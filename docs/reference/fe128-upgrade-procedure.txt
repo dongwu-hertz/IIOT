@@ -1,0 +1,138 @@
+# FE128_ROBOT_PLUS_System_Upgrade_Procedure_EN_V2.0.docx
+# Extracted from the .docx (word/document.xml) — text only; images and layout are lost.
+# Regenerate with: node scripts/docx-to-text.cjs <input.docx> <output.txt>
+# Tables are TAB-separated rows, one row per line.
+
+FE128 ROBOT PLUS System Upgrade Procedure
+Applicable Model: RK3568 Platform</w:r></w:p><w:p w14:paraId="0F99A051"><w:pPr><w:ind w:left="240"/></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>Document Version: V1.0</w:r></w:p><w:p w14:paraId="04393AFA"><w:pPr><w:ind w:left="240"/></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>Date: 2026-08-04</w:r></w:p><w:p w14:paraId="0E42BF8A"><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="100" w:beforeAutospacing="1" w:after="100" w:afterAutospacing="1"/><w:outlineLvl w:val="1"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:sz w:val="32"/></w:rPr><w:t>I. Preparation Before Upgrade
+1.1 Required Materials
+No.
+Item
+Description
+
+1
+Upgrade Package File
+FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.2
+
+2
+MobaXterm
+Used to log in to the device via SSH and upload the upgrade package through SFTP.
+
+3
+Device IP and Login Account
+IP address, username, and password that can be used to log in to the device via SSH.
+
+1.2 Precautions
+⚠️ Do not power off the device during the upgrade. Ensure a stable power supply.
+⚠️ It is recommended to back up the current system configuration before upgrading so that it can be restored if necessary.
+⚠️ Do not perform other operations during the upgrade. Wait until the entire upgrade process is complete.
+After the upgrade, restart the device and verify that all functions operate normally.
+II. Procedure
+Step 1: Connect with MobaXterm and Upload the Upgrade Package
+Open MobaXterm, click Session in the upper-left corner, and select SSH.</w:r><w:r><w:rPr><w:b/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t/></w:r></w:p><w:p w14:paraId="21B5D655"><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">Enter the device IP address (for example, 192.168.1.x) in Remote host, select Specify username, enter the login username (for example, root), and click OK to establish the connection.</w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas" w:cs="Consolas"/><w:shd w:val="clear" w:fill="F5F5F5"/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve"/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve"/></w:r><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas" w:cs="Consolas"/><w:shd w:val="clear" w:fill="F5F5F5"/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve"/></w:r></w:p><w:p w14:paraId="626A608A"><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>On the first connection, you will be prompted for the password. Enter the password and press Enter to log in to the device command line.
+After a successful connection, the SFTP file-browser panel will appear automatically on the left side of MobaXterm. If it is not displayed, click View → SFTP browser on the menu bar.</w:r><w:r><w:rPr><w:b/></w:rPr><w:t/></w:r><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t/></w:r></w:p><w:p w14:paraId="2A134AB4"><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">In the SFTP panel on the left, navigate to the directory containing the local upgrade package and drag the upgrade-package file to the remote directory on the right (uploading to /root/ is recommended):
+ FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+Wait for the upload to complete, then run the following command in the MobaXterm SSH terminal to confirm that the file exists:
+ls -l /root/FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+Note: The commands in Steps 2 through 4 are all executed in the current MobaXterm SSH terminal. No other tool is required.</w:r></w:p><w:p w14:paraId="457AC4EA"><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="100" w:beforeAutospacing="1" w:after="100" w:afterAutospacing="1"/><w:outlineLvl w:val="2"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:sz w:val="32"/></w:rPr><w:t>Step 2: Change the Upgrade-Package Permissions
+After the upload is complete, add execute permission to the upgrade package.
+Log in to the device command line through the backend terminal or SSH.
+Change to the directory containing the upgrade package (adjust the path according to the actual upload location):
+ cd /root/
+Make the upgrade package executable:
+chmod 755 FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+Verify that the permissions were changed successfully:
+ls -l FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+Confirm that the permission field in the output is -rwxr-xr-x, indicating that the permission change was successful.
+root@LFXS:~# ls -l FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+-rwxr-xr-x 1 root root 75382932 Sep 11 20:26 FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+root@LFXS:~#
+
+Step 3: Perform the System Upgrade
+
+In the directory containing the upgrade package, run the upgrade command:
+root@LFXS:~# chmod 755 FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+root@LFXS:~# ./FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11
+[2026-09-11 20:27:22] [INFO] ===== Selected upgrade mode: fe128_server Full upgrade =====
+[2026-09-11 20:27:22] [INFO] Log rotated: /var/log/fe64_update.log → /var/log/fe64_update.log.last
+[2026-09-11 20:27:22] [INFO] Current system architecture: aarch64
+[2026-09-11 20:27:22] [INFO] Expected upgrade package architecture: aarch64
+[2026-09-11 20:27:22] [INFO] [Step 1] Extracting upgrade package...
+[2026-09-11 20:27:37] [INFO] Extraction complete
+[2026-09-11 20:27:41] [INFO] [Step 2] Deploying service scripts and system configuration...
+[2026-09-11 20:27:41] [INFO] Updated: /etc/init.d/S99FE128L
+[2026-09-11 20:27:41] [INFO] Updated: /opt/startup.sh
+[2026-09-11 20:27:41] [INFO] Updated: /opt/recovery.sh
+[2026-09-11 20:27:41] [INFO] Updated: /root/hc_lib
+[2026-09-11 20:27:41] [INFO] [Step 3] Updating nginx configuration...
+[2026-09-11 20:27:41] [INFO] nginx configuration updated
+[2026-09-11 20:27:41] [INFO] [Step 4] Creating system directories...
+[2026-09-11 20:27:41] [INFO] [Step 5] Updating frontend and resource files...
+[2026-09-11 20:27:42] [INFO] Frontend HTML updated
+[2026-09-11 20:27:42] [INFO] Network configuration updated
+[2026-09-11 20:27:42] [INFO] [Step 6] Updating main program programs/...
+[2026-09-11 20:27:42] [INFO] Backing up conf/ configuration directory.
+[2026-09-11 20:27:42] [INFO] Backed up .device_config.ini
+[2026-09-11 20:27:43] [INFO] Backed up system.config
+[2026-09-11 20:27:46] [INFO] programs/ updated
+[2026-09-11 20:27:46] [INFO] clib library copied to /usr/lib/
+[2026-09-11 20:27:46] [INFO] Camera iqfiles updated
+[2026-09-11 20:27:46] [INFO] [Step 7] Configuring environment...
+[2026-09-11 20:27:46] [INFO] QT_QPA_PLATFORM already exists; skipped
+[2026-09-11 20:27:46] [INFO] [Step 8] Deploying k410_4096 upgrade package...
+[2026-09-11 20:27:47] [INFO] k410_4096 upgrade package deployed to /opt/
+[2026-09-11 20:27:47] [INFO] [Step 9] Upgrade complete; cleaning up...
+[2026-09-11 20:27:47] [INFO] Deleted temporary directory: /opt/update_files
+[2026-09-11 20:27:51] [INFO] Upgrade completed successfully!
+
+Monitor the terminal output and wait for the upgrade program to finish.
+Progress information is displayed during the upgrade. Do not interrupt the process.
+When the terminal displays a message similar to “Upgrade completed successfully!” or no error message is shown, the system upgrade is complete.</w:r></w:p><w:p w14:paraId="388D3C99"><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="100" w:beforeAutospacing="1" w:after="100" w:afterAutospacing="1"/><w:outlineLvl w:val="2"/><w:rPr><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:sz w:val="32"/></w:rPr><w:t>Step 4: Upgrade the FPGA
+After the system upgrade is complete, perform the FPGA firmware upgrade.
+Run the FPGA upgrade command (note the final parameter k410_4096):
+./FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11 k410_4096
+
+root@LFXS:~#
+root@LFXS:~# ./FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11 k410_4096
+[2026-09-11 20:33:22] [INFO] ===== Selected upgrade mode: k410_4096 =====
+[2026-09-11 20:33:22] [INFO] Log rotated: /var/log/fe64_update.log → /var/log/fe64_update.log.last
+[2026-09-11 20:33:22] [INFO] Current system architecture: aarch64
+[2026-09-11 20:33:22] [INFO] Expected upgrade package architecture: aarch64
+[2026-09-11 20:33:22] [INFO] [Step 1] Extracting upgrade package...
+[2026-09-11 20:33:31] [INFO] Extraction complete
+[2026-09-11 20:33:35] [INFO] [Step 8] Deploying k410_4096 upgrade package...
+[2026-09-11 20:33:35] [INFO] k410_4096 upgrade package deployed to /opt/
+[2026-09-11 20:33:35] [INFO] Upgrading FPGA firmware...
+[09/11/26 20:33:37.308][thread 30444][info] [MAIN] fe128 server start v2.13.1...
+[09/11/26 20:33:37.308][thread 30444][info] [MAIN] System work path: /opt/programs
+[09/11/26 20:33:37.308][thread 30444][info] [HAL] dev type: FE128_SERVER_PLUS
+[09/11/26 20:33:37.308][thread 30444][info] [HAL] infrared_enable: 0
+[09/11/26 20:33:37.308][thread 30444][info] [HAL] pan_tilt: PELCO-D
+[09/11/26 20:33:37.308][thread 30444][info] [HAL] zero_position: 0
+[09/11/26 20:33:37.308][thread 30444][info] [HAL] temp_offset_compen: 0
+[09/11/26 20:33:37.309][thread 30444][info] [MAIN] FPGA upgrade mode: file=/opt/k410_4096_upgradepack
+[09/11/26 20:33:37.309][thread 30444][info] [ACOUSTIC] fpga upgrade start, file_path:/opt/k410_4096_upgradepack
+[09/11/26 20:33:37.729][thread 30444][info] [UPGRADE] FPGA upgrade progress: 0%
+[09/11/26 20:33:54.312][thread 30444][info] [UPGRADE] FPGA upgrade progress: 10%
+[09/11/26 20:34:08.657][thread 30444][info] [UPGRADE] FPGA upgrade progress: 20%
+[09/11/26 20:34:23.061][thread 30444][info] [UPGRADE] FPGA upgrade progress: 30%
+[09/11/26 20:34:37.414][thread 30444][info] [UPGRADE] FPGA upgrade progress: 40%
+[09/11/26 20:34:51.814][thread 30444][info] [UPGRADE] FPGA upgrade progress: 50%
+[09/11/26 20:35:06.203][thread 30444][info] [UPGRADE] FPGA upgrade progress: 60%
+[09/11/26 20:35:20.600][thread 30444][info] [UPGRADE] FPGA upgrade progress: 70%
+[09/11/26 20:35:34.956][thread 30444][info] [UPGRADE] FPGA upgrade progress: 80%
+[09/11/26 20:35:49.336][thread 30444][info] [UPGRADE] FPGA upgrade progress: 90%
+[09/11/26 20:35:59.206][thread 30444][info] [UPGRADE] FPGA upgrade progress: 100%
+[09/11/26 20:35:59.206][thread 30444][info] [UPGRADE] FPGA upgrade completed, ret=0
+[09/11/26 20:36:00.209][thread 30444][info] [ACOUSTIC] fpga upgrade end, ret: 0
+[09/11/26 20:36:00.209][thread 30444][info] [MAIN] FPGA upgrade success
+[2026-09-11 20:36:01] [INFO] FPGA firmware upgraded successfully
+[2026-09-11 20:36:01] [INFO] [Step 9] Upgrade complete; cleaning up...
+[2026-09-11 20:36:01] [INFO] Deleted temporary directory: /opt/update_files
+[2026-09-11 20:36:01] [INFO] Retained upgrade package file: /opt/update.run
+[2026-09-11 20:36:01] [INFO] Upgrade completed successfully!
+
+Monitor the terminal output and wait for the FPGA upgrade to complete.
+Do not power off the device during the upgrade.
+When the terminal displays a successful-upgrade message, the FPGA upgrade is complete.
+Step 5: Restart the Device

@@ -1,0 +1,27 @@
+node_modules/
+out/
+dist/
+release/
+*.log
+.DS_Store
+.hertzinno-data/
+*.local
+.test-build/
+protocol-report-*.json
+.npm-cache/
+.npm-tmp/
+.electron-cache/
+
+# ---------------------------------------------------------------------------
+# 探针产物（2026-09-17 整理）：这些都是**本机跑出来的**，不是源码
+# ---------------------------------------------------------------------------
+# 截图目录（`demo-shot.cjs` 每次用 --out 指定，历史上出现过好几种后缀）
+.demo-shots/
+.demo-shots-*/
+# 真机/假设备的验证产物（`e2-live-proof.cjs` 的 json、wrapper、临时 profile 里的存储）
+.e2-live-proof/
+.e2-live-proof-*/
+# 记住登录的验证产物
+.remember-proof/
+# TypeScript 增量编译缓存（每台机器都会变，进仓库只会制造无意义的 diff）
+*.tsbuildinfo

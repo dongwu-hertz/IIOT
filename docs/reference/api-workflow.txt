@@ -1,0 +1,425 @@
+# Onboard_Acoustic_Camera_API_Workflow_EN_V1.1.docx
+# Extracted from the .docx (word/document.xml) — text only; images and layout are lost.
+# Regenerate with: node scripts/docx-to-text.cjs <input.docx> <output.txt>
+# Tables are TAB-separated rows, one row per line.
+
+Onboard Acoustic Camera / Mini Acoustic Camera API Workflow Document
+
+Document Information
+Item
+Content
+
+Product Model
+HZ-FA-371/ HZ-FA-36
+
+Document Name
+Acoustic Camera API Workflow Document
+
+Version
+V1.0 (compiled from Product User Manual v1.0)
+
+Scope of Application
+Secondary development and integration of the onboard acoustic camera by a host computer / third-party system through HTTP + WebSocket interfaces
+
+Reference Documents
+Onboard Acoustic Camera / Mini Acoustic Camera User Manual v1.0 -- Partial Discharge Detection Version.docx
+Onboard Acoustic Camera / Mini Acoustic Camera User Manual v1.0 -- Leakage Detection Version.docx
+Onboard Acoustic Camera / Mini Acoustic Camera User Manual v1.0 -- Mechanical Abnormal Noise Version.docx
+
+Revision History
+Version
+Date
+Author
+Change Description
+
+V1.0
+[2026/08/25]
+[LF]
+Initial version compiled from Chapter 5 of the Onboard Acoustic Camera User Manual v1.0
+
+Overview
+Document Purpose
+This document describes the complete workflow for calling the open interfaces of the onboard acoustic camera: login authentication → parameter configuration → start detection → subscribe to real-time data (WebSocket) → obtain detection results → end detection. It also provides an interface list and call examples.
+Document Description
+This document is compiled from Chapter 5, “Open Interface Description,” of the Onboard Acoustic Camera / Mini Acoustic Camera User Manual v1.0 (Partial Discharge Detection Version), and can serve as the interface-integration baseline for secondary development and system integration.
+Interface Overview
+HTTP interfaces (REST): used for authentication, parameter configuration, starting/stopping detection, log/file retrieval, alarm-strategy management, etc.
+WebSocket interfaces: used to obtain FFT, acoustic signature, PRPD, abnormal-noise localization points, PCM audio, and detection results in real time.
+RTSP interface: used to obtain the video stream.
+Key Terms
+token: authentication token issued after login. All subsequent HTTP requests must include it in the Authorization header; failed or invalid authentication returns 401.
+Acoustic-field configuration: upper/lower analysis frequency-band limits (freq_up_limit / freq_down_limit, unit: kHz).
+Imaging configuration: imaging threshold energy_threshold, number of detection targets target_number, imaging sensitivity imaging_sensitivity, and imaging enhancement imaging_enhance.
+Detection mode: `run_mode`: 1 = single detection; -1 = smart patrol.
+RTSP: video streaming protocol. The default video_port in the video parameters is 443.
+Quick Start
+The complete API workflow for switching modes is shown below. (Note: The device supports only one operating mode when shipped. If mode switching is required, please contact technical support.)
+
+Login Authentication (POST /login)
+Enable alarm strategy ID=1 (PUT /alarm_strategy)
+Adjust device imaging parameters; set the imaging frequency band to 20 kHz–40 kHz (PUT /system/acoustic)
+Start detection (POST /turn_on_detect); returns the alarm-record ID.
+Obtain detection result: GET detect_logs/{detect_id}; obtain result file: GET detect_file/{log.saving_path}/{logs.file_name}
+Disable alarm strategy ID=1 (PUT /alarm_strategy)
+End.
+
+Overall API Workflow and Detailed Description
+
+As shown in the figure above, API calls should follow the workflow described above.
+Login Authentication
+Interface
+Method
+Description
+
+/login
+POST
+Used for device login
+Request body: {"username":"admin","password":"<MD5(password+lfxs), 32-character lowercase hash>"}
+Response: {"token":"<encrypted token>"}
+Authentication: include the token in the Authorization header for all subsequent HTTP interfaces; failed authentication or an invalid token returns 401.
+Password hashing rule: password = MD5(plaintext password + "lfxs"), output as 32 lowercase characters. Example: password 123456 → MD5("123456lfxs").
+
+The above is the login-authentication process. After login, the device returns a token. Include this token when calling subsequent interfaces.
+Alarm Strategy Configuration (HTTP)
+Interface
+Method
+Description
+
+alarm_strategy_enable
+GET
+PUT
+POST
+DELETE
+Alarm Conditions
+Used to get/add/configure/delete alarm conditions.
+
+/alarm_strategy
+GET
+PUT
+POST
+DELETE
+Alarm Strategy
+Used to get/add/configure/delete alarm strategies.
+
+alarm_strategy_enable
+GET / PUT
+Imaging Configuration
+Used to get/set and enable an alarm strategy.
+The device supports only one active alarm strategy at a time.
+
+/upload_nc
+POST
+Used to upload a comparison file.
+
+nc_filelist
+GET
+Used to obtain the comparison-file list.
+
+/nc_file
+DELETE
+Used to delete an alarm condition.
+
+A. Without Spectral Comparison
+
+The above shows the complete API call sequence for creating a new alarm strategy when spectral comparison is not used in the alarm conditions.
+B. With Spectral Comparison
+
+The above shows the complete API call sequence for creating a new alarm strategy when spectral comparison is used in the alarm conditions.
+The above describes creating alarm strategies through the API. Alternatively, all alarm strategies can be created in advance on the device O&M page, and the corresponding alarm ID can then be used to enable or disable a strategy as needed.
+
+C. Enable/Disable Alarm Strategy
+
+In actual production environments, an alarm strategy is usually enabled according to the workflow above. First call the query interface (GET /alarm_strategy_enable) to check whether an alarm strategy is already enabled; then call the update interface (PUT /alarm_strategy_enable) to enable or disable the required strategy.
+Scenario 1: Assume the query interface (GET /alarm_strategy_enable) shows that the system contains three alarm strategies: A (switch=0), B (switch=0), and C (switch=0), meaning all three are disabled. If the business requirement is to enable strategy A, simply call the update interface (PUT /alarm_strategy_enable) to enable strategy A.
+Scenario 2: Assume the query interface (GET /alarm_strategy_enable) shows that the system contains three alarm strategies: A (switch=1), B (switch=0), and C (switch=0), meaning strategy A is enabled and the others are disabled. If the business requirement is to enable strategy B, first call the update interface (PUT /alarm_strategy_enable) to disable strategy A, then call it again to enable strategy B.
+Note: Due to system-resource limitations, the device can have at most one alarm strategy enabled at any given time.
+
+Parameter Configuration (HTTP)
+Interface
+Method
+Description
+
+/system/acoustic
+GET / PUT
+Acoustic-Field Configuration
+Used to get/set parameters including the upper analysis frequency-band limit (unit: kHz) and lower analysis frequency-band limit (unit: kHz).
+
+/system/image
+GET
+/ PUT
+Imaging Configuration
+Used to get/set the energy threshold, number of detection targets, imaging sensitivity, imaging enhancement, and other parameters.
+
+/system/video
+GET
+/ PUT
+Video & RTSP
+Used to get/set resolution, video frame rate, video bitrate, video flip, and other parameters.
+
+/run_mode
+GET
+/ PUT
+Operating Mode
+Used to obtain the current operating mode.
+
+/system/scan_area
+GET
+/ PUT
+Detection Area
+Used to get/set the detection area.
+
+The above shows the complete API call sequence for device parameter configuration. Before changing device parameters, first check the current device status and then determine whether changes are required.
+Start Detection
+Interface
+Method
+Description
+
+/turn_on_detect
+POST
+Used to issue the start-detection command.
+Single mode: detection ends after one cycle; the result can be viewed on the Data page.
+Smart-patrol mode: repeatedly executes the enabled alarm strategy; a record is saved and generated only when an alarm is triggered.
+
+/turn_off_detect
+POST
+Used to issue the stop-detection command.
+Single mode: immediately ends the current detection. Current record duration = end time - start time. In particular:
+This interface can be used to stop detection before the alarm-strategy period ends. If the alarm period is exceeded, the system stops detection automatically and the stop interface does not need to be called again.
+Detection-record duration is measured in seconds. If the alarm-strategy period is 1 s and the stop-detection interface is called within 1 second, the detection-record duration is 1 second. If the detection period is 13 seconds and the stop-detection interface is called after 2.6 seconds, the detection-record duration is 3 seconds.
+Smart-patrol mode: immediately ends the repeated detection cycle.
+
+/system/detect_status
+GET
+Used to obtain the current detection status and determine whether the device is currently detecting.
+
+A. Single Detection:
+
+The above shows the complete single-detection process. Call the start-detection interface (POST /turn_on_detect).
+The device starts acquiring data. Based on the “enabled alarm-strategy period” (the length of a strategy cycle, adjustable from 1 to 30 seconds according to actual requirements), the device acquires spatial acoustic-signature and visible-light data for one cycle, calculates feature values, and determines whether the results trigger an alarm. When the start-detection interface (POST /turn_on_detect) succeeds, it generates a record ID. The generated detection-log details can be obtained using that record ID. A record is generated regardless of whether an alarm is triggered. Single-detection mode is recommended during the early exploration and validation stage of a project.
+B. Smart Patrol:
+
+The above shows the complete smart-patrol process. After the start-detection interface (POST turn_on_detect) is called and smart patrol is enabled, the device performs periodic acquisition and analysis according to the enabled alarm strategy. If an analysis result triggers an alarm, the corresponding record is saved; otherwise, the analysis result is discarded. Smart-patrol mode is recommended when the business application is mature and stable and the existing alarm strategy can meet the requirements. At any time during the process, the current detection status can be queried using GET /system/detect_status.
+
+Note:
+Before calling the start-detection interface, make sure that one alarm strategy is enabled.
+Single-detection mode: each call to the start-detection interface (POST turn_on_detect) generates one record.
+Smart-patrol mode: after calling the start-detection interface (POST turn_on_detect) and enabling smart patrol, the device performs periodic acquisition and detection according to the enabled alarm strategy. A record is saved only when an alarm is triggered.
+Obtain Detection Results and Files
+Interface
+Method
+Description
+
+/detectFeedback
+ws
+Used to obtain detection results in real time.
+Available in both single-detection and smart-patrol modes.
+
+detect_logs/{detect_id}
+GET
+Used to obtain the detection result by ID.
+Applicable to single-detection mode.
+
+detect_file/{log.saving_path}/{logs.file_name}
+GET
+Used to obtain the detection-result file.
+
+Alarm Push
+-
+Used to push detection data to a specified service.
+
+There are three methods for obtaining detection results
+Method 1: WebSocket Protocol
+WebSocket request address: ws://localhost:port/detectFeedback. After each detection, the device returns one packet of detection-result data as a JSON string. Parse the returned data according to byte order, then construct http://{IP}:{port}/detect_file/{log.saving_path}/{logs.file_name} to obtain the corresponding result file.
+
+Method 2: Obtain the Detection Result Record by ID
+
+The above shows how to obtain the corresponding detection record by ID. In single-detection mode, the start-detection interface (POST turn_on_detect) returns a record ID. Wait until the detection is complete (GET /system/detect_status can be used to check whether detection has ended), then wait 1–10 seconds and call GET detect_logs/{detect_id} to obtain the result. Based on the returned record, construct http://{IP}:{port}/detect_file/{log.saving_path}/{logs.file_name} to obtain the corresponding result file.
+
+Note: If GET detect_logs/{detect_id} is called immediately after detection ends, no record may be returned because data acquisition has just completed and analysis and saving require processing resources and time. With a typical 1-second alarm-strategy period, analysis and saving take several hundred milliseconds. This time increases as the alarm-strategy period becomes longer. Determine an appropriate wait time through testing for the actual application.
+
+Method 3: Alarm Push
+
+The device can automatically push alarm records to a specified server. In the example above, the custom service endpoint is http://192.168.2.50:8080/logs. When the device generates an alarm record, it immediately pushes the record as JSON over HTTP to the specified service on host 192.168.2.50. Construct http://{IP}:{port}/detect_file/{log.saving_path}/{logs.file_name} to obtain the corresponding result file.
+
+Complete Interface List (HTTP)
+Method
+Path
+Function
+
+POST
+/login
+Login authentication; obtain token
+
+GET
+/system/acoustic
+Get acoustic-field configuration
+
+PUT
+/system/acoustic
+Set acoustic-field configuration
+
+GET
+/system/image
+Get imaging configuration
+
+PUT
+/system/image
+Set imaging configuration
+
+GET
+/system/video
+Get video & RTSP configuration
+
+PUT
+/system/video
+Set video & RTSP configuration
+
+GET
+/run_mode
+Get operating mode
+
+PUT
+/run_mode
+Set operating mode
+
+GET
+/system/scan_area
+Get detection area
+
+PUT
+/system/scan_area
+Set detection area
+
+POST
+/turn_on_detect
+Start detection (returns detect_id)
+
+POST
+/turn_off_detect
+Stop detection
+
+GET
+/system/detect_status
+Get detection status (whether detection is in progress)
+
+GET
+/detect_logs/{detect_id}
+Get detection log / result
+
+DELETE
+/detect_logs
+Delete detection log
+
+GET
+/detect_file/{saving_path}/{file_name}
+Get detection-result file
+
+GET
+/system_time
+Get system time
+
+PUT
+/time_set_manually
+Set system time
+
+GET
+/alarm_strategy
+Get alarm strategies
+
+POST
+/alarm_strategy
+Add an alarm strategy
+
+PUT
+/alarm_strategy
+Modify an alarm strategy (cannot be modified while enabled)
+
+DELETE
+/alarm_strategy
+Delete an alarm strategy
+
+GET
+/alarm_strategy_enable
+Get the enabled alarm strategy
+
+PUT
+/alarm_strategy_enable
+Set alarm-strategy enable/disable state
+
+GET
+/alarm_condition
+Get alarm conditions
+
+POST
+/alarm_condition
+Add an alarm condition
+
+PUT
+/alarm_condition
+Modify an alarm condition (cannot be modified while bound to an enabled strategy)
+
+DELETE
+/alarm_condition
+Delete an alarm condition
+
+POST
+/upload_nc
+Upload noise-comparison file (multipart)
+
+GET
+/nc_filelist
+Get comparison-file list
+
+DELETE
+/nc_file
+Delete comparison file
+
+WebSocket Real-Time Data Subscription (Port 80)
+Establish a connection to ws://IP:80/<stream>. After connection, receive binary/JSON streams according to the custom protocol. Heartbeat: after a successful connection, the client must send any message to the server at least once per minute; otherwise, the server considers the connection inactive and disconnects it.
+Data Stream
+Path
+Return Format
+Frequency
+
+PCM Audio
+/pcmData
+float32 binary stream
+10 frames/s, sampling rate 48 kHz
+
+FFT
+/fftData
+int16 binary stream (first 512 points)
+5 frames/s
+
+Acoustic Signature
+/voiceprintData
+int binary stream
+1 frame/s
+
+PRPD Plot
+/prpdData
+int binary stream
+1 frame/s
+
+Abnormal-Noise Localization Points
+/energyData
+int32 binary stream
+Pushed at scheduled intervals
+
+Detection Result
+/detectFeedback
+JSON string
+One packet after each detection
+
+Exception Handling
+401 authentication failure: the token is missing or invalid. Call POST /login again to obtain a new token and retry.
+WebSocket disconnection: if the heartbeat is not sent on time (once per minute), the server disconnects the client. Reconnect and resubscribe to the target data stream.
+Network-configuration change: after the device IP is changed on the Web page, the current session is disconnected immediately. Log in again using the new IP.
+Strategy lock: an enabled alarm strategy/condition cannot be modified or deleted. Disable it first.
+Detection limits: the single-detection duration (detection period) can be set from 1 to 30 seconds. The device retains only the latest 50 detection records; older records are overwritten cyclically.
+Safety and Maintenance
+The default account is admin / 123456. It is recommended to change the password immediately after the first connection under System Configuration → User Management.
+“Restore Initialization” resets the IP address, username, and password to their default values and deletes all historical data. Use with caution.
+Device logs can be downloaded from System Configuration → Device Logs as system_logs.log. Device Self-Test can be used to check whether the hardware microphones are operating normally.
+Binary streams returned by WebSocket (PCM float32, FFT int16, abnormal-noise localization int32, etc.) are parsed in little-endian byte order.
+HTTP interfaces uniformly return JSON; ret=200 and msg="SUCCESS" indicate success.

@@ -1,0 +1,127 @@
+# electron-builder configuration
+#
+# Target platform per the spec: Windows 10 / Windows 11 x64.
+# The spec makes this software PERMANENTLY FREE with no licence, no device
+# limit and no online activation, so there is deliberately no licensing,
+# trial-expiry or phone-home configuration here — and there must never be.
+
+appId: com.hertzinno.acousticboxmanager
+productName: HERTZINNO Acoustic Box Manager
+copyright: Copyright © 2026 HERTZINNO. All rights reserved.
+# NOTE: electron-builder has no `publisher` or `homepage` key — both are rejected
+# as unknown properties. The installer's publisher line comes from package.json's
+# `author.name`, and the website from `homepage` there. Supplying them twice would
+# also risk the two disagreeing.
+
+directories:
+  output: release
+  buildResources: build
+
+# Ship only what the app actually needs at runtime.
+files:
+  - out/**/*
+  - package.json
+  # Brand assets are imported by the renderer, so Vite bundles and fingerprints
+  # them into out/renderer/assets — nothing extra needs to ship here.
+  - '!**/*.map'
+  - '!**/{.eslintrc,.editorconfig,.gitignore,.github}'
+  # The repo-local npm cache (see BUILD.md §2 — the global cache is not writable in
+  # some sandboxes). It is never a runtime input; this only makes that explicit.
+  - '!.npm-cache/**'
+
+# Native modules cannot be loaded from inside an asar archive: the .node binary
+# is mapped into the process address space by the OS loader, which does not
+# understand asar. Forgetting this produces a runtime "Cannot find module
+# better-sqlite3" that only appears in the packaged build.
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - '**/*.node'
+  # ffmpeg is spawned as a PROCESS, which is the same problem as a native module and
+  # a different failure: `spawn()` asks the OS to create a process from a path, and an
+  # executable inside app.asar cannot be started. Worse, the path the installer
+  # package reports EXISTS (its existence check goes through Electron's asar shim), so
+  # the failure is an ENOENT at spawn time rather than a missing file — i.e. a black
+  # video rectangle with nothing in the log to explain it. Unpacking puts the binary
+  # at node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe under app.asar.unpacked,
+  # which is exactly where services/media/ffmpeg.ts looks when app.isPackaged.
+  # ~64.5 MB, GPLv3 build — see the header of that file before changing it.
+  - node_modules/@ffmpeg-installer/**/*
+
+win:
+  # Multi-size ICO generated from the official brand asset 蓝底白色.png.
+  # 256 px is included because Windows requires it for Explorer's extra-large
+  # view and for the installer; `build/icon.png` is kept alongside it for
+  # platforms that read PNG (macOS, Linux) so the same artwork is used everywhere.
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Produce a normal installer, not a self-extracting archive that antivirus
+  # engines flag and IT departments block.
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # This file stays UNSIGNED on purpose so it builds on any machine. The
+  # certificate identity lives in `scripts/electron-builder.signed.cjs`, used by
+  # `npm run dist:win:signed`: configuring `win.signtoolOptions.certificateSubjectName`
+  # here would make `dist:win` FAIL wherever the CA's cloud signer is not installed
+  # ("Cannot find certificate ..."), and silently shipping an unsigned installer
+  # while the log claims otherwise is the worse failure of the two. See BUILD.md §8.
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: HERTZINNO Acoustic Box Manager
+  # Uninstall must NOT delete the user's audio library: it can be tens of
+  # gigabytes of irreplaceable recordings living outside the install directory.
+  deleteAppDataOnUninstall: false
+  # Device credentials live in the OS credential store, so there is no local
+  # secret file for the uninstaller to clean up either.
+  runAfterFinish: true
+
+  # -- Multilingual installer (product request: "安装软件时应该支持选择语言") --------
+  #
+  # These four codes are the same four the APPLICATION ships. That is the point:
+  # an operator who picks Türkçe in the installer gets a Türkçe installer wizard,
+  # and the application then opens in Turkish too (see the note on
+  # `displayLanguageSelector` below).
+  #
+  # Verified against the pinned electron-builder rather than guessed — the codes
+  # are resolved through `app-builder-lib/out/util/langs`, which maps
+  #   en_US -> English · zh_CN -> SimpChinese · es_ES -> SpanishInternational · tr_TR -> Turkish
+  # An unknown code throws "Language name is unknown for <x>" at build time, so a
+  # typo fails the build instead of silently shipping an English-only installer.
+  multiLanguageInstaller: true
+  displayLanguageSelector: true
+  installerLanguages:
+    - zh_CN
+    - en_US
+    - es_ES
+    - tr_TR
+  # NOTE: `nsis.language` is deliberately NOT set. Reading the pinned
+  # electron-builder, that key is used for exactly one thing — the `/LANG=<lcid>` of
+  # the installer's VERSIONINFO resource (`NsisTarget.computeVersionKey`). It does
+  # NOT pick the wizard's default page language, which is why setting it here would
+  # look like configuration while doing something else. electron-builder's default
+  # (1033) is also the right pairing for this file, whose productName, copyright and
+  # description strings are all English.
+  #
+  # The wizard's initial language therefore comes from NSIS itself (the OS language,
+  # falling back to the first entry above), and the operator can change it in the
+  # selector because `displayLanguageSelector` is on.
+  #
+  # HONEST LIMIT: the installer's chosen language does NOT reach the application.
+  # The app picks its own language from, in order: the user's saved choice
+  # (`localStorage`), the OS locale reported by the main process, then the product
+  # default (Chinese) — see `src/renderer/src/composables/useLocale.ts`. Wiring the
+  # installer choice through would need the NSIS script to write something the app
+  # reads; that is not implemented.
+
+# No auto-update server for V1. The spec forbids online licensing, and an
+# update channel would be an unrequested outbound connection from a tool used
+# on industrial networks.
+publish: null

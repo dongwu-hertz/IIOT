@@ -1,0 +1,485 @@
+/**
+ * 多路实时视频墙的会话状态：档位、格子分配、出声格、当前格。
+ *
+ * 为什么是 Pinia store + localStorage
+ *   1. 产品要求「档位、格子分配与声音选择在**会话内**保持，档位至少活过导航」。
+ *      组件里的 `ref` 会随路由卸载消失，所以状态必须住在组件之外（store）。
+ *   2. 档位额外写进 localStorage，沿用本仓库既有的 `hertzinno.` 前缀与
+ *      `try/catch` 写法（`composables/useLocale.ts`、`stores/channelWall.ts`）。
+ *      格子分配**只在内存里**：它指的是「哪台相机在哪一格」，而设备 id 是数据库
+ *      主键，重启后可能对应另一台设备 —— 把一个可能过期的 id 从磁盘上恢复出来，
+ *      会在启动时静默拉一路谁也没要求的视频。
+ *   3. 所有**决定**都在 `lib/cameraWall.ts` 的纯函数里，本文件只做三件事：
+ *      保存状态、调用纯函数、把结果交给视图去发 IPC / 写 localStorage。
+ *
+ * 状态与设备列表的关系
+ *   `syncDevices()` 是设备列表（可能来自健康监测推送、删除、刷新）与墙之间的
+ *   唯一同步点：设备被删掉就清空它占的格并记下原因，设备离线就把它那一路标成
+ *   「设备离线」并交给视图去停。绝不留一个指向已删设备的死 `<video>`。
+ */
+
+import { computed, ref } from 'vue'
+import { defineStore } from 'pinia'
+import type { Device } from '@shared/domain/models'
+import {
+  DEFAULT_MAX_CONCURRENT_CAMERA_STREAMS,
+  normaliseMaxConcurrentStreams,
+  type CameraLiveState
+} from '@shared/domain/camera-live'
+import {
+  DEFAULT_CAMERA_WALL_LAYOUT,
+  assignCamera,
+  buildCameraCells,
+  cameraCellCount,
+  cameraCellStartPermission,
+  cameraWallSummary,
+  clearCameraCell,
+  createCameraWallModel,
+  focusSlotForDevice,
+  isCameraWallLayout,
+  isWallCapableDevice,
+  removeDeviceFromWall,
+  setActiveSlot,
+  setAudioSlot,
+  setCameraWallLayout,
+  toggleAudioSlot,
+  type CameraCellStatus,
+  type CameraWallLayout,
+  type CameraWallModel
+} from '@renderer/lib/cameraWall'
+import {
+  MAX_CUSTOM_VIEWS,
+  bindViewToDevices,
+  normaliseViews,
+  validateDivision,
+  type BoundView,
+  type CameraDivision,
+  type CameraView
+} from '@renderer/lib/cameraViewDivision'
+
+/** 档位偏好的 localStorage 键（格子分配刻意不持久化，见文件头）。 */
+export const CAMERA_WALL_LAYOUT_STORAGE_KEY = 'hertzinno.cameraWall.layout'
+
+function readStoredLayout(): CameraWallLayout {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_WALL_LAYOUT_STORAGE_KEY)
+    const parsed = raw === null ? NaN : Number(raw)
+    return isCameraWallLayout(parsed) ? parsed : DEFAULT_CAMERA_WALL_LAYOUT
+  } catch {
+    return DEFAULT_CAMERA_WALL_LAYOUT
+  }
+}
+
+function writeStoredLayout(layout: CameraWallLayout): void {
+  try {
+    window.localStorage.setItem(CAMERA_WALL_LAYOUT_STORAGE_KEY, String(layout))
+  } catch {
+    // 记不住偏好不应该让切换偏好本身失败。
+  }
+}
+
+/**
+ * 视图对象的 localStorage 键。
+ *
+ * 与档位分开存：档位是一个数字、坏值回落到默认档；视图是一个数组、坏值要**逐项修补**
+ * （`normaliseViews` 负责丢坏值、截断到 5 套、把绑定数组对齐格子数）。
+ */
+export const CAMERA_WALL_VIEWS_STORAGE_KEY = 'hertzinno.cameraWall.views'
+
+/** 从磁盘读视图列表。**一律当作不可信输入**：坏值丢弃而不是让界面起不来。 */
+function readStoredViews(): CameraView[] {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_WALL_VIEWS_STORAGE_KEY)
+    if (raw === null) return []
+    return normaliseViews(JSON.parse(raw))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 「某台设备为什么空了」的记录。
+ *
+ * 单独存一份而不是塞进格子模型：模型是纯的、可逐位比较的（见
+ * `lib/cameraWall.ts`），而原因是一次性事件的说明文字，用过就该消失。
+ */
+export interface CameraWallNotice {
+  kind: 'device-removed' | 'device-offline' | 'layout-shrunk' | 'limit-exceeded'
+  deviceName?: string
+  /** `layout-shrunk` 时被停掉的路数。 */
+  count?: number
+  /** `limit-exceeded` 时的上限与当前路数。 */
+  max?: number
+  active?: number
+}
+
+export const useCameraWallStore = defineStore('cameraWall', () => {
+  /**
+   * 模型本身。
+   *
+   * 用 `ref` 包一个普通对象而不是 `reactive`：`lib/cameraWall.ts` 的每个变换都
+   * 返回**新对象**，整体替换比深层响应式代理更容易推理，也避免把响应式代理传进
+   * 纯函数（那会让「就地修改 store」这种毛病变得可能）。
+   */
+  const model = ref<CameraWallModel>(createCameraWallModel(readStoredLayout()))
+
+  /** 设备列表。由 `bindDevices()` 注入，见文件头。 */
+  const deviceList = ref<readonly Device[]>([])
+
+  /** 主进程的逐会话状态。界面只读，它由 `cameraLive:state` 与 `start` 的返回填充。 */
+  const states = ref<Record<string, CameraLiveState>>({})
+
+  /** 本机并发上限（`camera-live:limits` 的 `max`）。拿不到时用同一个默认常量。 */
+  const maxStreams = ref<number>(DEFAULT_MAX_CONCURRENT_CAMERA_STREAMS)
+  /**
+   * 主进程报的当前路数。
+   *
+   * `null` 表示**还没问到**，此时 `startPermission()` 用界面的估计值兜底。
+   * 与「主进程说是 0 路」严格区分：把 0 当成「没问到」会让判断在有会话停止后
+   * 一直高估占用，从而误报超出上限。
+   */
+  const reportedActive = ref<number | null>(null)
+
+  /** 最近一次「因为什么空掉了」的说明，供界面提示条使用。 */
+  const notice = ref<CameraWallNotice | null>(null)
+
+  /** 一次拒绝：格子状态，用来把「为什么没能开始」画在那一格上。 */
+  const refusal = ref<{ slot: number; status: CameraCellStatus } | null>(null)
+
+  const layout = computed(() => model.value.layout)
+  const cellCount = computed(() => cameraCellCount(model.value.layout))
+  const audioSlot = computed(() => model.value.audioSlot)
+  const activeSlot = computed(() => model.value.activeSlot)
+
+  const cells = computed(() =>
+    buildCameraCells(model.value, {
+      devices: deviceList.value,
+      states: states.value,
+      maxStreams: maxStreams.value
+    })
+  )
+
+  const summary = computed(() => cameraWallSummary(model.value, cells.value, maxStreams.value))
+
+  // -------------------------------------------------------------------------
+  // 依赖注入与主进程状态的写入点
+  // -------------------------------------------------------------------------
+
+  function bindDevices(list: readonly Device[]): void {
+    deviceList.value = list
+  }
+
+  /** 用一批主进程快照覆盖状态（`cameraLive:state`）。 */
+  function applyStates(list: readonly CameraLiveState[]): void {
+    const next: Record<string, CameraLiveState> = { ...states.value }
+    for (const state of list) next[state.deviceId] = state
+    states.value = next
+  }
+
+  /** 用一次 start 的结果覆盖一台设备的状态。 */
+  function applyState(state: CameraLiveState): void {
+    states.value = { ...states.value, [state.deviceId]: state }
+  }
+
+  /** 丢掉一台设备的状态（停止之后，这一格要回到「未开始」）。 */
+  function forgetState(deviceId: string): void {
+    if (!(deviceId in states.value)) return
+    const next = { ...states.value }
+    delete next[deviceId]
+    states.value = next
+  }
+
+  function setLimits(max: number, active: number): void {
+    maxStreams.value = normaliseMaxConcurrentStreams(max)
+    reportedActive.value = Number.isFinite(active) ? Math.max(0, Math.floor(active)) : null
+  }
+
+  function setNotice(next: CameraWallNotice | null): void {
+    notice.value = next
+  }
+
+  function clearRefusal(): void {
+    refusal.value = null
+  }
+
+  // -------------------------------------------------------------------------
+  // 格子的操作
+  // -------------------------------------------------------------------------
+
+  /**
+   * 把一台相机放进某一格。
+   *
+   * 三条入口（设备树双击、拖拽、下拉选择）都走这里，所以「一台相机最多一格」
+   * 只有一份实现：已经在别格时会**移动**过来，而不是变成两格。
+   */
+  function placeDevice(slot: number, deviceId: string): { ok: boolean; movedFrom: number | null } {
+    const device = deviceList.value.find((item) => item.id === deviceId)
+    if (!isWallCapableDevice(device)) return { ok: false, movedFrom: null }
+    const result = assignCamera(model.value, slot, deviceId)
+    model.value = result.model
+    clearRefusal()
+    return { ok: result.changed, movedFrom: result.movedFrom }
+  }
+
+  /** 双击设备树的落点：已经在墙上就回到它那一格，否则空格 / 当前格。 */
+  function slotForDevice(deviceId: string): number {
+    return focusSlotForDevice(
+      model.value,
+      deviceId,
+      deviceList.value.map((device) => device.id)
+    )
+  }
+
+  function clearCell(slot: number): void {
+    model.value = clearCameraCell(model.value, slot)
+    clearRefusal()
+  }
+
+  function setActive(slot: number): void {
+    model.value = setActiveSlot(model.value, slot)
+  }
+
+  /** 切换某一格的声音（全局至多一格出声）。 */
+  function toggleAudio(slot: number): void {
+    model.value = toggleAudioSlot(model.value, slot)
+  }
+
+  function setAudio(slot: number | null): void {
+    model.value = setAudioSlot(model.value, slot)
+  }
+
+  /**
+   * 换档位。
+   *
+   * 变小时被挤掉的相机必须**先停止**（调用方据 `evictedDeviceIds` 去 stop），
+   * 否则主进程里会留下没人看的 ffmpeg —— 「档位从 16 换到 1」不该变成一次
+   * 十五条 RTSP 连接的静默泄漏。
+   */
+  function changeLayout(next: CameraWallLayout): { evictedDeviceIds: string[] } {
+    if (!isCameraWallLayout(next)) return { evictedDeviceIds: [] }
+    const result = setCameraWallLayout(model.value, next)
+    model.value = result.model
+    for (const deviceId of result.evictedDeviceIds) forgetState(deviceId)
+    writeStoredLayout(next)
+    if (result.evictedDeviceIds.length > 0) {
+      notice.value = { kind: 'layout-shrunk', count: result.evictedDeviceIds.length }
+    }
+    return { evictedDeviceIds: result.evictedDeviceIds }
+  }
+
+  /** 界面自己估计的占用路数（主进程还没回答时用）。 */
+  function estimatedActive(): number {
+    return summary.value.active
+  }
+
+  /**
+   * 这一格现在能不能开始拉流。
+   *
+   * 占用路数优先用**主进程报的数**：只有它知道所有会话（包括别的页面开的，
+   * 以及已经从这一格被移走但还没释放的）。界面估计只在没问到的时候兜底。
+   */
+  function startPermission(
+    slot: number,
+    deviceId: string
+  ): { allowed: boolean; refusal: CameraCellStatus | null } {
+    const device = deviceList.value.find((item) => item.id === deviceId)
+    if (device?.status === 'OFFLINE') return { allowed: false, refusal: 'device-offline' }
+
+    const active = reportedActive.value ?? estimatedActive()
+    const permission = cameraCellStartPermission(
+      model.value,
+      slot,
+      deviceId,
+      active,
+      maxStreams.value
+    )
+    if (!permission.allowed && permission.refusal === 'limit-exceeded') {
+      notice.value = { kind: 'limit-exceeded', max: maxStreams.value, active }
+    }
+    if (!permission.allowed && permission.refusal !== null) {
+      refusal.value = { slot, status: permission.refusal }
+    }
+    return permission
+  }
+
+  /**
+   * 设备列表变了：删除与离线都要**显式**处理。
+   *
+   * 返回需要调用方停止的设备 id（本 store 不发 IPC：它不持有设备服务，而且
+   * 「谁去调主进程」应当是视图的显式决定 —— 这也让这个函数在测试里可断言）。
+   */
+  function syncDevices(list: readonly Device[]): {
+    toStop: string[]
+    removedSlots: number[]
+    offlineSlots: number[]
+  } {
+    deviceList.value = list
+    const toStop = new Set<string>()
+    const removedSlots: number[] = []
+    const offlineSlots: number[] = []
+
+    // 先按快照遍历：下面的修补会替换 `model`，不能一边遍历一边改。
+    const snapshot = [...model.value.slots]
+    for (const deviceId of snapshot) {
+      if (deviceId === null) continue
+      const device = list.find((item) => item.id === deviceId)
+      if (!device) {
+        const result = removeDeviceFromWall(model.value, deviceId)
+        model.value = result.model
+        removedSlots.push(...result.clearedSlots)
+        forgetState(deviceId)
+        toStop.add(deviceId)
+        continue
+      }
+      if (device.status === 'OFFLINE') {
+        const index = model.value.slots.indexOf(deviceId)
+        if (index >= 0) offlineSlots.push(index)
+        // 会话必须真的停掉：一个离线设备的 ffmpeg 会一直重试到超时为止。
+        toStop.add(deviceId)
+      }
+    }
+
+    if (removedSlots.length > 0) {
+      notice.value = { kind: 'device-removed' }
+    } else if (offlineSlots.length > 0) {
+      notice.value = { kind: 'device-offline' }
+    }
+
+    return { toStop: [...toStop], removedSlots, offlineSlots }
+  }
+
+  /**
+   * 清空所有格子，保留档位。
+   *
+   * 退出页面时用：主进程里的每一个会话都必须被停掉（否则就是若干个没人看的
+   * ffmpeg 占着相机那有限的 `rtsp_client_limit`），但档位是用户的偏好，留下。
+   */
+  function clearAll(layoutToKeep: CameraWallLayout = model.value.layout): string[] {
+    const assigned = model.value.slots.filter((slot): slot is string => slot !== null)
+    model.value = createCameraWallModel(layoutToKeep)
+    states.value = {}
+    refusal.value = null
+    return assigned
+  }
+
+  // -------------------------------------------------------------------------
+  // 视图对象（iVMS 的 View = 档位 + 每格绑谁，可命名保存）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 视图列表。
+   *
+   * 与格子分配**不同**：格子分配刻意不持久化（文件头说明了理由：数据库主键重启后可能
+   * 对应另一台设备），而视图里存的是**稳定的 `deviceUid`**（相机 `fa371:<ip>:<port>`、
+   * 盒子 `mac:…`），所以它可以落盘——前提是恢复时**重新解析**，解析不到就留空。
+   */
+  const views = ref<CameraView[]>(readStoredViews())
+
+  /** 主动保存/另存的结果，供界面说明为什么没存成（例如已到 5 套上限）。 */
+  type SaveViewResult = { ok: true; view: CameraView } | { ok: false; reason: 'limit-reached' | 'invalid-division' }
+
+  function persistViews(): void {
+    try {
+      window.localStorage.setItem(CAMERA_WALL_VIEWS_STORAGE_KEY, JSON.stringify(views.value))
+    } catch {
+      // 记不住偏好不应该让保存动作本身失败。
+    }
+  }
+
+  /** 另存当前分屏为一套具名视图。超过上限时**如实拒绝**，不悄悄丢掉最旧的一套。 */
+  function saveViewAs(name: string, division: CameraDivision): SaveViewResult {
+    if (!validateDivision(division).ok) return { ok: false, reason: 'invalid-division' }
+    if (views.value.length >= MAX_CUSTOM_VIEWS) return { ok: false, reason: 'limit-reached' }
+    const view: CameraView = {
+      id: `view-${Date.now().toString(36)}-${views.value.length + 1}`,
+      name,
+      division,
+      bindings: division.cells.map(() => null)
+    }
+    views.value = [...views.value, view]
+    persistViews()
+    return { ok: true, view }
+  }
+
+  function renameView(id: string, name: string): void {
+    views.value = views.value.map((view) => (view.id === id ? { ...view, name } : view))
+    persistViews()
+  }
+
+  function deleteView(id: string): void {
+    views.value = views.value.filter((view) => view.id !== id)
+    persistViews()
+  }
+
+  /** 把某一格绑到某台设备（按 `deviceUid` 存，不存数据库主键）。 */
+  function bindViewSlot(id: string, index: number, deviceUid: string | null): void {
+    views.value = views.value.map((view) => {
+      if (view.id !== id) return view
+      const bindings = [...view.bindings]
+      if (index < 0 || index >= view.division.cells.length) return view
+      bindings[index] = deviceUid
+      return { ...view, bindings }
+    })
+    persistViews()
+  }
+
+  /**
+   * 解析一套视图：每格该放哪台设备、哪几格解析不到。
+   *
+   * **它不改模型、更不起流。** 两个理由：
+   *   1. 「是否拉流」是另一个决定（`decideCameraAutoPlay()`，一次进程一次尝试）。让恢复
+   *      顺手起流会绕过「操作员手动停止过就不再自动起」这条规则；
+   *   2. 现在的 `CameraWallModel` **还表达不了自定义分屏**：它的档位是固定的
+   *      `1 | 4 | 9 | 16`（N 个等大槽位），而 `Joint` 合并后的格子数可能是 8 这种既不是
+   *      平方数也不在档位表里的值。把绑定写进去需要先把这个模型泛化成「一组矩形格子」，
+   *      那是第 ⑤ 轮剩下的工作。所以这里只产出**决定**，由那一轮负责落到模型上。
+   */
+  function resolveView(id: string, resolveUid: (uid: string) => string | undefined): BoundView | undefined {
+    const view = views.value.find((candidate) => candidate.id === id)
+    if (!view) return undefined
+    return bindViewToDevices(view, resolveUid)
+  }
+
+  return {
+    // state
+    model,
+    states,
+    maxStreams,
+    reportedActive,
+    notice,
+    refusal,
+    deviceList,
+    views,
+    // getters
+    layout,
+    cellCount,
+    audioSlot,
+    activeSlot,
+    cells,
+    summary,
+    // actions
+    bindDevices,
+    applyStates,
+    applyState,
+    forgetState,
+    setLimits,
+    setNotice,
+    clearRefusal,
+    placeDevice,
+    slotForDevice,
+    clearCell,
+    setActive,
+    toggleAudio,
+    setAudio,
+    changeLayout,
+    estimatedActive,
+    startPermission,
+    syncDevices,
+    clearAll,
+    saveViewAs,
+    renameView,
+    deleteView,
+    bindViewSlot,
+    resolveView
+  }
+})

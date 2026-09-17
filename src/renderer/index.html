@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content Security Policy (spec appendix C rule 3).
+
+      `connect-src 'none'` is the platform-level enforcement of the hard rule
+      "the renderer never opens a network connection to a device IP": even if a
+      future change accidentally introduced fetch()/WebSocket/XHR to a device,
+      Chromium would block it. Every byte of device data must arrive through
+      window.api.* (IPC -> DeviceService -> HTTP transport in the main process).
+
+      `media-src 'self' blob:` is required by the recording player: the audio
+      arrives as base64 over IPC and is played from an object URL created with
+      URL.createObjectURL(). Without `blob:` here Chromium blocks the <audio>
+      element (media-src falls back to default-src, and `'self'` does not cover
+      blob: URLs in every Chromium/Electron build we ship to). It does NOT widen
+      network access: blob: URLs are same-process objects, and connect-src is
+      still 'none'.
+
+      `media-src … http://127.0.0.1:*` is required by the CAMERA LIVE VIEW, and it is
+      the ONLY widening this policy has ever needed for it. The FA371 speaks RTSP,
+      which Chromium cannot demux, so the main process re-muxes it with ffmpeg and
+      serves the MP4 over a loopback HTTP server whose port the OS picks at bind time
+      (`listen(0)`); a wildcard PORT is therefore the only form that can be written
+      down — pinning a number would break the moment the ephemeral port changed.
+
+      `img-src … http://127.0.0.1:*` was added for the ALARM SNAPSHOTS on the device
+      map (owner 2026-09-17, batch 8): the sonar's alarm pictures are local JPEG files,
+      and the renderer cannot read files. They are served by the SAME loopback server
+      as the video (one instance, one security story) — so the widening is the same
+      `127.0.0.1` host with the same wildcard port and the same per-session token in
+      the path. `img-src` authorises IMAGE LOADS only; `connect-src 'none'` still
+      blocks fetch/XHR/WebSocket, so this cannot become a data channel either.
+
+      Why a wildcard loopback port is safe HERE while nothing else was relaxed:
+        - the host is the literal `127.0.0.1`, never `localhost` (which resolves
+          through the hosts file) and never a device IP, so this grants no reach
+          beyond this machine;
+        - `media-src`/`img-src` only authorise MEDIA and IMAGE loads. They do not
+          authorise fetch(), XHR or WebSocket — `connect-src 'none'` still blocks
+          every one of those, so a compromised renderer cannot turn this into a
+          data channel;
+        - both services are protected by a per-session random token in the path
+          and a loopback-only bind, both enforced in the main process.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none'"
+    />
+    <title>HERTZINNO Acoustic Box Manager</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

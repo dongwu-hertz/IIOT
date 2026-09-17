@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": false,
+    "outDir": "./.test-build",
+    "rootDir": ".",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "target": "ES2022",
+    "verbatimModuleSyntax": false,
+    "declaration": false,
+    "sourceMap": false,
+    "tsBuildInfoFile": "./.test-build/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/shared/**/*.ts", "src/main/services/device/**/*.ts", "src/main/services/stream/**/*.ts", "src/main/services/audio/**/*.ts", "src/main/services/trend/**/*.ts", "src/main/services/storage/**/*.ts", "src/main/services/logging/**/*.ts", "src/main/services/database/**/*.ts", "src/main/services/settings/**/*.ts", "src/main/services/media/**/*.ts", "src/main/services/linkage/**/*.ts", "tests/**/*.ts"]
+}

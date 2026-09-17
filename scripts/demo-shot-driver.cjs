@@ -1,0 +1,3179 @@
+'use strict'
+/**
+ * DEMO / VERIFICATION DRIVER — not part of the shipped app.
+ *
+ * Required by `scripts/demo-shot.cjs` through a generated two-line wrapper, so it
+ * runs inside Electron's main process attached to the app before the app's own
+ * entry creates its window. Configuration arrives in the `HZ_DEMO_SHOT`
+ * environment variable as JSON.
+ *
+ * WHY THIS IS A REAL FILE (it used to be a template literal inside demo-shot.cjs)
+ *
+ * A generated program is one that nothing type-checks, nothing lints and no editor
+ * understands, and this repository paid for that three times: a backtick in a
+ * comment terminated the outer literal, an escape sequence collapsed into a real
+ * newline on the way through, and a snippet assembled without newlines silently
+ * needed explicit semicolons because automatic semicolon insertion never fires on a
+ * single line. Every one of those reached the operator as Electron's generic
+ * "Script failed to execute" — or as a harness that simply HUNG, because the
+ * rejection escaped as an unhandled promise.
+ *
+ * The driver is a normal file now, so `node --check scripts/demo-shot-driver.cjs`
+ * sees it, and the only generated text left is the two-line wrapper.
+ *
+ * Snippets injected into the RENDERER are still strings and still arrive on ONE
+ * line, so every statement in them ends with an explicit `;`.
+ */
+const { app, BrowserWindow } = require('electron')
+const electron = require('electron')
+const crypto = require('node:crypto')
+const fs = require('node:fs')
+const http = require('node:http')
+const path = require('node:path')
+
+const CONFIG = JSON.parse(process.env.HZ_DEMO_SHOT || '{}')
+const OUT = CONFIG.out
+const ONLY = CONFIG.route
+const KEEP_OPEN = CONFIG.keepOpen
+const ROUTES = CONFIG.routes || []
+
+const problems = []
+const log = (m) => { process.stdout.write('[demo] ' + m + '\n') }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 假的听诊盒子（E2 / 2023 版）——**只在这台探针进程里**，用来把「拉」通道走完整条路。
+ *
+ * 为什么要有它（业主 2026-09-16 第①项：「端到端可用」）：
+ * 客户端、落库、界面各自都有单测，但"从界面上把设备加进来 → 点同步 → 告警与录音真的落进
+ * 本机库"这条**串起来**的路，只有把一台设备真的接上才走得通。真机不在手上，所以设备这一侧
+ * 是假的，**协议这一侧是真的**：路径、token 头、口令摘要、字段名都按手册
+ * （`docs/reference/` 的两份 E2 手册 + `src/shared/domain/e2.ts` 的常量）实现。
+ *
+ * 它**能证明**什么：应用真的发出了手册里的那些请求、口径对（MD5 摘要、Bearer token、
+ * `file_path` 带 `saving_path`）、并把结果落进了本机库。
+ * 它**不能证明**什么：与真机的互操作性 —— 一个按我们理解写的假设备无法证伪我们的理解。
+ * 这一点写在 `docs/Ivms4200-UX-REFERENCE.md` §15.36 里，不许当成"真机验过了"。
+ */
+function makeWavBytes(sampleRate, seconds) {
+  const channels = 1
+  const bitsPerSample = 16
+  const frames = Math.round(sampleRate * seconds)
+  const dataBytes = frames * channels * (bitsPerSample / 8)
+  const buffer = Buffer.alloc(44 + dataBytes)
+  buffer.write('RIFF', 0, 'ascii')
+  buffer.writeUInt32LE(36 + dataBytes, 4)
+  buffer.write('WAVE', 8, 'ascii')
+  buffer.write('fmt ', 12, 'ascii')
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(channels, 22)
+  buffer.writeUInt32LE(sampleRate, 24)
+  buffer.writeUInt32LE(sampleRate * channels * (bitsPerSample / 8), 28)
+  buffer.writeUInt16LE(channels * (bitsPerSample / 8), 32)
+  buffer.writeUInt16LE(bitsPerSample, 34)
+  buffer.write('data', 36, 'ascii')
+  buffer.writeUInt32LE(dataBytes, 40)
+  return buffer
+}
+
+/** 一张最小的合法 JPEG（1×1 像素），用来验"时频谱图/抓拍是二进制下载，不是 JSON"。 */
+const TINY_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+    'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
+    'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==',
+  'base64'
+)
+
+/**
+ * 启动假的听诊盒子。
+ *
+ * @param {{ password: string, sampleRate?: number }} options
+ */
+async function startMockE2Device(options) {
+  const password = options.password
+  const sampleRate = options.sampleRate ?? 48000
+  /**
+   * 这一台假设备扮演**哪一代**（业主 2026-09-17 第 8 批把 PTZ 与抓图接上之后需要两种）。
+   *
+   * `auscultation`（默认）= 2023 版听诊盒子：`/system` 里有 `work_mode`，告警带
+   * `alarm_value`/`alarm_reasons`/`audio_name`，图是 10 张时频谱。
+   * `airSonar` = SN-16 空气声呐：`/system` 里是**球机那一组** `cam_*`（没有 `work_mode`），
+   * 告警带 `horizontal`/`vertical`，图是 **3 张球机抓图**（`1.jpg`…`3.jpg`）+ 固定 `alarm.wav`，
+   * 而且 `PUT /system` 要真的把参数改掉（PTZ 那条链的读回核对才有东西可核）。
+   */
+  const variant = options.variant === 'airSonar' ? 'airSonar' : 'auscultation'
+
+  /** 手册里那条告警（2023 版字段：`alarm_value` 位图 + `alarm_reasons` 文本 + `audio_name`）。 */
+  const logEntry =
+    variant === 'airSonar'
+      ? {
+          id: 54143,
+          time: '2026-09-17_10-20-30',
+          db_value: 70.59,
+          tde_ratio: 39.17,
+          fde_ratio: 0.97,
+          horizontal: 45,
+          vertical: 90,
+          saving_path: '20260917_102030/',
+          files_status: 1
+        }
+      : {
+          id: 7,
+          time: '2026-09-17_10-20-30',
+          db_value: 41.5,
+          main_frequency: 320.25,
+          tde_ratio: 0.5,
+          fde_ratio: 0.25,
+          alarm_value: 3,
+          alarm_reasons: '局部放电',
+          saving_path: 'alarm/2026-09-17',
+          audio_name: 'alarm.wav',
+          files_status: 1
+        }
+
+  /**
+   * 空气声呐的 `/system`（真机实测那一台的形状）。**可写**：`PUT /system` 就地改它 ——
+   * PTZ 保存的读回核对必须有真的变化可读，否则那条断言只是在读回我们自己的请求。
+   */
+  const airSonarParams = {
+    cam_enable: false,
+    cam_ip: '192.168.2.64',
+    cam_pass: 'AP1_lfxs_2025',
+    cam_port: 80,
+    cam_user: 'admin',
+    cur_realtime_channel: 1,
+    db_limit: 60,
+    is_cam_init: false,
+    is_ptz_direction_same_with_sonar: false,
+    is_save_snapshot: true,
+    notify_url: 'http://192.168.110.91:8080/api/v1/probe/telemetry',
+    samplerate: 20000
+  }
+
+  const requests = []
+  const server = http.createServer((request, response) => {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      let body = {}
+      try {
+        body = raw === '' ? {} : JSON.parse(raw)
+      } catch {
+        body = { __raw: raw }
+      }
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      const entry = {
+        method: request.method ?? '',
+        path: url.pathname,
+        query: Object.fromEntries(url.searchParams.entries()),
+        auth: request.headers.authorization ?? '',
+        body
+      }
+      requests.push(entry)
+
+      const json = (status, payload) => {
+        response.writeHead(status, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(payload))
+      }
+
+      if (url.pathname === '/login') {
+        // 两份手册的口令摘要不一致：**只认加盐那一种**（`md5(password + 'lfxs')`），
+        // 不加盐的摘要回 401 —— 这样"先加盐、401 再换"那条路径在探针里是**真的**走了一遍。
+        const salted = crypto.createHash('md5').update(password + 'lfxs').digest('hex')
+        const plain = crypto.createHash('md5').update(password).digest('hex')
+        entry.digestStyle = body.password === salted ? 'salted' : body.password === plain ? 'plain' : 'unknown'
+        if (body.username === 'admin' && entry.digestStyle === 'salted') {
+          json(200, { token: 'probe-token' })
+          return
+        }
+        json(401, { ret: -1, msg: 'auth failed' })
+        return
+      }
+
+      // 除登录之外一律要 Bearer token（与客户端一致）。
+      if (entry.auth !== 'Bearer probe-token') {
+        json(401, { ret: -1 })
+        return
+      }
+
+      if (url.pathname === '/workmode') {
+        /*
+         * 空气声呐**没有**工作模式这个概念（手册里连 `work_mode` 字段都没有）。
+         * 它照旧 404：客户端在变体已判成 airSonar 时**根本不会问这个端点**，
+         * 所以这里 404 正是"我们有没有乱问"的证据（探针会检查请求列表里没有它）。
+         */
+        if (variant === 'airSonar') {
+          json(404, { ret: -1 })
+          return
+        }
+        json(200, {
+          work_mode: 'rotating_equipment',
+          samplerate: sampleRate,
+          stft_pic_height: 256,
+          stft_pic_width: 512
+        })
+        return
+      }
+      if (url.pathname === '/system') {
+        if (request.method === 'PUT') {
+          entry.written = body
+          // 空气声呐：**真的改**（PTZ 的读回核对要读到变化）。
+          if (variant === 'airSonar' && body && typeof body === 'object') {
+            Object.assign(airSonarParams, body)
+          }
+          json(200, { ret: 0 })
+          return
+        }
+        if (variant === 'airSonar') {
+          // 球机那一组键在 `/system` 里出现 ⇒ 变体判定为 airSonar（见 detectE2Variant）。
+          json(200, airSonarParams)
+          return
+        }
+        // `work_mode` 在 `/system` 里出现过 ⇒ 变体判定为 2023 版听诊盒子（见 detectE2Variant）。
+        json(200, {
+          work_mode: 'rotating_equipment',
+          samplerate: sampleRate,
+          threshold_db: 40,
+          alarm_interval: 30
+        })
+        return
+      }
+      if (url.pathname === '/basic' || url.pathname === '/get_device_basic_params') {
+        // 两代的设备信息端点不同；真机上只有自己那一个（这里按变体只答一个）。
+        const served = url.pathname === '/basic' ? 'auscultation' : 'airSonar'
+        if (served !== variant) {
+          json(404, { ret: -1 })
+          return
+        }
+        json(
+          200,
+          variant === 'airSonar'
+            ? {
+                dev_name: '探针声呐',
+                dev_type: 'AS16-auth-vertical-reverse',
+                dev_version: 'V3.4.0.2024-11-27',
+                upgrade_time: '2024-11-27_10:00:00',
+                web_version: 'WEBV2.3.0',
+                equip_number: 'PROBE-SN16-0001'
+              }
+            : {
+                dev_name: '探针听诊盒子',
+                dev_type: 'E2',
+                dev_version: 'V1.2.3',
+                upgrade_time: '2026-01-01 00:00:00',
+                web_version: 'web-1.0',
+                equip_number: 'PROBE-E2-0001'
+              }
+        )
+        return
+      }
+      if (url.pathname === '/alarm_log_all' || url.pathname === '/alarm_log' ||
+          url.pathname === '/get_all_alarms' || url.pathname === '/get_alarm_logs_conditional') {
+        json(200, { logs_count: 1, logs: [logEntry] })
+        return
+      }
+      if (url.pathname === '/alarm_files' || url.pathname === '/saving_alarm_file') {
+        const filePath = url.searchParams.get('file_path') ?? ''
+        entry.filePath = filePath
+        if (filePath.endsWith('alarm.wav')) {
+          response.writeHead(200, { 'content-type': 'audio/wav' })
+          response.end(makeWavBytes(sampleRate, 2))
+          return
+        }
+        if (/\.jpg$/i.test(filePath)) {
+          response.writeHead(200, { 'content-type': 'image/jpeg' })
+          response.end(TINY_JPEG)
+          return
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' })
+        response.end('not found')
+        return
+      }
+      /*
+       * 空气声呐真机（V3.4.0）的文件走**静态路径** `/static_file/<saving_path><name>`，
+       * 而手册写的是 API 形态。客户端两条都会试（只有 404 才换），所以这里把它实现出来：
+       * 于是"抓图真的被下载下来了"这件事在假设备上也能验。
+       */
+      if (url.pathname.startsWith('/static_file/')) {
+        entry.filePath = url.pathname
+        if (url.pathname.endsWith('alarm.wav')) {
+          response.writeHead(200, { 'content-type': 'audio/wav' })
+          response.end(makeWavBytes(sampleRate, 2))
+          return
+        }
+        if (/\.jpg$/i.test(url.pathname)) {
+          response.writeHead(200, { 'content-type': 'image/jpeg' })
+          response.end(TINY_JPEG)
+          return
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' })
+        response.end('not found')
+        return
+      }
+      if (url.pathname === '/time_sync_with_nvt') {
+        entry.timedSync = true
+        json(200, { ret: 0 })
+        return
+      }
+      json(404, { ret: -1 })
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  return {
+    port,
+    requests,
+    variant,
+    /** 空气声呐模式下的 `/system`（`PUT /system` 会改它）—— 探针用它验"真的写进设备了"。 */
+    params: airSonarParams,
+    close: () => new Promise((resolve) => server.close(() => resolve()))
+  }
+}
+
+/**
+ * 产品这一轮点名的四档窗口尺寸。
+ *
+ * 顺序刻意从小到大：断言读的是「这一列随窗口变宽」这条顺序关系。四档都是**内容区**
+ * 尺寸（`setContentSize`），所以渲染层报回来的 `innerWidth/innerHeight` 必须与请求的
+ * 数字逐像素相同 —— 不同就说明操作系统把窗口夹小了，那时必须说出来，而不是拿另一档
+ * 的数字当成这一档的结论。
+ */
+const TREE_SIZES = [
+  [1280, 720],
+  [1366, 768],
+  [1920, 1080],
+  [2560, 1440]
+]
+
+/** 左/上间距与四档之间允许的浮动（px）：亚像素布局 + 取整，2px 是噪声不是偏移。 */
+const GAP_TOLERANCE_PX = 2
+
+/**
+ * 在渲染层里跑一段**异步**脚本并把结果解析成对象。
+ *
+ * 与 `run()` 里那个 `layout()` 的分工：`layout()` 会先切路由再跑（它测的是某一页的
+ * 结构），这里的片段与路由无关（它们问的是主进程/设备），所以不切页。
+ */
+async function execJson(win, label, source) {
+  try {
+    const raw = await win.webContents.executeJavaScript(source)
+    return typeof raw === 'string' ? JSON.parse(raw) : raw
+  } catch (error) {
+    log(label + ' threw: ' + (error && error.message))
+    problems.push(label + ' threw: ' + (error && error.message))
+    return { ok: false, threw: String(error && error.message) }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 重命名演练（默认关闭，`--rename-drill` 打开）
+//
+// 为什么需要它，而且为什么由 `demo-shot` 做：声纹设备与它的通道**只存在于操作员的真实
+// profile 里**，`video-proof.cjs` 那一次跑在临时 profile 中（它只会自己加上那台相机）。
+// 所以「改设备名 / 改通道名，再改回来」这件事只有真实 profile 里的进程能做。
+//
+// 为什么默认关闭：它写的是**真机**（一台正在被值班使用的声纹设备）。默认的
+// `node scripts/demo-shot.cjs` 因此一个字节都不写设备；要演练必须显式给一个开关。
+// ---------------------------------------------------------------------------
+const RENAME_DRILL = CONFIG.renameDrill === true
+
+/** 设备列表（按 kind 挑，绝不按名字或地址猜）。 */
+function listDevicesScript() {
+  return (
+    '(async () => { try {' +
+    '  const r = await window.api.devices.list();' +
+    '  if (!r.success) return JSON.stringify({ ok: false, code: r.error.code });' +
+    '  return JSON.stringify({ ok: true, devices: (r.data || []).map((d) => ({' +
+    '    id: d.id, kind: d.kind, name: d.name, ip: d.ip, status: d.status })) });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()'
+  )
+}
+
+/** 设备身份（`get_devinfo`）—— 设备侧的名字就在这里，它才是「设备真的改名了吗」的答案。 */
+function deviceInfoScript(deviceId) {
+  return (
+    '(async () => { try {' +
+    '  const r = await window.api.devices.getInfo(' + JSON.stringify(deviceId) + ');' +
+    '  if (!r.success) return JSON.stringify({ ok: false, code: r.error.code, message: r.error.message || "" });' +
+    '  return JSON.stringify({ ok: true, name: r.data.name, channelCount: r.data.channelCount });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()'
+  )
+}
+
+/** 设备侧的通道表（`GET /get_passageway`）：改通道名之后的权威读数。 */
+function deviceChannelsScript(deviceId) {
+  return (
+    '(async () => { try {' +
+    '  const r = await window.api.config.getChannels(' + JSON.stringify(deviceId) + ');' +
+    '  if (!r.success) return JSON.stringify({ ok: false, code: r.error.code, message: r.error.message || "" });' +
+    '  return JSON.stringify({ ok: true, channels: (r.data || []).map((c) => ({' +
+    '    channelIndex: c.channelIndex, name: c.name, enabled: c.enabled })) });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()'
+  )
+}
+
+/** 一次设备重命名（本地 + 设备），与设备管理页里那条 `renameDeviceName()` 逐句相同。 */
+function renameDeviceScript(deviceId, name) {
+  return (
+    '(async () => { try {' +
+    '  const updated = await window.api.devices.update({ id: ' + JSON.stringify(deviceId) +
+    ', name: ' + JSON.stringify(name) + ' });' +
+    '  if (!updated.success) return JSON.stringify({ ok: false, step: "local", code: updated.error.code });' +
+    '  const written = await window.api.config.setDeviceName(' + JSON.stringify(deviceId) + ', ' +
+    JSON.stringify(name) + ');' +
+    '  if (!written.success) return JSON.stringify({ ok: false, step: "device", code: written.error.code,' +
+    '    message: written.error.message || "" });' +
+    '  return JSON.stringify({ ok: true, localName: updated.data.name });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()'
+  )
+}
+
+/**
+ * 这个探针写一次名字、读回、再改回原值并读回。
+ *
+ * 「写入读回」这一步是**必须**的：一次 `ret:200` 不构成证据（设备完全可能接受请求而忽略
+ * 字段），所以设备侧的名字一律用 `get_devinfo` 重读；通道名用 `updateChannel` 返回的
+ * 设备重读结果。恢复之后同样再读一次，证明这台真机回到了原样。
+ */
+async function runRenameDrill(win) {
+  const list = await execJson(win, 'renameList', listDevicesScript())
+  const devices = list.ok ? list.devices || [] : []
+  const box = devices.filter((device) => device.kind === 'acousticBox')[0] || null
+  log('rename drill  : devices = ' + JSON.stringify(devices.map((d) => (d.kind + ':' + d.name))))
+  if (!box) {
+    log('rename drill  : 未验证 — 真实 profile 里没有声纹设备，设备名/通道名无法演练')
+    return
+  }
+
+  const beforeInfo = await execJson(win, 'renameInfoBefore', deviceInfoScript(box.id))
+  const beforeChannels = await execJson(win, 'renameChannelsBefore', deviceChannelsScript(box.id))
+  log('rename before : device=' + JSON.stringify(beforeInfo) + ' channels=' + JSON.stringify(beforeChannels))
+  const originalName = beforeInfo.ok ? beforeInfo.name : ''
+
+  if (!originalName) {
+    log('rename drill  : 未验证 — 设备的 get_devinfo 没有给出名字，无法验证设备侧重命名')
+  } else {
+    const next = 'HZ 验证设备名 ' + Date.now().toString().slice(-6)
+    const write = await execJson(win, 'renameWrite', renameDeviceScript(box.id, next))
+    const afterInfo = await execJson(win, 'renameInfoAfter', deviceInfoScript(box.id))
+    log('rename write  : ' + JSON.stringify(write) + ' -> device reads back ' + JSON.stringify(afterInfo))
+    if (!write.ok) {
+      problems.push('声纹设备重命名失败：' + JSON.stringify(write))
+    } else if (!afterInfo.ok || afterInfo.name !== next) {
+      // 设备接受请求却没改名：这是**必须**报出来的事实，而不是「成功了」。
+      problems.push('设备侧重命名没有生效：写入要求 ' + JSON.stringify(next) +
+        '，重读 get_devinfo 得到 ' + JSON.stringify(afterInfo))
+    }
+    const restore = await execJson(win, 'renameRestore', renameDeviceScript(box.id, originalName))
+    const restoredInfo = await execJson(win, 'renameInfoRestored', deviceInfoScript(box.id))
+    log('rename restore: ' + JSON.stringify(restore) + ' -> device reads back ' + JSON.stringify(restoredInfo))
+    if (!restore.ok) problems.push('设备名恢复失败：' + JSON.stringify(restore))
+    if (!restoredInfo.ok || restoredInfo.name !== originalName) {
+      problems.push('设备名恢复后读回不是原值：期望 ' + JSON.stringify(originalName) +
+        '，得到 ' + JSON.stringify(restoredInfo))
+    }
+  }
+
+  // 通道：挑一路**启用**的（真机上 2~7 路未启用）。改一个正在用的通道，比改一个停用的
+  // 通道更能证明写入链路真的通了。
+  const channels = beforeChannels.ok ? beforeChannels.channels || [] : []
+  const enabled = channels.filter((channel) => channel.enabled === true)
+  const target = enabled[0] || channels[0] || null
+  log('rename channel: target=' + JSON.stringify(target) + ' (enabled ' + enabled.length +
+    ' of ' + channels.length + ')')
+  if (!target) {
+    log('rename drill  : 未验证 — 设备没有上报任何通道，通道名无法演练')
+    return
+  }
+  const originalChannel = target.name || ''
+  const nextChannel = 'HZ 验证通道 ' + Date.now().toString().slice(-6)
+  const writeChannel = await execJson(win, 'renameChannelWrite',
+    '(async () => { try {' +
+    '  const r = await window.api.config.updateChannel(' + JSON.stringify(box.id) + ', ' +
+    JSON.stringify(target.channelIndex) + ', { name: ' + JSON.stringify(nextChannel) + ' });' +
+    '  if (!r.success) return JSON.stringify({ ok: false, code: r.error.code, message: r.error.message || "" });' +
+    '  const one = (r.data || []).filter((c) => c.channelIndex === ' + JSON.stringify(target.channelIndex) +
+    ')[0] || null;' +
+    '  return JSON.stringify({ ok: true, readBack: one });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()')
+  log('rename channel: write ' + JSON.stringify(writeChannel))
+  if (!writeChannel.ok) {
+    problems.push('通道重命名失败：' + JSON.stringify(writeChannel))
+  } else if (!writeChannel.readBack || writeChannel.readBack.name !== nextChannel) {
+    problems.push('通道重命名没有生效（主进程写完重读设备的值不是新值）：' + JSON.stringify(writeChannel))
+  }
+  const restoreChannel = await execJson(win, 'renameChannelRestore',
+    '(async () => { try {' +
+    '  const r = await window.api.config.updateChannel(' + JSON.stringify(box.id) + ', ' +
+    JSON.stringify(target.channelIndex) + ', { name: ' + JSON.stringify(originalChannel) + ' });' +
+    '  if (!r.success) return JSON.stringify({ ok: false, code: r.error.code });' +
+    '  const one = (r.data || []).filter((c) => c.channelIndex === ' + JSON.stringify(target.channelIndex) +
+    ')[0] || null;' +
+    '  return JSON.stringify({ ok: true, readBack: one });' +
+    '} catch (error) { return JSON.stringify({ ok: false, threw: String(error && error.message) }); } })()')
+  log('rename channel: restore ' + JSON.stringify(restoreChannel))
+  if (!restoreChannel.ok || !restoreChannel.readBack || restoreChannel.readBack.name !== originalChannel) {
+    problems.push('通道名恢复后读回不是原值：期望 ' + JSON.stringify(originalChannel) +
+      '，得到 ' + JSON.stringify(restoreChannel))
+  }
+}
+
+/**
+ * 把主进程的 `shell.openExternal` 换成一支**记录用的替身**。
+ *
+ * 为什么需要它：页脚里的公司网站链接这一轮必须证明「还在，而且还能用」。「按钮在
+ * DOM 里」只能证明前半句；后半句要一次真正的点击 —— 渲染层 `app:open-external` IPC
+ * → 主进程校验协议 → `shell.openExternal`。探针把这个终点记下来（返回值照原样给一个
+ * 已完成的 Promise），于是：
+ *   - 点击路径被端到端走通一次，中间任何一环断了都记不到 URL；
+ *   - 探针不会真的弹出系统浏览器打开公司网站（这是一次自动化验证，不是演示）。
+ *
+ * 必须在应用自己的入口之前装好：这个驱动是被 wrapper 先 `require` 的（见
+ * `scripts/demo-shot.cjs`），所以替身在主进程模块图建立之前就位。
+ */
+const openExternalCalls = []
+let openExternalStubInstalled = false
+try {
+  electron.shell.openExternal = (url) => {
+    openExternalCalls.push(String(url))
+    return Promise.resolve()
+  }
+  openExternalStubInstalled = typeof electron.shell.openExternal === 'function'
+} catch (error) {
+  log('openExternal stub could not be installed: ' + (error && error.message))
+}
+
+// The app creates its own window; attach listeners as it is created so no
+// early console error or preload failure is missed.
+app.on('browser-window-created', (_event, win) => {
+  win.webContents.on('console-message', (...a) => {
+    // Electron >= 33 passes a single details object; older versions pass
+    // (event, level, message, line, source). Support both, since the pinned
+    // Electron version and the locally available one may differ.
+    const d = a[0]
+    if (d && typeof d === 'object' && 'level' in d) {
+      if (String(d.level) === 'error' || String(d.level) === 'warning') {
+        problems.push('console[' + d.level + '] ' + d.message + ' (' + d.sourceId + ':' + d.lineNumber + ')')
+      }
+      return
+    }
+    const level = a[0]
+    if (level >= 2) problems.push('console[' + level + '] ' + a[1] + ' (' + a[3] + ':' + a[2] + ')')
+  })
+  win.webContents.on('preload-error', (_e, p, err) => problems.push('preload-error ' + p + ': ' + err.message))
+  win.webContents.on('render-process-gone', (_e, details) => problems.push('render-process-gone: ' + JSON.stringify(details)))
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => problems.push('did-fail-load ' + code + ' ' + desc + ' ' + url))
+})
+
+async function shoot(win, name) {
+  const image = await win.webContents.capturePage()
+  const file = path.join(OUT, name + '.png')
+  fs.writeFileSync(file, image.toPNG())
+  const size = image.getSize()
+
+  // A "successful" capture of a blank window is still a broken UI, and the
+  // harness cannot rely on a human looking at the PNG. So measure the bitmap:
+  // a real screen has many distinct colours; an empty/white one has almost none.
+  const bmp = image.toBitmap()
+  const seen = new Set()
+  let nonWhite = 0
+  let sampled = 0
+  for (let i = 0; i + 3 < bmp.length; i += 4 * 97) { // stride-sample
+    const b = bmp[i], g = bmp[i + 1], r = bmp[i + 2]
+    seen.add((r >> 3) + ',' + (g >> 3) + ',' + (b >> 3))
+    if (r < 245 || g < 245 || b < 245) nonWhite += 1
+    sampled += 1
+  }
+  const text = await win.webContents.executeJavaScript(
+    '(document.body.innerText || "").replace(/\s+/g, " ").trim().slice(0, 180)'
+  )
+  const nodes = await win.webContents.executeJavaScript('document.querySelectorAll("*").length')
+
+  log('captured ' + name + '.png  ' + size.width + 'x' + size.height + '  ' + fs.statSync(file).size + ' B')
+  log('  distinct colours ~' + seen.size + ' | non-white ' + Math.round(100 * nonWhite / sampled) + '% | DOM nodes ' + nodes)
+  log('  text: ' + JSON.stringify(text))
+
+  if (seen.size < 12) problems.push(name + ': only ' + seen.size + ' distinct colours — looks blank')
+  if (nodes < 20) problems.push(name + ': only ' + nodes + ' DOM nodes')
+  return size
+}
+
+async function run() {
+  await sleep(3500) // let the app create its window and finish loading
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win) {
+    log('FATAL: the app never created a BrowserWindow')
+    app.exit(1)
+    return
+  }
+
+  log('window title : ' + JSON.stringify(win.getTitle()))
+  log('visible      : ' + win.isVisible())
+  log('url          : ' + win.webContents.getURL())
+
+  /**
+   * Sign in before touching the UI.
+   *
+   * The shell is gated behind an application account, and the factory
+   * administrator must replace its password on first use. This demo runs against
+   * its own throwaway profile, so it walks the real two-step flow — which also
+   * makes the screenshots below show a signed-in application rather than a login
+   * form. The session lives in the MAIN process, so it survives the reloads the
+   * language probe performs later.
+   *
+   * NOTE: no backticks and no dollar-brace interpolation in this string. The whole
+   * driver is itself a template literal in the parent script, so either would
+   * terminate it early — which is exactly how this broke the first time. The code
+   * below is therefore built by string concatenation.
+   */
+  const signIn = await win.webContents.executeJavaScript(
+    '(async () => { try {' +
+    "  const login = await window.api.auth.login({ username: 'admin', password: 'Hz@123456' });" +
+    "  if (!login.success) return JSON.stringify({ step: 'login', code: login.error.code });" +
+    '  if (login.data.mustChangePassword) {' +
+    '    const changed = await window.api.auth.changePassword({' +
+    "      currentPassword: 'Hz@123456'," +
+    "      newPassword: 'demo-shot-pass'" +
+    '    });' +
+    "    if (!changed.success) return JSON.stringify({ step: 'change', code: changed.error.code });" +
+    "    return JSON.stringify({ step: 'changed' });" +
+    '  }' +
+    "  return JSON.stringify({ step: 'already-signed-in' });" +
+    '} catch (error) {' +
+    "  return JSON.stringify({ step: 'threw', message: String(error && error.message) });" +
+    '} })()'
+  )
+  log('sign in      : ' + signIn)
+  const signInStep = JSON.parse(signIn).step
+  if (signInStep !== 'changed' && signInStep !== 'already-signed-in') {
+    problems.push('could not sign in: ' + signIn)
+  }
+
+  // Give Vue a tick to mount the shell in response to the session change.
+  await sleep(600)
+
+  const mounted = await win.webContents.executeJavaScript(
+    'document.querySelector(".app-shell") ? "app-shell-present" : "app-shell-MISSING"'
+  )
+  log('vue mount    : ' + mounted)
+  if (mounted !== 'app-shell-present') problems.push('vue-not-mounted')
+
+  const bridge = await win.webContents.executeJavaScript(
+    'JSON.stringify({api: typeof window.api, events: typeof window.events, genericInvoke: typeof (window.api && window.api.invoke)})'
+  )
+  log('preload bridge: ' + bridge)
+
+  /**
+   * Brand-mark probe.
+   *
+   * This used to measure the rendered width of the sidebar wordmark ("Acoustic Box
+   * Manager") to catch a glyph-painting fault. That wordmark was removed by product
+   * request — the brand mark is now the LOGO ALONE — so measuring text here would
+   * measure nothing.
+   *
+   * The risk that replaces it is a broken brand mark: the logo is a bundled PNG, and
+   * an image that fails to load renders as an invisible (or broken) element with no
+   * console error and no layout complaint. A naturalWidth of 0 is the honest test
+   * for "the bitmap actually decoded", which the complete flag alone does not prove.
+   */
+  const brand = await win.webContents.executeJavaScript('(() => {' +
+    'const el = document.querySelector(".sidebar__logo");' +
+    'if (!el) return JSON.stringify({found: false});' +
+    'const box = el.getBoundingClientRect();' +
+    'return JSON.stringify({' +
+    '  found: true,' +
+    '  complete: el.complete,' +
+    '  naturalWidth: el.naturalWidth,' +
+    '  naturalHeight: el.naturalHeight,' +
+    '  renderedWidth: Math.round(box.width),' +
+    '  renderedHeight: Math.round(box.height),' +
+    '  alt: el.getAttribute("alt"),' +
+    '  wordmarkPresent: !!document.querySelector(".sidebar__brand-name, .sidebar__brand-sub")' +
+    '});' +
+    '})()')
+  log('brand probe  : ' + brand)
+  {
+    const state = JSON.parse(brand)
+    if (!state.found) problems.push('侧栏品牌标识不存在')
+    else {
+      if (!state.complete || !(state.naturalWidth > 0)) {
+        problems.push('侧栏 logo 没有真正解码（naturalWidth=' + state.naturalWidth + '）')
+      }
+      if (!(state.renderedWidth > 0 && state.renderedHeight > 0)) {
+        problems.push('侧栏 logo 渲染尺寸为 0')
+      }
+      // The product removed the wordmark, so its return is a regression, not a nicety.
+      if (state.wordmarkPresent) problems.push('侧栏又出现了文字品牌名（产品要求只保留 logo）')
+    }
+  }
+
+  const list = ONLY ? ROUTES.filter((r) => r[1] === ONLY) : ROUTES
+  for (const [name, route] of list) {
+    // Hash history is what the router uses, so navigate by hash and let the
+    // router react — pushing a history state would not notify it.
+    await win.webContents.executeJavaScript(
+      'location.hash = ' + JSON.stringify('#' + route) + '; true'
+    )
+    await sleep(1400)
+    await shoot(win, name)
+  }
+
+  /**
+   * Layout regression checks (product request, one round of UI changes).
+   *
+   * Four things were MOVED, and every one of them can be "done" in the source and
+   * still wrong on screen: a component that is imported but not rendered, a tree
+   * that is moved in the template but keeps its old sidebar styling, a footer that
+   * is rendered inside the scroll container and therefore scrolls away.
+   *
+   * So each check is a DOM fact read from the running window, and each one is
+   * phrased as the product phrased it:
+   *   1. 设备拓扑 belongs INSIDE 设备管理 content    -> on /devices, and not in the sidebar
+   *   2. the language picker belongs in 系统设置     -> on /settings
+   *   3. version + copyright belong in a page footer -> present, and pinned to the bottom
+   *   4. the sidebar keeps the logo and drops the wordmark
+   *   5. 页脚不要邮箱、整条内容居中、公司网站链接还能用（这一轮新增，见下面
+   *      footerEmailInText / footerCenterOffsetPx / openExternal 那三段断言）
+   */
+  /**
+   * 跑一段页面脚本并把结果解析成对象，**带超时**。
+   *
+   * 为什么需要超时（2026-09-17 踩到）：`executeJavaScript` 等的是那段脚本自己
+   * `resolve()`。脚本里同步抛异常（Vue 的处理器在 `dispatchEvent` 里抛）、或者某个
+   * `new Promise` 的 `resolve` 分支被跳过时，这个 Promise **永远不会 settle** ——
+   * 探针的表现是**挂住**（实测挂了一个多小时，log 停在上一行），而不是报一条失败。
+   * 一次自动化验证挂在那里，比一条红断言糟糕得多：没有人知道它卡在哪一步。
+   *
+   * 超时之后返回一个**带 `probeTimeout` 标记的对象**，调用方照常走它的断言路径
+   * （缺字段就是缺字段），于是"哪一条探针卡住了"会出现在 problems 里。
+   */
+  const layout = async (route, script) => {
+    await win.webContents.executeJavaScript(
+      'location.hash = ' + JSON.stringify('#' + route) + '; true'
+    )
+    await sleep(1200)
+    const timeoutMs = 30_000
+    const raw = await Promise.race([
+      win.webContents.executeJavaScript(script),
+      sleep(timeoutMs).then(() => null)
+    ])
+    if (raw === null) {
+      log('layout ' + route.padEnd(9) + ': TIMEOUT after ' + timeoutMs + 'ms')
+      problems.push(route + ' 上这一段探针超时（' + timeoutMs + 'ms 没有返回）—— 页面脚本可能抛了异常或没有 resolve')
+      return { probeTimeout: true }
+    }
+    const state = JSON.parse(raw)
+    log('layout ' + route.padEnd(9) + ': ' + JSON.stringify(state))
+    return state
+  }
+
+  const overview = await layout('/', '(() => {' +
+    'const sidebar = document.querySelector(".sidebar");' +
+    'const tree = document.querySelector(".device-tree");' +
+    'const footer = document.querySelector(".app-footer");' +
+    'const main = document.querySelector(".app-main");' +
+    'const box = footer ? footer.getBoundingClientRect() : null;' +
+    // 页脚的内容块：把每个可见子元素（版权、分隔点、网站按钮、版本、发布日期）的
+    // 盒子取出来，量三件事 ——
+    //   1. 整块的中心与页脚容器的中心之差（产品要求「居中对齐」）；
+    //   2. 左右两侧的留白之差（居中的另一个读法）；
+    //   3. **相邻子元素之间的最大空隙**。这一条是专门用来抓上一轮那种分栏做法的：
+    //      左右两半各自贴边时，左右留白仍然相等（都是内边距），所以只看留白差
+    //      分辨不出「中间有一大块空白」；相邻空隙会把那个被删掉的
+    //      `.app-footer__spacer` 立刻暴露出来（它当时有几百像素宽）。
+    'const kids = footer ? Array.prototype.slice.call(footer.querySelectorAll("span, button"))' +
+    '  .filter((el) => el.getBoundingClientRect().width > 0) : [];' +
+    'const rects = kids.map((el) => el.getBoundingClientRect());' +
+    'let maxGap = 0;' +
+    'for (let i = 1; i < rects.length; i += 1) {' +
+    '  maxGap = Math.max(maxGap, rects[i].left - rects[i - 1].right);' +
+    '}' +
+    'const blockLeft = rects.length ? Math.min.apply(null, rects.map((r) => r.left)) : null;' +
+    'const blockRight = rects.length ? Math.max.apply(null, rects.map((r) => r.right)) : null;' +
+    'const text = footer ? footer.textContent.replace(/\\s+/g, " ").trim() : "";' +
+    'const link = footer ? footer.querySelector(".app-footer__link") : null;' +
+    'return JSON.stringify({' +
+    '  treeInSidebar: !!(sidebar && tree && sidebar.contains(tree)),' +
+    '  treeOnOverview: !!tree,' +
+    '  footerPresent: !!footer,' +
+    '  footerIsLastChild: !!(main && footer && main.lastElementChild === footer),' +
+    '  footerInsideScroller: !!(footer && footer.closest(".app-content")),' +
+    '  footerBottomGap: box ? Math.round(window.innerHeight - box.bottom) : null,' +
+    '  footerText: footer ? text : null,' +
+    // 邮箱：产品明确要求页脚不再保留邮箱。邮箱在文字里必然带一个 "@"，所以这一条
+    // 既能抓住渲染出来的地址，也能抓住一个只留下空的 mailto 按钮的中间状态。
+    '  footerEmailInText: /@/.test(text),' +
+    '  footerMailtoLinks: footer' +
+    '    ? Array.prototype.slice.call(footer.querySelectorAll("[href]"))' +
+    '      .filter((el) => (el.getAttribute("href") || "").toLowerCase().indexOf("mailto:") === 0).length' +
+    '    : 0,' +
+    '  footerSpacer: footer ? !!footer.querySelector(".app-footer__spacer") : false,' +
+    '  footerJustify: footer ? getComputedStyle(footer).justifyContent : null,' +
+    '  footerCenterOffsetPx: (box && blockLeft !== null && blockRight !== null)' +
+    '    ? Math.round((blockLeft + blockRight) / 2 - (box.left + box.right) / 2) : null,' +
+    '  footerBlockLeftGapPx: (box && blockLeft !== null) ? Math.round(blockLeft - box.left) : null,' +
+    '  footerBlockRightGapPx: (box && blockRight !== null) ? Math.round(box.right - blockRight) : null,' +
+    '  footerMaxInternalGapPx: rects.length > 1 ? Math.round(maxGap) : 0,' +
+    '  footerChildCount: rects.length,' +
+    '  footerLinkText: link ? (link.textContent || "").trim() : null,' +
+    '  footerLinkTag: link ? link.tagName.toLowerCase() : null' +
+    '});' +
+    '})()')
+
+  if (overview.treeInSidebar) problems.push('设备拓扑仍挂在侧栏里')
+  if (overview.treeOnOverview) problems.push('总览页出现了设备拓扑（它应该只在设备管理页）')
+  if (!overview.footerPresent) problems.push('页脚不存在')
+  if (!overview.footerIsLastChild) problems.push('页脚不是 .app-main 的最后一个子元素')
+  if (overview.footerInsideScroller) {
+    problems.push('页脚在滚动容器 .app-content 内部，会跟着内容滚走')
+  }
+  if (overview.footerBottomGap !== null && overview.footerBottomGap > 2) {
+    problems.push('页脚没有贴在窗口底部，下方还空 ' + overview.footerBottomGap + 'px')
+  }
+
+  /**
+   * 页脚这一轮的三条断言（产品要求：「不用保留邮箱……居中对齐」）。
+   *
+   * 全部是量出来的，因为这三条每一条都能在源码里「看起来对」而屏幕上不对：
+   * 邮箱可能是主进程数据里带回来的、居中可能被一个 `flex: 1` 的空元素破坏、
+   * 网站链接可能还在但点不动。
+   */
+  log('footer text  : ' + JSON.stringify(overview.footerText))
+  log(
+    'footer centre: ' + JSON.stringify({
+      justify: overview.footerJustify,
+      centerOffsetPx: overview.footerCenterOffsetPx,
+      leftGapPx: overview.footerBlockLeftGapPx,
+      rightGapPx: overview.footerBlockRightGapPx,
+      maxInternalGapPx: overview.footerMaxInternalGapPx,
+      children: overview.footerChildCount
+    })
+  )
+  if (overview.footerEmailInText || overview.footerMailtoLinks > 0) {
+    problems.push(
+      '页脚里仍然有邮箱（文字含 @：' + overview.footerEmailInText + '，mailto 链接 ' +
+      overview.footerMailtoLinks + ' 个）：' + JSON.stringify(overview.footerText)
+    )
+  }
+  if (overview.footerSpacer) problems.push('页脚又出现了 .app-footer__spacer（它会把内容重新分成左右两半）')
+  if (overview.footerJustify !== 'center') {
+    problems.push('页脚的计算样式 justify-content 是 ' + overview.footerJustify + '，不是 center')
+  }
+  if (overview.footerCenterOffsetPx !== null && Math.abs(overview.footerCenterOffsetPx) > 2) {
+    problems.push('页脚内容块没有居中：中心偏离容器中心 ' + overview.footerCenterOffsetPx + 'px')
+  }
+  if (
+    overview.footerBlockLeftGapPx !== null &&
+    overview.footerBlockRightGapPx !== null &&
+    Math.abs(overview.footerBlockLeftGapPx - overview.footerBlockRightGapPx) > 2
+  ) {
+    problems.push(
+      '页脚左右留白不相等（左 ' + overview.footerBlockLeftGapPx + 'px / 右 ' +
+      overview.footerBlockRightGapPx + 'px）'
+    )
+  }
+  if (overview.footerMaxInternalGapPx > 24) {
+    problems.push(
+      '页脚内容中间有 ' + overview.footerMaxInternalGapPx + 'px 的空隙：内容又被推成左右两半了'
+    )
+  }
+  if (!overview.footerLinkText) {
+    problems.push('页脚里没有公司网站链接')
+  }
+
+  /**
+   * 网站链接必须**真的还能用**，而不只是还在。
+   *
+   * 点它就是一次 `app:open-external` IPC，主进程最终会调 `shell.openExternal`。
+   * 探针在**主进程里**把那个调用录下来再放行（返回值照原样给一个已完成的 Promise），
+   * 所以这里得到的是端到端的证据，而不是「按钮存在」这种读 DOM 就能拿到的弱结论；
+   * 同时它也不会真的把系统浏览器打开一个外部网页。
+   */
+  const footerLink = await layout('/', '(() => {' +
+    'const btn = document.querySelector(".app-footer__link");' +
+    'if (!btn) return JSON.stringify({ found: false });' +
+    'const text = (btn.textContent || "").trim();' +
+    'btn.click();' +
+    'return JSON.stringify({ found: true, text: text, tag: btn.tagName.toLowerCase() });' +
+    '})()')
+  await sleep(900)
+  const openExternalUrls = openExternalCalls.slice()
+  log(
+    'footer link  : ' + JSON.stringify({
+      click: footerLink,
+      stubInstalled: openExternalStubInstalled,
+      opened: openExternalUrls
+    })
+  )
+  if (!footerLink.found) {
+    problems.push('页脚里的公司网站链接不存在')
+  } else if (
+    !openExternalUrls.some(
+      (url) => String(url).replace(/^https?:\/\//, '') === footerLink.text
+    )
+  ) {
+    problems.push(
+      '点击页脚的网站链接没有发起打开请求（链接文字 ' + JSON.stringify(footerLink.text) +
+      '，主进程收到 ' + JSON.stringify(openExternalUrls) + '，拦截器是否生效 ' +
+      openExternalStubInstalled + '）'
+    )
+  }
+
+  /**
+   * 设备管理页：树在左列、左上间距与总览一致、删掉的两句话真的不在、没有横向溢出、
+   * 没有被裁掉的控件。
+   *
+   * WHY THIS IS ONE PROBE AND NOT SEVERAL
+   * 这一轮的产品要求是一句话：「打开该界面后，左侧一个设备拓扑树 …… 左侧间距和高度间距
+   * 和总览的改动后的保持一致」。它有五个可测的分句（位置、左上间距、两句被删掉的文案、
+   * 溢出、裁切），但它们说的是**同一帧屏幕**：分开量会得到不同时刻的 DOM，而「树在左列
+   * 但页面横向溢出了」这种组合恰恰是要一起看的。
+   *
+   * 间距量的是**内容盒**（`.app-content` 的 padding 之内、滚动条之外）到树卡片外框的
+   * 距离。`.page` 与总览页是同一个流式列（`assets/main.css` 的 `.page` 没有 max-width
+   * 也没有自动外边距），所以两层合起来就是产品说的「和总览的改动后保持一致」：
+   * `.app-content` 的 `--space-6` 加上两个页面共用的同一个 `.page`。
+   *
+   * 「删除掉」判的是**渲染出来的元素文字**（`textContent`），不是源码：`aria-label`
+   * 里合法地留着同一个词（树的无障碍名字），断言标签会把那件事误判成没删干净。
+   */
+  const devicesLayout = await layout('/devices', '(() => {' +
+    'const tree = document.querySelector(".device-tree");' +
+    'const sidebar = document.querySelector(".sidebar");' +
+    'const page = document.querySelector(".page");' +
+    'const layoutEl = document.querySelector(".devices-layout");' +
+    'const card = document.querySelector(".devices-topology");' +
+    'const content = document.querySelector(".app-content");' +
+    'const firstRow = document.querySelector(".device-tree__row");' +
+    'const head = document.querySelector(".device-tree__head");' +
+    'const round = (n) => Math.round(n);' +
+    'const rectOf = (el) => { const r = el.getBoundingClientRect();' +
+    '  return { left: round(r.left), top: round(r.top), width: round(r.width), height: round(r.height), right: round(r.right) }; };' +
+    'const visibleText = (el) => {' +
+    '  const copy = el.cloneNode(true);' +
+    '  Array.prototype.slice.call(copy.querySelectorAll(".visually-hidden"))' +
+    '    .forEach((node) => node.parentNode.removeChild(node));' +
+    '  return (copy.textContent || "").replace(/\\s+/g, " ").trim();' +
+    '};' +
+    // 内容盒：padding 之内、纵向滚动条之外。
+    'const contentStyle = content ? getComputedStyle(content) : null;' +
+    'const contentBox = content ? {' +
+    '  left: round(content.getBoundingClientRect().left + (parseFloat(contentStyle.paddingLeft) || 0)),' +
+    '  top: round(content.getBoundingClientRect().top + (parseFloat(contentStyle.paddingTop) || 0)),' +
+    '  right: round(content.getBoundingClientRect().left + content.clientWidth - (parseFloat(contentStyle.paddingRight) || 0))' +
+    '} : null;' +
+    // 「设备拓扑」这句标题：它作为**元素文字**必须一处都不剩（`aria-label` 不算）。
+    'const removedHeadings = ["\\u8bbe\\u5907\\u62d3\\u6251"];' +
+    'const headingHits = Array.prototype.slice.call(document.querySelectorAll("body *"))' +
+    '  .filter((el) => removedHeadings.indexOf((el.textContent || "").trim()) >= 0).length;' +
+    // 「共 N 台设备，在线 N 台」：按**形状**找（任何语言、任何台数），因为这一行在不同
+    // 语言里是不同的一句话，而它在中文目录里的原文才是被删掉的那一句。
+    'const countPatterns = [/\\u5171\\s*\\d+\\s*\\u53f0\\u8bbe\\u5907/, /\\d+\\s*devices?,\\s*\\d+\\s*online/i,' +
+    '  /\\d+\\s*equipos?,\\s*\\d+\\s*en l\\u00ednea/i, /\\d+\\s*cihaz,\\s*\\d+\\s*tanesi/i];' +
+    'const countHits = Array.prototype.slice.call(document.querySelectorAll("body *"))' +
+    '  .filter((el) => {' +
+    '    if (el.children.length > 0) return false;' +
+    '    const text = (el.textContent || "").trim();' +
+    '    return countPatterns.some((pattern) => pattern.test(text));' +
+    '  }).length;' +
+    // 横向溢出：内容区自己的 scrollWidth 与窗口宽都要看。前者是整页级别的证据，后者能
+    // 抓住「内容区没溢出但窗口被某个绝对定位元素撑宽」。
+    'const overflow = {' +
+    '  appContentScrollWidth: content ? content.scrollWidth : null,' +
+    '  appContentClientWidth: content ? content.clientWidth : null,' +
+    '  bodyScrollWidth: document.body.scrollWidth,' +
+    '  docScrollWidth: document.documentElement.scrollWidth,' +
+    '  windowInnerWidth: window.innerWidth' +
+    '};' +
+    // 被裁掉的控件：逐个可交互元素比窗口边界。对话框里的控件不算（它们在自己的浮层里）。
+    'const interactive = Array.prototype.slice.call(document.querySelectorAll("button, select, input, [role=tab]"))' +
+    '  .filter((el) => {' +
+    '    if (el.closest("[role=dialog]")) return false;' +
+    '    const r = el.getBoundingClientRect();' +
+    '    return r.width > 0 && r.height > 0;' +
+    '  });' +
+    'const clipped = interactive.filter((el) => {' +
+    '  const r = el.getBoundingClientRect();' +
+    '  return r.left < -0.5 || r.right > window.innerWidth + 0.5;' +
+    '}).map((el) => (el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 24));' +
+    'return JSON.stringify({' +
+    '  treeOnDevices: !!tree,' +
+    '  treeInsidePage: !!(page && tree && page.contains(tree)),' +
+    '  treeInSidebar: !!(sidebar && tree && sidebar.contains(tree)),' +
+    '  twoColumn: !!layoutEl,' +
+    '  cards: document.querySelectorAll(".device-card").length,' +
+    '  tableRows: document.querySelectorAll("table.devices-table tbody tr").length,' +
+    '  viewport: { w: window.innerWidth, h: window.innerHeight },' +
+    '  contentBox: contentBox,' +
+    '  page: page ? rectOf(page) : null,' +
+    // 左列判定：卡片是两列网格的第一个子元素，且**真的在页面左半边**。
+    '  cardIsFirstChild: !!(layoutEl && card && layoutEl.firstElementChild === card),' +
+    '  card: card ? rectOf(card) : null,' +
+    '  tree: tree ? rectOf(tree) : null,' +
+    '  firstRow: firstRow ? rectOf(firstRow) : null,' +
+    '  head: head ? rectOf(head) : null,' +
+    '  cardContentLeft: card ? round(card.getBoundingClientRect().left + (parseFloat(getComputedStyle(card).paddingLeft) || 0)) : null,' +
+    '  cardContentTop: card ? round(card.getBoundingClientRect().top + (parseFloat(getComputedStyle(card).paddingTop) || 0)) : null,' +
+    '  treeText: tree ? visibleText(tree).slice(0, 240) : null,' +
+    '  headingHits: headingHits,' +
+    '  countHits: countHits,' +
+    '  overflow: overflow,' +
+    '  clipped: clipped,' +
+    '  interactiveCount: interactive.length' +
+    '});' +
+    '})()')
+
+  if (!devicesLayout.treeOnDevices) problems.push('设备管理页没有设备拓扑')
+  if (!devicesLayout.treeInsidePage) problems.push('设备拓扑不在设备管理页的内容区里')
+  if (devicesLayout.treeInSidebar) problems.push('设备拓扑同时在侧栏里（重复渲染）')
+  if (!devicesLayout.twoColumn) problems.push('设备管理页不是两列布局（.devices-layout 不存在）')
+  if (!devicesLayout.cardIsFirstChild) {
+    problems.push('拓扑卡片不是 .devices-layout 的第一个子元素，所以它不在左边那一列')
+  }
+  if (devicesLayout.headingHits > 0) {
+    problems.push('设备管理页仍然渲染着 ' + devicesLayout.headingHits + ' 处「设备拓扑」标题')
+  }
+  if (devicesLayout.countHits > 0) {
+    problems.push('设备管理页仍然渲染着 ' + devicesLayout.countHits + ' 处设备/在线计数那一行')
+  }
+  /*
+   * 第 3 条：右侧是**表格**，卡片版式（`.device-card`）连类名都应该没有了 ——
+   * 卡片留着会让同一批设备在页面上有两个渲染路径。
+   */
+  if (devicesLayout.cards > 0) {
+    problems.push('设备管理页还有卡片版式的节点（.device-card）：' + devicesLayout.cards + ' 个')
+  }
+  log('devices tree  : ' + JSON.stringify({
+    viewport: devicesLayout.viewport,
+    contentBox: devicesLayout.contentBox,
+    page: devicesLayout.page,
+    card: devicesLayout.card,
+    tree: devicesLayout.tree,
+    firstRow: devicesLayout.firstRow,
+    text: devicesLayout.treeText
+  }))
+  {
+    /**
+     * 「和总览的改动后保持一致」这句话的**精确读法**。
+     *
+     * 总览页的改动是：`.page` 不再有 `max-width`、不再有自动外边距，它从内容盒的左上角
+     * 开始，左/上间距由 `.app-content` 的 `--space-6` 唯一提供。所以「一致」在这里等于
+     * 三件事：
+     *   1. `.page` 的左上角**就是**内容盒的左上角（两个页面公用同一条 `.page` 规则）；
+     *   2. 拓扑卡片贴住内容盒的**左边**（左列从最左边开始）；
+     *   3. 卡片的内容盒顶端与卡片顶端重合（上内边距为 0），所以树不是被一层内边距推下去的。
+     *
+     * 卡片的上边缘**在**页头下面（页面标题与「添加设备」按钮占了那一行），所以拿
+     * 卡片顶端去比内容盒顶端是错的 —— 正确的参照物是 `.page` 自己。
+     */
+    const pageLeftGap = devicesLayout.page && devicesLayout.contentBox
+      ? devicesLayout.page.left - devicesLayout.contentBox.left
+      : null
+    const pageTopGap = devicesLayout.page && devicesLayout.contentBox
+      ? devicesLayout.page.top - devicesLayout.contentBox.top
+      : null
+    const cardLeftGap = devicesLayout.card && devicesLayout.contentBox
+      ? devicesLayout.card.left - devicesLayout.contentBox.left
+      : null
+    const cardTopGap = devicesLayout.card && devicesLayout.contentBox
+      ? devicesLayout.card.top - devicesLayout.contentBox.top
+      : null
+    const rowLeftGap = devicesLayout.firstRow && devicesLayout.cardContentLeft !== null
+      ? devicesLayout.firstRow.left - devicesLayout.cardContentLeft
+      : null
+    // 第一行之前**只允许**有那一条工具条（＋ / －）。用的参照物因此是工具条的底边，
+    // 而不是卡片内容盒的顶边：把工具条算成“空白”会得出一个 48px 的假问题。
+    const headGap = devicesLayout.head && devicesLayout.cardContentLeft !== null
+      ? devicesLayout.head.left - devicesLayout.cardContentLeft
+      : null
+    const headTopGap = devicesLayout.head && devicesLayout.cardContentTop !== null
+      ? devicesLayout.head.top - devicesLayout.cardContentTop
+      : null
+    log('devices gap   : .page left=' + pageLeftGap + 'px top=' + pageTopGap +
+      'px; card left=' + cardLeftGap + 'px top=' + cardTopGap +
+      'px (first element of the content column); toolbar inside the card: left=' + headGap +
+      'px top=' + headTopGap + 'px')
+    if (pageLeftGap === null || pageLeftGap > GAP_TOLERANCE_PX) {
+      problems.push('设备管理页的 .page 没有从内容盒左边开始：' + pageLeftGap + 'px（总览页是 0）')
+    }
+    if (pageTopGap === null || pageTopGap > GAP_TOLERANCE_PX) {
+      problems.push('设备管理页的 .page 没有从内容盒上边开始：' + pageTopGap + 'px（总览页是 0）')
+    }
+    if (cardLeftGap === null || cardLeftGap > GAP_TOLERANCE_PX) {
+      problems.push('设备拓扑没有贴住内容盒左边：左间距 ' + cardLeftGap + 'px（应为 0）')
+    }
+    /*
+     * 页头已被产品要求删掉（「设备管理界面的右侧内容区域：去掉标题」），所以拓扑卡片是
+     * 内容列里的**第一个**元素：它的上边缘必须正好落在固定间距上（0px）。
+     *
+     * 这比改动之前那条「正数且小于 120px」**更强**：那时间距由页头决定、是可变的；现在
+     * 没有任何东西能把它推下去，非 0 就说明有人加回了页头或加了外边距。
+     */
+    if (cardTopGap === null || Math.abs(cardTopGap) > GAP_TOLERANCE_PX) {
+      problems.push('设备拓扑卡片没有从内容盒顶部开始（' + cardTopGap + 'px）：' +
+        '页头已删，它是内容列的第一个元素')
+    }
+    if (headGap !== null && headGap > GAP_TOLERANCE_PX) {
+      problems.push('树的工具条没有贴住卡片内容盒左边：还空着 ' + headGap + 'px')
+    }
+    if (headTopGap !== null && headTopGap > GAP_TOLERANCE_PX) {
+      problems.push('树的工具条没有从卡片内容盒顶部开始：还空着 ' + headTopGap + 'px')
+    }
+    if (rowLeftGap !== null && rowLeftGap > GAP_TOLERANCE_PX) {
+      problems.push('树的第一行没有贴住卡片内容盒左边：还空着 ' + rowLeftGap + 'px')
+    }
+    const clipped = devicesLayout.clipped || []
+    if (clipped.length > 0) {
+      problems.push('设备管理页有被窗口裁掉的控件：' + JSON.stringify(clipped))
+    }
+    const overflow = devicesLayout.overflow || {}
+    if (overflow.appContentScrollWidth > overflow.appContentClientWidth + 1) {
+      problems.push('设备管理页横向溢出了内容区：scrollWidth ' + overflow.appContentScrollWidth +
+        ' > clientWidth ' + overflow.appContentClientWidth)
+    }
+    if (overflow.bodyScrollWidth > overflow.windowInnerWidth + 1 ||
+        overflow.docScrollWidth > overflow.windowInnerWidth + 1) {
+      problems.push('设备管理页把窗口撑出了横向滚动条：body ' + overflow.bodyScrollWidth +
+        ' / document ' + overflow.docScrollWidth + ' vs window ' + overflow.windowInnerWidth)
+    }
+    log('devices overflow: ' + JSON.stringify(overflow) + ' clipped=' + JSON.stringify(clipped))
+  }
+
+  /**
+   * 四档窗口尺寸下 `/devices` 上**树**的几何。
+   *
+   * 每一档都重新读一次：`win.setContentSize()` 之后必须等一次重排落定，否则量到的是
+   * 过渡中的数字。四档的结论有两条 ——
+   *   1. 树卡片的左/上间距（相对内容盒）**逐像素相同**：这就是「和总览的改动后的保持一致」，
+   *      因为总览页与这一页共用同一个 `.app-content` 内边距和同一个 `.page` 流式列；
+   *   2. 树仍然在左列（卡片左边缘贴着内容盒左侧、且卡片宽度远小于内容盒宽度），页面宽度
+   *      随窗口变宽而树列的宽度不变 —— 左列是固定的 220–280px。
+   */
+  const treeGeometry = []
+  /** 每档窗口**实际**的内容尺寸（见下面那段说明）。与 `treeGeometry` 同序。 */
+  const actualContentSizes = []
+  for (const size of TREE_SIZES) {
+    win.setContentSize(size[0], size[1])
+    await sleep(700)
+    /*
+     * 先读窗口**实际**的内容尺寸，而不是拿我们请求的那个数字当基准。
+     *
+     * 这是测量口径的修正（2026-09-16 发现）：断言原来是拿"请求值"去比渲染层的
+     * `window.innerWidth`，中间隔着 Windows 的边框与非 100% 的 DPI 缩放 —— 四档一律偏
+     * +6 / +17，而**布局本身全都正常**（卡片间距、树的列宽、贴边全部通过）。那说明偏的
+     * 不是界面，而是"拿什么当基准"：视口尺寸由窗口决定，不由我们的请求决定。
+     */
+    const actualContent = win.getContentSize()
+    actualContentSizes.push({ w: actualContent[0], h: actualContent[1] })
+    const measured = await layout('/devices', '(() => {' +
+      'const tree = document.querySelector(".device-tree");' +
+      'const page = document.querySelector(".page");' +
+      'const card = document.querySelector(".devices-topology");' +
+      'const content = document.querySelector(".app-content");' +
+      'if (!tree || !page || !card || !content) return JSON.stringify({ found: false,' +
+      '  hasTree: !!tree, hasPage: !!page, hasCard: !!card, hasContent: !!content });' +
+      'content.scrollTop = 0;' +
+      'const round = (n) => Math.round(n);' +
+      'const contentStyle = getComputedStyle(content);' +
+      'const box = {' +
+      '  left: content.getBoundingClientRect().left + (parseFloat(contentStyle.paddingLeft) || 0),' +
+      '  top: content.getBoundingClientRect().top + (parseFloat(contentStyle.paddingTop) || 0),' +
+      '  right: content.getBoundingClientRect().left + content.clientWidth - (parseFloat(contentStyle.paddingRight) || 0)' +
+      '};' +
+      'const cardRect = card.getBoundingClientRect();' +
+      'const treeRect = tree.getBoundingClientRect();' +
+      'const head = document.querySelector(".device-tree__head");' +
+      'const headRect = head ? head.getBoundingClientRect() : null;' +
+      'const row = tree.querySelector(".device-tree__row");' +
+      'const rows = Array.prototype.slice.call(tree.querySelectorAll(".device-tree__row"));' +
+      'const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;' +
+      'const cardStyle = getComputedStyle(card);' +
+      'const rowRect = row ? row.getBoundingClientRect() : null;' +
+      'const cardContentBox = {' +
+      '  left: cardRect.left + (parseFloat(cardStyle.paddingLeft) || 0),' +
+      '  top: cardRect.top + (parseFloat(cardStyle.paddingTop) || 0),' +
+      '  right: cardRect.left + card.clientWidth - (parseFloat(cardStyle.paddingRight) || 0),' +
+      '  bottom: cardRect.top + card.clientHeight - (parseFloat(cardStyle.paddingBottom) || 0)' +
+      '};' +
+      'const interactive = Array.prototype.slice.call(document.querySelectorAll("button, select, input, [role=tab]"))' +
+      '  .filter((el) => {' +
+      '    if (el.closest("[role=dialog]")) return false;' +
+      '    const r = el.getBoundingClientRect();' +
+      '    return r.width > 0 && r.height > 0;' +
+      '  });' +
+      'const clipped = interactive.filter((el) => {' +
+      '  const r = el.getBoundingClientRect();' +
+      '  return r.left < -0.5 || r.right > window.innerWidth + 0.5;' +
+      '}).map((el) => (el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 24));' +
+      'return JSON.stringify({' +
+      '  found: true,' +
+      '  viewport: { w: window.innerWidth, h: window.innerHeight },' +
+      '  contentBox: { left: round(box.left), top: round(box.top), right: round(box.right) },' +
+      '  card: { left: round(cardRect.left), top: round(cardRect.top), width: round(cardRect.width), right: round(cardRect.right) },' +
+      '  tree: { left: round(treeRect.left), top: round(treeRect.top), width: round(treeRect.width) },' +
+      '  firstRow: rowRect ? { left: round(rowRect.left), top: round(rowRect.top), height: round(rowRect.height) } : null,' +
+      '  head: headRect ? { left: round(headRect.left), top: round(headRect.top), height: round(headRect.height) } : null,' +
+      '  cardContentBox: { left: round(cardContentBox.left), top: round(cardContentBox.top),' +
+      '    right: round(cardContentBox.right), bottom: round(cardContentBox.bottom) },' +
+      '  cardContentLeft: round(cardContentBox.left),' +
+      '  cardContentTop: round(cardContentBox.top),' +
+      '  treeBox: { left: round(treeRect.left), top: round(treeRect.top), width: round(treeRect.width), height: round(treeRect.height) },' +
+      // 树必须**填满**卡片的内容盒（左/上贴边、宽高相同）：左边/上边留白是产品点名的
+      // 那两条，右边/下边相同则说明卡片没有把树推到角落里。
+      '  treeInContentBoxPx: { left: round(treeRect.left - cardContentBox.left), top: round(treeRect.top - cardContentBox.top),' +
+      '    right: round(cardContentBox.right - treeRect.right), bottom: round(cardContentBox.bottom - treeRect.bottom) },' +
+      // 第一行与最后一行必须分别贴着内容盒的顶/底（中间允许有状态说明文字与列表）。
+      '  firstRowInContentBoxPx: rowRect ? round(rowRect.top - cardContentBox.top) : null,' +
+      '  lastRowInContentBoxPx: lastRow ? round(cardContentBox.bottom - lastRow.getBoundingClientRect().bottom) : null,' +
+      '  rowCount: rows.length,' +
+      // 三组间距：相对内容盒（左/上，产品说的那两句）、卡片内树的位置、以及树自身的内边距。
+      '  gapFromContentBoxPx: { left: round(cardRect.left - box.left), top: round(cardRect.top - box.top),' +
+      '    right: round(box.right - cardRect.right) },' +
+      // 工具条相对卡片内容盒的位置，以及第一行相对工具条底边的位置：第一行之前**允许**
+      // 且有且只有那一条工具条，所以“贴着顶部”的判据落在工具条上。
+      '  headFromCardContentBoxPx: (headRect ? { left: round(headRect.left - (cardRect.left + (parseFloat(cardStyle.paddingLeft) || 0))),' +
+      '    top: round(headRect.top - (cardRect.top + (parseFloat(cardStyle.paddingTop) || 0))) } : null),' +
+      '  rowFromHeadBottomPx: (rowRect && headRect) ? round(rowRect.top - headRect.bottom) : null,' +
+      '  treePaddingPx: { left: cardStyle.paddingLeft, top: cardStyle.paddingTop, right: cardStyle.paddingRight, bottom: cardStyle.paddingBottom },' +
+      '  page: { left: round(page.getBoundingClientRect().left), top: round(page.getBoundingClientRect().top),' +
+      '    width: round(page.getBoundingClientRect().width) },' +
+      '  contentClientWidth: content.clientWidth,' +
+      '  contentScrollWidth: content.scrollWidth,' +
+      '  windowInnerWidth: window.innerWidth,' +
+      '  bodyScrollWidth: document.body.scrollWidth,' +
+      '  docScrollWidth: document.documentElement.scrollWidth,' +
+      '  clipped: clipped,' +
+      '  interactiveCount: interactive.length' +
+      '});' +
+      '})()')
+    treeGeometry.push(measured)
+    log('devices ' + size[0] + 'x' + size[1] + ' : ' + JSON.stringify(measured))
+  }
+
+  {
+    /**
+     * 四档之间必须**逐像素相同**的三组数字：`.page` 相对内容盒的位置（总览页与这一页
+     * 共用同一条 `.page` 规则）、拓扑卡片相对内容盒的左间距，以及第一行相对卡片内容盒的
+     * 位置。只要有一档不同，说明间距是按窗口宽度算出来的（居中列或百分比内边距）——
+     * 那正是产品说的「现在是中间对齐了」与「和左边和上边保持固定的距离」的差别。
+     */
+    const found = treeGeometry.filter((entry) => entry.found)
+    if (found.length !== TREE_SIZES.length) {
+      problems.push('设备树的几何只量到 ' + found.length + ' / ' + TREE_SIZES.length + ' 档：' +
+        JSON.stringify(treeGeometry))
+    }
+    for (let i = 0; i < treeGeometry.length; i += 1) {
+      const entry = treeGeometry[i]
+      const size = TREE_SIZES[i]
+      const actual = actualContentSizes[i]
+      if (!entry.found) continue
+      /*
+       * 判据是「渲染层的视口 == 窗口自己报的内容尺寸」，不是「== 我们请求的数字」。
+       * 请求值只用来定位是哪一档；它与实际值不同属于环境（边框/DPI），单独记一行日志，
+       * 不进 `problems` —— 把它算成问题会让这一条断言长期红着，而真正要守的东西
+       * （渲染视口与窗口一致）就不再有人看了。
+       */
+      if (entry.viewport.w !== actual.w || entry.viewport.h !== actual.h) {
+        problems.push('设备管理页：窗口内容尺寸 ' + actual.w + 'x' + actual.h +
+          '，渲染层视口却是 ' + entry.viewport.w + 'x' + entry.viewport.h)
+      }
+      if (actual.w !== size[0] || actual.h !== size[1]) {
+        log('devices ' + size[0] + 'x' + size[1] + ' : 窗口实际给的是 ' + actual.w + 'x' + actual.h +
+          '（边框 / DPI 造成，非界面问题）')
+      }
+      // `.page` 就是内容盒的左上角：这是「和总览的改动后保持一致」的字面含义。
+      const pageLeft = entry.page.left - entry.contentBox.left
+      const pageTop = entry.page.top - entry.contentBox.top
+      if (pageLeft > GAP_TOLERANCE_PX || pageTop > GAP_TOLERANCE_PX) {
+        problems.push('设备管理页在 ' + size[0] + 'x' + size[1] + ' 的 .page 没有从内容盒左上角开始：' +
+          pageLeft + 'px / ' + pageTop + 'px')
+      }
+      if (entry.gapFromContentBoxPx.left > GAP_TOLERANCE_PX) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 没有贴住内容盒左边：左间距 ' +
+          entry.gapFromContentBoxPx.left + 'px')
+      }
+      if (entry.gapFromContentBoxPx.top > GAP_TOLERANCE_PX) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的上间距不是 0：' +
+          entry.gapFromContentBoxPx.top + 'px（页头已删，树卡片是内容列第一个元素）')
+      }
+      // 卡片自己的上内边距必须是 0：树不是被一层内边距推下去的。
+      if ((parseFloat(entry.treePaddingPx.top) || 0) !== 0) {
+        problems.push('设备树卡片在 ' + size[0] + 'x' + size[1] + ' 有上内边距 ' +
+          entry.treePaddingPx.top + '：树被推下去了')
+      }
+      // 工具条（＋ / －）必须从卡片内容盒的左上角开始。
+      if (entry.headFromCardContentBoxPx &&
+          (entry.headFromCardContentBoxPx.left > GAP_TOLERANCE_PX ||
+           entry.headFromCardContentBoxPx.top > GAP_TOLERANCE_PX)) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的工具条没有从卡片内容盒左上角开始：' +
+          JSON.stringify(entry.headFromCardContentBoxPx))
+      }
+      // 树必须填满卡片的内容盒：左/上贴边（产品点名的两条），右/下也贴边（树不是被推到
+      // 角落里的）。
+      if (entry.treeInContentBoxPx.left > GAP_TOLERANCE_PX ||
+          entry.treeInContentBoxPx.top > GAP_TOLERANCE_PX ||
+          entry.treeInContentBoxPx.right > GAP_TOLERANCE_PX ||
+          entry.treeInContentBoxPx.bottom > GAP_TOLERANCE_PX) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 没有填满卡片的内容盒：' +
+          JSON.stringify(entry.treeInContentBoxPx))
+      }
+      // 第一行与内容盒顶部之间是**工具条**（＋ / －）；设备列表为空时还多一句状态文字。
+      // 所以「第一行贴顶」不是这一页的约束 —— 贴顶的是工具条（上面那一条），而树整体
+      // 必须填满内容盒（再上一条）。
+      if (entry.lastRowInContentBoxPx !== null && entry.lastRowInContentBoxPx > GAP_TOLERANCE_PX) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的最后一个行与卡片内容盒底部之间空着 ' +
+          entry.lastRowInContentBoxPx + 'px')
+      }      // 左列判定：树卡片必须落在内容盒的**左半部分**（而不是被推到中间或右边）。
+      const half = (entry.contentBox.right - entry.contentBox.left) / 2
+      if (entry.card.left - entry.contentBox.left > half) {
+        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 不在左列：卡片距内容盒左边 ' +
+          (entry.card.left - entry.contentBox.left) + 'px，超过内容宽度的一半 ' + Math.round(half) + 'px')
+      }
+      if (entry.clipped.length > 0) {
+        problems.push('设备管理页在 ' + size[0] + 'x' + size[1] + ' 有被裁掉的控件：' +
+          JSON.stringify(entry.clipped))
+      }
+      if (entry.contentScrollWidth > entry.contentClientWidth + 1 ||
+          entry.bodyScrollWidth > entry.windowInnerWidth + 1 ||
+          entry.docScrollWidth > entry.windowInnerWidth + 1) {
+        problems.push('设备管理页在 ' + size[0] + 'x' + size[1] + ' 有横向溢出：内容区 ' +
+          entry.contentScrollWidth + '/' + entry.contentClientWidth + '，body ' +
+          entry.bodyScrollWidth + '，document ' + entry.docScrollWidth + '，窗口 ' +
+          entry.windowInnerWidth)
+      }
+    }
+    const lefts = found.map((entry) => entry.gapFromContentBoxPx.left)
+    const tops = found.map((entry) => entry.gapFromContentBoxPx.top)
+    if (new Set(lefts).size > 1 || new Set(tops).size > 1) {
+      problems.push('设备树相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
+        JSON.stringify(lefts) + ' top=' + JSON.stringify(tops))
+    }
+    const pageLefts = found.map((entry) => entry.page.left - entry.contentBox.left)
+    const pageTops = found.map((entry) => entry.page.top - entry.contentBox.top)
+    if (new Set(pageLefts).size > 1 || new Set(pageTops).size > 1) {
+      problems.push('.page 相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
+        JSON.stringify(pageLefts) + ' top=' + JSON.stringify(pageTops))
+    }
+    const headLefts = found
+      .map((entry) => (entry.headFromCardContentBoxPx ? entry.headFromCardContentBoxPx.left : null))
+      .filter((value) => value !== null)
+    const headTops = found
+      .map((entry) => (entry.headFromCardContentBoxPx ? entry.headFromCardContentBoxPx.top : null))
+      .filter((value) => value !== null)
+    const rowGaps = found
+      .map((entry) => entry.treeInContentBoxPx.left)
+      .filter((value) => value !== null)
+    if (new Set(headLefts).size > 1 || new Set(headTops).size > 1 || new Set(rowGaps).size > 1) {
+      problems.push('树相对卡片内容盒的位置在四档尺寸下不是同一个数：工具条 left=' +
+        JSON.stringify(headLefts) + ' top=' + JSON.stringify(headTops) +
+        ' treeLeft=' + JSON.stringify(rowGaps))
+    }
+    // 左列宽度是固定的 220–280px，右列才是流式的：窗口变宽时树不该跟着变宽。
+    const cardWidths = found.map((entry) => entry.card.width)
+    if (new Set(cardWidths).size > 1) {
+      problems.push('设备树所在左列的宽度在四档尺寸下变了：' + JSON.stringify(cardWidths) +
+        '（左列应当是固定的 220-280px，只有右列随窗口变宽）')
+    }
+    const pageWidths = found.map((entry) => entry.page.width)
+    for (let i = 1; i < pageWidths.length; i += 1) {
+      if (!(pageWidths[i] > pageWidths[i - 1])) {
+        problems.push('设备管理页的内容列没有随窗口变宽：' + JSON.stringify(pageWidths))
+        break
+      }
+    }
+    log('devices gaps  : .page left=' + JSON.stringify(pageLefts) + ' top=' + JSON.stringify(pageTops) +
+      '; card left=' + JSON.stringify(lefts) + ' top=' + JSON.stringify(tops) +
+      ' (px from the content box; tolerance ' + GAP_TOLERANCE_PX + ')')
+    log('devices rows  : toolbar ' + JSON.stringify(headLefts) + ' / ' + JSON.stringify(headTops) +
+      ', tree↔contentBox left ' + JSON.stringify(rowGaps) +
+      ' cardWidths=' + JSON.stringify(cardWidths) + ' pageWidths=' + JSON.stringify(pageWidths))
+  }
+
+  // 量完把窗口恢复成主进程创建时的尺寸，后面的探针才在一个正常的尺寸下读数。
+  win.setContentSize(1440, 900)
+  await sleep(600)
+
+  /**
+   * ③④ 设备管理页右侧的**设备表**（业主 2026-09-17 第 3、4 条）。
+   *
+   * 量四件事，每一件都只能靠 DOM：
+   *   ① 表头正好是业主给的那八列、顺序一致；
+   *   ② 每一行都有「查看」与「配置」两个**图标**按钮（`data-action` 标记 + 里面有 svg），
+   *      IP 那一格是一个按钮（双击才打开浏览器）；
+   *   ③ 点「查看」→ 进实时监测页并带上这台设备的 id；点「配置」→ 进这台设备的详情页；
+   *   ④ **单击** IP 什么都不做（不跳转）—— 双击的前半段是两次单击，单击要是会导航，
+   *      双击就永远落不到这一格上（这一条是第 4 条能不能用的前提）。
+   *
+   * `shell.openExternal` 那一次真正的双击单独量（见下面 `devicesTableDouble`）：
+   * 渲染层读不到主进程的替身记录，只能在主进程这一侧比较调用前后。
+   */
+  const devicesTable = await layout('/devices', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    'const table = document.querySelector("table.devices-table");' +
+    'if (!table) return JSON.stringify({ ok: false, reason: "no-devices-table" });' +
+    'const headers = [...table.querySelectorAll("thead th")].map((th) => text(th));' +
+    'const rows = [...table.querySelectorAll("tbody tr")];' +
+    'const actions = [...table.querySelectorAll("tbody [data-action]")];' +
+    'const out = {' +
+    '  ok: true,' +
+    '  headers,' +
+    '  rows: rows.length,' +
+    '  monitorIcons: table.querySelectorAll("[data-action=device-monitor]").length,' +
+    '  configureIcons: table.querySelectorAll("[data-action=device-configure]").length,' +
+    '  actionsAreIcons: actions.length > 0 && actions.every((b) => !!b.querySelector("svg")),' +
+    '  ipButtons: table.querySelectorAll("button.devices-table__ip").length,' +
+    '  wrapIsTableWrap: !!document.querySelector(".table-wrap.devices-table-card"),' +
+    '  firstIp: "",' +
+    '  afterMonitor: null,' +
+    '  afterConfigure: "",' +
+    '  afterSingleClick: ""' +
+    '};' +
+    'const firstRow = rows[0];' +
+    'const ipButton = firstRow ? firstRow.querySelector("button.devices-table__ip") : null;' +
+    'out.firstIp = text(ipButton);' +
+    // ③ 查看：进实时监测页，并把设备 id 带在查询串上。
+    'const eye = firstRow ? firstRow.querySelector("[data-action=device-monitor]") : null;' +
+    'if (eye) { eye.click(); await wait(900); }' +
+    'out.afterMonitor = { hash: location.hash,' +
+    '  selectValue: (function(){ const s = document.querySelector("#topbar-page-slot select");' +
+    '    return s ? s.value : null; })(),' +
+    '  sonarLive: document.querySelectorAll("[data-sonar-live-unwired]").length,' +
+    '  cameraLive: document.querySelectorAll(".camera-live").length,' +
+    '  channelTabs: document.querySelectorAll(".channel-tabs").length,' +
+    '  trendPanel: document.querySelectorAll(".trend-panel").length };' +
+    // ③ 配置：进这台设备的详情页。
+    'location.hash = "#/devices"; await wait(900);' +
+    'const row2 = document.querySelector("table.devices-table tbody tr");' +
+    'const gear = row2 ? row2.querySelector("[data-action=device-configure]") : null;' +
+    'if (gear) { gear.click(); await wait(900); }' +
+    'out.afterConfigure = location.hash;' +
+    // ④ 单击 IP：什么都不许发生（不跳转、不选中别的东西）。
+    'location.hash = "#/devices"; await wait(900);' +
+    'const ip2 = document.querySelector("table.devices-table button.devices-table__ip");' +
+    'if (ip2) {' +
+    '  ip2.click();' +
+    '  await wait(600);' +
+    '  out.afterSingleClick = location.hash;' +
+    '}' +
+    'return JSON.stringify(out);' +
+    '})()')
+
+  log('devices table : ' + JSON.stringify(devicesTable))
+  if (!devicesTable.ok) {
+    problems.push('设备管理页没有设备表（table.devices-table）：' + JSON.stringify(devicesTable))
+  } else {
+    const EXPECTED_HEADERS = [
+      '设备名称',
+      '设备IP',
+      '设备类型',
+      '是否在线',
+      '告警数量',
+      '设备通道',
+      '查看',
+      '配置'
+    ]
+    if (JSON.stringify(devicesTable.headers) !== JSON.stringify(EXPECTED_HEADERS)) {
+      problems.push('设备表的列不是业主给的那八列（或顺序不对）：' + JSON.stringify(devicesTable.headers))
+    }
+    if (!devicesTable.wrapIsTableWrap) {
+      problems.push('设备表没有用全应用同一套 .table-wrap 外壳')
+    }
+    if (devicesTable.rows === 0) {
+      problems.push('设备表一行都没有（库里又不是没有设备）——"表渲染了"与"没数据"必须能分开')
+    }
+    if (devicesTable.monitorIcons !== devicesTable.rows) {
+      problems.push(
+        '「查看」图标数与设备行数不一致：' + devicesTable.monitorIcons + ' vs ' + devicesTable.rows
+      )
+    }
+    if (devicesTable.configureIcons !== devicesTable.rows) {
+      problems.push(
+        '「配置」图标数与设备行数不一致：' + devicesTable.configureIcons + ' vs ' + devicesTable.rows
+      )
+    }
+    if (!devicesTable.actionsAreIcons) {
+      problems.push('查看/配置那一格里出现了没有图标的按钮（业主明确要图标）')
+    }
+    if (devicesTable.ipButtons !== devicesTable.rows) {
+      problems.push('不是每一行的 IP 都是可双击的按钮：' + devicesTable.ipButtons + ' vs ' + devicesTable.rows)
+    }
+    const monitor = devicesTable.afterMonitor || {}
+    if (!/^#\/monitor/.test(String(monitor.hash || ''))) {
+      problems.push('点「查看」没有进实时监测页：' + monitor.hash)
+    } else if (!/\?device=/.test(String(monitor.hash))) {
+      problems.push('点「查看」没有把设备 id 带过去：' + monitor.hash)
+    } else if (String(monitor.selectValue || '') === '') {
+      problems.push('点「查看」之后顶栏的设备下拉没有选中任何设备')
+    }
+    if (!/^#\/devices\/[^/]+$/.test(String(devicesTable.afterConfigure || ''))) {
+      problems.push('点「配置」没有进这台设备的详情页：' + devicesTable.afterConfigure)
+    }
+    if (devicesTable.afterSingleClick !== '#/devices') {
+      problems.push(
+        '单击设备 IP 把页面带走了（' + devicesTable.afterSingleClick +
+          '）——双击打开浏览器就永远落不到这一格上'
+      )
+    }
+  }
+
+  /**
+   * ④ **双击**设备 IP → 打开设备自己的 Web 界面。
+   *
+   * 终点是主进程的 `shell.openExternal`（页脚那条链路的同一个替身），所以只能在主进程这
+   * 一侧比较调用前后：单击不许加一条、双击必须正好加一条，且那一条是这台设备的地址。
+   */
+  {
+    const callsBeforeSingle = openExternalCalls.length
+    await layout('/devices', '(async () => {' +
+      'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+      'const ip = document.querySelector("table.devices-table button.devices-table__ip");' +
+      'if (ip) { ip.click(); await wait(500); }' +
+      'return JSON.stringify({ clicked: !!ip });' +
+      '})()')
+    const callsAfterSingle = openExternalCalls.length
+    if (callsAfterSingle !== callsBeforeSingle) {
+      problems.push('单击设备 IP 就打开了浏览器（业主说的是**双击**）')
+    }
+
+    const doubleClick = await layout('/devices', '(async () => {' +
+      'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+      'const ip = document.querySelector("table.devices-table button.devices-table__ip");' +
+      'if (!ip) return JSON.stringify({ clicked: false });' +
+      'ip.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));' +
+      'await wait(700);' +
+      'return JSON.stringify({ clicked: true, hash: location.hash });' +
+      '})()')
+    const callsAfterDouble = openExternalCalls
+    const opened = callsAfterDouble[callsAfterDouble.length - 1] || ''
+    const firstIp = String(devicesTable.firstIp || '').split(':')[0]
+    log('devices table : 双击 IP -> openExternal(' + opened + ')')
+    if (!doubleClick.clicked) {
+      problems.push('设备表里找不到可双击的 IP 按钮')
+    } else if (callsAfterDouble.length !== callsBeforeSingle + 1) {
+      problems.push(
+        '双击设备 IP 没有正好打开一次设备 Web 界面：新增 ' +
+          (callsAfterDouble.length - callsBeforeSingle) + ' 次'
+      )
+    } else if (firstIp && opened.indexOf(firstIp) < 0) {
+      problems.push('双击打开的不是这一行的设备地址：' + opened + '（这一行是 ' + firstIp + '）')
+    }
+    if (doubleClick.hash !== '#/devices') {
+      problems.push('双击设备 IP 之后页面被带走了：' + doubleClick.hash)
+    }
+  }
+
+
+  const settingsLayout = await layout('/settings', '(() => {' +
+    'const select = document.querySelector(".lang__select");' +
+    'const sidebar = document.querySelector(".sidebar");' +
+    'const page = document.querySelector(".page");' +
+    'return JSON.stringify({' +
+    '  langOnSettings: !!select,' +
+    '  langInsidePage: !!(page && select && page.contains(select)),' +
+    '  langInSidebar: !!(sidebar && select && sidebar.contains(select)),' +
+    '  options: select ? select.options.length : 0' +
+    '});' +
+    '})()')
+
+  if (!settingsLayout.langOnSettings) problems.push('系统设置里没有语言选择器')
+  if (settingsLayout.langInSidebar) problems.push('语言选择器仍在侧栏里')
+  if (settingsLayout.options !== 4) {
+    problems.push('语言选择器有 ' + settingsLayout.options + ' 个选项，应为 4')
+  }
+
+  /**
+   * ③ 设置页的七个页签（业主 2026-09-17）。
+   *
+   * 一次真点击 + 等一次渲染，逐个页签量：这一页有没有 tabpanel、里面有多少可操作控件、
+   * 有没有重复的卡片标题（`h3.section-title`）、账号/关于那两页的关键控件在不在。
+   *
+   * 为什么要**逐个点**而不是只数页签：页签渲染出来、点下去什么都不变，是这类改动最常见的
+   * 失败形态（`activeTab` 没接上 / 每个面板都用同一个条件）。只数页签数完全看不出来。
+   */
+  const settingsTabs = await layout('/settings', '(() => {' +
+    'const tabs = [...document.querySelectorAll(".settings-tabs [role=tab]")];' +
+    'if (tabs.length === 0) return Promise.resolve(JSON.stringify({ tabs: 0 }));' +
+    'const ids = tabs.map((tab) => tab.getAttribute("data-tab"));' +
+    'const results = [];' +
+    'const step = (index) => {' +
+    '  if (index >= tabs.length) return Promise.resolve();' +
+    '  tabs[index].click();' +
+    '  return new Promise((done) => setTimeout(done, 150)).then(() => {' +
+    '    const page = document.querySelector(".page");' +
+    '    const panels = [...document.querySelectorAll("[role=tabpanel]")]' +
+    '      .filter((panel) => panel.offsetParent !== null);' +
+    /*
+     * 内容量按**整页**量，而不是按 `[role=tabpanel]`：告警 / 邮箱 / 账号三页装的是
+     * 独立组件（`LinkageSettingsSection` 等），它们的根元素不是 tabpanel ——
+     * 只数 tabpanel 会把"这三页渲染得好好的"误报成"点下去什么都没有"（第一版就是这样）。
+     */
+    '    const cards = page ? [...page.querySelectorAll("section.card")]' +
+    '      .filter((card) => card.offsetParent !== null).length : 0;' +
+    '    const controls = page ? page.querySelectorAll("input, select, button").length : 0;' +
+    '    const numbers = page ? page.querySelectorAll("input[type=number]").length : 0;' +
+    '    const titles = panels.reduce((sum, panel) =>' +
+    '      sum + panel.querySelectorAll("h3.section-title").length, 0);' +
+    '    results.push({' +
+    '      id: tabs[index].getAttribute("data-tab"),' +
+    '      selected: tabs[index].getAttribute("aria-selected") === "true",' +
+    '      panels: panels.length,' +
+    '      cards, controls, numbers, titles,' +
+    '      signOut: document.querySelectorAll("[data-action=sign-out]").length,' +
+    '      changePassword: document.querySelectorAll("[data-action=change-password]").length,' +
+    '      restore: document.querySelectorAll("[data-action=restore-defaults]").length' +
+    '    });' +
+    '    return step(index + 1);' +
+    '  });' +
+    '};' +
+    'return step(0).then(() => JSON.stringify({ tabs: tabs.length, ids, results }));' +
+    '})()')
+  log('settings tabs: ' + JSON.stringify(settingsTabs))
+
+  if (settingsTabs.tabs !== 7) {
+    problems.push('设置页的页签不是 7 个：' + settingsTabs.tabs)
+  } else {
+    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'account', 'about']
+    if (JSON.stringify(settingsTabs.ids) !== JSON.stringify(expectedIds)) {
+      problems.push('设置页页签的顺序/名字不对：' + JSON.stringify(settingsTabs.ids))
+    }
+    /*
+     * 只有**内联**在这四个页签里的卡片不许有 `h3.section-title`（业主 ③：不要每张卡片都
+     * 写名字）。告警/邮箱/账号三页装的是独立组件，它们自己的卡片标题是各自子域的名字
+     * （例如"告警联动"），不是对页签名的重复。
+     */
+    const inlineTabs = new Set(['language', 'storage', 'video', 'about'])
+    for (const tab of settingsTabs.results) {
+      if (tab.cards === 0) problems.push('页签 ' + tab.id + ' 点下去一张卡片都没有（是空的）')
+      if (tab.controls === 0) problems.push('页签 ' + tab.id + ' 里一个可操作控件都没有')
+      if (!tab.selected) problems.push('页签 ' + tab.id + ' 点下去之后 aria-selected 不是 true')
+      if (inlineTabs.has(tab.id) && tab.titles > 0) {
+        problems.push('页签 ' + tab.id + ' 里又出现了卡片标题（' + tab.titles + ' 个）')
+      }
+      if (tab.id === 'video' && tab.numbers !== 6) {
+        problems.push('「视频与缓冲」里的数字输入不是 6 个：' + tab.numbers +
+          '（设备探测 3 个 + 缓冲 3 个必须合成一组）')
+      }
+      if (tab.id === 'account') {
+        if (tab.signOut !== 1) problems.push('账号页签里没有「退出登录」按钮')
+        if (tab.changePassword !== 1) problems.push('账号页签里没有「修改密码」按钮')
+      }
+      if (tab.id === 'about' && tab.restore !== 1) {
+        problems.push('「关于与维护」页签里没有「恢复默认值」')
+      }
+    }
+  }
+
+  // Back to the Overview so the language section below starts from the same place
+  // the earlier screenshots did.
+  await win.webContents.executeJavaScript('location.hash = "#/"; true')
+  await sleep(800)
+
+  /**
+   * Language switching, checked against the REAL rendered DOM.
+   *
+   * A catalogue can be complete, typed and unit-tested and still never reach the
+   * screen — a component that forgot to call the translation helper renders its
+   * raw key or a stale hard-coded string. That is only visible in a running app.
+   *
+   * Driven step by step from here rather than inside one executeJavaScript call:
+   * switching by reload destroys the JS context, so a promise spanning a reload
+   * would never settle.
+   */
+  const readLocaleState = async (label) => {
+    const raw = await win.webContents.executeJavaScript(`JSON.stringify({
+      navFirst: (document.querySelector('.sidebar__nav .nav-item__label') || {}).textContent || null,
+      footer: (document.querySelector('.app-footer') || {}).textContent || null,
+      copyright: (document.querySelector('.app-footer__copyright') || {}).textContent || null,
+      release: (document.querySelector('.app-footer__version') || {}).textContent || null,
+      htmlLang: document.documentElement.lang,
+      title: document.title
+    })`)
+    const parsed = JSON.parse(raw)
+    log('locale ' + label.padEnd(6) + ': nav=' + JSON.stringify(parsed.navFirst) +
+        ' copyright=' + JSON.stringify(parsed.copyright) +
+        ' version=' + JSON.stringify(parsed.release) +
+        ' htmlLang=' + parsed.htmlLang)
+    return parsed
+  }
+
+  const localeStates = {}
+  for (const code of ['zh-CN', 'en', 'es', 'tr']) {
+    // Drive the real persistence path: the same storage key the composable reads
+    // on startup. Reloading also proves the choice SURVIVES a restart, which is
+    // half the feature.
+    await win.webContents.executeJavaScript(
+      'window.localStorage.setItem("hertzinno.locale", ' + JSON.stringify(code) + '); true'
+    )
+    win.webContents.reload()
+    await sleep(2600)
+    localeStates[code] = await readLocaleState(code)
+  }
+
+  // The four languages must actually render DIFFERENT text. Comparing rendered
+  // output catches a component that ignored the locale entirely, which a
+  // catalogue-level test cannot see.
+  const rendered = Object.values(localeStates).map((state) => state.navFirst)
+  if (new Set(rendered).size !== rendered.length) {
+    problems.push('locale switch did not change the rendered navigation: ' + JSON.stringify(rendered))
+  }
+  for (const [code, state] of Object.entries(localeStates)) {
+    if (state.htmlLang !== code) {
+      problems.push('document.documentElement.lang is ' + state.htmlLang + ' for locale ' + code)
+    }
+    // A raw key on screen means the translation helper was never called.
+    if (typeof state.navFirst === 'string' && state.navFirst.startsWith('app.')) {
+      problems.push('untranslated key rendered for ' + code + ': ' + state.navFirst)
+    }
+    // The release date is locale DATA, not copy: it must be formatted by Intl for
+    // the active language, and must never still read as the Chinese form
+    // (year/month/day ideographs) once the interface is English, Spanish or
+    // Turkish. Regression guard for the shared Chinese-only date formatter that
+    // was removed, which rendered the same Chinese date in all four languages.
+    //
+    // Checked on the WHOLE footer, because the date moved there with the version
+    // when the sidebar footer was replaced by the page footer.
+    if (code !== 'zh-CN' && typeof state.footer === 'string' && /[\u5e74\u6708\u65e5]/.test(state.footer)) {
+      problems.push('release date rendered in Chinese for ' + code + ': ' + state.footer)
+    }
+    // The footer is where the product asked for the version and the copyright, so
+    // their ABSENCE is a finding — a text check that only pattern-matches passes
+    // silently when the element is gone.
+    if (!state.copyright) problems.push('footer has no copyright line for ' + code)
+    if (!state.release) problems.push('footer has no version for ' + code)
+  }
+
+  // Leave the app in the default language so the captured screenshots are the
+  // product's default appearance.
+  await win.webContents.executeJavaScript(
+    'window.localStorage.setItem("hertzinno.locale", "zh-CN"); true'
+  )
+  win.webContents.reload()
+  await sleep(2600)
+
+  /**
+   * 重命名演练（`--rename-drill`）：**真的**改一次声纹设备的设备名与一路通道名，读回，
+   * 再改回原值并读回。默认不跑（见文件头那块说明），因为它写的是值班中的真机。
+   */
+  if (RENAME_DRILL) {
+    await runRenameDrill(win)
+  } else {
+    log('rename drill  : skipped（默认不写设备；要演练请加 --rename-drill）')
+  }
+
+  /**
+   * 告警记录的等级与备注（v6）。
+   *
+   * 一次性 profile 里**没有告警行**，所以能验证的是「控件真的渲染出来了」这一层：
+   * 筛选器里有没有等级下拉、下拉里是不是四档、表头有没有「等级」这一列。着色与备注
+   * 编辑要先有一条记录，那属于单元测试与源码守卫的覆盖面（`tests/alarm-severity-ui.test.ts`
+   * 钉住每一档都有配色类、筛选器真的把 severity 写进 query）。
+   *
+   * 之所以要这一项：`problems` 曾经 0 而页面上根本没有控件——只要有记录才报错的话，
+   * 「控件没渲染」与「没有数据」看起来完全一样。
+   */
+  const alarmsLayout = await layout('/alarms', '(() => {' +
+    'const labels = [...document.querySelectorAll(".filter-bar .field-label")].map((n) => n.textContent.trim());' +
+    'const selects = [...document.querySelectorAll(".filter-bar select")];' +
+    'const severitySelect = selects.find((s) =>' +
+    '  [...s.options].some((o) => o.textContent.trim() === "全部等级"));' +
+    'const heads = [...document.querySelectorAll("table thead th")].map((n) => n.textContent.trim());' +
+    'return JSON.stringify({' +
+    '  filterLabels: labels,' +
+    '  severityOptionCount: severitySelect ? severitySelect.options.length - 1 : 0,' +
+    '  severityOptions: severitySelect ? [...severitySelect.options].slice(1).map((o) => o.textContent.trim()) : [],' +
+    '  heads' +
+    '});})()')
+  log('alarms controls: ' + JSON.stringify(alarmsLayout))
+  if (!alarmsLayout.filterLabels.includes('告警等级')) {
+    problems.push('告警记录的筛选栏里没有「告警等级」下拉：' + JSON.stringify(alarmsLayout.filterLabels))
+  }
+  if (alarmsLayout.severityOptionCount !== 4) {
+    problems.push('等级下拉有 ' + alarmsLayout.severityOptionCount + ' 个档位，应为 4：' +
+      JSON.stringify(alarmsLayout.severityOptions))
+  }
+  if (!alarmsLayout.heads.includes('等级')) {
+    problems.push('告警记录的表头里没有「等级」列：' + JSON.stringify(alarmsLayout.heads))
+  }
+
+  /**
+   * 三项界面改造（业主 2026-09-16）的屏幕级断言。
+   *
+   * 三条要求都能"源码里改对了但屏幕上没生效"，所以每条都读 DOM：
+   *   1. 设备管理页右侧内容区没有标题，且「添加设备」在**左侧拓扑树里面**；
+   *   2. **所有**页面都没有页面内标题（外层框架的标题栏已经写了）；
+   *   3. 告警图标点开是那张面板：没有告警时写「当前无告警」，角标与列表同源。
+   */
+  const devicesChrome = await layout('/devices', '(() => {' +
+    'const add = [...document.querySelectorAll("button")]' +
+    '  .find((b) => b.textContent.trim().includes("添加设备"));' +
+    'const tree = document.querySelector(".device-tree");' +
+    'const content = document.querySelector(".devices-main");' +
+    'return JSON.stringify({' +
+    '  addButtonPresent: !!add,' +
+    '  addInsideTree: !!(add && tree && tree.contains(add)),' +
+    '  addInsideContent: !!(add && content && content.contains(add)),' +
+    '  pageTitles: [...document.querySelectorAll(".page-title")].map((n) => n.textContent.trim())' +
+    '});})()')
+  log('devices chrome: ' + JSON.stringify(devicesChrome))
+  if (!devicesChrome.addButtonPresent) problems.push('设备管理页找不到「添加设备」按钮')
+  if (!devicesChrome.addInsideTree) problems.push('「添加设备」不在左侧拓扑树里')
+  if (devicesChrome.addInsideContent) problems.push('「添加设备」仍然在右侧内容区里')
+  if (devicesChrome.pageTitles.length > 0) {
+    problems.push('设备管理页仍然有页面标题：' + JSON.stringify(devicesChrome.pageTitles))
+  }
+
+  /**
+   * 添加设备对话框：**没有机型选择**，但安装信息四个框都在（业主 2026-09-17 第 1、2 条）。
+   *
+   * 这一条必须无条件断言，而且**两边都要**断：
+   *   - 机型控件一个都不能有（`.kind__radio` / `.kind__name` 为 0）—— 留着它，界面就仍然在让
+   *     操作员做"选哪套协议"这道判断题，而这正是第 2 条要消掉的东西；
+   *   - 四个点位输入框必须在（第 1 条）—— 少了任何一个都不会报错，只会让那一项永远录不进去。
+   *
+   * "控件没渲染"与"没有数据"在这类探针里长得一样（§15.13.5），所以数量必须写死。
+   */
+  const addDialog = await layout('/devices', '(() => {' +
+    'const add = [...document.querySelectorAll("button")]' +
+    '  .find((b) => b.textContent.trim().includes("添加设备"));' +
+    'if (!add) return JSON.stringify({ opened: false });' +
+    'add.click();' +
+    'return new Promise((resolve) => setTimeout(() => {' +
+    '  const dialog = document.querySelector("[data-add-device-dialog]");' +
+    '  resolve(JSON.stringify({' +
+    '    opened: !!dialog,' +
+    '    kindControls: dialog ? dialog.querySelectorAll(".kind__radio, .kind__name, select[name=kind]").length : -1,' +
+    '    hasLead: !!(dialog && dialog.querySelector(".add__lead")),' +
+    '    installInputs: dialog ? dialog.querySelectorAll("fieldset.install input.input").length : -1,' +
+    '    installPoints: dialog ? [...dialog.querySelectorAll("fieldset.install .field-label")]' +
+    '      .map((n) => n.textContent.trim()) : []' +
+    '  }));' +
+    '}, 300));})()')
+  log('add dialog    : ' + JSON.stringify(addDialog))
+  if (!addDialog.opened) {
+    problems.push('点「添加设备」没有打开对话框（找不到 [data-add-device-dialog]）')
+  } else {
+    if (addDialog.kindControls !== 0) {
+      problems.push(
+        '添加设备对话框里还有机型选择控件（第 2 条要求协议自动匹配）：' + addDialog.kindControls
+      )
+    }
+    if (!addDialog.hasLead) problems.push('添加设备对话框里没有那句"不用选机型"的说明')
+    if (addDialog.installInputs !== 4) {
+      problems.push(
+        '添加设备对话框里的安装信息输入不是四个（第 1 条）：' + addDialog.installInputs
+      )
+    }
+    for (const label of ['纬度', '经度', '方位角', '基准声压级']) {
+      if (!(addDialog.installPoints || []).some((text) => text.includes(label))) {
+        problems.push('安装信息里没有「' + label + '」这一项：' + JSON.stringify(addDialog.installPoints))
+      }
+    }
+  }
+
+
+  /*
+   * 逐路由扫一遍**页面级**标题。
+   *
+   * 断言刻意只针对两件事，而不是"`.page` 里不许有任何 h1/h2"：
+   *   1. `.page-title` 这个类不许回来（它就是被删掉的那个页面标题）；
+   *   2. `.page` 的**第一个**元素不许是 h1/h2（那才是"页面标题"的位置）。
+   * 因为 `.page` 里面合法的段落标题是存在的 —— 总览页的「通道墙」就标着这一页两块内容
+   * 里的第二块。第一版断言把任何 h2 都算成违规，于是把「通道墙」报成了问题：那是
+   * **断言写得太宽**，不是界面错了。
+   */
+  const titlesByRoute = {}
+  for (const [name, route] of ROUTES) {
+    const state = await layout(route, '(() => {' +
+      '  const page = document.querySelector(".page");' +
+      '  const first = page ? page.firstElementChild : null;' +
+      '  const leading = first && /^(H1|H2)$/.test(first.tagName)' +
+      '    ? first.textContent.trim().slice(0, 40) : "";' +
+      '  return JSON.stringify({' +
+      '    pageTitleClass: document.querySelectorAll(".page-title").length,' +
+      '    leadingHeading: leading' +
+      '  });' +
+      '})()')
+    titlesByRoute[route] = state
+    if (state.pageTitleClass > 0)
+      problems.push(route + ' 仍有 .page-title：' + state.pageTitleClass + ' 个')
+    if (state.leadingHeading !== '')
+      problems.push(route + ' 的 .page 第一个元素又是标题：' + JSON.stringify(state.leadingHeading))
+  }
+  log('page titles   : ' + JSON.stringify(titlesByRoute))
+
+  const alarmPanel = await layout('/alarms', '(() => {' +
+    'const bell = document.querySelector(".alarm-badge__button");' +
+    'if (!bell) return JSON.stringify({ found: false });' +
+    'bell.click();' +
+    'return new Promise((resolve) => setTimeout(() => {' +
+    '  const panel = document.querySelector(".alarm-panel");' +
+    '  const badge = document.querySelector(".alarm-badge__count");' +
+    '  resolve(JSON.stringify({' +
+    '    found: true,' +
+    '    panelOpen: !!panel,' +
+    '    text: panel ? panel.textContent.replace(/\\s+/g, " ").trim().slice(0, 120) : "",' +
+    '    itemCount: panel ? panel.querySelectorAll(".alarm-item").length : -1,' +
+    '    badge: badge ? badge.textContent.trim() : ""' +
+    '  }));' +
+    '}, 350));})()')
+  log('alarm panel   : ' + JSON.stringify(alarmPanel))
+  if (!alarmPanel.found) {
+    problems.push('顶栏找不到告警图标（.alarm-badge__button）')
+  } else if (!alarmPanel.panelOpen) {
+    problems.push('点告警图标没有打开面板')
+  } else {
+    if (alarmPanel.itemCount === 0 && !alarmPanel.text.includes('当前无告警')) {
+      problems.push('没有待处理告警时，面板没有写「当前无告警」：' + JSON.stringify(alarmPanel.text))
+    }
+    // 角标与列表同源：有角标就必须有对应条数，没有条数就不许有角标。
+    const badgeCount = alarmPanel.badge === '' ? 0 : Number(alarmPanel.badge)
+    if (badgeCount !== alarmPanel.itemCount) {
+      problems.push(
+        '角标数（' + alarmPanel.badge + '）与面板列出的条数（' + alarmPanel.itemCount + '）不一致'
+      )
+    }
+  }
+
+  /**
+   * 历史趋势：刷新 / 立即落盘必须与设备选择在**同一张卡片**里，且设备下拉收窄了。
+   *
+   * ⚠️ 一次性 profile 里**没有设备**，这一页会走「尚未添加设备」那个分支，筛选卡片根本
+   * 不渲染 —— 那时这三条**量不到**，必须如实说"跳过"，而不是报成问题：把"没量到"与
+   * "量到不合格"混成同一个问题正是探针最不该做的事（见文档 §15.13.5）。
+   * 因此只有"页头不许回来"这一条在任何 profile 下都成立，无条件断言；
+   * 卡片内部的三条只在有设备时断言，并有一条源码守卫兜底（`tests/page-layout.test.ts`）。
+   */
+  const trendsChrome = await layout('/trends', '(() => {' +
+    'const card = document.querySelector(".page .card");' +
+    'const buttons = [...document.querySelectorAll(".page button")]' +
+    '  .filter((b) => /刷新|落盘/.test(b.textContent.trim()));' +
+    'const select = card ? card.querySelector("select") : null;' +
+    'return JSON.stringify({' +
+    '  hasCard: !!card,' +
+    '  actionCount: buttons.length,' +
+    '  actionsInsideCard: buttons.length > 0 && buttons.every((b) => card && card.contains(b)),' +
+    '  deviceSelectWidth: select ? Math.round(select.getBoundingClientRect().width) : -1,' +
+    '  pageHeaderPresent: !!document.querySelector(".page .page-header"),' +
+    '  emptyState: /尚未添加设备|还没有添加任何设备/.test(document.body.textContent)' +
+    '});})()')
+  log('trends chrome : ' + JSON.stringify(trendsChrome))
+  if (trendsChrome.pageHeaderPresent) {
+    problems.push('历史趋势页又出现了页头')
+  }
+  if (!trendsChrome.hasCard) {
+    log('trends chrome : skipped（这个一次性 profile 里没有设备，筛选卡片不渲染）')
+  } else {
+    if (trendsChrome.actionCount < 2) {
+      problems.push('历史趋势页找不到「刷新 / 立即落盘」两个动作（找到 ' +
+        trendsChrome.actionCount + ' 个）')
+    }
+    if (!trendsChrome.actionsInsideCard) {
+      problems.push('刷新 / 立即落盘不在设备选择那张卡片里')
+    }
+    if (trendsChrome.deviceSelectWidth <= 0 || trendsChrome.deviceSelectWidth > 220) {
+      problems.push('历史趋势的设备下拉没有收窄：' + trendsChrome.deviceSelectWidth + 'px')
+    }
+  }
+
+  /**
+   * 本地样本库（schema v7）与 AI 标注：**控件真的在**这一层。
+   *
+   * 一次性 profile 里没有样本行、也没有配置过 AI，所以能验证的是：
+   *   - 两个入口按钮存在（告警中心的批量「加入样本库」、录音文件的「加入样本库」列）；
+   *   - 样本库页有导出卡片与 AI 卡片；
+   *   - AI 未配置时**如实说原因**（不是笼统的"不可用"）且「让 AI 标注」按钮是**禁用**的
+   *     —— "按钮在但点了没反应"是最坏的形态：用户会以为 AI 看过一遍什么都没发现。
+   */
+  const alarmsSampleEntry = await layout('/alarms', '(() => {' +
+    'const buttons = [...document.querySelectorAll(".page button")].map((b) => b.textContent.trim());' +
+    'const addButton = [...document.querySelectorAll(".page button")]' +
+    '  .find((b) => b.textContent.trim() === "加入样本库");' +
+    'return JSON.stringify({' +
+    '  hasAdd: !!addButton,' +
+    '  addDisabled: addButton ? addButton.disabled : null,' +
+    '  labels: buttons.slice(0, 12)' +
+    '});})()')
+  log('samples entry : ' + JSON.stringify(alarmsSampleEntry))
+  if (!alarmsSampleEntry.hasAdd) {
+    problems.push('告警中心没有「加入样本库」按钮：' + JSON.stringify(alarmsSampleEntry.labels))
+  } else if (alarmsSampleEntry.addDisabled !== true) {
+    // 没勾任何记录时它必须是灰的：否则一点就是"入库 0 条"这种没意义的回执。
+    problems.push('没有勾选记录时「加入样本库」不是禁用状态')
+  }
+
+  const recordingsSampleColumn = await layout('/recordings', '(() => {' +
+    'const heads = [...document.querySelectorAll("table thead th")].map((n) => n.textContent.trim());' +
+    'return JSON.stringify({ heads });})()')
+  log('recordings col: ' + JSON.stringify(recordingsSampleColumn))
+  if (!recordingsSampleColumn.heads.includes('样本库')) {
+    problems.push('录音文件的表头里没有「样本库」列：' + JSON.stringify(recordingsSampleColumn.heads))
+  }
+
+  const samplesChrome = await layout('/samples', '(() => {' +
+    'const titles = [...document.querySelectorAll(".page .section-title")].map((n) => n.textContent.trim());' +
+    'const state = document.querySelector(".ai-state");' +
+    'const runButton = [...document.querySelectorAll(".page button")]' +
+    '  .find((b) => b.textContent.trim() === "让 AI 标注");' +
+    'const rows = document.querySelectorAll("table tbody tr").length;' +
+    'const heads = [...document.querySelectorAll("table thead th")].map((n) => n.textContent.trim());' +
+    'const columns = [...document.querySelectorAll(".label-column__head")].map((n) => n.textContent.trim());' +
+    'return JSON.stringify({' +
+    '  titles,' +
+    '  aiState: state ? state.textContent.trim() : "",' +
+    '  runFound: !!runButton,' +
+    '  runDisabled: runButton ? runButton.disabled : null,' +
+    '  heads,' +
+    '  labelColumns: columns,' +
+    '  rows' +
+    '});})()')
+  log('samples chrome: ' + JSON.stringify(samplesChrome))
+  if (!samplesChrome.titles.includes('导出数据集')) {
+    problems.push('样本库页没有「导出数据集」卡片：' + JSON.stringify(samplesChrome.titles))
+  }
+  if (!samplesChrome.titles.includes('AI 标注（可选）')) {
+    problems.push('样本库页没有 AI 标注卡片：' + JSON.stringify(samplesChrome.titles))
+  }
+  // 标签库（两个维度）必须**同时**在：只渲染一维就等于"故障类型没有设备类型可配"。
+  if (!samplesChrome.titles.includes('标签库')) {
+    problems.push('样本库页没有「标签库」卡片：' + JSON.stringify(samplesChrome.titles))
+  }
+  for (const dimension of ['设备类型', '故障类型']) {
+    if (!samplesChrome.labelColumns.includes(dimension)) {
+      problems.push('标签库里没有「' + dimension + '」一栏：' + JSON.stringify(samplesChrome.labelColumns))
+    }
+    if (!samplesChrome.heads.includes(dimension)) {
+      problems.push('样本表里没有「' + dimension + '」列：' + JSON.stringify(samplesChrome.heads))
+    }
+  }
+  // 未配置时必须说出**具体**原因，而不是"不可用"三个字。
+  if (!/未启用|未填接口地址|接口地址不合法|未填模型名|已配置/.test(samplesChrome.aiState)) {
+    problems.push('AI 状态行没有说出具体原因：' + JSON.stringify(samplesChrome.aiState))
+  }
+  if (!samplesChrome.runFound) {
+    problems.push('样本库页找不到「让 AI 标注」按钮')
+  } else if (samplesChrome.runDisabled !== true) {
+    problems.push('AI 未配置时「让 AI 标注」按钮不是禁用的（点了会失败，用户却以为它跑过了）')
+  }
+
+  /**
+   * 实时监测页的结构（业主 2026-09-17 的第②批：③④⑦）。
+   *
+   * 一次性 profile 里两台设备都在（一台声纹设备、一台相机），但**都离线**，所以量得到的是
+   * 布局事实而不是数据流：
+   *   - 设备下拉**在顶栏那一格里**（`#topbar-page-slot`），且宽度约为顶栏的一半；
+   *   - 「数据流状态」与「当前帧」两张卡片**不在了**（`.stream-strip` 为 0）；
+   *   - 实时视频墙与相机声学数据卡片**不在了**（页面上不再有它们的根节点）。
+   *
+   * 这三条都必须**按 DOM 断言**：源码里删掉一个组件而它在别处又被挂回来，是这套代码里
+   * 最容易发生的事（同一个组件在总览页还在用）。
+   */
+  const monitorChrome = await layout('/monitor', '(() => {' +
+    'const slot = document.querySelector("#topbar-page-slot");' +
+    'const select = slot ? slot.querySelector("select") : null;' +
+    'const topbar = document.querySelector(".topbar");' +
+    'const topbarWidth = topbar ? topbar.getBoundingClientRect().width : 0;' +
+    'const slotWidth = slot ? slot.getBoundingClientRect().width : 0;' +
+    /*
+     * 第 6 条（业主 2026-09-17）：下拉宽度是那一格的 50%、靠右，**紧挨着**右侧的设备数量。
+     * 三件事都只能量：宽度比（50%）、它右边到那一格右边缘的缝（靠右 = 缝≈0）、
+     * 以及它右边到 `.indicators`（里面第一个就是设备总数）的距离（就是顶栏的 16px 间距）。
+     */
+    'const selectRect = select ? select.getBoundingClientRect() : null;' +
+    'const slotRect = slot ? slot.getBoundingClientRect() : null;' +
+    'const indicators = document.querySelector(".topbar .indicators");' +
+    'const indicatorsRect = indicators ? indicators.getBoundingClientRect() : null;' +
+    'return JSON.stringify({' +
+    '  slotExists: !!slot,' +
+    '  selectInSlot: !!(select && slot && slot.contains(select)),' +
+    '  selectWidth: selectRect ? Math.round(selectRect.width) : -1,' +
+    '  slotRatio: topbarWidth > 0 ? Math.round((slotWidth / topbarWidth) * 100) : -1,' +
+    '  selectRatio: slotWidth > 0 && selectRect ? Math.round((selectRect.width / slotWidth) * 100) : -1,' +
+    '  selectRightGapToSlot: slotRect && selectRect ? Math.round(slotRect.right - selectRect.right) : null,' +
+    '  selectToIndicatorsGap: indicatorsRect && selectRect ? Math.round(indicatorsRect.left - selectRect.right) : null,' +
+    '  streamStrip: document.querySelectorAll(".stream-strip").length,' +
+    '  videoWall: document.querySelectorAll(".video-wall, .camera-video-wall").length,' +
+    '  alarmEntry: document.querySelectorAll(".camera-alarm-entry").length,' +
+    /*
+     * ② 每通道声纹特性卡片 + 音频回放（声纹设备那一支）。
+     *
+     * 这里量的是"结构对不对"，不是"有没有数据"：真实数据要一台在线设备，而这一条
+     * 在离线设备上也必须能断言。三件事：
+     *   - 卡片数 = 通道页签数（一通道一张，且都渲染出来了）；
+     *   - 每张卡片恰好是一种读数状态，且"有值"与"有时间"必须同真同假
+     *     （只画数字不画时间 = 把旧读数当实时值卖）；
+     *   - 播放按钮 / 音量滑杆 / 那句"播的是什么"都在。
+     */
+    '  channelTabs: document.querySelectorAll(".channel-tab").length,' +
+    '  channelCards: document.querySelectorAll(".channel-card").length,' +
+    '  channelCardActive: document.querySelectorAll(".channel-card--active").length,' +
+    '  channelCardValues: document.querySelectorAll(".channel-card__values").length,' +
+    '  channelCardStates: [...document.querySelectorAll(".channel-card")].map((card) => ({' +
+    '    badges: card.querySelectorAll(".badge").length,' +
+    '    hasValues: !!card.querySelector(".channel-card__values"),' +
+    '    hasTime: !!card.querySelector(".channel-card__time"),' +
+    '    empty: !!card.querySelector(".channel-card__empty")' +
+    '  })),' +
+    '  playButton: document.querySelectorAll(".audio-bar__play").length,' +
+    '  playDisabled: (function(){ const b = document.querySelector(".audio-bar__play");' +
+    '    return b ? b.disabled : null; })(),' +
+    '  volumeSlider: document.querySelectorAll(".audio-bar__slider").length,' +
+    '  volumeValue: (function(){ const s = document.querySelector(".audio-bar__slider");' +
+    '    return s ? s.value : null; })(),' +
+    '  previewHint: document.querySelectorAll(".audio-bar__hint").length,' +
+    /*
+     * ③b 版式：趋势置顶、其下四张图谱卡片、再下面时间轴回放。
+     * 量的是**几何**（谁在谁上面），因为这一条改动只有版式：顺序一被改回去，
+     * 页面照样能看，只是"一进页面要先滚动才看得到趋势"。
+     */
+    '  layout3b: (function(){' +
+    '    const rect = (el) => (el ? el.getBoundingClientRect() : null);' +
+    '    const trend = rect(document.querySelector(".trend-panel"));' +
+    '    const grid = document.querySelector(".graph-grid");' +
+    '    const gridRect = rect(grid);' +
+    '    const cards = grid ? [...grid.querySelectorAll(":scope > .card")] : [];' +
+    '    const track = rect(document.querySelector(".mtl__track"));' +
+    '    return {' +
+    '      trendTop: trend ? Math.round(trend.top) : null,' +
+    '      trendHeight: trend ? Math.round(trend.height) : null,' +
+    '      gridTop: gridRect ? Math.round(gridRect.top) : null,' +
+    '      gridCards: cards.length,' +
+    '      gridCardWidths: cards.map((card) => Math.round(card.getBoundingClientRect().width)),' +
+    '      gridCardHeights: cards.map((card) => Math.round(card.getBoundingClientRect().height)),' +
+    '      timelineTop: track ? Math.round(track.top) : null,' +
+    '      timelineTrackWidth: track ? Math.round(track.width) : null,' +
+    '      timelineSegments: document.querySelectorAll(".mtl__segment").length,' +
+    '      timelineTicks: document.querySelectorAll(".mtl__tick").length,' +
+    '      timelineEmptyShown: document.querySelectorAll(".mtl__state").length > 0,' +
+    '      timelineLocalOnly: document.querySelectorAll(".mtl__hint").length' +
+    '    };' +
+    '  })(),' +
+    '});})()')
+  log('monitor chrome: ' + JSON.stringify(monitorChrome))
+  if (!monitorChrome.slotExists) {
+    problems.push('顶栏没有页面控件那一格（#topbar-page-slot）')
+  } else if (!monitorChrome.selectInSlot) {
+    problems.push('实时监测的设备下拉没有被投到顶栏那一格里')
+  } else {
+    // 业主指定 50%。给一个宽容带：40–60% 都算"一半"，因为顶栏还有内边距与两侧内容。
+    if (monitorChrome.slotRatio < 40 || monitorChrome.slotRatio > 60) {
+      problems.push('顶栏那一格不是约 50% 宽：' + monitorChrome.slotRatio + '%')
+    }
+    /*
+     * 第 6 条：下拉本身是那一格的 50%（不是填满那一格），且靠右、紧挨设备数量。
+     * 上界给到 60%（含 select 自身的 1px 边框与亚像素取整）；下界 40% 同理由。
+     */
+    if (monitorChrome.selectRatio < 40 || monitorChrome.selectRatio > 60) {
+      problems.push(
+        '实时监测页的设备下拉不是那一格的约 50%：' + monitorChrome.selectRatio + '%（第 6 条）'
+      )
+    }
+    if (
+      monitorChrome.selectRightGapToSlot === null ||
+      monitorChrome.selectRightGapToSlot > 2
+    ) {
+      problems.push(
+        '设备下拉没有靠右：它右边到那一格右边缘还有 ' + monitorChrome.selectRightGapToSlot + 'px'
+      )
+    }
+    if (
+      monitorChrome.selectToIndicatorsGap === null ||
+      monitorChrome.selectToIndicatorsGap < 0 ||
+      monitorChrome.selectToIndicatorsGap > 24
+    ) {
+      problems.push(
+        '设备下拉没有紧挨着「设备数量」那组指示器：间距 ' +
+          monitorChrome.selectToIndicatorsGap + 'px'
+      )
+    }
+  }
+  if (monitorChrome.streamStrip > 0) {
+    problems.push('实时监测页还有「数据流状态」那条（.stream-strip 出现了 ' + monitorChrome.streamStrip + ' 次）')
+  }
+  if (monitorChrome.videoWall > 0) {
+    problems.push('实时监测页还有视频墙（.video-wall 出现了 ' + monitorChrome.videoWall + ' 次）')
+  }
+
+  /*
+   * ② 每通道声纹特性卡片（只在声纹设备那一支上有；上面那次 /monitor 打开时选中的就是它）。
+   *
+   * 全部是**无条件**断言：卡片数、每张卡片的"值/时间/状态"三件套、播放与音量控件。
+   * 数据是真是假此刻量不出来（这台设备离线），所以只断言结构 —— 但"卡片一个都没渲染"
+   * 与"数据没来"必须能分开：前者是数量对不上，后者是卡片显示"未读取"。
+   */
+  {
+    const cards = monitorChrome.channelCardStates || []
+    if (monitorChrome.channelCards === 0) {
+      problems.push('实时监测页没有每通道声纹特性卡片（② 要求一通道一张）')
+    } else if (monitorChrome.channelCards !== monitorChrome.channelTabs) {
+      problems.push(
+        '每通道卡片数与通道页签数不一致：卡片 ' + monitorChrome.channelCards +
+          ' 个 vs 页签 ' + monitorChrome.channelTabs + ' 个'
+      )
+    }
+    if (monitorChrome.channelCards > 0 && monitorChrome.channelCardActive !== 1) {
+      problems.push('高亮的通道卡片不是恰好一张：' + monitorChrome.channelCardActive)
+    }
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index]
+      if (card.badges !== 1) {
+        problems.push('第 ' + (index + 1) + ' 张通道卡片的读数状态标记不是恰好一个：' + card.badges)
+      }
+      // 有值 ⇔ 有时间：只有数字没有时间的那张卡片是在把旧读数当实时值卖。
+      if (card.hasValues !== card.hasTime) {
+        problems.push(
+          '第 ' + (index + 1) + ' 张通道卡片的"数值"与"更新时间"不同真同假：' + JSON.stringify(card)
+        )
+      }
+      // 空态与数值二选一，不许都出现或都不出现。
+      if (card.empty === card.hasValues) {
+        problems.push('第 ' + (index + 1) + ' 张通道卡片既没有空态也没有数值：' + JSON.stringify(card))
+      }
+    }
+    if (monitorChrome.playButton !== 1) {
+      problems.push('实时监测页的音频播放按钮不是恰好一个：' + monitorChrome.playButton)
+    }
+    if (monitorChrome.volumeSlider !== 1) {
+      problems.push('实时监测页的音量滑杆不是恰好一个：' + monitorChrome.volumeSlider)
+    }
+    if (monitorChrome.previewHint !== 1) {
+      problems.push('播放按钮旁边没有那句"播的是什么"的说明（.audio-bar__hint）：' +
+        monitorChrome.previewHint)
+    }
+    log(
+      'monitor chrome/②: 卡片 ' + monitorChrome.channelCards + '/' + monitorChrome.channelTabs +
+        '，有数值的 ' + monitorChrome.channelCardValues + ' 张，播放按钮 disabled=' +
+        monitorChrome.playDisabled + '（无预览帧时应当为 true），音量 ' + monitorChrome.volumeValue + '%'
+    )
+  }
+
+  /*
+   * ③b 版式：趋势置顶 → 其下四张图谱卡片 → 再下面时间轴回放。
+   *
+   * 全部是**无条件**断言：量不到（null）就是问题 —— "这一块没渲染"与"版式对了"在一份
+   * 只列 problems 的报告里长得一样（§15.13.5）。
+   */
+  {
+    const info = monitorChrome.layout3b || {}
+    if (info.trendTop === null || info.gridTop === null) {
+      problems.push('量不到趋势卡片或四张图谱卡片：' + JSON.stringify(info))
+    } else {
+      if (!(info.gridTop > info.trendTop)) {
+        problems.push('四张图谱卡片不在趋势下面：趋势 top ' + info.trendTop + '，卡片 top ' + info.gridTop)
+      }
+      if (info.trendHeight === null || info.trendHeight < 120) {
+        problems.push('趋势卡片的高度不合理：' + info.trendHeight)
+      }
+    }
+    if (info.gridCards !== 4) {
+      problems.push('四张图谱卡片不是恰好四张：' + info.gridCards + '（' + JSON.stringify(info.gridCardWidths) + '）')
+    } else {
+      const narrowest = Math.min(...info.gridCardWidths)
+      if (narrowest < 400) {
+        problems.push('四张图谱卡片里有卡片被压得太窄：' + narrowest + 'px（' + JSON.stringify(info.gridCardWidths) + '）')
+      }
+      const flat = info.gridCardHeights.filter((height) => height < 100)
+      if (flat.length > 0) {
+        problems.push('四张图谱卡片里有卡片没有高度：' + JSON.stringify(info.gridCardHeights))
+      }
+    }
+    if (info.timelineTop === null) {
+      problems.push('找不到时间轴回放的轨道（.mtl__track）')
+    } else {
+      if (!(info.timelineTop > info.gridTop)) {
+        problems.push('时间轴回放不在四张图谱卡片下面：卡片 top ' + info.gridTop + '，时间轴 top ' + info.timelineTop)
+      }
+      if (info.timelineTrackWidth < 200) {
+        problems.push('时间轴轨道太窄，几何算不出来：' + info.timelineTrackWidth)
+      }
+      if (info.timelineTicks <= 0) {
+        problems.push('时间轴一个刻度都没有（几何没跑起来）：' + JSON.stringify(info))
+      }
+      /*
+       * 「0 段录像」与「轨道坏了」必须能分开：这台设备本机确实没有录像，所以段数应当是 0，
+       * 但**必须**有那句说明（`.mtl__state`）。只有 0 段而没有任何说明，看起来就是坏的。
+       */
+      if (info.timelineSegments === 0 && !info.timelineEmptyShown) {
+        problems.push('时间轴上没有录像段，也没有说明为什么（空态没画出来）')
+      }
+      if (info.timelineLocalOnly !== 1) {
+        problems.push('时间轴回放没有写清"只回放本机文件"：' + info.timelineLocalOnly)
+      }
+      log('monitor chrome/③b: 趋势 top ' + info.trendTop + '，四张卡片 top ' + info.gridTop +
+        '，时间轴 top ' + info.timelineTop + '，段 ' + info.timelineSegments +
+        '，刻度 ' + info.timelineTicks + '，空态 ' + info.timelineEmptyShown)
+    }
+  }
+  // ⑧：五张图谱＝相机五路，排成一排。声纹设备那一支没有这五张，所以只在相机上量（下面那段）。
+
+  /**
+   * 相机那一支的排布：相机控制与告警**并排**（⑦），而且直播画面在（⑤ 的 16:9 之后会在这里量）。
+   *
+   * 为什么必须把设备切到相机再量：上面那次 /monitor 打开时选中的是声纹设备，相机那几块
+   * 一块都不渲染（`v-if="isCamera"`）—— "没渲染"与"排错了"在只看 problems 的探针里长得一样。
+   */
+  /*
+   * 再显式恢复一次窗口，并**读回**它到底是多少。
+   *
+   * 为什么值得单独写一段：2026-09-17 第 8 批的一次运行里，这一条之后的所有读数都在
+   * **2048 宽**的窗口下取的（前面那一次 `setContentSize(1440,900)` 没有生效），
+   * 于是相机那几条断言在另一个尺寸下报失败 —— 而失败信息看起来像"相机的图谱没渲染"。
+   * 尺寸是探针的**前提**，前提不成立时应当先说出来，而不是让后面的断言去背这个锅。
+   */
+  win.setContentSize(1440, 900)
+  await sleep(700)
+  {
+    const actual = win.getContentSize()
+    log('window size   : 请求 1440x900，实际 ' + actual[0] + 'x' + actual[1])
+    if (Math.abs(actual[0] - 1440) > 40 || Math.abs(actual[1] - 900) > 40) {
+      problems.push(
+        '探针窗口没有恢复到 1440x900（实际 ' + actual[0] + 'x' + actual[1] +
+          '）—— 后面的几何断言都在别的尺寸下取数'
+      )
+    }
+  }
+
+  const monitorCamera = await layout('/monitor', '(() => {' +
+    'const select = document.querySelector("#topbar-page-slot select");' +
+    'if (!select) return JSON.stringify({ switched: false, reason: "no-select" });' +
+    'const option = [...select.options].find((o) => /Camera|相机|cámara|kamera/i.test(o.textContent));' +
+    'if (!option) return JSON.stringify({ switched: false, reason: "no-camera", options: [...select.options].map((o) => o.textContent.trim()) });' +
+    'select.value = option.value;' +
+    'select.dispatchEvent(new Event("change", { bubbles: true }));' +
+    'return new Promise((resolve) => setTimeout(() => {' +
+    '  const alarm = document.querySelector(".camera-alarm-entry");' +
+    '  const control = document.querySelector(".cctl");' +
+    '  const live = document.querySelector(".camera-live");' +
+    '  const sameRow = !!(alarm && control)' +
+    '    && Math.abs(alarm.getBoundingClientRect().top - control.getBoundingClientRect().top) < 24;' +
+    '  const liveBox = live ? live.getBoundingClientRect() : null;' +
+    /*
+     * ⑤ 右键菜单：先真的按一次右键（派发 `contextmenu`），再等一次渲染。
+     *
+     * **必须等**：Vue 的模板更新是异步的，派发之后立刻读 DOM 拿到的一定是"菜单没开"
+     * （第一版就是这样，报了一个假失败）。所以这里先把事件发出去，200 ms 之后再量。
+     */
+    '  const stage = document.querySelector(".camera-live__stage");' +
+    '  if (stage) stage.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,' +
+    '    cancelable: true, clientX: 120, clientY: 120 }));' +
+    '  setTimeout(function(){' +
+    '  const menus = [...document.querySelectorAll("[role=menu]")];' +
+    '  const top = menus.length > 0 ? menus[0] : null;' +
+    '  const menuItems = top ? [...top.querySelectorAll(":scope > [role=menuitem]")] : [];' +
+    '  const menu = {' +
+    '    opened: menus.length > 0,' +
+    '    count: menuItems.length,' +
+    '    disabled: menuItems.filter((item) => item.getAttribute("aria-disabled") === "true" ||' +
+    '      item.classList.contains("vmenu__item--disabled")).length,' +
+    '    hasSubmenu: menuItems.some((item) => item.getAttribute("aria-haspopup") === "menu"),' +
+    '    labels: menuItems.map((item) => (item.textContent || "").trim().slice(0, 24)) };' +
+    /*
+     * 量完就把菜单关掉：它是个 Teleport 到 body 的浮层，留着的话这张 /monitor 的截图
+     * 会永远带着一个打开的右键菜单（下一个人会以为页面自己弹出了菜单）。
+     * `mousedown` 在 document 上（菜单的关闭条件就是"点别处"）。
+     */
+    '  document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));' +
+    '  resolve(JSON.stringify({' +
+    '    switched: true,' +
+    '    hasLive: !!live,' +
+    '    hasAlarmEntry: !!alarm,' +
+    '    hasControl: !!control,' +
+    '    sameRow,' +
+    /*
+     * 诊断用（2026-09-17 第 8 批发现在别的窗口尺寸下这一条会失败）：设备数、空态、
+     * 以及**这一屏看到的是哪一台**。`graphCount 0` 与 `stageBox null` 同时出现时，
+     * "相机那几块没渲染"与"这一页根本不在相机上（设备列表空了 / 选中的是别的设备）"
+     * 长得一模一样 —— 这三个读数把它们分开。
+     */
+    '    deviceCount: (function(){ const el = document.querySelector(".topbar .indicator__value");' +
+    '      return el ? Number((el.textContent || "").trim()) : -1; })(),' +
+    '    emptyState: document.querySelectorAll(".empty-state, [data-empty-state]").length,' +
+    '    selectedOption: (function(){ const s = document.querySelector("#topbar-page-slot select");' +
+    '      return s && s.selectedOptions[0] ? (s.selectedOptions[0].textContent || "").trim() : null; })(),' +
+    // ⑧：五张图谱一排。数它们的**顶边**是否几乎相同 —— 那是"同一排"的可测定义。
+    '    graphCount: document.querySelectorAll(".acam__row > .acam__panel").length,' +
+    '    graphTops: [...document.querySelectorAll(".acam__row > .acam__panel")]' +
+    '      .map((n) => Math.round(n.getBoundingClientRect().top)),' +
+    /*
+     * "同一排"还必须是**这一块自己排成的一排**，不是被挤扁的一排：
+     *   rowWidth  这一排实际有多宽（= 声学面板的宽度，因为它是整幅宽的）；
+     *   graphWidths 每张卡多宽（222px 左右才读得出来；60px 说明面板被塞进了排布板的一格）；
+     *   rowOverflow 这一排自己有没有横向溢出（能量点那张表在里面）；
+     *   rowFifthRight 第五张卡的右边缘相对这一排右边缘的位置（> 0 就是排到外面去了）。
+     */
+    '    panelWidth: (function(){ const p = document.querySelector(".acam");' +
+    '      return p ? Math.round(p.getBoundingClientRect().width) : -1; })(),' +
+    '    rowWidth: (function(){ const r = document.querySelector(".acam__row");' +
+    '      return r ? Math.round(r.getBoundingClientRect().width) : -1; })(),' +
+    '    graphWidths: [...document.querySelectorAll(".acam__row > .acam__panel")]' +
+    '      .map((n) => Math.round(n.getBoundingClientRect().width)),' +
+    '    rowOverflow: (function(){ const r = document.querySelector(".acam__row");' +
+    '      return r ? r.scrollWidth - r.clientWidth : -1; })(),' +
+    /*
+     * 能量点那张五列表：它是这一排里唯一"内容有最小宽度"的东西。
+     * 没有实时能量点时表不渲染（设备离线），那时这里是 null —— 探针不许把 null 当成"通过"，
+     * 所以下面只比 null 以外的值，并在报告里写明"没有表可量"。
+     */
+    '    tableOverflow: (function(){ const t = document.querySelector(".acam__table");' +
+    '      if (!t) return null; return t.scrollWidth - t.clientWidth; })(),' +
+    '    rowFifthRight: (function(){ const r = document.querySelector(".acam__row");' +
+    '      const cards = [...document.querySelectorAll(".acam__row > .acam__panel")];' +
+    '      if (!r || cards.length === 0) return null;' +
+    '      return Math.round(cards[cards.length - 1].getBoundingClientRect().right' +
+    '        - r.getBoundingClientRect().right); })(),' +
+    '    viewportWidth: window.innerWidth,' +
+    /*
+     * ⑤ 16:9 视频窗口：量的是**窗口本身**的宽高比，不是视频源的比例。
+     * 判据用 16/9 = 1.7778，允许 ±0.05（边框、圆角与 devicePixelRatio 的取整）。
+     */
+    '    stageBox: (function(){ const s = document.querySelector(".camera-live__stage");' +
+    '      if (!s) return null; const r = s.getBoundingClientRect();' +
+    '      return { w: Math.round(r.width), h: Math.round(r.height),' +
+    '        ratio: r.height > 0 ? Math.round((r.width / r.height) * 1000) / 1000 : 0 }; })(),' +
+    /*
+     * ⑤ 右键菜单的测量结果（见上面那段：事件已派发、渲染已等过）。
+     */
+    '    menu: menu,' +
+    '    liveWidth: liveBox ? Math.round(liveBox.width) : -1' +
+    '  }));' +
+    '  }, 200);' +
+    '}, 900));})()')
+  log('monitor camera: ' + JSON.stringify(monitorCamera))
+  if (!monitorCamera.switched) {
+    problems.push('探针切不到相机设备：' + JSON.stringify(monitorCamera))
+  } else {
+    if (!monitorCamera.hasLive) problems.push('相机那一支没有直播画面（.camera-live）')
+    if (!monitorCamera.hasControl) problems.push('相机那一支没有相机控制面板（.cctl）')
+    if (!monitorCamera.hasAlarmEntry) problems.push('相机那一支没有告警卡片（.camera-alarm-entry）')
+    if (monitorCamera.hasControl && monitorCamera.hasAlarmEntry && !monitorCamera.sameRow) {
+      problems.push('相机控制与告警没有并排（不在同一行）')
+    }
+    // ⑧：五张图谱，且**在同一排**（顶边之差 < 8px 才算一排）。
+    if (monitorCamera.graphCount !== 5) {
+      problems.push('相机那一支的图谱不是五张：' + monitorCamera.graphCount)
+    } else {
+      const tops = monitorCamera.graphTops
+      const spread = Math.max(...tops) - Math.min(...tops)
+      if (spread >= 8) {
+        problems.push('五张图谱不在同一排（顶边相差 ' + spread + 'px）：' + JSON.stringify(tops))
+      }
+    }
+    /*
+     * "同一排"必须是这一块**自己**排成的一排：面板要占满整幅宽，五张卡要被分在这一排里，
+     * 而且这一排不许横向溢出（能量点那张五列表是这一排里唯一内容有最小宽度的东西）。
+     *
+     * 这些都是**无条件**断言：面板宽度/卡宽度只要量到就比，量不到（-1 / null）也报问题 ——
+     * "控件没渲染"与"排错了"不能长得一样（§15.13.5）。
+     */
+    if (monitorCamera.panelWidth <= 0 || monitorCamera.rowWidth <= 0) {
+      problems.push('量不到五张图谱那一排的宽度：' + JSON.stringify(monitorCamera))
+    } else if (monitorCamera.rowWidth < monitorCamera.panelWidth - 1) {
+      problems.push(
+        '声学面板没有占满整幅宽（面板 ' + monitorCamera.panelWidth +
+          'px，图谱那一排只有 ' + monitorCamera.rowWidth + 'px）'
+      )
+    }
+    if (monitorCamera.graphCount === 5) {
+      const widths = monitorCamera.graphWidths
+      const narrowest = Math.min(...widths)
+      if (narrowest < 200) {
+        problems.push('五张图谱每张只有 ' + narrowest + 'px（放不下表头与坐标轴）：' +
+          JSON.stringify(widths))
+      }
+    }
+    if (monitorCamera.rowOverflow === null || monitorCamera.rowOverflow > 1) {
+      problems.push('五张图谱那一排横向溢出：' + monitorCamera.rowOverflow +
+        '（窗口 ' + monitorCamera.viewportWidth + 'px）')
+    }
+    if (monitorCamera.rowFifthRight === null || monitorCamera.rowFifthRight > 1) {
+      problems.push('第五张图谱排到了这一排的外面：右边缘 +' + monitorCamera.rowFifthRight + 'px')
+    }
+    /*
+     * ⑤ 16:9 视频窗口：窗口本身的宽高比必须是 16:9（1.7778 ± 0.05）。
+     * 这条是**无条件**的：量不到舞台（null）也报问题 —— "控件没渲染"与"比例对了"
+     * 在只读 problems 的报告里长得一样（§15.13.5）。
+     */
+    if (!monitorCamera.stageBox) {
+      problems.push('量不到相机直播舞台（.camera-live__stage）')
+    } else {
+      const ratio = monitorCamera.stageBox.ratio
+      if (Math.abs(ratio - 16 / 9) > 0.05) {
+        problems.push(
+          '相机视频窗口不是 16:9：实测 ' + ratio + '（' + monitorCamera.stageBox.w + '×' +
+            monitorCamera.stageBox.h + '）'
+        )
+      }
+    }
+    /*
+     * ⑤ 右键菜单：这一页按一次右键必须弹出菜单，且项数与模型给出的**一致**
+     * （正在播放的相机 + 本页声明的四项能力 ⇒ 8 项：抓图/录像、全屏、复制地址、
+     * 外部播放器、叠加信息、本机回放、下载检测记录、告警配置）。
+     *
+     * 为什么把 8 写在这里而不是"至少 1 项"：少一项就是少一个功能，而 8 这个数字里
+     * 每一项都有对应的断言（下面的 labels 也会打出来给人看）。
+     */
+    const EXPECTED_MENU_ITEMS = 8
+    if (!monitorCamera.menu || !monitorCamera.menu.opened) {
+      problems.push('实时监测页按右键没有弹出菜单：' + JSON.stringify(monitorCamera.menu))
+    } else {
+      if (monitorCamera.menu.count !== EXPECTED_MENU_ITEMS) {
+        problems.push(
+          '右键菜单项数不是 ' + EXPECTED_MENU_ITEMS + '：' + monitorCamera.menu.count +
+            '（' + JSON.stringify(monitorCamera.menu.labels) + '）'
+        )
+      }
+      if (!monitorCamera.menu.hasSubmenu) {
+        problems.push('右键菜单里没有「抓图 / 录像」二级菜单')
+      }
+    }
+    log('monitor camera/⑤: 舞台 ' + JSON.stringify(monitorCamera.stageBox) +
+      '，菜单 ' + JSON.stringify(monitorCamera.menu))
+    /*
+     * 能量点表格：有数据时才量得到。量到就要求它不溢出；量不到（离线设备没有实时能量点）
+     * 就在报告里说出来 —— "没有表可量"不等于"表没溢出"。
+     */
+    if (monitorCamera.tableOverflow !== null && monitorCamera.tableOverflow > 1) {
+      problems.push('能量点表格溢出了卡片：' + monitorCamera.tableOverflow + 'px')
+    } else if (monitorCamera.tableOverflow === null) {
+      log('monitor camera: 没有量到能量点表格（这台相机离线，没有实时能量点）——' +
+        ' 表格在 ' + monitorCamera.graphWidths + ' 宽的卡里的表现未验证')
+    }
+  }
+
+  /**
+   * ⑨ 相机配置搬家：设备详情页对相机只给相机页签，且「检测模式/告警策略/维护与升级」
+   * 在**设备管理里**。
+   *
+   * 用**直接路由**（`/devices/<id>`）而不是点设备树：树里的节点要先展开、选择器又依赖结构，
+   * 而设备 id 是 IPC 给的确定值 —— 探针不该因为"点不到"而跳过一条能测的断言
+   * （第一版就是那样，报了 skipped，等于没测）。
+   */
+  const cameraList = await execJson(win, 'cameraList', listDevicesScript())
+  const cameraDevice = cameraList.ok
+    ? (cameraList.devices || []).find((device) => device.kind === 'acousticCamera')
+    : undefined
+  if (cameraDevice) {
+    const tabs = await layout('/devices/' + cameraDevice.id, '(() => {' +
+      'const labels = [...document.querySelectorAll(".tab, [role=\\"tab\\"]")]' +
+      '  .map((n) => n.textContent.trim());' +
+      'return JSON.stringify({ tabs: labels });})()')
+    log('camera tabs   : ' + JSON.stringify(tabs))
+    for (const label of ['检测模式', '告警策略', '维护与升级']) {
+      if (!tabs.tabs.some((text) => text.includes(label))) {
+        problems.push('相机详情页没有「' + label + '」页签：' + JSON.stringify(tabs.tabs))
+      }
+    }
+    for (const gone of ['通道与采样率', 'RS485 / Modbus', 'Push 上报']) {
+      if (tabs.tabs.some((text) => text.includes(gone))) {
+        problems.push('相机详情页仍然有 FA8 的「' + gone + '」页签：' + JSON.stringify(tabs.tabs))
+      }
+    }
+  } else {
+    problems.push('一次性 profile 里找不到相机设备，无法验证相机页签：' + JSON.stringify(cameraList))
+  }
+
+  /**
+   * ① 听诊盒子「拉」通道的**端到端**走一遍（业主 2026-09-16 第①项）。
+   *
+   * 设备这一侧是本进程里的假设备（`startMockE2Device()`，按手册实现；文件头写了它能证明
+   * 什么、不能证明什么）。界面这一侧是真的：打开添加设备对话框 → 选听诊盒子 → 填地址凭据
+   * → 测试连接 → 添加 → 进设备详情 → 点「同步告警」→ 读同步结果。
+   *
+   * 断言分两层，缺一不可：
+   *   - **应用真的做了什么**（driver 侧读假设备的请求记录）：POST /login 用的是加盐摘要、
+   *     之后每个请求都带 `Bearer` token、日志走 `/alarm_log_all`、下载走 `/alarm_files`
+   *     且 `file_path` 含 `saving_path`；
+   *   - **东西真的落进本机库了**（renderer 侧查 IPC）：alarms 有这条告警、recordings 有这份
+   *     wav，并且文件真的在磁盘上（下载字节数 > 44 字节的 WAV 头）。
+   *
+   * 存储根目录**改成这一次性 profile 里的目录**再同步：`--with-data` 用的是操作员真库的副本，
+   * 但 `storageRoot` 指向的是他真实的存储目录 —— 不换掉就会往他的目录里写一份探针录音。
+   */
+  const probeStorageRoot = path.join(app.getPath('userData'), 'probe-storage')
+  const mockE2 = await startMockE2Device({ password: 'admin123' })
+  log('mock E2 device : 127.0.0.1:' + mockE2.port)
+
+  const e2Script = ('(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    'const findButton = (root, needle) => [...root.querySelectorAll("button")]' +
+    '  .find((b) => text(b).includes(needle));' +
+    /*
+     * 找**添加设备那个**对话框，而不是"文档里第一个 role=dialog"。
+     *
+     * 为什么（这一版探针连续踩了两次）：`role="dialog"` 在页面里不止一个 —— 顶栏的
+     * 「待处理告警」浮层也是（它由更早的探针点开、之后一直留着）。按"第一个可见的"取，
+     * 拿到的是那个告警浮层。
+     * 判据从"里面有机型单选项（`.kind__radio`）"换成了**那个组件自己挂的标记**
+     * （`data-add-device-dialog`）：机型选择按第 2 条删掉了，原来的判据随之失效。
+     */
+    'const visibleDialogs = () => [...document.querySelectorAll("[role=dialog]")]' +
+    '  .filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; });' +
+    'const addDialog = () => visibleDialogs().find((d) => d.querySelector("[data-add-device-dialog]")) || null;' +
+    'const setInput = (el, value) => { el.value = value;' +
+    '  el.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  el.dispatchEvent(new Event("change", { bubbles: true })); };' +
+    /*
+     * **渲染层 store 里的设备数** —— 用顶栏那颗指示器读（它是 `devices.devices.length`，
+     * 每一页都在），顺带读它的错误文案（`devices.error`）。
+     *
+     * 为什么要这个读数：加完设备之后实时监测页的设备下拉里只剩这一台，而 IPC 同时报 3 台。
+     * 下拉与顶栏读的是**同一个 store**，两个读数一比就知道是"store 真的只有 1 台"还是
+     * "下拉渲染错了"；而 `devices.error` 非空说明那一次 `load()` 失败过。
+     */
+    'const storeDeviceCount = () => {' +
+    '  const el = document.querySelector(".topbar .indicator__value");' +
+    '  const value = el ? Number(text(el)) : NaN;' +
+    '  return Number.isFinite(value) ? value : -1;' +
+    '};' +
+    'const storeError = () => text(document.querySelector(".topbar__error")).slice(0, 120);' +
+    'const ipcDeviceCount = async () => {' +
+    '  const listed = await window.api.devices.list();' +
+    '  return listed && listed.success ? (listed.data || []).length : -1;' +
+    '};' +
+    'const out = { steps: [] };' +
+    'try {' +
+    // 可能开着的弹窗先关掉（有取消/关闭按钮的那种），从干净的状态开始。
+    '  for (let i = 0; i < 3; i += 1) {' +
+    '    const open = visibleDialogs().find((d) =>' +
+    '      findButton(d, "取消") || findButton(d, "Cancel") || findButton(d, "关闭") || findButton(d, "Close"));' +
+    '    if (!open) break;' +
+    '    const cancel = findButton(open, "取消") || findButton(open, "Cancel") ||' +
+    '      findButton(open, "关闭") || findButton(open, "Close");' +
+    '    cancel.click(); await wait(400);' +
+    '  }' +
+    '  location.hash = "#/devices"; await wait(900);' +
+    '  out.storeAtStart = storeDeviceCount();' +
+    '  out.ipcAtStart = await ipcDeviceCount();' +
+    '  out.storeErrorAtStart = storeError();' +
+    '  out.treeRowsAtStart = document.querySelectorAll(".device-tree__row").length;' +
+    '  const add = [...document.querySelectorAll("button")].find((b) => text(b).includes("添加设备"));' +
+    '  if (!add) return JSON.stringify({ ok: false, reason: "no-add-button" });' +
+    '  add.click(); await wait(600);' +
+    '  let dlg = addDialog();' +
+    '  if (!dlg) return JSON.stringify({ ok: false, reason: "no-add-dialog",' +
+    '    visible: visibleDialogs().map((d) => text(d).slice(0, 40)) });' +
+    /*
+     * **机型不再由人选**（第 2 条）：这一版里对话框里没有机型控件，探针也不点它。
+     * 要证明的还是那件事 —— 识别出来的机型必须**当面说出来**（`[data-probe-kind]`）。
+     */
+    '  out.kindRadios = dlg.querySelectorAll(".kind__radio").length;' +
+    '  const inputs = [...dlg.querySelectorAll(".form-grid input.input")];' +
+    '  if (inputs.length < 4) return JSON.stringify({ ok: false, reason: "few-inputs", count: inputs.length });' +
+    '  setInput(inputs[0], "127.0.0.1");' +
+    '  setInput(inputs[1], "__E2_PORT__");' +
+    '  setInput(inputs[2], "admin");' +
+    '  setInput(inputs[3], "admin123");' +
+    /*
+     * 安装信息（第 1 条）：四个框都填上，加完之后要从**库里读回来**逐项相等 ——
+     * 业主的硬规矩是"每个写设备的操作必须读回验证"，所以这一段不是可选的。
+     */
+    '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
+    '  out.installInputs = install.length;' +
+    '  if (install.length === 4) {' +
+    '    setInput(install[0], "31.2304");' +
+    '    setInput(install[1], "121.4737");' +
+    '    setInput(install[2], "135");' +
+    '    setInput(install[3], "63.5");' +
+    '  }' +
+    '  await wait(300);' +
+    '  const test = findButton(dlg, "测试连接");' +
+    '  if (!test) return JSON.stringify({ ok: false, reason: "no-test-button" });' +
+    '  test.click(); await wait(2000);' +
+    '  dlg = addDialog();' +
+    '  out.probeSucceeded = !!(dlg && dlg.querySelector(".probe .badge--success"));' +
+    '  out.probeText = text(dlg && dlg.querySelector(".probe")).slice(0, 160);' +
+    '  out.detectedKindText = text(dlg && dlg.querySelector("[data-probe-kind]")).slice(0, 120);' +
+    '  out.steps.push("probe");' +
+    '  const submit = [...dlg.querySelectorAll("button")].filter((b) => text(b).includes("添加设备")).pop();' +
+    '  if (!submit) return JSON.stringify({ ok: false, reason: "no-submit", steps: out.steps });' +
+    '  submit.click(); await wait(2000);' +
+    '  out.dialogClosed = !addDialog();' +
+    '  out.steps.push("add");' +
+    /*
+     * 加完设备那一刻的两个读数：store 里几台、库里几台，以及 store 有没有报错。
+     * 这三个数放在一起才能区分"主进程没写进去"、"写进去了但 store 没更新"、
+     * 以及"某次 load() 失败（`devices.error` 非空）"。
+     */
+    '  out.storeAfterAdd = storeDeviceCount();' +
+    '  out.ipcAfterAdd = await ipcDeviceCount();' +
+    '  out.storeErrorAfterAdd = storeError();' +
+    // 找到刚加进来的那一台：**按地址找**（127.0.0.1 = 这一次的假设备）。
+    /*
+     * 为什么不能按 `kind === "auscultationBox"` 找第一台：`--with-data` 用的是操作员真库的
+     * 副本，而他的库里**本来就有一台 SN-16**（2026-09-17 真机验证时加进去的）。按 kind 找
+     * 会拿到那一台真设备，于是后面每一条断言都在问一台离线的真机 —— 第一版就是这样：
+     * 探针报"告警 0 条、录音 0 份、身份不是 equip_number"，全是假失败。
+     */
+    '  const listed = await window.api.devices.list();' +
+    '  const devices = listed && listed.success ? listed.data : [];' +
+    '  const box = (devices || []).find((d) => d.ip === "127.0.0.1" &&' +
+    '    d.httpPort === __E2_PORT__) || null;' +
+    '  if (!box) return JSON.stringify({ ok: false, reason: "device-not-listed", steps: out.steps,' +
+    '    devices: (devices || []).map((d) => d.kind + "@" + d.ip) });' +
+    '  out.deviceId = box.id;' +
+    '  out.deviceName = box.name;' +
+    '  out.deviceUid = box.deviceUid;' +
+    /*
+     * 安装信息**读回来**（第 1 条）：`devices.list()` 是重新查库的那条路，不是 store 里
+     * 那份内存快照。业主的硬规矩是"每个写设备的操作必须读回验证"，所以这里逐项比。
+     */
+    '  out.installation = box.installation || null;' +
+    '  const relisted = await window.api.devices.list();' +
+    '  const boxAgain = relisted && relisted.success' +
+    '    ? (relisted.data || []).find((d) => d.id === box.id) : null;' +
+    '  out.installationReadBack = boxAgain ? (boxAgain.installation || null) : null;' +
+    // 存储根目录换成这一次性 profile 里的目录：不许往操作员真实的存储目录里写探针文件。
+    '  await window.api.settings.update({ storageRoot: __E2_STORAGE__ });' +
+    // 进设备详情，切到「听诊盒子」页签，点同步。
+    '  location.hash = "#/devices/" + box.id; await wait(900);' +
+    '  const tab = document.querySelector(".tabs [data-tab=auscultation]");' +
+    '  if (!tab) return JSON.stringify({ ok: false, reason: "no-auscultation-tab", steps: out.steps });' +
+    '  tab.click(); await wait(900);' +
+    '  out.statusShown = !!document.querySelector("[data-action=e2-sync]");' +
+    '  const sync = document.querySelector("[data-action=e2-sync]");' +
+    '  if (!sync) return JSON.stringify({ ok: false, reason: "no-sync-button", steps: out.steps });' +
+    '  sync.click(); await wait(3500);' +
+    '  const outcomeEl = document.querySelector("[data-e2-outcome]");' +
+    '  out.outcomeText = text(outcomeEl).slice(0, 240);' +
+    '  out.steps.push("sync");' +
+    // 本机库：告警与录音都要有这台设备的记录。
+    '  const alarms = await window.api.alarms.query({ deviceId: box.id, limit: 10 });' +
+    '  out.alarms = alarms && alarms.success ? (alarms.data.items || []).length : -1;' +
+    '  const recordings = await window.api.recordings.query({ deviceId: box.id, limit: 10 });' +
+    '  const items = recordings && recordings.success ? (recordings.data.items || []) : [];' +
+    '  out.recordings = items.length;' +
+    '  out.recording = items[0] ? { id: items[0].id, relativePath: items[0].relativePath,' +
+    '    sampleRate: items[0].sampleRate, fileSize: items[0].fileSize || 0,' +
+    '    recordingType: items[0].recordingType } : null;' +
+    /*
+     * 诊断用：走完这条链之后，**主进程**里还有几台设备。
+     * 探针后面那几条断言（相机那一支）依赖设备列表，所以设备数变少时必须能一眼看出是
+     * "库里真的少了"还是"渲染层的 store 里少了"。
+     */
+    '  const all = await window.api.devices.list();' +
+    '  out.deviceCountAfter = all && all.success ? (all.data || []).length : -1;' +
+    '  out.deviceKindsAfter = all && all.success ? (all.data || []).map((d) => d.kind) : [];' +
+    '  location.hash = "#/monitor"; await wait(900);' +
+    '  out.storeAtEnd = storeDeviceCount();' +
+    '  out.storeErrorAtEnd = storeError();' +
+    '  out.selectOptionsAfter = [...document.querySelectorAll("#topbar-page-slot select option")]' +
+    '    .map((o) => text(o));' +
+    /*
+     * **界面上的设备列表**：下拉里的 option（= store 里的设备）与顶栏那颗指示器
+     * （`devices.devices.length`，同一个 store 的第二个读数）。
+     *
+     * 这两个读数加在一起才能钉住 2026-09-17 修掉的那个缺陷：`devices.refreshStatus(id)`
+     * 原来把主进程回**一台**当成整份列表，于是"进一次设备详情页"之后全应用的设备列表
+     * 只剩那一台 —— 顶栏与下拉会同时变小，而库里一台都没少。
+     */
+    '  const options = Array.isArray(out.selectOptionsAfter) ? out.selectOptionsAfter : [];' +
+    '  out.addedDeviceVisible = options.some((label) => label.indexOf("探针听诊盒子") >= 0);' +
+    /*
+     * ⑤ 三种机型三支内容里的**第三支**：这一台是听诊盒子/声呐，`/monitor` 必须显示声呐那一屏
+     * —— 参数与告警同步面板 + 安装点位卡片 + 本机录音时间轴，以及那句"实时流未接入"；
+     * **不能**是声纹那一支（通道页签 / 实时趋势 / 图谱）。
+     */
+    '  out.sonarBranch = {' +
+    '    unwired: document.querySelectorAll("[data-sonar-live-unwired]").length,' +
+    '    syncButton: document.querySelectorAll("[data-action=e2-sync]").length,' +
+    '    installCard: document.querySelectorAll("[data-installation]").length,' +
+    '    installPoint: text(document.querySelector("[data-installation-point]")),' +
+    '    channelTabs: document.querySelectorAll(".channel-tabs").length,' +
+    '    trend: document.querySelectorAll(".trend-panel").length,' +
+    '    audioBar: document.querySelectorAll(".audio-bar").length' +
+    '  };' +
+    '  return JSON.stringify(Object.assign({ ok: true }, out));' +
+    '} catch (error) {' +
+    '  return JSON.stringify({ ok: false, reason: "threw", message: String(error && error.message || error),' +
+    '    steps: out.steps });' +
+    '}' +
+    '})()')
+    /*
+     * 端口与存储目录在**这里**替换，而不是在拼接里 —— `'a' + 'b'.replace(...)` 只会替换
+     * 最后一个字符串字面量（这条链式写法第一版就是这么错的，探针会把 PORT 当成变量名）。
+     */
+    .replace(/__E2_PORT__/g, String(mockE2.port))
+    .replace(/__E2_STORAGE__/g, JSON.stringify(probeStorageRoot))
+
+  const e2Flow = await layout('/devices', e2Script)
+
+  log('e2 pull flow   : ' + JSON.stringify(e2Flow))
+
+  /** 假设备这一侧：应用究竟发出了什么。 */
+  const e2Paths = mockE2.requests.map((entry) => entry.method + ' ' + entry.path)
+  const e2Logins = mockE2.requests.filter((entry) => entry.path === '/login')
+  const e2Files = mockE2.requests.filter((entry) => entry.path === '/alarm_files')
+  const e2Authed = mockE2.requests.filter(
+    (entry) => entry.path !== '/login' && entry.auth === 'Bearer probe-token'
+  )
+  log('mock E2 saw    : ' + JSON.stringify({
+    paths: e2Paths,
+    loginStyles: e2Logins.map((entry) => entry.digestStyle),
+    filePaths: e2Files.map((entry) => entry.filePath),
+    authedCalls: e2Authed.length
+  }))
+
+  if (!e2Flow.ok) {
+    problems.push('听诊盒子端到端流程没有走通：' + JSON.stringify(e2Flow))
+  } else {
+    if (!e2Flow.probeSucceeded) {
+      problems.push('「测试连接」没有报成功：' + JSON.stringify(e2Flow.probeText))
+    }
+    if (!e2Flow.dialogClosed) problems.push('点「添加设备」之后对话框没有关闭')
+    if (e2Flow.deviceUid !== 'e2:PROBE-E2-0001') {
+      problems.push('新设备的身份不是设备自己报的 equip_number：' + e2Flow.deviceUid)
+    }
+    if (!e2Flow.statusShown) problems.push('设备详情里看不到听诊盒子面板（没有同步按钮）')
+    /*
+     * ①② 自动识别机型 + 安装信息录入（业主 2026-09-17 第 1、2 条）。
+     *   ① 对话框里**不许**再有机型控件（`kindRadios` 必须为 0），且识别结果要写出来
+     *      （`detectedKindText` 里出现"听诊盒子"）；
+     *   ② 四个点位数写进去之后**从库里读回来**逐项相等 —— 这是"写设备必须读回验证"。
+     */
+    if (e2Flow.kindRadios !== 0) {
+      problems.push('添加设备对话框里还有机型单选项（第 2 条要求不再让人选机型）：' + e2Flow.kindRadios)
+    }
+    if (!/听诊盒子/.test(String(e2Flow.detectedKindText || ''))) {
+      problems.push('探活结果里没有说出自动识别出来的机型：' + JSON.stringify(e2Flow.detectedKindText))
+    }
+    if (e2Flow.installInputs !== 4) {
+      problems.push('添加设备对话框里的安装信息输入不是四个：' + e2Flow.installInputs)
+    }
+    const installationReadBack = e2Flow.installationReadBack || null
+    const EXPECTED_INSTALLATION = {
+      gisLatitude: 31.2304,
+      gisLongitude: 121.4737,
+      azimuthDeg: 135,
+      soundLevelDb: 63.5
+    }
+    if (JSON.stringify(installationReadBack) !== JSON.stringify(EXPECTED_INSTALLATION)) {
+      problems.push(
+        '录入的安装信息从库里读回来不是原值：' + JSON.stringify(installationReadBack) +
+          '（期望 ' + JSON.stringify(EXPECTED_INSTALLATION) + '）'
+      )
+    }
+    /*
+     * ⑤ 声呐那一支（第 5 条）：这一台是听诊盒子族，`/monitor` 必须是声呐那一屏。
+     * 判据是**两边都要**：声呐该有的在、声纹那一支的不在 —— 只说"有参数面板"证明不了
+     * 它没有落到声纹那一支上（那一支也会渲染页面）。
+     */
+    const sonar = e2Flow.sonarBranch || {}
+    if (sonar.unwired !== 1) {
+      problems.push('实时监测页没有出现声呐那一支（缺"实时流未接入"那句）：' + JSON.stringify(sonar))
+    }
+    if (sonar.syncButton !== 1) {
+      problems.push('声呐那一支没有参数与告警同步面板：' + JSON.stringify(sonar))
+    }
+    if (sonar.installCard !== 1) {
+      problems.push('声呐那一支没有安装点位卡片：' + JSON.stringify(sonar))
+    }
+    if (String(sonar.installPoint || '').indexOf('31.2304') < 0) {
+      problems.push('声呐那一支的安装点位不是录入的那个：' + JSON.stringify(sonar.installPoint))
+    }
+    if (sonar.channelTabs !== 0 || sonar.trend !== 0 || sonar.audioBar !== 0) {
+      problems.push(
+        '声呐那一支里出现了声纹设备的东西（通道页签/趋势/音频条）：' + JSON.stringify(sonar)
+      )
+    }
+    if (e2Flow.alarms !== 1) {
+      problems.push('同步之后本机库里这台设备的告警不是 1 条：' + e2Flow.alarms)
+    }
+    if (e2Flow.recordings !== 1) {
+      problems.push('同步之后本机库里这台设备的录音不是 1 份：' + e2Flow.recordings)
+    }
+    if (e2Flow.recording && e2Flow.recording.sampleRate !== 48000) {
+      // 采样率必须来自**真 WAV 表头**，不是我们猜的默认值。
+      problems.push('下载回来的录音采样率不是 WAV 表头里的 48000：' + e2Flow.recording.sampleRate)
+    }
+    if (e2Flow.recording && e2Flow.recording.fileSize <= 44) {
+      problems.push('录音文件只有 WAV 头（没有数据）：' + e2Flow.recording.fileSize)
+    }
+    /*
+     * **界面上的设备列表不许比库里少**。
+     *
+     * 这条断言钉住的是 2026-09-17 定位并修掉的缺陷：`devices.refreshStatus(id)` 原来把
+     * 主进程回的**一台**当成整份列表（`devices.value = list`），而设备详情页每次进入都会调它
+     * （`DeviceDetailView`），于是"进过一次详情页"之后全应用的设备列表只剩那一台：
+     * 顶栏总数与实时监测的下拉同时变小，库里一台都没少。
+     * 这条探针正好会经过一次详情页（切听诊盒子页签并同步），所以它能抓住回归 ——
+     * 修复前这两个读数分别是 1（下拉）/ 1（顶栏）而库里有 3 台。
+     */
+    const options = Array.isArray(e2Flow.selectOptionsAfter) ? e2Flow.selectOptionsAfter : []
+    if (options.length < e2Flow.deviceCountAfter) {
+      problems.push(
+        '实时监测页的设备下拉少于库里的设备数（' + options.length + ' vs ' +
+          e2Flow.deviceCountAfter + '）—— 设备列表被"单台刷新"截断过：' + JSON.stringify(options)
+      )
+    }
+    if (e2Flow.storeAtEnd !== -1 && e2Flow.storeAtEnd < e2Flow.deviceCountAfter) {
+      problems.push(
+        '顶栏的设备总数少于库里的（' + e2Flow.storeAtEnd + ' vs ' + e2Flow.deviceCountAfter +
+          '）—— 渲染层的设备列表被截断了'
+      )
+    }
+    /*
+     * **这一台新设备要能被界面看见**。库里写进去了、界面上没有，对操作员就是"设备没加成功"。
+     */
+    if (e2Flow.addedDeviceVisible !== true) {
+      problems.push(
+        '加进来的那台设备没有出现在实时监测页的设备下拉里：' +
+          JSON.stringify(e2Flow.selectOptionsAfter)
+      )
+    }
+    if (!/1/.test(e2Flow.outcomeText)) {
+      problems.push('同步结果那几行没有读出条数：' + JSON.stringify(e2Flow.outcomeText))
+    }
+  }
+
+  /**
+   * ⑧ 空气声呐（SN-16）：**PTZ 配置页** + **点位图** + **告警抓图**（业主 2026-09-17 第 8 批）。
+   *
+   * 这一条也是一次**写操作**（加设备、改 PTZ 参数、同步），所以它排在所有只读探针之后。
+   *
+   * 三件事各自只有一种方式能证明：
+   *   - **页签只有 PTZ**：读 DOM 里 `.tabs [role=tab]` 的**标签列表**（不是"有没有 PTZ 面板"——
+   *     留着 2023 版那一组时 PTZ 面板照样在）；
+   *   - **保存真的写进了设备**：改一个端口 → 保存 → 读回核对那一块说"全部生效"，
+   *     并且**假设备那一侧的参数也变了**（两边都看，才排除"界面自己在演"）；
+   *   - **抓图真的显示出来了**：`<img>` 的 `naturalWidth > 0`。这一条同时验了 CSP 的白名单
+   *     （`img-src http://127.0.0.1:*`）、回环端点、以及"目录落库 → 界面找得到"这条链 ——
+   *     任何一环断了图片都是 0×0。
+   */
+  const mockSonar = await startMockE2Device({ password: 'admin123', variant: 'airSonar' })
+  log('mock air sonar : 127.0.0.1:' + mockSonar.port)
+
+  const sonarScript = ('(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    'const findButton = (root, needle) => [...root.querySelectorAll("button")]' +
+    '  .find((b) => text(b).includes(needle));' +
+    'const visibleDialogs = () => [...document.querySelectorAll("[role=dialog]")]' +
+    '  .filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; });' +
+    'const addDialog = () => visibleDialogs().find((d) => d.querySelector("[data-add-device-dialog]")) || null;' +
+    'const setInput = (el, value) => { el.value = value;' +
+    '  el.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  el.dispatchEvent(new Event("change", { bubbles: true })); };' +
+    'const out = { steps: [] };' +
+    'try {' +
+    // 关掉可能还开着的对话框（上一条探针留了一个），从干净状态开始。
+    '  for (let i = 0; i < 3; i += 1) {' +
+    '    const open = visibleDialogs().find((d) => findButton(d, "取消") || findButton(d, "Cancel"));' +
+    '    if (!open) break;' +
+    '    (findButton(open, "取消") || findButton(open, "Cancel")).click(); await wait(400);' +
+    '  }' +
+    '  location.hash = "#/devices"; await wait(900);' +
+    '  const add = [...document.querySelectorAll("button")].find((b) => text(b).includes("添加设备"));' +
+    '  if (!add) return JSON.stringify({ ok: false, reason: "no-add-button" });' +
+    '  add.click(); await wait(600);' +
+    '  let dlg = addDialog();' +
+    '  if (!dlg) return JSON.stringify({ ok: false, reason: "no-add-dialog" });' +
+    '  const creds = [...dlg.querySelectorAll(".form-grid input.input")];' +
+    '  setInput(creds[0], "127.0.0.1");' +
+    '  setInput(creds[1], "__SONAR_PORT__");' +
+    '  setInput(creds[2], "admin");' +
+    '  setInput(creds[3], "admin123");' +
+    // 点位图要有点位才有得画：这一台按业主的流程录入安装信息（第 1 条）。
+    '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
+    '  setInput(install[0], "31.2304");' +
+    '  setInput(install[1], "121.4737");' +
+    '  setInput(install[2], "135");' +
+    '  setInput(install[3], "63.5");' +
+    '  await wait(300);' +
+    '  const test = findButton(dlg, "测试连接");' +
+    '  if (!test) return JSON.stringify({ ok: false, reason: "no-test-button" });' +
+    '  test.click(); await wait(2500);' +
+    '  dlg = addDialog();' +
+    '  out.probeText = text(dlg && dlg.querySelector(".probe")).slice(0, 140);' +
+    '  out.detectedKindText = text(dlg && dlg.querySelector("[data-probe-kind]")).slice(0, 120);' +
+    '  const submit = [...dlg.querySelectorAll("button")].filter((b) => text(b).includes("添加设备")).pop();' +
+    '  submit.click(); await wait(2200);' +
+    '  const listed = await window.api.devices.list();' +
+    '  const devices = listed && listed.success ? listed.data : [];' +
+    '  const sonar = (devices || []).find((d) => d.ip === "127.0.0.1" &&' +
+    '    d.httpPort === __SONAR_PORT__) || null;' +
+    '  if (!sonar) return JSON.stringify({ ok: false, reason: "sonar-not-listed", steps: out.steps,' +
+    '    devices: (devices || []).map((d) => d.kind + "@" + d.ip + ":" + d.httpPort) });' +
+    '  out.deviceId = sonar.id;' +
+    '  out.e2Variant = sonar.e2Variant || null;' +
+    // ---- PTZ 配置页：页签只有「PTZ 联动」 ----
+    '  location.hash = "#/devices/" + sonar.id; await wait(1400);' +
+    '  out.tabs = [...document.querySelectorAll(".tabs [role=tab]")].map((tab) => text(tab));' +
+    '  out.ptzFields = [' +
+    '    ...document.querySelectorAll("[data-ptz]")' +
+    '  ].map((el) => ({ key: el.getAttribute("data-ptz"),' +
+    '    value: el.type === "checkbox" ? el.checked : el.value }));' +
+    '  const portField = document.querySelector("[data-ptz=cameraPort]");' +
+    '  if (!portField) return JSON.stringify({ ok: false, reason: "no-ptz-panel", tabs: out.tabs });' +
+    '  out.portBefore = portField.value;' +
+    // 改端口 → 保存（只有「保存」才写设备）。
+    '  setInput(portField, "8082"); await wait(200);' +
+    '  const save = document.querySelector("[data-action=ptz-save]");' +
+    '  if (!save) return JSON.stringify({ ok: false, reason: "no-ptz-save" });' +
+    '  save.click(); await wait(2500);' +
+    '  out.ptzChecks = [...document.querySelectorAll("[data-ptz-checks] li")].map((li) => text(li));' +
+    '  out.ptzAllApplied = !!document.querySelector("[data-ptz-checks] .badge--success");' +
+    '  const portAfter = document.querySelector("[data-ptz=cameraPort]");' +
+    '  out.portAfter = portAfter ? portAfter.value : null;' +
+    '  location.hash = "#/map"; await wait(1400);' +
+    '  out.markers = document.querySelectorAll("[data-map-marker]").length;' +
+    '  const marker = [...document.querySelectorAll("[data-map-marker]")]' +
+    '    .find((el) => el.getAttribute("data-map-marker") === sonar.id);' +
+    '  if (!marker) return JSON.stringify({ ok: false, reason: "no-marker-for-sonar", steps: out.steps,' +
+    '    markers: document.querySelectorAll("[data-map-marker]").length });' +
+    '  marker.dispatchEvent(new MouseEvent("click", { bubbles: true })); await wait(900);' +
+    '  out.sideName = text(document.querySelector("[data-map-side] .section-title"));' +
+    '  const sync = document.querySelector("[data-action=map-sync]");' +
+    '  if (!sync) return JSON.stringify({ ok: false, reason: "no-map-sync", steps: out.steps });' +
+    '  sync.click(); await wait(4000);' +
+    '  out.syncOutcomeText = text(document.querySelector("[data-map-sync-outcome]")).slice(0, 200);' +
+    '  const alarmButton = document.querySelector("[data-alarm-id]");' +
+    '  if (!alarmButton) return JSON.stringify({ ok: false, reason: "no-alarm-row", steps: out.steps,' +
+    '    syncOutcomeText: out.syncOutcomeText });' +
+    '  out.alarmBadge = text(alarmButton.querySelector(".badge"));' +
+    '  alarmButton.click(); await wait(2500);' +
+    '  const images = [...document.querySelectorAll("[data-map-snapshots] img")];' +
+    '  out.snapshotImages = images.length;' +
+    '  out.imagesDecoded = images.filter((img) => img.naturalWidth > 0).length;' +
+    '  out.imageWidths = images.map((img) => img.naturalWidth);' +
+    '  out.imageSrcLoopback = images.every((img) => img.src.indexOf("http://127.0.0.1:") === 0);' +
+    '  out.snapshotNotCaptured = !!document.querySelector("[data-snapshot-not-captured]");' +
+    '  out.snapshotFilesGone = !!document.querySelector("[data-snapshot-files-gone]");' +
+    '  out.steps.push("done");' +
+    '  return JSON.stringify(Object.assign({ ok: true }, out));' +
+    '} catch (error) {' +
+    '  return JSON.stringify({ ok: false, reason: "threw",' +
+    '    message: String((error && error.message) || error), steps: out.steps });' +
+    '}' +
+    '})()')
+    .replace(/__SONAR_PORT__/g, String(mockSonar.port))
+
+  const sonarFlow = await layout('/devices', sonarScript)
+  log('air sonar flow : ' + JSON.stringify(sonarFlow))
+
+  if (!sonarFlow.ok) {
+    problems.push('空气声呐（PTZ + 点位图 + 抓图）流程没有走通：' + JSON.stringify(sonarFlow))
+  } else {
+    // ① 页签：**只有**「PTZ 联动」这一个（2023 版那一组不许在）。
+    if (JSON.stringify(sonarFlow.tabs) !== JSON.stringify(['PTZ 联动'])) {
+      problems.push('空气声呐的页签不是只有 PTZ 联动：' + JSON.stringify(sonarFlow.tabs))
+    }
+    // 代次在**添加设备时**就落库（界面才能同步地选出这一组页签）。
+    if (sonarFlow.e2Variant !== 'airSonar') {
+      problems.push('空气声呐的代次没有落库：' + JSON.stringify(sonarFlow.e2Variant))
+    }
+    // 读回来的是**设备当前的值**（`/system` 里那一组）。
+    const fields = Object.fromEntries((sonarFlow.ptzFields || []).map((f) => [f.key, f.value]))
+    if (fields.cameraIp !== '192.168.2.64' || fields.cameraUser !== 'admin') {
+      problems.push('PTZ 面板没有显示设备当前的值：' + JSON.stringify(fields))
+    }
+    if (fields.cameraPassword !== '') {
+      problems.push('PTZ 面板把球机口令回显到了输入框里：' + JSON.stringify(fields.cameraPassword))
+    }
+    // ② 保存：读回核对说"全部生效"，并且界面上那个框现在显示的是**设备读回来的值**。
+    if (sonarFlow.ptzAllApplied !== true) {
+      problems.push('PTZ 保存之后读回核对没有全部生效：' + JSON.stringify(sonarFlow.ptzChecks))
+    }
+    if (sonarFlow.portAfter !== '8082') {
+      problems.push('PTZ 保存之后界面没有刷新成设备读回的值：' + JSON.stringify(sonarFlow.portAfter))
+    }
+    if (mockSonar.params.cam_port !== 8082) {
+      problems.push('PTZ 保存没有真的写进设备：cam_port = ' + JSON.stringify(mockSonar.params.cam_port))
+    }
+    // 整份回写：没动的那几项一个都不许变。
+    if (mockSonar.params.db_limit !== 60 || mockSonar.params.cam_user !== 'admin' ||
+        mockSonar.params.cam_pass !== 'AP1_lfxs_2025') {
+      problems.push('PTZ 写回把别的参数改坏了：' + JSON.stringify(mockSonar.params))
+    }
+    // ③ 点位图：有点位就有标记，点标记能选中这一台。
+    if (sonarFlow.markers < 1) problems.push('点位图上没有出现任何标记')
+    if (String(sonarFlow.sideName || '').indexOf('探针声呐') < 0) {
+      problems.push('点位图上点标记之后右侧显示的不是这一台：' + JSON.stringify(sonarFlow.sideName))
+    }
+    // ④ 抓图：3 张真的解码出来了（CSP + 回环端点 + 目录落库整条链）。
+    if (sonarFlow.alarmBadge !== '有抓图') {
+      problems.push('同步之后这条告警没有显示"有抓图"：' + JSON.stringify(sonarFlow.alarmBadge))
+    }
+    if (sonarFlow.snapshotImages !== 3) {
+      problems.push('抓图不是 3 张：' + JSON.stringify(sonarFlow.snapshotImages))
+    }
+    if (sonarFlow.imagesDecoded !== sonarFlow.snapshotImages) {
+      problems.push(
+        '抓图没有全部解码（CSP 或回环端点有问题）：' + JSON.stringify(sonarFlow.imageWidths)
+      )
+    }
+    if (sonarFlow.imageSrcLoopback !== true) {
+      problems.push('抓图的地址不是本机回环地址：' + JSON.stringify(sonarFlow.imageSrcLoopback))
+    }
+    if (sonarFlow.snapshotNotCaptured || sonarFlow.snapshotFilesGone) {
+      problems.push('抓图显示了"没有图/文件不在" —— 而假设备明明回了 3 张 jpg')
+    }
+  }
+
+  /*
+   * 空气声呐**不该问 `/workmode`**（那一代没有工作模式这个概念）：问了就是"按错的代次取端点"，
+   * 而 404 会被读成"设备没数据"。这条断言同时钉住"变体判定真的在起作用"。
+   */
+  if (mockSonar.requests.some((request) => request.path === '/workmode')) {
+    problems.push('空气声呐问了 `/workmode`（这一代没有这个端点）')
+  }
+  if (mockSonar.params.cam_port === 8082 && mockSonar.requests.filter((r) => r.method === 'PUT').length === 0) {
+    problems.push('PTZ 保存没有向设备发过 PUT')
+  }
+
+  await mockSonar.close()
+
+  if (!e2Logins.some((entry) => entry.digestStyle === 'salted')) {
+    problems.push('登录没有先用加盐摘要（手册的写法）：' + JSON.stringify(e2Logins.map((e) => e.digestStyle)))
+  }
+  if (e2Authed.length < 4) {
+    // 登录之后至少要问：/system（判变体）、/workmode、/alarm_log_all、/alarm_files。
+    problems.push('带 token 的请求太少，链条没走全：' + e2Authed.length + '（' + JSON.stringify(e2Paths) + '）')
+  }
+  if (!e2Paths.includes('GET /alarm_log_all')) {
+    problems.push('没有向设备查告警日志（/alarm_log_all）：' + JSON.stringify(e2Paths))
+  }
+  if (e2Files.length === 0) {
+    problems.push('没有下载告警文件（/alarm_files）')
+  }
+  for (const entry of e2Files) {
+    // 手册明确要求 `file_path` 带 `saving_path`（缺了目录，设备只会回 404）。
+    if (!entry.filePath || !entry.filePath.includes('alarm/2026-09-17')) {
+      problems.push('下载用的 file_path 没有带上 saving_path：' + JSON.stringify(entry.filePath))
+    }
+  }
+
+  await mockE2.close()
+
+  /*
+   * 上面这一段是**写操作**（它往库里加一台设备、下一份录音），所以它排在所有只读探针
+   * 之后 —— 探针之间不该互相影响：第一版把它插在添加设备对话框那一条后面，结果是后面
+   * 的相机探针在设备下拉里只看到这一台新设备，报了一个"切不到相机"的假失败。
+   */
+  log('problems     : ' + problems.length)
+  for (const p of problems) log('  ! ' + p)
+
+  if (KEEP_OPEN) {
+    log('--keep-open given; window left open. Close it to exit.')
+    return
+  }
+  app.exit(problems.length ? 1 : 0)
+}
+
+/**
+ * A rejected executeJavaScript used to escape as an unhandled rejection: Electron
+ * printed nothing useful, the harness never called app.exit, and the run looked
+ * like a HANG rather than a failure. (It did exactly that for the sign-in snippet,
+ * which was a syntax error because the snippet is assembled without newlines and
+ * its statements had no semicolons — automatic semicolon insertion never fires on a
+ * single line.) Any failure here is now reported and exits non-zero.
+ */
+app.whenReady().then(() =>
+  run().catch((error) => {
+    log('FATAL: harness threw: ' + (error && error.stack ? error.stack : String(error)))
+    app.exit(1)
+  })
+)

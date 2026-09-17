@@ -1,0 +1,112 @@
+# HERTZINNO_HZ-FA-371_Software_Release_Notes_V2.0.11.docx
+# Extracted from the .docx (word/document.xml) — text only; images and layout are lost.
+# Regenerate with: node scripts/docx-to-text.cjs <input.docx> <output.txt>
+# Tables are TAB-separated rows, one row per line.
+
+SOFTWARE RELEASE NOTES
+HZ-FA-371
+2025 Major Software Update
+Product
+HZ-FA-371 Online Acoustic Imaging Camera
+Software Version
+V2.0.11
+
+Hardware Platform
+RK3568
+Sampling Rate
+200 kHz
+
+Release Type
+Major Software & Firmware Update
+FPGA Firmware
+V0.5.1.6_251219
+
+Overview
+The 2025 software update for the HERTZINNO HZ-FA-371 introduces a major upgrade to the acoustic imaging platform, including 200 kHz acoustic acquisition, enhanced multi-source localization, real sound-field visualization, expanded alarm analytics, improved gas-leak estimation, additional mechanical-condition indicators, and multiple reliability improvements.
+Release highlight
+Smarter acoustic imaging, more reliable alarms, and deeper condition analytics - with improved support for unattended industrial monitoring.
+
+Key Enhancements
+1. Enhanced Acoustic Imaging
+Support for 200 kHz acoustic sampling.
+Detection of up to 3 acoustic targets simultaneously.
+Improved multi-target algorithm for better localization stability.
+Optimized Focus Mode: acoustic source-point calculations are performed inside the defined focus area.
+Optimized system processing logic for more stable operation.
+2. Real Sound-Field Visualization
+Real Sound Field (acoustic field cloud) visualization is now fully supported.
+Dynamic range is adjustable from 0 to 15 dB.
+Cloud-map transparency and sound-field color palette can be adjusted.
+Real sound-field visualization supports up to 3 targets.
+
+Advanced Alarm & Analytics
+3. Alarm Strategy Improvements
+The alarm engine has been expanded with additional frequency-domain criteria and configurable analysis bands.
+New Band Energy Ratio alarm condition.
+Dominant Frequency, Spectrum Comparison, and Band Energy Ratio can use user-defined upper and lower frequency limits.
+Targeted frequency-band analysis helps isolate the features most relevant to the monitored fault or operating condition.
+4. Gas Leak Estimation
+A new leakage correction factor is available in the leakage estimation settings.
+The correction factor can be used to compensate for site-specific deviation in calculated leakage estimates.
+5. Mechanical Condition Monitoring
+Kurtosis is now available as an alarm-condition feature value.
+Crest Factor is now available as an alarm-condition feature value.
+These indicators extend the monitoring capability for impact- and transient-type mechanical abnormalities.
+System & Network Improvements
+Time-zone configuration added, with support for 38 time zones.
+Custom HTTP service-port configuration added.
+Configuration status is preserved across unexpected power loss and restored after restart.
+Online audio monitoring, recording, snapshot, full-screen video, and raw-channel data access are supported in the V2.0 platform.
+Reliability Fixes
+Fixed alarm-image refresh behavior when the acoustic energy value is NA.
+Fixed image-cache errors caused by detection-state reset issues during cyclic detection.
+Fixed detection recovery after program restart while cyclic detection is enabled.
+Fixed incorrect video time display.
+Fixed RTSP maximum-connection handling.
+Fixed a scheduled-restart issue in certain custom restart configurations.
+Improved input validation so invalid API values are no longer accepted as successful parameter updates.
+
+API & Integration Compatibility
+The main HTTP and WebSocket integration model remains compatible with the previous platform. Some HTTP endpoints add fields or apply stricter validation, while the existing WebSocket data channels remain unchanged.
+Core HTTP request/response structures remain compatible with the previous platform.
+Alarm-condition and leakage-setting endpoints are extended with additional fields for the new analytics functions.
+Existing real-time WebSocket data channels remain unchanged.
+Release Summary
+Area
+Improvement
+
+Acoustic Acquisition
+200 kHz sampling; FPGA V0.5.1.6_251219
+
+Imaging & Targets
+Improved multi-source localization; up to 3 targets
+
+Visualization
+Real Sound Field with adjustable dynamic range and transparency
+
+Alarm Analytics
+Band Energy Ratio and user-defined frequency bands
+
+Gas Leak Detection
+Leakage correction factor
+
+Mechanical Monitoring
+Kurtosis and Crest Factor
+
+System Configuration
+Time-zone and custom HTTP-port settings
+
+Reliability
+Restart, RTSP, cache, video-time, and validation fixes
+
+Upgrade Recommendation
+This release is recommended for HZ-FA-371 installations that require improved acoustic-imaging stability, advanced alarm analytics, unattended monitoring, gas-leak estimation, or mechanical condition monitoring.
+Important compatibility note
+Use only the upgrade package that matches the HZ-FA-371 hardware platform and acoustic acquisition configuration. The V2.0 series supports the RK3568 platform with 200 kHz sampling. Packages for other sampling-rate variants must not be mixed.
+
+Upgrade Notes
+Verify important configuration and detection records before upgrading.
+Do not interrupt power or network connectivity while the upgrade is in progress.
+After upgrading, verify the software/FPGA versions, acoustic settings, and real-time detection functions.
+HERTZINNO | Industrial Acoustic Imaging & Condition Monitoring
+For technical support and upgrade assistance, please contact your HERTZINNO representative.

@@ -1,0 +1,752 @@
+/**
+ * Global stylesheet + design tokens (spec section 8.2 visual language).
+ *
+ * Design intent: minimal, industrial, restrained — white surfaces, hairlines,
+ * one orange accent. The spec explicitly rejects "dark background + glowing blue
+ * big-screen dashboard" styling, so there is no dark theme and no glow here.
+ *
+ * Every colour used by the app is declared once as a CSS custom property below;
+ * components only ever reference the variables, never literal hex values.
+ */
+
+:root {
+  /* --- Surfaces & text ---------------------------------------------------- */
+  --color-bg: #ffffff;
+  --color-bg-subtle: #fafafa;
+  --color-bg-muted: #f4f4f5;
+  --color-text: #171717;
+  --color-text-secondary: #6b7280;
+  --color-border: #e5e7eb;
+  --color-border-strong: #d4d4d8;
+
+  /* --- Brand accent ------------------------------------------------------- */
+  --color-accent: #ff6a1a;
+  --color-accent-hover: #ea5c10;
+  --color-accent-soft: rgba(255, 106, 26, 0.1);
+  --color-accent-border: rgba(255, 106, 26, 0.32);
+
+  /* --- Semantic colours (status, alerts) ---------------------------------- */
+  --color-success: #15803d;
+  --color-success-soft: #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-warning: #b45309;
+  --color-warning-soft: #fffbeb;
+  --color-warning-border: #fcd34d;
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-neutral: #6b7280;
+  --color-neutral-soft: #f4f4f5;
+  --color-neutral-border: #e5e7eb;
+
+  /* --- Geometry ----------------------------------------------------------- */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* --- Shadows: minimal, very subtle -------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(23, 23, 23, 0.04);
+  --shadow-md: 0 2px 10px rgba(23, 23, 23, 0.06);
+  --shadow-lg: 0 12px 32px rgba(23, 23, 23, 0.12);
+
+  /* --- Typography (Chinese fallbacks are mandatory) ----------------------- */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft YaHei', monospace;
+
+  /* --- Layout ------------------------------------------------------------- */
+  --sidebar-width: 216px;
+  --topbar-height: 56px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   Reset
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure {
+  margin: 0;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   App shell
+   -------------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-content {
+  flex: 1;
+  /* `min-height: 0` is what lets a flex item in a COLUMN container shrink below its
+     content size. Without it the browser uses `min-height: auto`, the content box
+     refuses to get smaller than its content, and adding the page footer below it
+     would push the footer off screen instead of scrolling the content. */
+  min-height: 0;
+  overflow: auto;
+  /*
+   * 这一条内边距就是内容与左、上边缘之间的**唯一**距离来源（产品要求：全屏之后
+   * 右侧内容靠左，而且无论窗口多大都和左边、上边保持固定的距离）。它是固定像素值，
+   * 所以任何窗口尺寸下量到的左边距、上边距都是同一个数。
+   */
+  padding: var(--space-6);
+}
+
+/*
+ * 页面内容列：**左对齐、流式**。
+ *
+ * 这里曾经是 `max-width: var(--content-max-width); margin: 0 auto;`（定宽 1440px 居中），
+ * 那正是产品负责人说的「现在是中间对齐了」：窗口比 1440px 宽时左右各留一半空白，
+ * 内容看上去是居中的；窗口更宽之后列宽也不再增长，分辨率越高两侧空白越大 ——
+ * 与「支持不同的分辨率，自适应窗口大小」正好相反。
+ *
+ * 现在列宽完全由 `.app-content` 的内边距决定（左右各 `--space-6`），所以：
+ *   左间距 = 右间距 = `--space-6`，上间距 = `--space-6`，四档实测完全相同；
+ *   内容宽度 = 内容区宽度 − 2 × `--space-6`，跟着窗口一起变宽。
+ * 定宽 token `--content-max-width` 一并删掉了：留着一个没人用的 1440px，下一个人
+ * 很容易再把它加回这一条规则上，把居中列带回来。
+ */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/*
+ * 页头 = 副标题（可选） + 动作行。
+ *
+ * **没有页面标题这一项**，这是产品要求：外层框架的顶栏已经写了当前页的名字，页面里再写
+ * 一遍是同一条事实的第二处实现。所以 `.page-title` 这个类被删掉了 —— 留着它，下一个人
+ * 会以为"页面标题"仍然是这套设计的一部分。
+ *
+ * 动作行 `margin-left: auto`：页头只剩动作时（事件中心 / 历史趋势 / 系统设置），它们要贴
+ * 右端而不是被 `space-between` 留在左边。有副标题时副标题在左、动作在右，同一个规则
+ * 同时成立，不需要两个类。
+ */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.page-header > .btn-row {
+  margin-left: auto;
+}
+
+.page-subtitle {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+/* --------------------------------------------------------------------------
+   Surfaces
+   -------------------------------------------------------------------------- */
+
+.card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.card--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.card--interactive {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card--interactive:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.card-grid {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.card-grid--stats {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.card-grid--devices {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.two-col {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--color-bg-muted);
+  border-color: var(--color-border-strong);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-accent-border);
+  outline-offset: 1px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #ffffff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn--danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
+.btn--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--color-bg-muted);
+  border-color: transparent;
+}
+
+.btn--sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.btn--icon {
+  width: 28px;
+  padding: 0;
+}
+
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Form controls
+   -------------------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.field-hint {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+/*
+ * 一组表单字段（`<fieldset class="install">`）：添加设备对话框与设备管理页的编辑对话框
+ * 用的是同一个类，所以两处逐像素一致。
+ *
+ * 为什么必须写这条：浏览器默认给 fieldset 一个凹槽边框、legend 还会把上边框切断，
+ * 而这套视觉里没有出现过那种形状 —— 不写的话同一组输入框会随浏览器版本换一个样子。
+ * `min-width: 0` 是给网格用的：fieldset 的默认 `min-inline-size` 是 `min-content`，
+ * 放在 `grid` 里会把列顶宽。
+ */
+.install {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.install > .field-hint {
+  margin: 2px 0 var(--space-3);
+}
+
+.input,
+.select,
+.textarea {
+  height: 30px;
+  width: 100%;
+  padding: 0 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.textarea {
+  height: auto;
+  padding: 7px 9px;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.input:disabled,
+.select:disabled {
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.form-grid {
+  display: grid;
+  gap: var(--space-3) var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.filter-bar .field {
+  min-width: 140px;
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   -------------------------------------------------------------------------- */
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+}
+
+.table {
+  font-size: 12.5px;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-subtle);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+
+.table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 9px 12px;
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr.is-clickable {
+  cursor: pointer;
+}
+
+.table tbody tr.is-clickable:hover {
+  background: var(--color-bg-subtle);
+}
+
+.table-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   Badges, chips, dots
+   -------------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid var(--color-neutral-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-neutral-soft);
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.badge--success {
+  background: var(--color-success-soft);
+  border-color: var(--color-success-border);
+  color: var(--color-success);
+}
+
+.badge--warning {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+
+.badge--danger {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.badge--accent {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
+  color: var(--color-accent-hover);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-neutral);
+  flex: none;
+}
+
+.dot--online {
+  background: var(--color-success);
+}
+
+.dot--offline {
+  background: var(--color-neutral);
+}
+
+.dot--unknown {
+  background: var(--color-warning);
+}
+
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  padding: 1px 9px;
+  font-size: 11.5px;
+  line-height: 18px;
+  cursor: default;
+}
+
+.chip--accent {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Alerts
+   -------------------------------------------------------------------------- */
+
+.alert {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+
+.alert__icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.alert__body {
+  min-width: 0;
+}
+
+.alert__title {
+  font-weight: 600;
+}
+
+.alert--warning {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+  color: #92400e;
+}
+
+.alert--danger {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.alert--success {
+  background: var(--color-success-soft);
+  border-color: var(--color-success-border);
+  color: var(--color-success);
+}
+
+.alert--accent {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-border);
+}
+
+/* --------------------------------------------------------------------------
+   Data display helpers
+   -------------------------------------------------------------------------- */
+
+.kv {
+  display: grid;
+  gap: 8px 16px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.kv__item {
+  min-width: 0;
+}
+
+.kv__label {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.kv__value {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.muted {
+  color: var(--color-text-secondary);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.text-danger {
+  color: var(--color-danger);
+}
+
+.text-warning {
+  color: var(--color-warning);
+}
+
+.text-success {
+  color: var(--color-success);
+}
+
+.scroll-y {
+  overflow-y: auto;
+}
+
+/* --------------------------------------------------------------------------
+   Utility
+   -------------------------------------------------------------------------- */
+
+.spacer {
+  flex: 1;
+}
+
+.strike {
+  text-decoration: line-through;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Progress bar (disk usage) */
+.bar {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+
+.bar__fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.2s ease;
+}
+
+.bar__fill--danger {
+  background: var(--color-danger);
+}
+
+/* Thin, unobtrusive scrollbars keep the industrial look. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
