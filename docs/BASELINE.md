@@ -223,11 +223,15 @@ tests/                        ← node:test 单测（跑在编译产物 .test-bu
 
 ## 10. 开分叉时的实务提醒
 
-- **基线就是当前 `main` 工作树**（这个仓库还没有任何 commit —— `git log` 是空的，
-  所有文件都是未跟踪状态）。开分支前先做一次 `git add -A && git commit`，
-  否则分叉没有可回溯的基点。
-- 根目录有若干 `*.proof-*.log` / `.demo-*.log` 是历次探针的原始输出（`.gitignore` 已忽略 `*.log`），
-  不需要进分支；要删随时可删。
+- **基线提交已经打好了**：`621fd23`「基线：四种设备族 + schema v12（业主 2026-09-17 第 8 批收尾）」
+  —— 本仓库的**第一个** commit（354 个文件，190,361 行）。分叉就从它开始：
+  ```
+  git switch -c feature/ai-training      # 在基线上开分支
+  ```
+  在此之前工作树里所有文件都是未跟踪状态，没有可回溯的基点。
+- 根目录历次探针的 `*.proof-*.log` / `.demo-*.log` 是原始输出，`.gitignore` 已忽略 `*.log`；
+  截图目录（`.demo-shots*/`）、`.e2-live-proof*/`、`.remember-proof/` 与 `*.tsbuildinfo`
+  也一并忽略了（2026-09-17 整理时补的规则）。
 - 新版本请**接着 v12 往后加迁移**，不要修改已发布的迁移；`SCHEMA_VERSION` 与
   `MIGRATIONS` 最高版本必须一致（有单测钉着）。
 - 界面新增文案四语言一起加；新增权限要在 `shared/domain/auth.ts` 的 `PERMISSION_OPERATIONS`
