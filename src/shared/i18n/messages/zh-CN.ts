@@ -367,25 +367,43 @@ export const zhCN = {
     noticeAdded: '设备已添加',
     noticeUpdated: '已更新设备「{name}」',
     noticeRemoved: '已删除设备「{name}」',
-    menu: '更多操作',
     deviceId: '设备 ID',
     mac: 'MAC 地址',
     channelCount: '通道数',
     /**
-     * 设备表里这两列的表头（业主 2026-09-17 的列清单逐字给的：**设备IP** / **设备通道**）。
+     * 设备表的列表头（业主 2026-09-17 的清单逐字给过；**2026-09-18 第 8 条重给了**）：
+     * 序号 / 设备名称 / IP地址 / 设备类型 / 状态 / 告警数量 / 通道数 / 查看 / 设置 / 删除。
      *
-     * 为什么不复用 `devices.ip`（"IP 地址"）与 `devicesUi.channelCount`（"通道数"）：
-     * 那是**别的页面**（添加设备对话框、设备详情）里的标签，把它们改掉会顺手改掉那些页面；
-     * 而列名业主是逐字写下来的，表头就该是他写的那几个字。
+     * 与上一版的差别：多了「序号」；「设备IP」→「IP地址」、「是否在线」→「状态」、
+     * 「设备通道」→「通道数」；「配置」拆成「设置」与「删除」两个图标列（原来藏在 `⋮` 菜单里）。
      */
-    ipColumn: '设备IP',
-    channelColumn: '设备通道',
-    onlineColumn: '是否在线',
+    indexColumn: '序号',
+    ipColumn: 'IP地址',
+    channelColumn: '通道数',
+    onlineColumn: '状态',
     alarmCountColumn: '告警数量',
     ipDoubleClickHint: '双击打开设备 Web 界面',
     /** 设备表那一列的表头，也是「查看」图标按钮的说明（业主的列清单里叫「查看」）。 */
     viewColumn: '查看',
+    /** 「设置」= 打开编辑对话框（名称 / 端口 / 凭据 / 地址信息），业主第 10 条那一个。 */
+    settingColumn: '设置',
+    /** 「删除」= 删除这台设备（破坏性动作，弹确认）。 */
+    deleteColumn: '删除',
+    /**
+     * 「配置」：**点位图/地图页**上那一台设备的入口（进 `/devices/:id` 的配置页）。
+     * 设备表那一列按第 8 条改叫「设置」之后，这个词只剩地图页一个读者 —— 它说的仍然是
+     * "配置这台设备"（页签：通道配置 / 告警策略 / 维护与升级），所以留着。
+     */
     configure: '配置',
+    /** 点设备名进详情/配置页（页签：概览 / 检测模式 / 告警策略 / 维护与升级）。 */
+    openDetail: '查看设备详情与配置',
+    /** 编辑对话框里 IP 那一格只读的原因（业主第 10 条：IP 不可改）。 */
+    ipReadonlyHint: 'IP 地址决定设备身份，不可修改',
+    /** 凭据两格留空的意思（口令与用户名都不回显）。 */
+    credentialsKeep: '留空 = 不修改',
+    credentialsHint: '凭据保存在本机凭据库里，不会回显；填了才会写入。',
+    passwordShow: '显示密码',
+    passwordHide: '隐藏密码',
     editTitle: '编辑设备',
     editNameRequired: '设备名称不能为空',
     editPortInvalid: 'HTTP 端口需为 1-65535 之间的整数',

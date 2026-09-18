@@ -207,6 +207,15 @@ export interface UpdateDeviceInput {
   name?: string
   ip?: string
   httpPort?: number
+  /**
+   * 设备侧的登录凭据（业主 2026-09-18 第 10 条：编辑设备时用户名与密码都要能改）。
+   *
+   * **省略 = 不动这一项**（与 `installation` 同一条规矩）：界面上的密码框是空的
+   * （我们从不回显口令），空框必须读成"不改"，否则每保存一次别的字段就会把口令清掉。
+   * `username` 给了就必须非空（设备侧没有匿名账号）。
+   */
+  username?: string
+  password?: string
   /** 安装信息：**部分更新**（`undefined` = 不动这一项，`null` = 清空这一项）。 */
   installation?: Partial<Record<keyof DeviceInstallation, number | null>>
 }

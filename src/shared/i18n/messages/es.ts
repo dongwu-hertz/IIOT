@@ -295,19 +295,30 @@ export const es: MessageSchema = {
     noticeAdded: 'Equipo añadido',
     noticeUpdated: 'Equipo «{name}» actualizado',
     noticeRemoved: 'Equipo «{name}» eliminado',
-    menu: 'Más acciones',
     deviceId: 'ID del equipo',
     mac: 'Dirección MAC',
     channelCount: 'Canales',
-    /** Cabeceras de esas dos columnas (el propietario las escribió literalmente). */
-    ipColumn: 'IP del equipo',
-    channelColumn: 'Canales del equipo',
-    onlineColumn: 'En línea',
+    /** Cabeceras redefinidas por el propietario el 2026-09-18 (punto 8). */
+    indexColumn: 'N.º',
+    ipColumn: 'Dirección IP',
+    channelColumn: 'Canales',
+    onlineColumn: 'Estado',
     alarmCountColumn: 'Alarmas',
     ipDoubleClickHint: 'Doble clic para abrir la interfaz web del equipo',
     /** Cabecera de esa columna y etiqueta del botón con el icono del ojo. */
     viewColumn: 'Ver',
+    /** Ajustes = el diálogo de edición (nombre / puerto / credenciales / dirección). */
+    settingColumn: 'Ajustes',
+    /** Eliminar = borrar el equipo (destructivo, pide confirmación). */
+    deleteColumn: 'Eliminar',
+    /** Lo usa la página de mapa para entrar en la configuración del equipo. */
     configure: 'Configurar',
+    openDetail: 'Abrir los detalles y la configuración del equipo',
+    ipReadonlyHint: 'La dirección IP identifica al equipo y no se puede modificar',
+    credentialsKeep: 'En blanco = no cambiar',
+    credentialsHint: 'Las credenciales se guardan en el almacén local y nunca se muestran; solo se escriben los campos rellenados.',
+    passwordShow: 'Mostrar contraseña',
+    passwordHide: 'Ocultar contraseña',
     editTitle: 'Editar equipo',
     editNameRequired: 'El nombre del equipo es obligatorio',
     editPortInvalid: 'El puerto HTTP debe ser un entero entre 1 y 65535',

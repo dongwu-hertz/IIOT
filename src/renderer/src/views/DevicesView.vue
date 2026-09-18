@@ -47,7 +47,6 @@ const wall = useCameraWallStore()
 const session = useSessionStore()
 
 const addOpen = ref(false)
-const menuOpenId = ref('')
 const notice = ref('')
 const actionError = ref('')
 
@@ -72,6 +71,12 @@ const editForm = ref({
   name: '',
   ip: '',
   httpPort: 80,
+  /**
+   * 凭据（业主 2026-09-18 第 10 条）：用户名从库里读出来填上，**口令永远是空的**
+   * （我们从不回显口令；空框 = 不改，见 `UpdateDeviceInput.password`）。
+   */
+  username: '',
+  password: '',
   installation: {
     gisLatitude: '',
     gisLongitude: '',
@@ -80,6 +85,8 @@ const editForm = ref({
 })
 const editError = ref('')
 const editSaving = ref(false)
+/** 密码框是否明文显示（第 10 条要的"支持显示密码"）。每次打开对话框都回到隐藏。 */
+const editPasswordShown = ref(false)
 
 /** 数值 → 输入框文字；没录过就是空串（不是 `0`，也不是 `'undefined'`）。 */
 function installationInput(value: number | undefined): string {
@@ -159,7 +166,6 @@ function openDeviceInWall(deviceId: string): void {
 }
 
 onMounted(() => {
-  document.addEventListener('click', closeMenuOnOutsideClick)
   tree.ensureDefaultExpansion()
   /*
    * 列表为空时**这一页自己读一次**。
@@ -181,7 +187,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('click', closeMenuOnOutsideClick)
+  // 行末的 `⋮` 菜单按第 8 条删掉了（编辑与删除升成两列），所以这里不再有"点外面关菜单"
+  // 的监听器 —— 少一个监听器也少一处"关不掉的浮层"。
 })
 
 /**
@@ -288,28 +295,24 @@ async function openWebUi(device: Device): Promise<void> {
   if (message) actionError.value = message
 }
 
-function toggleMenu(device: Device): void {
-  menuOpenId.value = menuOpenId.value === device.id ? '' : device.id
-}
-
-function closeMenuOnOutsideClick(): void {
-  menuOpenId.value = ''
-}
-
 function startEdit(device: Device): void {
-  menuOpenId.value = ''
   editTarget.value = device
   const installation = device.installation
   editForm.value = {
     name: device.name,
     ip: device.ip ?? '',
     httpPort: device.httpPort ?? 80,
+    // 凭据**两个框都留空**（= 不修改）：口令与用户名都住在主进程的凭据库里
+    // （OS keyring，渲染层拿不到），所以这里没有办法"回显当前值"。
+    username: '',
+    password: '',
     installation: {
       gisLatitude: installationInput(installation?.gisLatitude),
       gisLongitude: installationInput(installation?.gisLongitude),
       azimuthDeg: installationInput(installation?.azimuthDeg)
     }
   }
+  editPasswordShown.value = false
   editError.value = ''
   editOpen.value = true
 }
@@ -342,11 +345,21 @@ async function submitEdit(): Promise<void> {
     azimuthDeg: parsed.installation.azimuthDeg ?? null
   }
   editSaving.value = true
+  /*
+   * **不发 `ip`**（业主第 10 条：编辑设备时 IP 不可改）：地址决定设备身份，改了它
+   * 就是另一台设备，而"编辑"这个词不包含"换一台"。端口照旧可以改（它只是同一个地址上的
+   * 另一个端口）。
+   *
+   * 凭据只在**填了**的时候发（空口令 = 不改，见 `UpdateDeviceInput.password`）。
+   */
+  const username = editForm.value.username.trim()
+  const password = editForm.value.password
   const updated = await devices.update({
     id: target.id,
     name: editForm.value.name.trim(),
-    ip: editForm.value.ip.trim(),
     httpPort: port,
+    ...(username === '' ? {} : { username }),
+    ...(password === '' ? {} : { password }),
     installation
   })
   editSaving.value = false
@@ -360,7 +373,6 @@ async function submitEdit(): Promise<void> {
 }
 
 function askRemove(device: Device): void {
-  menuOpenId.value = ''
   removeTarget.value = device
   removeOpen.value = true
 }
@@ -584,18 +596,20 @@ async function renameChannelName(
         <EmptyState v-if="cards.length === 0" :title="t('devices.empty')" />
 
         <!--
-          设备表（业主 2026-09-17 第 3 条）：一行一台设备，一列一个事实。
-          列与顺序都按业主给的来：设备名称 / 设备IP / 设备类型 / 是否在线 / 告警数量 /
-          设备通道 / 查看 / 配置。
+          设备表（业主 2026-09-17 第 3 条；**列清单在 2026-09-18 第 8 条里重给了**）：
+          序号 / 设备名称 / IP地址 / 设备类型 / 状态 / 告警数量 / 通道数 / 查看 / 设置 / 删除。
+          与上一版清单的差别逐条写进 `docs/Ivcs4200…` 那一份（见 §15.50）：多了"序号"，
+          "是否在线"改叫"状态"、"设备通道"改叫"通道数"，而原来藏在 `⋮` 菜单里的"编辑/删除"
+          升成了两个图标列（`设置` / `删除`），菜单本身删掉。
 
-          外壳用全应用同一套 `.table-wrap` + `.table`（告警 / 事件中心 / 录音 / 样本库
-          都是这两个类），所以表头吸顶、行分隔线、单元格内边距都只有一处实现 ——
-          这一页只加四件表特有的样式（见下面 `.devices-table` 那一段）。
+          扁平化（业主 2026-09-18 第 2b 条）：这一页**不再用 `.table-wrap` 那张卡片**，
+          改成一条上边线 + 每行一条分隔线（`.devices-table-flat`，见下面样式）。
         -->
-        <section v-else class="table-wrap devices-table-card">
+        <section v-else class="devices-table-flat">
           <table class="table devices-table">
             <thead>
               <tr>
+                <th scope="col" class="devices-table__num">{{ t('devicesUi.indexColumn') }}</th>
                 <th scope="col">{{ t('devices.name') }}</th>
                 <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
                 <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
@@ -603,12 +617,13 @@ async function renameChannelName(
                 <th scope="col" class="devices-table__num">{{ t('devicesUi.alarmCountColumn') }}</th>
                 <th scope="col" class="devices-table__num">{{ t('devicesUi.channelColumn') }}</th>
                 <th scope="col" class="devices-table__actions">{{ t('devicesUi.viewColumn') }}</th>
-                <th scope="col" class="devices-table__actions">{{ t('devicesUi.configure') }}</th>
+                <th scope="col" class="devices-table__actions">{{ t('devicesUi.settingColumn') }}</th>
+                <th scope="col" class="devices-table__actions">{{ t('devicesUi.deleteColumn') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="device in cards"
+                v-for="(device, index) in cards"
                 :key="device.id"
                 :class="[
                   'is-clickable',
@@ -619,13 +634,25 @@ async function renameChannelName(
                 ]"
                 @click="selectRow(device)"
               >
+                <td class="devices-table__num muted">{{ index + 1 }}</td>
                 <td>
-                  <span class="devices-table__name" :title="installationTitle(device)">
-                    {{ device.name }}
-                  </span>
                   <!--
-                    点位是**工具提示**而不是一列：业主给的列清单里没有它，而它又是这一批
-                    新增的事实（安装信息）。放在名字的 title 上，既不占列，又不丢信息。
+                    设备名是一**个入口**：点它进设备详情/配置页（业主第 8 条的列清单里没有
+                    "详情"这一列，而那个页面装着通道配置、告警策略、维护与升级 —— 它必须还在
+                    某个地方；名字是控制台里最自然的那一个）。
+                  -->
+                  <button
+                    type="button"
+                    class="devices-table__name devices-table__name--action"
+                    :title="t('devicesUi.openDetail')"
+                    data-action="device-detail"
+                    @click.stop="go(`/devices/${device.id}`)"
+                  >
+                    {{ device.name }}
+                  </button>
+                  <!--
+                    地址信息是**工具提示**而不是一列：业主给的列清单里没有它，而它又是
+                    已经录进库的事实。放在名字的 title 上，既不占列，又不丢信息。
                   -->
                   <span
                     v-if="device.installation"
@@ -662,9 +689,16 @@ async function renameChannelName(
                 <td class="devices-table__num">{{ alarmCount(device.id) ?? '—' }}</td>
                 <td class="devices-table__num">
                   {{ channelCount(device.id) ?? '—' }}
-                  <span v-if="enabledChannelSummary(device.id)" class="muted">
-                    {{ enabledChannelSummary(device.id) }}
-                  </span>
+                  <!--
+                    通道数的**明细**（几路在用）挪进 `title`：这一列现在有十列，1280×720 下
+                    横排放不下 —— 数字留着（它是列的含义），"8 路里开了几路"放进悬停。
+                  -->
+                  <span
+                    v-if="enabledChannelSummary(device.id)"
+                    class="devices-table__hint"
+                    :title="enabledChannelSummary(device.id)"
+                    aria-hidden="true"
+                  ></span>
                 </td>
                 <td class="devices-table__actions">
                   <!-- 「查看」= 按机型进入对应的实时检测界面（三个不同的内容）。 -->
@@ -682,53 +716,42 @@ async function renameChannelName(
                     </svg>
                   </button>
                 </td>
+                <!--
+                  「设置」= 编辑这一台设备（名称 / 端口 / 凭据 / 地址信息），业主第 10 条
+                  要的那个对话框。它原来是 `⋮` 菜单里的"编辑" —— 第 8 条的列清单把
+                  编辑与删除升成了两列，菜单因此删掉（一个入口胜过两个）。
+                -->
                 <td class="devices-table__actions">
                   <button
+                    v-if="session.isAdmin"
                     type="button"
                     class="btn btn--ghost btn--icon"
-                    :aria-label="t('devicesUi.configure')"
-                    :title="t('devicesUi.configure')"
+                    :aria-label="t('devicesUi.settingColumn')"
+                    :title="t('devicesUi.settingColumn')"
                     data-action="device-configure"
-                    @click.stop="go(`/devices/${device.id}`)"
+                    @click.stop="startEdit(device)"
                   >
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
                       <circle cx="8" cy="8" r="2.1" />
                       <path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5" />
                     </svg>
                   </button>
-                  <!--
-                    改名/删除仍然留在这个格里（业主的列清单里没有它们，但删掉就等于把功能删了）：
-                    一个省略号图标，位置在「配置」之后，不占新列。
-                  -->
-                  <div v-if="session.isAdmin" class="menu">
-                    <button
-                      type="button"
-                      class="btn btn--ghost btn--icon"
-                      :aria-expanded="menuOpenId === device.id"
-                      aria-haspopup="menu"
-                      :aria-label="t('devicesUi.menu')"
-                      @click.stop="toggleMenu(device)"
-                    >
-                      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-                        <circle cx="8" cy="3.5" r="1.2" fill="currentColor" />
-                        <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-                        <circle cx="8" cy="12.5" r="1.2" fill="currentColor" />
-                      </svg>
-                    </button>
-                    <div v-if="menuOpenId === device.id" class="menu__list" role="menu" @click.stop>
-                      <button type="button" class="menu__item" role="menuitem" @click="startEdit(device)">
-                        {{ t('common.edit') }}
-                      </button>
-                      <button
-                        type="button"
-                        class="menu__item menu__item--danger"
-                        role="menuitem"
-                        @click="askRemove(device)"
-                      >
-                        {{ t('common.delete') }}
-                      </button>
-                    </div>
-                  </div>
+                </td>
+                <td class="devices-table__actions">
+                  <button
+                    v-if="session.isAdmin"
+                    type="button"
+                    class="btn btn--ghost btn--icon devices-table__delete"
+                    :aria-label="t('devicesUi.deleteColumn')"
+                    :title="t('devicesUi.deleteColumn')"
+                    data-action="device-delete"
+                    @click.stop="askRemove(device)"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+                      <path d="M2.8 4.2h10.4M6.4 4.2V2.9h3.2v1.3M4.2 4.2l.7 9h6.2l.7-9" />
+                      <path d="M6.8 6.8v4.4M9.2 6.8v4.4" />
+                    </svg>
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -756,27 +779,87 @@ async function renameChannelName(
       :on-submit="submitRename"
     />
 
-    <!-- Edit: identity (deviceUid) is immutable; only label + address change. -->
-    <AppModal v-model="editOpen" :title="t('devicesUi.editTitle')" width="460px">
+    <!--
+      编辑设备（业主 2026-09-18 第 10 条）：
+        · 显示名称可改；**IP 不可改**（它决定设备身份，改了就是另一台设备）；
+        · HTTP 端口与 IP **同一行**；
+        · 用户名与密码**同一行**，都可改，密码框旁边有"显示/隐藏"；
+        · 经纬度同一行。
+      口令**从不回显**：密码框留空 = 不改（见 `UpdateDeviceInput.password` 的注释）。
+    -->
+    <AppModal v-model="editOpen" :title="t('devicesUi.editTitle')" width="560px">
       <div class="edit-form">
         <label class="field">
           <span class="field-label">{{ t('devices.name') }}</span>
           <input v-model="editForm.name" data-autofocus class="input" type="text" />
         </label>
-        <label class="field">
-          <span class="field-label">{{ t('devices.ip') }}</span>
-          <input v-model="editForm.ip" class="input" type="text" spellcheck="false" />
-        </label>
-        <label class="field">
-          <span class="field-label">{{ t('devices.port') }}</span>
-          <input v-model.number="editForm.httpPort" class="input" type="number" min="1" max="65535" />
-        </label>
+
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">{{ t('devices.ip') }}</span>
+            <input
+              class="input mono"
+              type="text"
+              :value="editForm.ip"
+              readonly
+              data-field="edit-ip"
+              :title="t('devicesUi.ipReadonlyHint')"
+            />
+            <span class="field-hint">{{ t('devicesUi.ipReadonlyHint') }}</span>
+          </label>
+          <label class="field">
+            <span class="field-label">{{ t('devices.port') }}</span>
+            <input v-model.number="editForm.httpPort" class="input" type="number" min="1" max="65535" />
+          </label>
+        </div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">{{ t('devices.username') }}</span>
+            <input
+              v-model="editForm.username"
+              class="input"
+              type="text"
+              autocomplete="off"
+              :placeholder="t('devicesUi.credentialsKeep')"
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">{{ t('devices.password') }}</span>
+            <span class="field-row">
+              <input
+                v-model="editForm.password"
+                class="input"
+                :type="editPasswordShown ? 'text' : 'password'"
+                autocomplete="off"
+                :placeholder="t('devicesUi.credentialsKeep')"
+              />
+              <button
+                type="button"
+                class="btn btn--ghost btn--icon"
+                :aria-pressed="editPasswordShown"
+                :aria-label="editPasswordShown ? t('devicesUi.passwordHide') : t('devicesUi.passwordShow')"
+                :title="editPasswordShown ? t('devicesUi.passwordHide') : t('devicesUi.passwordShow')"
+                data-action="edit-password-reveal"
+                @click="editPasswordShown = !editPasswordShown"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8Z" />
+                  <circle cx="8" cy="8" r="1.8" />
+                  <path v-if="!editPasswordShown" d="M2.5 13.5 13.5 2.5" />
+                </svg>
+              </button>
+            </span>
+            <span class="field-hint">{{ t('devicesUi.credentialsHint') }}</span>
+          </label>
+        </div>
       </div>
 
       <!--
-        安装信息（业主 2026-09-17 第 1 条）：录入之后必须**改得动**，否则打错一个数字
-        就只剩"删掉设备再加一遍"这条路。判据与添加设备对话框共用
+        地址信息（业主 2026-09-17 第 1 条；2026-09-18 第 7 条改名）：录入之后必须**改得动**，
+        否则打错一个数字就只剩"删掉设备再加一遍"这条路。判据与添加设备对话框共用
         `parseInstallation()`，清空一项 = 把库里那一项清掉（不是留旧值）。
+        经度与纬度**同一行**（第 10 条）。
       -->
       <fieldset class="install">
         <legend class="field-label">{{ t('installUi.section') }}</legend>
@@ -885,21 +968,72 @@ async function renameChannelName(
 }
 
 /*
- * 设备表（业主 2026-09-17 第 3 条）。
+ * 设备表（业主 2026-09-17 第 3 条；列清单在 2026-09-18 第 8 条重给）。
  *
- * 表本身的外观全部来自全局 `.table-wrap` / `.table`（表头吸顶、行分隔线、单元格内边距），
- * 这里**只**加这张表特有的四件事：
- *   ① 数字列（告警数量 / 设备通道）右对齐 —— 位数不同的两行才读得成一列；
- *   ② 最后两列是图标按钮，宽度收到内容宽，不参与分配剩余宽度（否则图标会被甩到很右边）；
+ * **扁平化（第 2b 条）**：这一页不再用 `.table-wrap` 那张卡片（它是全应用共用的外壳，
+ * 告警/事件中心/录音/样本库都靠它），改成只留一条上边线与每行的分隔线 —— 页面上没有
+ * 圆角、没有卡片边框、没有卡片底色，分区靠线。
+ *
+ * 表本身的外观仍然来自全局 `.table`（表头吸顶、行分隔线、单元格内边距），这一页只加
+ * 这张表特有的几件事：
+ *   ① 数字列（序号 / 告警数量 / 通道数）右对齐 —— 位数不同的两行才读得成一列；
+ *   ② 最后三列是图标按钮，宽度收到内容宽，不参与分配剩余宽度（否则图标会被甩到很右边）；
  *   ③ IP 那一格是 `<button>`（双击开设备 Web 界面），要看起来像一格文字而不是一个按钮；
  *   ④ 被选中的那一行加底色 —— 与左侧拓扑树里高亮的是同一台设备。
- *
- * `.devices-table-card`（`.table-wrap`）不自带内边距，所以没有"把卡片的内边距去掉"这一说：
- * 表头直接贴着卡片边框，与告警页那张表逐像素一致。
  */
+.devices-table-flat {
+  /* 只有上下两条线，没有卡片：上边线是这一段的起点，下边线把它与页脚内容分开。 */
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.devices-table-flat .devices-table {
+  /* `.table` 自己带表头底色与行线；这里只把"卡片内边距"那套去掉。 */
+  background: transparent;
+}
+
 .devices-table .devices-table__num {
   text-align: right;
   white-space: nowrap;
+}
+
+/*
+ * 十列要放得下 1280×720（业主第 8 条的清单比上一版多两列）：这一页的表把单元格的
+ * 左右内边距收到 `--space-2`，并让"名字"与"IP"两列在必要时省略号截断 —— 两列的内容
+ * 都是**可以在悬停里读全**的（名字的 title 是地址信息、IP 双击这一格本身就有提示）。
+ * 不这样做的话，最后那个删除图标会被挤出内容区（几何探针在 1280×720 上报过"被裁掉的控件"）。
+ */
+.devices-table th,
+.devices-table td {
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.devices-table__name--action {
+  display: inline-block;
+  max-width: 168px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.devices-table__ip {
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 通道数那一格只留数字；明细在 `title` 里（见模板注释），这个小圆点表示"还有话"。 */
+.devices-table__hint {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-border-strong, var(--color-border));
+  vertical-align: middle;
 }
 
 .devices-table .devices-table__actions {
@@ -909,6 +1043,53 @@ async function renameChannelName(
 
 .devices-table__name {
   font-weight: 600;
+}
+
+/* 名字是一个入口（点它进详情页）：看起来仍是一格文字，但指针与 hover 说得出它是可点的。 */
+.devices-table__name--action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.devices-table__name--action:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.devices-table__name--action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* 删除是破坏性动作：hover 时图标变危险色（与告警里的删除同一套读法）。 */
+.devices-table__delete:hover {
+  color: var(--color-danger);
+}
+
+/* 「IP 不可改」那一格：只读输入看起来就是只读（不是禁用 —— 禁用会让人以为整页不能编辑）。 */
+.edit-form .input[readonly] {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  cursor: default;
+}
+
+/* 一行里的两个控件（输入框 + 图标按钮）：输入框占满，按钮不缩。 */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.field-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* 「点位」只作为一个标记出现（坐标/方位角/声压级在 title 里）。 */

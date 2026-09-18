@@ -705,6 +705,39 @@ export class DeviceService extends EventEmitter {
       }
       resolved = { ...input, installation: { ...input.installation } }
     }
+    /*
+     * 凭据（业主 2026-09-18 第 10 条）：用户名与密码都能改，**省略 = 不动**。
+     *
+     * 三条判断：
+     *   1. 用户名给了就必须非空（设备侧没有匿名账号）；空串按"没给"处理，理由与
+     *      `UpdateDeviceInput.username` 的注释同一条；
+     *   2. 密码只在**给了非空**时覆盖 —— 界面从不回显口令，空框必须读成"不改"，
+     *      否则改一次端口就会把口令清掉；
+     *   3. 凭据变了**必须丢掉这个设备的运行时客户端**（`runtime` 里那一个拿着旧 token 的
+     *      会话）：不丢的话，后面的请求会继续用旧凭据，界面显示"改成功了"而设备侧
+     *      看到的还是旧账号 —— 那是本仓库最不能接受的那种"界面说假话"。
+     */
+    const nextUsername = input.username?.trim()
+    const nextPassword = input.password
+    const wantsCredentialChange =
+      (nextUsername !== undefined && nextUsername !== '') ||
+      (nextPassword !== undefined && nextPassword !== '')
+    if (wantsCredentialChange) {
+      const current = this.credentials.get(input.id)
+      if (!current) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `设备不存在或没有凭据: ${input.id}`)
+      }
+      this.credentials.set(input.id, {
+        username: nextUsername === undefined || nextUsername === '' ? current.username : nextUsername,
+        password: nextPassword === undefined || nextPassword === '' ? current.password : nextPassword
+      })
+      this.runtime.delete(input.id)
+      deviceLog().info('Device credentials updated', {
+        deviceId: input.id,
+        usernameChanged: nextUsername !== undefined && nextUsername !== '' && nextUsername !== current.username,
+        passwordChanged: nextPassword !== undefined && nextPassword !== ''
+      })
+    }
     const updated = this.devices.update(resolved)
     if (!updated) throw new AppError(ErrorCodes.VALIDATION_ERROR, `设备不存在: ${input.id}`)
     // A changed address invalidates the cached client.

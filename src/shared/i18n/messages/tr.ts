@@ -303,19 +303,30 @@ export const tr: MessageSchema = {
     noticeAdded: 'Cihaz eklendi',
     noticeUpdated: '«{name}» cihazı güncellendi',
     noticeRemoved: '«{name}» cihazı silindi',
-    menu: 'Diğer işlemler',
     deviceId: 'Cihaz kimliği',
     mac: 'MAC adresi',
     channelCount: 'Kanal sayısı',
-    /** O iki sütunun başlıkları (sahibi harfi harfine yazdı). */
-    ipColumn: 'Cihaz IP',
-    channelColumn: 'Cihaz kanalları',
-    onlineColumn: 'Çevrimiçi',
+    /** Başlıklar mal sahibi tarafından 2026-09-18'de yeniden verildi (8. madde). */
+    indexColumn: 'Sıra',
+    ipColumn: 'IP adresi',
+    channelColumn: 'Kanal sayısı',
+    onlineColumn: 'Durum',
     alarmCountColumn: 'Alarmlar',
     ipDoubleClickHint: 'Cihaz web arayüzünü açmak için çift tıklayın',
     /** O sütunun başlığı ve göz simgeli düğmenin etiketi. */
     viewColumn: 'Görüntüle',
+    /** Ayarlar = düzenleme iletişim kutusu (ad / bağlantı noktası / kimlik bilgileri / adres). */
+    settingColumn: 'Ayarlar',
+    /** Sil = cihazı kaldır (yıkıcıdır, önce onay ister). */
+    deleteColumn: 'Sil',
+    /** Harita sayfasının cihaz yapılandırmasına girişi için. */
     configure: 'Yapılandır',
+    openDetail: 'Cihaz ayrıntılarını ve yapılandırmasını aç',
+    ipReadonlyHint: 'IP adresi cihazın kimliğidir, değiştirilemez',
+    credentialsKeep: 'Boş = değiştirme',
+    credentialsHint: 'Kimlik bilgileri yerel depoda tutulur ve hiçbir zaman geri gösterilmez; yalnızca doldurulan alanlar yazılır.',
+    passwordShow: 'Parolayı göster',
+    passwordHide: 'Parolayı gizle',
     editTitle: 'Cihazı düzenle',
     editNameRequired: 'Cihaz adı zorunludur',
     editPortInvalid: 'HTTP bağlantı noktası 1 ile 65535 arasında bir tam sayı olmalıdır',

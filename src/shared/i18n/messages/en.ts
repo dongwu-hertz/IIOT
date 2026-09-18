@@ -299,19 +299,35 @@ export const en: MessageSchema = {
     noticeAdded: 'Device added',
     noticeUpdated: 'Device “{name}” updated',
     noticeRemoved: 'Device “{name}” deleted',
-    menu: 'More actions',
     deviceId: 'Device ID',
     mac: 'MAC address',
     channelCount: 'Channels',
-    /** Headers of those two table columns (the owner wrote them out literally). */
-    ipColumn: 'Device IP',
-    channelColumn: 'Device channels',
-    onlineColumn: 'Online',
+    /**
+     * Device table headers — re-given by the owner on 2026-09-18 (item 8):
+     * No. / Device name / IP address / Device type / Status / Alarms / Channels /
+     * View / Settings / Delete.
+     */
+    indexColumn: 'No.',
+    ipColumn: 'IP address',
+    channelColumn: 'Channels',
+    onlineColumn: 'Status',
     alarmCountColumn: 'Alarms',
     ipDoubleClickHint: 'Double-click to open the device web interface',
     /** Header of that table column, and the label of the eye icon button. */
     viewColumn: 'View',
+    /** Settings = the edit dialog (name / port / credentials / address info). */
+    settingColumn: 'Settings',
+    /** Delete = remove the device (destructive, asks first). */
+    deleteColumn: 'Delete',
+    /** Used by the map page's entry to the device config page. */
     configure: 'Configure',
+    /** Clicking the device name opens the detail/config page. */
+    openDetail: 'Open device details and configuration',
+    ipReadonlyHint: 'The IP address identifies the device and cannot be changed',
+    credentialsKeep: 'Leave blank to keep',
+    credentialsHint: 'Credentials live in the local credential store and are never shown back; only filled fields are written.',
+    passwordShow: 'Show password',
+    passwordHide: 'Hide password',
     editTitle: 'Edit device',
     editNameRequired: 'Device name is required',
     editPortInvalid: 'HTTP port must be an integer between 1 and 65535',

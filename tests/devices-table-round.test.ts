@@ -95,10 +95,17 @@ const topbar = read('src/renderer/src/components/AppTopbar.vue')
 // ---------------------------------------------------------------------------
 
 describe('设备表：一列一个事实，顺序按业主给的清单', () => {
-  it('表头正好是那八列，且顺序一致', () => {
+  /*
+   * 列清单由业主在 2026-09-18 第 8 条**重给**（上一版是 2026-09-17 的八列）：
+   * 序号 / 设备名称 / IP地址 / 设备类型 / 状态 / 告警数量 / 通道数 / 查看 / 设置 / 删除。
+   * 差别逐条：多了「序号」；「设备IP」→「IP地址」、「是否在线」→「状态」、
+   * 「设备通道」→「通道数」；「配置」拆成「设置」与「删除」两个图标列。
+   */
+  it('表头正好是那十列，且顺序一致', () => {
     const head = between(devicesViewCode, '<thead>', '</thead>', '设备表表头')
     const keys = [...head.matchAll(/t\('([\w.]+)'\)/g)].map((match) => match[1])
     assert.deepEqual(keys, [
+      'devicesUi.indexColumn',
       'devices.name',
       'devicesUi.ipColumn',
       'addDeviceUi.kindLabel',
@@ -106,14 +113,26 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
       'devicesUi.alarmCountColumn',
       'devicesUi.channelColumn',
       'devicesUi.viewColumn',
-      'devicesUi.configure'
+      'devicesUi.settingColumn',
+      'devicesUi.deleteColumn'
     ])
   })
 
-  it('列名逐字是业主给的那八个（表头就是他写的字，不是别的页面的标签）', () => {
-    // 照抄业主清单：设备名称 / 设备IP / 设备类型 / 是否在线 / 告警数量 / 设备通道 / 查看 / 配置。
-    const expected = ['设备名称', '设备IP', '设备类型', '是否在线', '告警数量', '设备通道', '查看', '配置']
+  it('列名逐字是业主给的那十个（表头就是他写的字，不是别的页面的标签）', () => {
+    const expected = [
+      '序号',
+      '设备名称',
+      'IP地址',
+      '设备类型',
+      '状态',
+      '告警数量',
+      '通道数',
+      '查看',
+      '设置',
+      '删除'
+    ]
     const actual = [
+      messageAt('zh-CN', 'devicesUi.indexColumn'),
       messageAt('zh-CN', 'devices.name'),
       messageAt('zh-CN', 'devicesUi.ipColumn'),
       messageAt('zh-CN', 'addDeviceUi.kindLabel'),
@@ -121,13 +140,20 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
       messageAt('zh-CN', 'devicesUi.alarmCountColumn'),
       messageAt('zh-CN', 'devicesUi.channelColumn'),
       messageAt('zh-CN', 'devicesUi.viewColumn'),
-      messageAt('zh-CN', 'devicesUi.configure')
+      messageAt('zh-CN', 'devicesUi.settingColumn'),
+      messageAt('zh-CN', 'devicesUi.deleteColumn')
     ]
     assert.deepEqual(actual, expected)
   })
 
   it('每一列在四本目录里都有译文，且「设备类型」不写成「机型」那一套', () => {
-    for (const key of ['devicesUi.viewColumn', 'devicesUi.configure', 'devicesUi.onlineColumn']) {
+    for (const key of [
+      'devicesUi.viewColumn',
+      'devicesUi.settingColumn',
+      'devicesUi.deleteColumn',
+      'devicesUi.indexColumn',
+      'devicesUi.onlineColumn'
+    ]) {
       for (const locale of Object.keys(CATALOGUES)) {
         const message = messageAt(locale, key)
         assert.ok(message && message.length > 0, `${locale} 缺 ${key}`)
@@ -137,8 +163,32 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     assert.equal(messageAt('zh-CN', 'addDeviceUi.kindLabel'), '设备类型')
   })
 
-  it('表格外壳用全应用同一套 `.table-wrap` / `.table`，没有第二套表样式', () => {
-    assert.ok(devicesViewCode.includes('class="table-wrap devices-table-card"'), '表格外壳不是 .table-wrap')
+  it('扁平化（第 2b 条）：这一页不用卡片外壳，只有线与表', () => {
+    /*
+     * 业主 2026-09-18 第 2b 条：「设备管理这个界面里面的内容，不要做成卡片的，而是做成
+     * 扁平化设计，用线条分区」。`.table-wrap` 是**全应用共用**的卡片外壳（告警/事件中心/
+     * 录音/样本库都靠它），所以这一页改成自己的 `.devices-table-flat`（上边线 + 行分隔线）。
+     */
+    assert.ok(
+      devicesViewCode.includes('class="devices-table-flat"'),
+      '设备表外壳不是扁平化的 .devices-table-flat'
+    )
+    assert.equal(
+      devicesViewCode.includes('table-wrap'),
+      false,
+      '这一页又用回了卡片外壳（.table-wrap）'
+    )
+    // 扁平外壳必须靠线分区：至少有一条上边线与一条下边线。
+    assert.match(
+      devicesView,
+      /\.devices-table-flat\s*\{[^}]*border-top:\s*1px solid/,
+      '扁平外壳没有上边线'
+    )
+    assert.match(
+      devicesView,
+      /\.devices-table-flat\s*\{[^}]*border-bottom:\s*1px solid/,
+      '扁平外壳没有下边线'
+    )
     assert.ok(devicesViewCode.includes('class="table devices-table"'), '表格没有用全局 .table')
     // 卡片版式（上一版的 `device-card*` / `fact__*`）必须连同样式一起删干净。
     assert.equal(devicesView.includes('device-card'), false, '卡片版式的类名还在 DevicesView 里')
@@ -151,24 +201,40 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     assert.ok(/\.devices-table \.devices-table__num\s*\{[^}]*text-align: right/.test(devicesView))
     assert.ok(/\.devices-table \.devices-table__actions\s*\{[^}]*width: 1%/.test(devicesView))
   })
+
+  it('序号列是行号（第 1 行是 1），不是设备自己的什么编号', () => {
+    assert.match(
+      devicesViewCode,
+      /v-for="\(device, index\) in cards"[\s\S]{0,400}?\{\{ index \+ 1 \}\}/,
+      '序号列不是行号'
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
-// ③④ 查看 / 配置两个图标 + 双击 IP
+// ③④ 查看 / 设置 / 删除三个图标 + 双击 IP
 // ---------------------------------------------------------------------------
 
-describe('设备表：查看与配置是图标，IP 双击开设备页面', () => {
-  it('「查看」与「配置」各是一个图标按钮，并带探针可认的标记', () => {
+describe('设备表：查看 / 设置 / 删除是图标，IP 双击开设备页面', () => {
+  it('「查看」「设置」「删除」各是一个图标按钮，并带探针可认的标记', () => {
     const monitorButton = buttonAround(devicesViewCode, 'data-action="device-monitor"')
     assert.ok(monitorButton.includes('<svg'), '查看按钮里没有图标')
     assert.ok(monitorButton.includes("t('devicesUi.viewColumn')"), '查看按钮没有无障碍名字')
 
-    const configureButton = buttonAround(devicesViewCode, 'data-action="device-configure"')
-    assert.ok(configureButton.includes('<svg'), '配置按钮里没有图标')
-    assert.ok(configureButton.includes("t('devicesUi.configure')"), '配置按钮没有无障碍名字')
+    const settingButton = buttonAround(devicesViewCode, 'data-action="device-configure"')
+    assert.ok(settingButton.includes('<svg'), '设置按钮里没有图标')
+    assert.ok(settingButton.includes("t('devicesUi.settingColumn')"), '设置按钮没有无障碍名字')
+
+    const deleteButton = buttonAround(devicesViewCode, 'data-action="device-delete"')
+    assert.ok(deleteButton.includes('<svg'), '删除按钮里没有图标')
+    assert.ok(deleteButton.includes("t('devicesUi.deleteColumn')"), '删除按钮没有无障碍名字')
+    // 两个破坏性/管理动作只对管理员出现（与后端 `requireAdministrator` 一致）。
+    assert.match(deleteButton, /v-if="session\.isAdmin"/, '删除按钮没有按管理员收口')
+    // 省略号菜单按第 8 条删掉了（编辑与删除升成两列，一个入口胜过两个）。
+    assert.equal(devicesViewCode.includes('menu__list'), false, '行末的省略号菜单又回来了')
   })
 
-  it('查看带设备 id 去实时检测页，配置去这台设备的详情页', () => {
+  it('查看带设备 id 去实时检测页，设置打开编辑对话框，点名字进详情页', () => {
     // 查看 = 按机型进实时检测：带上 device 查询串（页面自己按 kind 分支）。
     assert.ok(
       /function monitor\([\s\S]{0,400}?router\.push\(\{ path: '\/monitor', query: \{ device: device\.id \} \}\)/.test(
@@ -176,10 +242,15 @@ describe('设备表：查看与配置是图标，IP 双击开设备页面', () =
       ),
       '查看不再带设备 id 去 /monitor'
     )
-    assert.ok(
-      devicesViewCode.includes('go(`/devices/${device.id}`)'),
-      '配置不再去这台设备的详情页'
+    // 设置 = 编辑对话框（业主第 10 条那一个）。
+    assert.match(
+      buttonAround(devicesViewCode, 'data-action="device-configure"'),
+      /@click\.stop="startEdit\(device\)"/,
+      '设置按钮不再打开编辑对话框'
     )
+    // 名字是去详情/配置页的入口（列清单里没有"详情"这一列，而那个页面装着通道配置等）。
+    const nameButton = buttonAround(devicesViewCode, 'data-action="device-detail"')
+    assert.ok(nameButton.includes('go(`/devices/${device.id}`)'), '点名字不再进设备详情页')
   })
 
   it('行点击只选中（不跳走），这样双击 IP 才落得到那一格上', () => {

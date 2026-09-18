@@ -1552,14 +1552,18 @@ async function run() {
   await sleep(600)
 
   /**
-   * ③④ 设备管理页右侧的**设备表**（业主 2026-09-17 第 3、4 条）。
+   * ③④ 设备管理页右侧的**设备表**（业主 2026-09-17 第 3、4 条；列清单 2026-09-18 第 8 条重给）。
    *
-   * 量四件事，每一件都只能靠 DOM：
-   *   ① 表头正好是业主给的那八列、顺序一致；
-   *   ② 每一行都有「查看」与「配置」两个**图标**按钮（`data-action` 标记 + 里面有 svg），
-   *      IP 那一格是一个按钮（双击才打开浏览器）；
-   *   ③ 点「查看」→ 进实时监测页并带上这台设备的 id；点「配置」→ 进这台设备的详情页；
-   *   ④ **单击** IP 什么都不做（不跳转）—— 双击的前半段是两次单击，单击要是会导航，
+   * 量六件事，每一件都只能靠 DOM：
+   *   ① 表头正好是业主重给的那十列、顺序一致（序号 / 设备名称 / IP地址 / 设备类型 / 状态 /
+   *      告警数量 / 通道数 / 查看 / 设置 / 删除）；
+   *   ② **扁平化**（第 2b 条）：外壳不是 `.table-wrap` 那张卡片，而是 `.devices-table-flat`
+   *      （上下各一条线）；
+   *   ③ 序号列是行号（第 1 行就是 1）；
+   *   ④ 每一行都有「查看」「设置」「删除」三个**图标**按钮，IP 那一格是一个按钮（双击才开浏览器）；
+   *   ⑤ 点「查看」→ 进实时监测页并带上这台设备的 id；点「设置」→ 打开**编辑对话框**
+   *      （第 10 条：IP 只读、端口与 IP 同行、凭据同行 + 显示密码）；
+   *   ⑥ **单击** IP 什么都不做（不跳转）—— 双击的前半段是两次单击，单击要是会导航，
    *      双击就永远落不到这一格上（这一条是第 4 条能不能用的前提）。
    *
    * `shell.openExternal` 那一次真正的双击单独量（见下面 `devicesTableDouble`）：
@@ -1573,18 +1577,32 @@ async function run() {
     'const headers = [...table.querySelectorAll("thead th")].map((th) => text(th));' +
     'const rows = [...table.querySelectorAll("tbody tr")];' +
     'const actions = [...table.querySelectorAll("tbody [data-action]")];' +
+    'const flat = document.querySelector(".devices-table-flat");' +
+    'const flatStyle = flat ? getComputedStyle(flat) : null;' +
     'const out = {' +
     '  ok: true,' +
     '  headers,' +
     '  rows: rows.length,' +
+    '  flatShell: !!flat,' +
+    '  legacyCardShell: !!document.querySelector(".table-wrap.devices-table-card, .devices-table-card"),' +
+    '  flatTopBorder: flatStyle ? flatStyle.borderTopWidth : null,' +
+    '  flatBottomBorder: flatStyle ? flatStyle.borderBottomWidth : null,' +
     '  monitorIcons: table.querySelectorAll("[data-action=device-monitor]").length,' +
     '  configureIcons: table.querySelectorAll("[data-action=device-configure]").length,' +
-    '  actionsAreIcons: actions.length > 0 && actions.every((b) => !!b.querySelector("svg")),' +
+    '  deleteIcons: table.querySelectorAll("[data-action=device-delete]").length,' +
+    '  detailNames: table.querySelectorAll("[data-action=device-detail]").length,' +
+    '  actionsAreIcons: ["device-monitor", "device-configure", "device-delete"]' +
+    '    .every((action) => {' +
+    '      const buttons = [...table.querySelectorAll("tbody [data-action=" + action + "]")];' +
+    '      return buttons.length > 0 && buttons.every((b) => !!b.querySelector("svg"));' +
+    '    }),' +
     '  ipButtons: table.querySelectorAll("button.devices-table__ip").length,' +
-    '  wrapIsTableWrap: !!document.querySelector(".table-wrap.devices-table-card"),' +
+    '  indexCells: [...table.querySelectorAll("tbody tr")]' +
+    '    .map((tr) => text(tr.querySelector("td.devices-table__num"))),' +
+    '  menuPresent: !!table.querySelector(".menu__list"),' +
     '  firstIp: "",' +
     '  afterMonitor: null,' +
-    '  afterConfigure: "",' +
+    '  afterConfigure: null,' +
     '  afterSingleClick: ""' +
     '};' +
     'const firstRow = rows[0];' +
@@ -1596,7 +1614,7 @@ async function run() {
      * 为什么（2026-09-17 第 9 批实测踩到）：从实时监测页切回设备管理页时，设备管理页会
      * 重新读一次设备列表（含逐台探活），忙的时候 900ms 内表格还没进 DOM —— 于是下面两次
      * 查找都拿到 null，报出来的是"点配置没进详情页"与"单击 IP 把页面带走了"两条**假失败**
-     * （真正的现象是"我还没看到表格"）。探针自己的时间假设也要能被质疑，见 15.40.3。
+     *  （真正的现象是"我还没看到表格"）。探针自己的时间假设也要能被质疑，见 15.40.3。
      */
     'const waitForRow = async () => {' +
     '  for (let i = 0; i < 24; i += 1) {' +
@@ -1606,7 +1624,7 @@ async function run() {
     '  }' +
     '  return null;' +
     '};' +
-    // ③ 查看：进实时监测页，并把设备 id 带在查询串上。
+    // ④ 查看：进实时监测页，并把设备 id 带在查询串上。
     'const eye = firstRow ? firstRow.querySelector("[data-action=device-monitor]") : null;' +
     'if (eye) { eye.click(); await wait(900); }' +
     'out.afterMonitor = { hash: location.hash,' +
@@ -1616,13 +1634,49 @@ async function run() {
     '  cameraLive: document.querySelectorAll(".camera-live").length,' +
     '  channelTabs: document.querySelectorAll(".channel-tabs").length,' +
     '  trendPanel: document.querySelectorAll(".trend-panel").length };' +
-    // ③ 配置：进这台设备的详情页。
+    /*
+     * ⑤ 设置：**打开编辑对话框**（业主第 10 条那一个），并量对话框本身的三条版式要求：
+     *    IP 只读（readonly 属性）、端口与 IP 在同一行（两个 .field 同一个 .form-grid）、
+     *    凭据两格同一行 + 那个"显示密码"按钮真的把 type 从 password 换成 text。
+     */
     'location.hash = "#/devices";' +
     'const row2 = await waitForRow();' +
     'const gear = row2 ? row2.querySelector("[data-action=device-configure]") : null;' +
-    'if (gear) { gear.click(); await wait(1200); }' +
-    'out.afterConfigure = location.hash;' +
-    // ④ 单击 IP：什么都不许发生（不跳转、不选中别的东西）。
+    'const dialogOf = () => document.querySelector(".overlay [role=dialog]");' +
+    'if (gear) {' +
+    '  gear.click();' +
+    '  await wait(700);' +
+    '  const dlg = dialogOf();' +
+    '  out.afterConfigure = { hash: location.hash, dialogOpen: !!dlg };' +
+    '  if (dlg) {' +
+    '    const ip = dlg.querySelector("[data-field=edit-ip]");' +
+    '    out.editIpReadonly = !!ip && ip.hasAttribute("readonly");' +
+    '    out.editIpEditable = !!ip && !ip.readOnly;' +
+    '    const grids = [...dlg.querySelectorAll(".form-grid")];' +
+    '    out.editGrids = grids.map((g) => [...g.querySelectorAll(".field-label")].map((l) => text(l)));' +
+    '    const pw = dlg.querySelector("input[type=password]");' +
+    '    const reveal = dlg.querySelector("[data-action=edit-password-reveal]");' +
+    '    out.editPasswordHiddenType = pw ? pw.getAttribute("type") : null;' +
+    '    out.editRevealPresent = !!reveal;' +
+    '    if (reveal) {' +
+    '      reveal.click();' +
+    '      await wait(300);' +
+    '      const after = dlg.querySelector("input[data-field=edit-password], .form-grid input[type=text]");' +
+    '      const revealed = [...dlg.querySelectorAll("input")].find((i) => i.getAttribute("type") === "text" && i.value === "");' +
+    '      out.editPasswordAfterReveal = (function(){' +
+    '        const all = [...dlg.querySelectorAll("input")];' +
+    '        const pwNow = all.find((i) => i.getAttribute("type") === "password");' +
+    '        return pwNow ? "password" : "text";' +
+    '      })();' +
+    '      if (after) void after;' +
+    '      if (revealed) void revealed;' +
+    '    }' +
+    '    const close = [...dlg.querySelectorAll("button")].find((b) => text(b) === "取消");' +
+    '    if (close) { close.click(); await wait(400); }' +
+    '    out.editDialogClosed = !dialogOf();' +
+    '  }' +
+    '}' +
+    // ⑥ 单击 IP：什么都不许发生（不跳转、不选中别的东西）。
     'location.hash = "#/devices";' +
     'const row3 = await waitForRow();' +
     'const ip2 = row3 ? row3.querySelector("button.devices-table__ip") : null;' +
@@ -1639,36 +1693,65 @@ async function run() {
     problems.push('设备管理页没有设备表（table.devices-table）：' + JSON.stringify(devicesTable))
   } else {
     const EXPECTED_HEADERS = [
+      '序号',
       '设备名称',
-      '设备IP',
+      'IP地址',
       '设备类型',
-      '是否在线',
+      '状态',
       '告警数量',
-      '设备通道',
+      '通道数',
       '查看',
-      '配置'
+      '设置',
+      '删除'
     ]
     if (JSON.stringify(devicesTable.headers) !== JSON.stringify(EXPECTED_HEADERS)) {
-      problems.push('设备表的列不是业主给的那八列（或顺序不对）：' + JSON.stringify(devicesTable.headers))
+      problems.push(
+        '设备表的列不是业主 2026-09-18 第 8 条重给的那十列（或顺序不对）：' +
+          JSON.stringify(devicesTable.headers)
+      )
     }
-    if (!devicesTable.wrapIsTableWrap) {
-      problems.push('设备表没有用全应用同一套 .table-wrap 外壳')
+    // ② 扁平化（第 2b 条）：不再用卡片外壳，而是上下两条线。
+    if (!devicesTable.flatShell) {
+      problems.push('设备表没有扁平化的外壳（.devices-table-flat）—— 第 2b 条要求去卡片')
+    }
+    if (devicesTable.legacyCardShell) {
+      problems.push('设备表又用回了卡片外壳（.devices-table-card / .table-wrap）')
+    }
+    for (const [side, value] of [
+      ['上', devicesTable.flatTopBorder],
+      ['下', devicesTable.flatBottomBorder]
+    ]) {
+      if (!value || value === '0px') {
+        problems.push('扁平外壳没有' + side + '边线（分区只能靠线）：' + JSON.stringify(value))
+      }
+    }
+    if (devicesTable.menuPresent) {
+      problems.push('行末的省略号菜单又回来了（第 8 条已把编辑/删除升成两列）')
     }
     if (devicesTable.rows === 0) {
       problems.push('设备表一行都没有（库里又不是没有设备）——"表渲染了"与"没数据"必须能分开')
     }
-    if (devicesTable.monitorIcons !== devicesTable.rows) {
-      problems.push(
-        '「查看」图标数与设备行数不一致：' + devicesTable.monitorIcons + ' vs ' + devicesTable.rows
-      )
+    // ③ 序号列 = 行号。
+    const indexes = devicesTable.indexCells || []
+    if (indexes.length !== devicesTable.rows) {
+      problems.push('序号列的行数与设备行数不一致：' + JSON.stringify(indexes))
+    } else if (indexes.some((value, index) => value !== String(index + 1))) {
+      problems.push('序号列不是 1、2、3…：' + JSON.stringify(indexes))
     }
-    if (devicesTable.configureIcons !== devicesTable.rows) {
-      problems.push(
-        '「配置」图标数与设备行数不一致：' + devicesTable.configureIcons + ' vs ' + devicesTable.rows
-      )
+    for (const [label, count] of [
+      ['查看', devicesTable.monitorIcons],
+      ['设置', devicesTable.configureIcons],
+      ['删除', devicesTable.deleteIcons],
+      ['设备名（详情入口）', devicesTable.detailNames]
+    ]) {
+      if (count !== devicesTable.rows) {
+        problems.push(
+          '「' + label + '」的个数与设备行数不一致：' + count + ' vs ' + devicesTable.rows
+        )
+      }
     }
     if (!devicesTable.actionsAreIcons) {
-      problems.push('查看/配置那一格里出现了没有图标的按钮（业主明确要图标）')
+      problems.push('查看/设置/删除那一格里出现了没有图标的按钮（业主明确要图标）')
     }
     if (devicesTable.ipButtons !== devicesTable.rows) {
       problems.push('不是每一行的 IP 都是可双击的按钮：' + devicesTable.ipButtons + ' vs ' + devicesTable.rows)
@@ -1681,8 +1764,43 @@ async function run() {
     } else if (String(monitor.selectValue || '') === '') {
       problems.push('点「查看」之后顶栏的设备下拉没有选中任何设备')
     }
-    if (!/^#\/devices\/[^/]+$/.test(String(devicesTable.afterConfigure || ''))) {
-      problems.push('点「配置」没有进这台设备的详情页：' + devicesTable.afterConfigure)
+    // ⑤ 设置 → 编辑对话框 + 三条版式要求（第 10 条）。对话框自己那几个读数在 `devicesTable`
+    // 顶层（`editIpReadonly` / `editGrids` / …），这里只从 `afterConfigure` 拿"有没有开"。
+    const configure = devicesTable.afterConfigure || {}
+    if (!configure.dialogOpen) {
+      problems.push('点「设置」没有打开编辑对话框：' + JSON.stringify(configure))
+    } else {
+      if (devicesTable.editIpEditable) {
+        problems.push('编辑对话框里的 IP 还能改（第 10 条：IP 地址不可修改）')
+      }
+      if (!devicesTable.editIpReadonly) {
+        problems.push('编辑对话框里没有只读的 IP 那一格（[data-field=edit-ip]）')
+      }
+      const grids = devicesTable.editGrids || []
+      const hasRow = (a, b) => grids.some((g) => g.includes(a) && g.includes(b))
+      if (!hasRow('IP 地址', 'HTTP 端口')) {
+        problems.push('IP 与 HTTP 端口不在同一行：' + JSON.stringify(grids))
+      }
+      if (!hasRow('用户名', '密码')) {
+        problems.push('用户名与密码不在同一行：' + JSON.stringify(grids))
+      }
+      if (!hasRow('纬度（°）', '经度（°）')) {
+        problems.push('纬度与经度不在同一行：' + JSON.stringify(grids))
+      }
+      if (devicesTable.editPasswordHiddenType !== 'password') {
+        problems.push('密码框默认不是 password 类型：' + JSON.stringify(devicesTable.editPasswordHiddenType))
+      }
+      if (!devicesTable.editRevealPresent) {
+        problems.push('密码框旁边没有「显示密码」按钮（第 10 条要求能显示密码）')
+      } else if (devicesTable.editPasswordAfterReveal !== 'text') {
+        problems.push(
+          '点了「显示密码」之后那一格仍然是 password（第 10 条要能显示）：' +
+            JSON.stringify(devicesTable.editPasswordAfterReveal)
+        )
+      }
+      if (devicesTable.editDialogClosed !== true) {
+        problems.push('编辑对话框点「取消」之后没有关掉')
+      }
     }
     if (devicesTable.afterSingleClick !== '#/devices') {
       problems.push(
