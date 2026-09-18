@@ -1070,7 +1070,37 @@ export const es: MessageSchema = {
     withoutPointHint: 'No están en el mapa: sin punto no hay posición que dibujar. Pulse un nombre para abrir ese equipo y registrarlo.',
     pickOne: 'Todavía no hay equipo seleccionado.',
     point: 'Punto',
-    alarmsTitle: 'Alarmas y capturas',
+    /**
+     * Tonos del marcador (lote 10, punto 14: en línea verde / alarma rojo / sin conexión gris).
+     * «En línea» y «sin conexión» reutilizan `devices.status.*`: un hecho, una redacción.
+     * El color nunca carga solo con el significado, por eso cada leyenda lleva un recuento.
+     */
+    legendAlarm: 'Alarma sin confirmar',
+    /** Lista de equipos (primera de las tres listas, punto 17). */
+    devicesTitle: 'Equipos',
+    devicesCount: '{count} equipo(s)',
+    devicesHint: 'Pulse una fila para seleccionar el equipo (su marcador también se resalta); doble clic para abrir ese equipo.',
+    colAlarms: 'Sin confirmar',
+    /** Lista de alarmas (segunda). */
+    alarmsTitle: 'Alarmas',
+    alarmsFor: 'Equipo seleccionado: {name}',
+    /** Lista de datos en vivo (tercera). */
+    liveTitle: 'Datos en vivo',
+    colDb: 'dB',
+    colStability: 'Estabilidad',
+    colAzimuth: 'Azimut',
+    liveHint: 'Los dB son el nivel de presión sonora de la última alarma de ese equipo (— si no hay ninguna); el azimut es el de instalación registrado, no el de la fuente en el fotograma actual.',
+    /**
+     * Por qué la columna «estabilidad» nunca tiene valor. NO ESTÁ EN EL MANUAL: docs/reference/
+     * no describe esa magnitud, y lo único llamado «estabilidad» en el producto es un umbral de
+     * regla de alarma (un criterio, no una medida). La magnitud real de la vía de descarga
+     * parcial se llama «suavidad» y no es la misma, así que no se sustituye.
+     */
+    stabilityNoSourceHint:
+      'Esta columna no tiene origen de datos: el manual no describe una medida de «estabilidad» y esta máquina no tiene lectura de ella (el producto solo tiene una regla de alarma «umbral de estabilidad del nivel de presión sonora», que es un criterio, no una medida). La magnitud real de la vía de descarga parcial se llama «suavidad» y no es la misma, así que no se usa como sustituto.',
+    /** «No se pudo leer» y «no hay» deben seguir siendo distinguibles (misma regla que la tabla de equipos). */
+    notRead: '—',
+    none: '—',
     alarmCount: 'últimas {count}',
     noAlarms: 'Aún no hay alarmas de este equipo localmente. Use «Sincronizar alarmas» arriba.',
     sync: 'Sincronizar alarmas',

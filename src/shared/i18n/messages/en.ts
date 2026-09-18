@@ -1087,7 +1087,37 @@ export const en: MessageSchema = {
     withoutPointHint: 'They are not on the map: without a point there is no position to draw. Click a name to open that device and record it.',
     pickOne: 'No device selected yet.',
     point: 'Point',
-    alarmsTitle: 'Alarms and snapshots',
+    /**
+     * Marker tones (owner batch 10, item 14: online green / alarm red / offline grey).
+     * "Online" and "offline" reuse `devices.status.*` - one wording per fact. Colour never
+     * carries the meaning alone, so each legend entry shows a count.
+     */
+    legendAlarm: 'Unacknowledged alarm',
+    /** Device list (first of the three lists, item 17). */
+    devicesTitle: 'Devices',
+    devicesCount: '{count} device(s)',
+    devicesHint: 'Click a row to select the device (its marker highlights too); double-click to open that device.',
+    colAlarms: 'Unacknowledged',
+    /** Alarm list (second). */
+    alarmsTitle: 'Alarms',
+    alarmsFor: 'Selected device: {name}',
+    /** Live data list (third). */
+    liveTitle: 'Live data',
+    colDb: 'dB',
+    colStability: 'Stability',
+    colAzimuth: 'Azimuth',
+    liveHint: 'dB is the sound pressure level on that device\u2019s most recent alarm (— when there is none); azimuth is the recorded installation azimuth, not the current frame\u2019s source bearing.',
+    /**
+     * Why the "stability" column never has a value. NOT IN THE MANUAL: docs/reference/ has no
+     * such quantity, and the only "stability" in this product is an alarm-rule threshold (a
+     * criterion, not a reading). The real measured value for the partial-discharge path is
+     * "smoothness", which is a different quantity, so it is not substituted here.
+     */
+    stabilityNoSourceHint:
+      'This column has no data source: the manual does not describe a "stability" measurement and this machine has no reading for it (the product only has an "SPL stability threshold" alarm rule, which is a criterion rather than a measurement). The partial-discharge path\u2019s real measured value is called "smoothness" and is not the same quantity, so it is not used as a substitute.',
+    /** "Could not be read" and "there is none" must stay distinguishable (same rule as the device table). */
+    notRead: '—',
+    none: '—',
     alarmCount: 'latest {count}',
     noAlarms: 'No alarms for this device locally yet. Use “Sync alarms” above.',
     sync: 'Sync alarms',

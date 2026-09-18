@@ -282,3 +282,233 @@ describe('点位图：不联网、点声呐看抓图', () => {
     assert.equal(/加载失败|loading failed/i.test(String(messageAt('zh-CN', 'mapUi.noPoints'))), false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 第 10 批第 13/14/17 条：版面、落点配色、地图下方三张列表
+// ---------------------------------------------------------------------------
+
+describe('地图信息（GIS）：16:9 占满宽度的地图区（第 13 条）', () => {
+  it('画布是 16:9，而且外层那一层也按 16:9 定高', () => {
+    // 两边比例必须一致：不一致时 SVG 会按 `preserveAspectRatio` 留白，
+    // 图上就出现两条看不懂的边（而"看起来没问题"）。
+    const canvas = /const CANVAS = \{ width: (\d+), height: (\d+) \}/.exec(mapView)
+    assert.ok(canvas, '没有找到 CANVAS 常量')
+    const [, width, height] = canvas
+    assert.equal(
+      Number(width) / Number(height),
+      16 / 9,
+      `画布不是 16:9：${width}×${height}`
+    )
+    assert.match(
+      mapView,
+      /\.map-canvas-frame \{[\s\S]*?width: 100%;[\s\S]*?aspect-ratio: 16 \/ 9;/,
+      '定比例的那一层不是"占满宽度 + 16:9"'
+    )
+  })
+
+  it('地图区**没有** max-height（加了它就不再是 16:9）', () => {
+    const block = mapView.slice(mapView.indexOf('.map-canvas-frame {'))
+    const body = block.slice(0, block.indexOf('}'))
+    assert.equal(/max-height/.test(body), false, `地图区加了高度上限，比例会被破坏：${body}`)
+  })
+
+  it('地图区不是卡片：`.card` 的左右内边距会让"占满宽度"只是近似', () => {
+    const panel = mapTemplate.slice(mapTemplate.indexOf('data-map-panel'))
+    const tag = panel.slice(0, panel.indexOf('>'))
+    assert.equal(/class="[^"]*\bcard\b/.test(tag), false, `地图区又套上了卡片：${tag.trim()}`)
+  })
+
+  it('网格线与落点用同一个 padding（两个数不一致会让网格与点错位）', () => {
+    assert.match(mapView, /MAP_PADDING = (\d+)/, '没有统一的那一个留白常量')
+    assert.match(
+      mapView,
+      /deviceMapLayout\(mapInputs\.value, CANVAS\.width, CANVAS\.height, MAP_PADDING\)/,
+      '落点布局没有用统一留白'
+    )
+    assert.match(
+      mapView,
+      /mapProjector\(bounds, CANVAS\.width, CANVAS\.height, MAP_PADDING\)/,
+      '投影器没有用统一留白 —— 网格会与落点错位'
+    )
+  })
+})
+
+describe('落点配色：在线绿 / 告警红 / 离线灰（第 14 条）', () => {
+  it('三种色调各有一条 CSS 规则，而且用的是既有的语义色', () => {
+    for (const [tone, token] of [
+      ['online', '--color-success'],
+      ['alarm', '--color-danger'],
+      ['offline', '--color-text-tertiary']
+    ]) {
+      assert.match(
+        mapView,
+        new RegExp(`\\.map-marker--${tone} \\.map-marker__dot \\{[\\s\\S]*?${token}`),
+        `落点缺少 ${tone} 那一档，或它没有用 ${token}`
+      )
+    }
+    // 颜色值不许在组件里现写（这个仓库只有 assets/main.css 写颜色）。
+    assert.equal(
+      /#[0-9a-fA-F]{3,8}\b/.test(mapTemplate),
+      false,
+      '模板里出现了硬编码颜色'
+    )
+  })
+
+  it('色调的判据是**未确认告警 > 在线 > 离线**，并且 UNKNOWN 不算在线', () => {
+    // 判据只能有一处：`markerTone()`。
+    assert.match(
+      mapView,
+      /function markerTone\(device: Device\): 'alarm' \| 'online' \| 'offline' \{[\s\S]*?facts\.pending > 0[\s\S]*?device\.status === 'ONLINE'/,
+      'markerTone 的优先级不是"未确认告警 > 在线 > 离线"'
+    )
+    // 读不到告警数时不能整张图变红：`-1` 是"没读到"，不是"有告警"。
+    assert.equal(
+      /facts\.pending >= 0|facts\.pending !== -1/.test(mapView),
+      false,
+      'markerTone 里出现了把 -1 当告警的写法'
+    )
+  })
+
+  it('颜色不单独承载信息：图例三档各带一个数，设备列表与实时列表也有色点', () => {
+    for (const tone of ['alarm', 'online', 'offline']) {
+      assert.ok(
+        mapTemplate.includes(`data-legend-tone="${tone}"`),
+        `图例缺少 ${tone} 那一档`
+      )
+    }
+    assert.ok(mapTemplate.includes('data-map-legend'), '没有图例')
+    assert.ok(
+      mapTemplate.includes('toneCounts.alarm'),
+      '图例没有给数（只有颜色时色觉差异下读不出来）'
+    )
+    // 列表里的色点与图上的落点用同一个 `markerTone()`：两处各判一次迟早不一致。
+    assert.equal(
+      (mapTemplate.match(/markerTone\(device\)/g) ?? []).length,
+      2,
+      '设备列表与实时数据列表没有各用一个色点（或不止两处）'
+    )
+  })
+})
+
+describe('地图下方依次三张列表（第 17 条）', () => {
+  it('顺序是 设备列表 → 告警列表 → 实时数据列表，而且都在地图区之后', () => {
+    const panel = mapTemplate.indexOf('data-map-panel')
+    const devicesList = mapTemplate.indexOf('data-map-devices')
+    const alarmsList = mapTemplate.indexOf('data-map-alarms')
+    const liveList = mapTemplate.indexOf('data-map-live')
+    assert.ok(panel >= 0 && devicesList >= 0 && alarmsList >= 0 && liveList >= 0, '三张列表没有齐')
+    assert.ok(
+      panel < devicesList && devicesList < alarmsList && alarmsList < liveList,
+      '三张列表的顺序或位置不对（应为：地图区 → 设备列表 → 告警列表 → 实时数据列表）'
+    )
+  })
+
+  it('实时数据列表的列是 分贝 / 稳定度 / 方位', () => {
+    const block = mapTemplate.slice(mapTemplate.indexOf('data-map-live'))
+    for (const key of ['mapUi.colDb', 'mapUi.colStability', 'mapUi.colAzimuth']) {
+      assert.ok(block.includes(key), `实时数据列表缺少 ${key} 这一列`)
+    }
+  })
+
+  it('「稳定度」那一列恒为「—」，而且写明**没有数据源**（手册未说明）', () => {
+    // 这一列不能悄悄填一个别的量（平滑度）—— 那是编造。
+    const block = mapTemplate.slice(mapTemplate.indexOf('data-map-live'))
+    assert.ok(block.includes("t('mapUi.none')"), '稳定度那一格没有固定的「—」')
+    assert.ok(block.includes('data-live-no-source'), '稳定度表头没有"没有数据源"的钩子')
+    assert.ok(block.includes('mapUi.stabilityNoSourceHint'), '没有写明为什么这一列没有值')
+    // 说明文字必须点明"手册未说明"与"不拿别的量顶替"两件事。
+    const hint = String(messageAt('zh-CN', 'mapUi.stabilityNoSourceHint'))
+    assert.match(hint, /手册未说明/, '说明里没有「手册未说明」')
+    assert.match(hint, /平滑度/, '说明里没有交代"平滑度不是同一个量"，下一个人会直接拿它顶替')
+    for (const locale of ['en', 'es', 'tr']) {
+      assert.match(
+        String(messageAt(locale, 'mapUi.stabilityNoSourceHint')),
+        /manual|kılavuz/i,
+        `${locale} 的说明没有交代"手册里没有"`
+      )
+    }
+  })
+
+  it('分贝取最近一条告警的声压级，方位取**录入的**方位角（各有出处）', () => {
+    assert.match(mapView, /function liveDb\([\s\S]*?facts\.latestSpl/, '分贝不是取最近一条告警的 spl')
+    assert.match(
+      mapView,
+      /function liveAzimuth\([\s\S]*?installation\?\.azimuthDeg/,
+      '方位不是取录入的方位角'
+    )
+    // 读不到与"没有"必须分得开。
+    assert.match(mapView, /facts\.total < 0[\s\S]*?mapUi\.notRead/, '分贝那一列没有区分"没读到"')
+  })
+
+  it('三张列表的文案在四种语言里齐全', () => {
+    const REQUIRED = [
+      'mapUi.legendAlarm',
+      'mapUi.devicesTitle',
+      'mapUi.devicesCount',
+      'mapUi.devicesHint',
+      'mapUi.colAlarms',
+      'mapUi.alarmsTitle',
+      'mapUi.alarmsFor',
+      'mapUi.liveTitle',
+      'mapUi.colDb',
+      'mapUi.colStability',
+      'mapUi.colAzimuth',
+      'mapUi.liveHint',
+      'mapUi.stabilityNoSourceHint',
+      'mapUi.notRead',
+      'mapUi.none'
+    ]
+    /**
+     * 纯符号的两条**故意四种语言一样**（`—` 就是 `—`，没有可翻译的东西），所以
+     * "不能与中文逐字相同"这一条对它们不适用 —— 第一次跑正是这里红了一次。
+     */
+    const SYMBOLS = ['mapUi.notRead', 'mapUi.none']
+    for (const key of REQUIRED) {
+      for (const locale of Object.keys(CATALOGUES)) {
+        const message = messageAt(locale, key)
+        assert.ok(message && message.trim() !== '', `${locale} 缺 ${key}`)
+        assert.equal(message.includes('@'), false, `${locale} 的 ${key} 含裸 @`)
+      }
+      if (SYMBOLS.includes(key)) continue
+      const reference = messageAt('zh-CN', key) as string
+      for (const locale of ['en', 'es', 'tr']) {
+        assert.notEqual(messageAt(locale, key), reference, `${locale} 的 ${key} 与中文逐字相同`)
+      }
+    }
+    // 两条符号键在四本目录里必须是同一个符号：它们在界面上的意思是"没有值 / 没读到"，
+    // 逐语言改一个破折号只会让同一件事有两种写法。
+    for (const key of SYMBOLS) {
+      for (const locale of Object.keys(CATALOGUES)) {
+        assert.equal(
+          messageAt(locale, key),
+          messageAt('zh-CN', key),
+          `${locale} 的 ${key} 与其它语言不是同一个符号`
+        )
+        assert.equal(
+          /[a-zA-Z\u4e00-\u9fa5]/.test(messageAt(locale, key) as string),
+          false,
+          `${locale} 的 ${key} 里出现了文字：它应当是纯符号`
+        )
+      }
+    }
+    // `devicesCount` 与 `alarmsFor` 的占位符四语言一致。
+    for (const key of ['mapUi.devicesCount', 'mapUi.alarmsFor']) {
+      const reference = (messageAt('zh-CN', key) as string).match(/\{(\w+)\}/g)?.sort()
+      for (const locale of ['en', 'es', 'tr']) {
+        assert.deepEqual(
+          (messageAt(locale, key) as string).match(/\{(\w+)\}/g)?.sort(),
+          reference,
+          `${locale} 的 ${key} 占位符不一致`
+        )
+      }
+    }
+  })
+
+  it('旧的"告警与抓图"标题已经换成「告警列表」（不留第二种说法）', () => {
+    assert.equal(
+      String(messageAt('zh-CN', 'mapUi.alarmsTitle')),
+      '告警列表',
+      '告警列表那一张的标题不是第 17 条给的那一个'
+    )
+  })
+})

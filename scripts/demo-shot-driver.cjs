@@ -2120,6 +2120,181 @@ async function run() {
     }
   }
 
+  /*
+   * 这一段**只读**，所以必须排在所有写设备/写库的探针之前（那是本仓库的一条硬规矩：
+   * 写操作的探针排在最后，免得把只读探针看到的状态改掉）。第 13/14/17 条的地图版面断言
+   * 不依赖"声呐那一台已经加进来"——它只要求图例上的数与图上的落点数对得上。
+   */
+  /**
+   * 地图信息（GIS）的版面与落点配色（业主 2026-09-18 第 13/14/17 条）。
+   *
+   * 三段断言都只能量 DOM：
+   *   ① **16:9 且占满内容宽度**（第 13 条）：量 `[data-map-canvas-frame]` 的宽高比与它
+   *      左右两边到内容盒的距离。比例只在 CSS 里写着"16 / 9"是不够的 —— 一个
+   *      `max-height` 就会把它压成别的比例，而那在屏幕上是"图看起来扁了一点"。
+   *   ② **落点三种色调**（第 14 条）：每个标记都有 `data-marker-tone`，取值只能是那三个；
+   *      图例三档各有一个数，且**数与图上的标记数对得上**（对不上说明图例是写死的）。
+   *   ③ **地图下方依次三张列表**（第 17 条）：按 `getBoundingClientRect().top` 排序，
+   *      而不是按 DOM 顺序 —— 后者可以由 CSS 的 `order` 反过来。
+   *
+   * 这一段跑在声呐那一台**已经加进来**之后，所以图上至少有一个标记（探针不依赖"恰好三个"）。
+   */
+  const mapLayout = await layout('/map', '(() => {' +
+    'const round = (n) => Math.round(n);' +
+    'const rectOf = (el) => { const r = el.getBoundingClientRect();' +
+    '  return { left: round(r.left), top: round(r.top), width: round(r.width), height: round(r.height), right: round(r.right) }; };' +
+    'const frame = document.querySelector("[data-map-canvas-frame]");' +
+    'const panel = document.querySelector("[data-map-panel]");' +
+    'const content = document.querySelector(".app-content");' +
+    'if (!frame || !panel || !content) return JSON.stringify({ found: false,' +
+    '  hasFrame: !!frame, hasPanel: !!panel, hasContent: !!content });' +
+    'const contentStyle = getComputedStyle(content);' +
+    'const contentBox = {' +
+    '  left: content.getBoundingClientRect().left + (parseFloat(contentStyle.paddingLeft) || 0),' +
+    '  right: content.getBoundingClientRect().left + content.clientWidth - (parseFloat(contentStyle.paddingRight) || 0)' +
+    '};' +
+    'const frameRect = frame.getBoundingClientRect();' +
+    'const markers = [...document.querySelectorAll("[data-map-marker]")];' +
+    'const tones = markers.map((m) => m.getAttribute("data-marker-tone"));' +
+    'const legend = [...document.querySelectorAll("[data-map-legend] [data-legend-tone]")].map((li) => ({' +
+    '  tone: li.getAttribute("data-legend-tone"),' +
+    '  text: (li.textContent || "").replace(/\\s+/g, " ").trim(),' +
+    '  count: Number(((li.textContent || "").match(/(\\d+)\\s*$/) || [])[1])' +
+    '}));' +
+    // 三张列表：按**屏幕上的纵坐标**排序（DOM 里的顺序可以由 CSS 改掉）。
+    'const blocks = ["data-map-devices", "data-map-alarms", "data-map-live"]' +
+    '  .map((name) => {' +
+    '    const el = document.querySelector("[" + name + "]");' +
+    '    return el ? { name: name, top: round(el.getBoundingClientRect().top) } : { name: name, top: null };' +
+    '  });' +
+    'const liveHeadings = [...document.querySelectorAll("[data-map-live] thead th")]' +
+    '  .map((th) => (th.textContent || "").trim());' +
+    'const liveRows = [...document.querySelectorAll("[data-map-live] tbody tr")].map((tr) =>' +
+    '  [...tr.querySelectorAll("td")].map((td) => (td.textContent || "").replace(/\\s+/g, " ").trim()));' +
+    'const deviceRows = document.querySelectorAll("[data-map-device-row]").length;' +
+    'return JSON.stringify({' +
+    '  found: true,' +
+    '  frame: rectOf(frame),' +
+    '  ratio: frameRect.height > 0 ? Math.round((frameRect.width / frameRect.height) * 10000) / 10000 : null,' +
+    '  frameLeftGapPx: round(frameRect.left - contentBox.left),' +
+    '  frameRightGapPx: round(contentBox.right - frameRect.right),' +
+    '  contentBoxWidth: round(contentBox.right - contentBox.left),' +
+    '  canvasPresent: !!document.querySelector("[data-map-canvas]"),' +
+    /*
+     * 「一台点位都没有」与「有设备但都没录点位」是两件事，界面上一句是"去补录"、另一句才是空图。
+     * 这一段探针跑在**加设备之前**，操作员库里那几台可能一台点位都没录 —— 那时的正确答案是
+     * "没有画布 + 有那句提示"，而不是"画布不见了"。两个数一起读才判得出来。
+     */
+    '  emptyNotice: !!document.querySelector("[data-map-empty]"),' +
+    '  markerCount: markers.length,' +
+    '  tones: tones,' +
+    '  legend: legend,' +
+    '  blocks: blocks,' +
+    '  deviceRows: deviceRows,' +
+    '  liveHeadings: liveHeadings,' +
+    '  liveRowCount: liveRows.length,' +
+    // 稳定度那一列（第 3 列）逐行都必须是「—」：这一列没有数据源，见文件头。
+    '  stabilityColumn: liveRows.map((cells) => cells[2]),' +
+    '  stabilityHint: (() => {' +
+    '    const el = document.querySelector("[data-live-no-source]");' +
+    '    return el ? (el.getAttribute("title") || "").slice(0, 120) : null;' +
+    '  })()' +
+    '});' +
+    '})()')
+  log('map layout    : ' + JSON.stringify(mapLayout))
+  if (mapLayout.found !== true) {
+    problems.push('地图信息（GIS）页没有量到地图区：' + JSON.stringify(mapLayout))
+  } else {
+    // ① 16:9 与占满宽度。
+    const want = 16 / 9
+    if (mapLayout.ratio === null || Math.abs(mapLayout.ratio - want) > 0.02) {
+      problems.push(
+        '地图区不是 16:9：宽高比 ' + mapLayout.ratio + '（应为 ' + want.toFixed(4) + '）'
+      )
+    }
+    if (mapLayout.frameLeftGapPx > GAP_TOLERANCE_PX || mapLayout.frameRightGapPx > GAP_TOLERANCE_PX) {
+      problems.push(
+        '地图区没有占满内容宽度：左空 ' + mapLayout.frameLeftGapPx + 'px、右空 ' +
+        mapLayout.frameRightGapPx + 'px'
+      )
+    }
+    if (Math.abs(mapLayout.frame.width - mapLayout.contentBoxWidth) > GAP_TOLERANCE_PX) {
+      problems.push(
+        '地图区的宽度与内容盒不一致：' + mapLayout.frame.width + ' vs ' + mapLayout.contentBoxWidth
+      )
+    }
+    if (mapLayout.canvasPresent !== (mapLayout.markerCount > 0)) {
+      problems.push(
+        '画布与落点不一致：canvasPresent=' + mapLayout.canvasPresent +
+        ' markerCount=' + mapLayout.markerCount + '（有点位就该有画布，没有点位就该只有那句提示）'
+      )
+    }
+    if (mapLayout.markerCount === 0 && mapLayout.emptyNotice !== true) {
+      problems.push('一台点位都没有时，地图区没有那句"去补录"的提示（data-map-empty）')
+    }
+    if (mapLayout.markerCount > 0 && mapLayout.emptyNotice === true) {
+      problems.push('图上有落点、却同时显示着"还没有任何设备录入点位"')
+    }
+
+    // ② 落点配色。
+    const allowed = ['alarm', 'online', 'offline']
+    const bad = mapLayout.tones.filter((tone) => !allowed.includes(tone))
+    if (bad.length > 0) {
+      problems.push('有落点的色调不在 在线绿/告警红/离线灰 这三档里：' + JSON.stringify(bad))
+    }
+    if (mapLayout.legend.length !== 3) {
+      problems.push('图例不是三条（在线 / 告警 / 离线）：' + JSON.stringify(mapLayout.legend))
+    }
+    for (const tone of allowed) {
+      const entry = mapLayout.legend.find((item) => item.tone === tone)
+      if (!entry) {
+        problems.push('图例缺少 ' + tone + ' 那一档')
+        continue
+      }
+      const onMap = mapLayout.tones.filter((value) => value === tone).length
+      if (!Number.isFinite(entry.count) || entry.count !== onMap) {
+        problems.push(
+          '图例上 ' + tone + ' 的数字与图上的落点数对不上：' + entry.count + ' vs ' + onMap +
+          '（图例是写死的？）'
+        )
+      }
+    }
+
+    // ③ 地图下方依次三张列表。
+    const tops = mapLayout.blocks.map((block) => block.top)
+    if (tops.some((top) => top === null)) {
+      problems.push('三张列表没有齐：' + JSON.stringify(mapLayout.blocks))
+    } else if (!(tops[0] < tops[1] && tops[1] < tops[2])) {
+      problems.push('三张列表在屏幕上的顺序不对（应为 设备列表 → 告警列表 → 实时数据列表）：' + JSON.stringify(mapLayout.blocks))
+    }
+    // 它们必须都在地图区**下面**。
+    if (tops.every((top) => top !== null) && !(mapLayout.frame.top < tops[0])) {
+      problems.push('第一张列表不在地图区下面：' + JSON.stringify(mapLayout.blocks))
+    }
+    if (mapLayout.deviceRows < 1) {
+      problems.push('设备列表里一行都没有')
+    }
+
+    // ④ 实时数据列表的四列与「稳定度」那一列。
+    if (mapLayout.liveHeadings.length !== 4) {
+      problems.push('实时数据列表不是四列：' + JSON.stringify(mapLayout.liveHeadings))
+    }
+    if (mapLayout.liveRowCount !== mapLayout.deviceRows) {
+      problems.push(
+        '实时数据列表的行数与设备列表不一致：' + mapLayout.liveRowCount + ' vs ' + mapLayout.deviceRows
+      )
+    }
+    const stability = mapLayout.stabilityColumn || []
+    if (stability.length > 0 && stability.some((value) => value !== '—')) {
+      problems.push(
+        '「稳定度」那一列出现了值（这一列没有数据源，见 mapUi.stabilityNoSourceHint）：' +
+        JSON.stringify(stability)
+      )
+    }
+    if (!mapLayout.stabilityHint || mapLayout.stabilityHint.length < 10) {
+      problems.push('「稳定度」表头没有那句"没有数据源"的说明')
+    }
+  }
   /**
    * 添加设备对话框：**没有机型选择**，但安装信息四个框都在（业主 2026-09-17 第 1、2 条）。
    *
@@ -3998,7 +4173,24 @@ async function run() {
     '  if (!marker) return JSON.stringify({ ok: false, reason: "no-marker-for-sonar", steps: out.steps,' +
     '    markers: document.querySelectorAll("[data-map-marker]").length });' +
     '  marker.dispatchEvent(new MouseEvent("click", { bubbles: true })); await wait(900);' +
-    '  out.sideName = text(document.querySelector("[data-map-side] .section-title"));' +
+    /*
+     * 选中的是哪一台：第 13/17 条把右边那张卡片拿掉之后，"当前选中"显示在**告警列表**的
+     * 小标题里（`mapUi.alarmsFor` = 「选中设备：<name>」）。探针读的是那个 `<span>`，
+     * 所以判据从"右侧卡片的标题"换成"告警列表那一行里的名字"。
+     */
+    '  out.sideName = text(document.querySelector("[data-map-alarms] .section-header .muted"));' +
+    /*
+     * 第 14 条（在线绿 / 告警红 / 离线灰）的真凭据：**这一台真的画在图上**，所以这里能读到
+     * 它的 `data-marker-tone`，以及图例三档的数字与图上落点数的关系。
+     * 早先那段只读探针跑在加设备之前，操作员库里可能一台点位都没录（那时 `markerCount` 是 0，
+     * 色调那一组断言是空过的）—— 所以这一台才是"落点配色"的实测点。
+     */
+    '  out.markerTone = marker.getAttribute("data-marker-tone");' +
+    '  out.markerCount = document.querySelectorAll("[data-map-marker]").length;' +
+    '  out.legendCounts = [...document.querySelectorAll("[data-map-legend] [data-legend-tone]")].map((li) => ({' +
+    '    tone: li.getAttribute("data-legend-tone"),' +
+    '    count: Number(((li.textContent || "").match(/(\\d+)\\s*$/) || [])[1])' +
+    '  }));' +
     '  const sync = document.querySelector("[data-action=map-sync]");' +
     '  if (!sync) return JSON.stringify({ ok: false, reason: "no-map-sync", steps: out.steps });' +
     '  sync.click(); await wait(4000);' +
@@ -4066,6 +4258,22 @@ async function run() {
     if (String(sonarFlow.sideName || '').indexOf('探针声呐') < 0) {
       problems.push('点位图上点标记之后右侧显示的不是这一台：' + JSON.stringify(sonarFlow.sideName))
     }
+    // ③b 落点配色（第 14 条）：这一台真的画在图上，所以它的色调是可读的。
+    if (!['alarm', 'online', 'offline'].includes(String(sonarFlow.markerTone))) {
+      problems.push('这一台的落点色调不在三档里：' + JSON.stringify(sonarFlow.markerTone))
+    }
+    {
+      const counts = sonarFlow.legendCounts || []
+      const total = counts.reduce((sum, entry) => sum + (Number(entry.count) || 0), 0)
+      if (counts.length !== 3) {
+        problems.push('图例不是三条：' + JSON.stringify(counts))
+      } else if (total !== sonarFlow.markerCount) {
+        problems.push(
+          '图例三档加起来与图上的落点数对不上：' + total + ' vs ' + sonarFlow.markerCount +
+          '（图例是写死的？）'
+        )
+      }
+    }
     // ④ 抓图：3 张真的解码出来了（CSP + 回环端点 + 目录落库整条链）。
     if (sonarFlow.alarmBadge !== '有抓图') {
       problems.push('同步之后这条告警没有显示"有抓图"：' + JSON.stringify(sonarFlow.alarmBadge))
@@ -4096,6 +4304,8 @@ async function run() {
   if (mockSonar.params.cam_port === 8082 && mockSonar.requests.filter((r) => r.method === 'PUT').length === 0) {
     problems.push('PTZ 保存没有向设备发过 PUT')
   }
+
+
 
   await mockSonar.close()
 

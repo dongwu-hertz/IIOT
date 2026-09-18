@@ -1075,7 +1075,37 @@ export const tr: MessageSchema = {
     withoutPointHint: 'Haritada değiller: nokta yoksa çizilecek konum da yok. Kaydetmek için ada tıklayıp o cihazı açın.',
     pickOne: 'Henüz cihaz seçilmedi.',
     point: 'Nokta',
-    alarmsTitle: 'Alarmlar ve görüntüler',
+    /**
+     * İşaretçi tonları (10. parti, 14. madde: çevrimiçi yeşil / alarm kırmızı / çevrimdışı gri).
+     * «Çevrimiçi» ve «çevrimdışı» `devices.status.*` anahtarlarını yeniden kullanır: bir olgu,
+     * tek bir ifade. Renk anlamı tek başına taşımaz; bu yüzden her göstergede sayı da var.
+     */
+    legendAlarm: 'Onaylanmamış alarm',
+    /** Cihaz listesi (üç listenin ilki, 17. madde). */
+    devicesTitle: 'Cihazlar',
+    devicesCount: '{count} cihaz',
+    devicesHint: 'Cihazı seçmek için bir satıra tıklayın (haritadaki işaretçi de vurgulanır); o cihazı açmak için çift tıklayın.',
+    colAlarms: 'Onaylanmamış',
+    /** Alarm listesi (ikinci). */
+    alarmsTitle: 'Alarmlar',
+    alarmsFor: 'Seçili cihaz: {name}',
+    /** Canlı veri listesi (üçüncü). */
+    liveTitle: 'Canlı veriler',
+    colDb: 'dB',
+    colStability: 'Kararlılık',
+    colAzimuth: 'Azimut',
+    liveHint: 'dB, o cihazın en son alarmındaki ses basıncı düzeyidir (yoksa —); azimut, kayıtlı kurulum azimutudur, geçerli karenin kaynak yönü değildir.',
+    /**
+     * «Kararlılık» sütununun neden hiç değer taşımadığı. KILAVUZDA YOK: docs/reference/ böyle bir
+     * büyüklük tanımlamıyor ve üründe «kararlılık» adını taşıyan tek şey bir alarm kuralı eşiğidir
+     * (ölçüm değil, ölçüt). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük
+     * değildir; bu yüzden onun yerine konmaz.
+     */
+    stabilityNoSourceHint:
+      'Bu sütunun veri kaynağı yok: kılavuz «kararlılık» diye bir ölçüm tanımlamıyor ve bu makinede onun okuması yok (üründe yalnızca «ses basıncı düzeyi kararlılık eşiği» alarm kuralı var; o bir ölçüt, ölçüm değil). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük değildir, bu yüzden onun yerine kullanılmaz.',
+    /** «Okunamadı» ile «hiç yok» ayrılabilir kalmalı (cihaz tablosundaki kuralın aynısı). */
+    notRead: '—',
+    none: '—',
     alarmCount: 'son {count}',
     noAlarms: 'Bu cihazın yerel alarmı yok. Yukarıdan «Alarmları eşitle»ye basın.',
     sync: 'Alarmları eşitle',
