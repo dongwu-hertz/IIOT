@@ -556,6 +556,28 @@ describe('相机界面这一轮的目录条目', () => {
     }
   })
 
+  /**
+   * 第 23 条（2026-09-18 第 10 批）：「删除「相机声学数据」窗口、数据默认实时接收」。
+   *
+   * 两个键是被删掉的那个窗口专用的，所以它们必须一起消失 —— 留着一个没人引用的
+   * `cameraStreamUi.start`，下一个人很容易顺着它把「开始接收」按钮画回来，
+   * 而"默认就在收"这件事会被那颗按钮重新变成一个动作。
+   */
+  it('㉓ 被删掉的窗口标题与「开始接收」两个键在四种语言里都不复存在', () => {
+    for (const [locale, catalogue] of Object.entries(CATALOGUES)) {
+      const streamUi = (catalogue as { cameraStreamUi: Record<string, string> }).cameraStreamUi
+      assert.equal('title' in streamUi, false, `${locale}.cameraStreamUi.title 仍然存在（窗口已删）`)
+      assert.equal('start' in streamUi, false, `${locale}.cameraStreamUi.start 仍然存在（不再有开始按钮）`)
+      // 保留下来的那几档状态必须还在：删的是窗口，不是"能不能看出流没起来"。
+      for (const key of ['sessionIdle', 'sessionRunning', 'sessionError', 'stop']) {
+        assert.ok(
+          typeof streamUi[key] === 'string' && streamUi[key].trim().length > 0,
+          `${locale}.cameraStreamUi.${key} 丢失了（状态仍然要说得出来）`
+        )
+      }
+    }
+  })
+
   it('新增的四个键在四种语言里都有非空译文', () => {
     const keys: Array<[string, string]> = [
       ['cameraAlarmUi', 'refreshIcon'],

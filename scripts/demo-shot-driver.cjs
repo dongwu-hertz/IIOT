@@ -3201,37 +3201,47 @@ async function run() {
     '    emptyState: document.querySelectorAll(".empty-state, [data-empty-state]").length,' +
     '    selectedOption: (function(){ const s = document.querySelector("#topbar-page-slot select");' +
     '      return s && s.selectedOptions[0] ? (s.selectedOptions[0].textContent || "").trim() : null; })(),' +
-    // ⑧：五张图谱一排。数它们的**顶边**是否几乎相同 —— 那是"同一排"的可测定义。
-    '    graphCount: document.querySelectorAll(".acam__row > .acam__panel").length,' +
-    '    graphTops: [...document.querySelectorAll(".acam__row > .acam__panel")]' +
-    '      .map((n) => Math.round(n.getBoundingClientRect().top)),' +
     /*
-     * "同一排"还必须是**这一块自己排成的一排**，不是被挤扁的一排：
-     *   rowWidth  这一排实际有多宽（= 声学面板的宽度，因为它是整幅宽的）；
-     *   graphWidths 每张卡多宽（222px 左右才读得出来；60px 说明面板被塞进了排布板的一格）；
-     *   rowOverflow 这一排自己有没有横向溢出（能量点那张表在里面）；
-     *   rowFifthRight 第五张卡的右边缘相对这一排右边缘的位置（> 0 就是排到外面去了）。
+     * 第 24 条（2026-09-18）：**声纹图与频谱图 16:9 各占 50%**，并排一行。
+     *
+     * 量四件事，每一件都能"源码里写对了但屏幕上是另一个样子"：
+     *   graphCount    这一块一共几张图（第 24 条之后仍然是 5 张，只是分成 2 + 1 + 2 排）；
+     *   pairCount     第一行（声纹 + 频谱）里有几块 —— 必须是 **2**；
+     *   pairWidths    两块的宽度 —— 必须几乎相等（"各占 50%"的可测定义）；
+     *   pairRatios    两块那一层（`.acam__stage--ratio`）的宽高比 —— 必须都是 16:9。
      */
+    '    graphCount: document.querySelectorAll(".acam__panel").length,' +
+    '    pairCount: document.querySelectorAll(".acam__pair")[0]' +
+    '      ? document.querySelectorAll(".acam__pair")[0].querySelectorAll(":scope > .acam__panel").length : -1,' +
+    '    pairWidths: (function(){ const p = document.querySelector(".acam__pair");' +
+    '      if (!p) return [];' +
+    '      return [...p.querySelectorAll(":scope > .acam__panel")]' +
+    '        .map((n) => Math.round(n.getBoundingClientRect().width)); })(),' +
+    '    pairRatios: [...document.querySelectorAll(".acam__pair .acam__stage--ratio")]' +
+    '      .map((n) => { const r = n.getBoundingClientRect();' +
+    '        return r.height > 0 ? Math.round((r.width / r.height) * 1000) / 1000 : 0; }),' +
+    /*
+     * 第 23 条：那个「相机声学数据」窗口必须真的不在，而且**状态仍然看得见**。
+     * `statusText` 是那一行状态上的字：空面板与安静的房间在屏幕上长得一样，
+     * 所以这一页靠它区分"没起来"与"没有数据"。
+     */
+    '    acousticWindowPresent: !!document.querySelector(".acam__head"),' +
+    '    legacyStartButton: [...document.querySelectorAll(".acam button")]' +
+    '      .filter((b) => /开始接收|Start receiving|Iniciar recepción|Almayı başlat/.test((b.textContent || ""))).length,' +
+    '    statusText: (function(){ const el = document.querySelector("[data-acam-state]");' +
+    '      return el ? (el.textContent || "").trim() : null; })(),' +
+    '    stopButtonPresent: !!document.querySelector("[data-action=acam-stop]"),' +
     '    panelWidth: (function(){ const p = document.querySelector(".acam");' +
     '      return p ? Math.round(p.getBoundingClientRect().width) : -1; })(),' +
-    '    rowWidth: (function(){ const r = document.querySelector(".acam__row");' +
-    '      return r ? Math.round(r.getBoundingClientRect().width) : -1; })(),' +
-    '    graphWidths: [...document.querySelectorAll(".acam__row > .acam__panel")]' +
-    '      .map((n) => Math.round(n.getBoundingClientRect().width)),' +
-    '    rowOverflow: (function(){ const r = document.querySelector(".acam__row");' +
-    '      return r ? r.scrollWidth - r.clientWidth : -1; })(),' +
+    '    pairOverflow: (function(){ const p = document.querySelector(".acam__pair");' +
+    '      return p ? p.scrollWidth - p.clientWidth : -1; })(),' +
     /*
-     * 能量点那张五列表：它是这一排里唯一"内容有最小宽度"的东西。
+     * 能量点那张五列表：它是这一块里唯一"内容有最小宽度"的东西。
      * 没有实时能量点时表不渲染（设备离线），那时这里是 null —— 探针不许把 null 当成"通过"，
      * 所以下面只比 null 以外的值，并在报告里写明"没有表可量"。
      */
     '    tableOverflow: (function(){ const t = document.querySelector(".acam__table");' +
     '      if (!t) return null; return t.scrollWidth - t.clientWidth; })(),' +
-    '    rowFifthRight: (function(){ const r = document.querySelector(".acam__row");' +
-    '      const cards = [...document.querySelectorAll(".acam__row > .acam__panel")];' +
-    '      if (!r || cards.length === 0) return null;' +
-    '      return Math.round(cards[cards.length - 1].getBoundingClientRect().right' +
-    '        - r.getBoundingClientRect().right); })(),' +
     '    viewportWidth: window.innerWidth,' +
     /*
      * ⑤ 16:9 视频窗口：量的是**窗口本身**的宽高比，不是视频源的比例。
@@ -3259,45 +3269,64 @@ async function run() {
     if (monitorCamera.hasControl && monitorCamera.hasAlarmEntry && !monitorCamera.sameRow) {
       problems.push('相机控制与告警没有并排（不在同一行）')
     }
-    // ⑧：五张图谱，且**在同一排**（顶边之差 < 8px 才算一排）。
+    // 第 24 条：这一块仍然是**五张**图（只是分成 2 + 1 + 2 排，不是一排五张）。
     if (monitorCamera.graphCount !== 5) {
       problems.push('相机那一支的图谱不是五张：' + monitorCamera.graphCount)
-    } else {
-      const tops = monitorCamera.graphTops
-      const spread = Math.max(...tops) - Math.min(...tops)
-      if (spread >= 8) {
-        problems.push('五张图谱不在同一排（顶边相差 ' + spread + 'px）：' + JSON.stringify(tops))
+    }
+    /*
+     * 第 24 条：**声纹图与频谱图 16:9 各占 50%**（并排一行）。
+     *
+     * 四件事都是**无条件**断言：量不到（-1 / 空数组）也报问题 ——
+     * "控件没渲染"与"排错了"在只读 problems 的报告里长得一样（§15.13.5）。
+     */
+    if (monitorCamera.pairCount !== 2) {
+      problems.push('声纹图 + 频谱图那一行不是 2 块：' + monitorCamera.pairCount)
+    }
+    {
+      const widths = monitorCamera.pairWidths || []
+      if (widths.length !== 2) {
+        problems.push('量不到声纹图 / 频谱图的宽度：' + JSON.stringify(widths))
+      } else {
+        const [left, right] = widths
+        // "各占 50%"：两块宽度之差不超过 2px（子像素取整）。
+        if (Math.abs(left - right) > 2) {
+          problems.push('声纹图与频谱图不是各占 50%：' + JSON.stringify(widths))
+        }
+      }
+    }
+    {
+      const ratios = monitorCamera.pairRatios || []
+      if (ratios.length !== 2) {
+        problems.push('声纹图 / 频谱图那一层 16:9 的盒子不是 2 个：' + JSON.stringify(ratios))
+      }
+      for (const ratio of ratios) {
+        if (Math.abs(ratio - 16 / 9) > 0.05) {
+          problems.push('声纹图 / 频谱图那一层不是 16:9：' + ratio + '（应为 ' + (16 / 9).toFixed(4) + '）')
+        }
       }
     }
     /*
-     * "同一排"必须是这一块**自己**排成的一排：面板要占满整幅宽，五张卡要被分在这一排里，
-     * 而且这一排不许横向溢出（能量点那张五列表是这一排里唯一内容有最小宽度的东西）。
-     *
-     * 这些都是**无条件**断言：面板宽度/卡宽度只要量到就比，量不到（-1 / null）也报问题 ——
-     * "控件没渲染"与"排错了"不能长得一样（§15.13.5）。
+     * 第 23 条：那个「相机声学数据」窗口**必须真的不在**（连「开始接收」按钮一起），
+     * 而**状态仍然要说出来** —— 删窗口不等于可以不说"流没起来"。
      */
-    if (monitorCamera.panelWidth <= 0 || monitorCamera.rowWidth <= 0) {
-      problems.push('量不到五张图谱那一排的宽度：' + JSON.stringify(monitorCamera))
-    } else if (monitorCamera.rowWidth < monitorCamera.panelWidth - 1) {
-      problems.push(
-        '声学面板没有占满整幅宽（面板 ' + monitorCamera.panelWidth +
-          'px，图谱那一排只有 ' + monitorCamera.rowWidth + 'px）'
-      )
+    if (monitorCamera.acousticWindowPresent) {
+      problems.push('「相机声学数据」那个窗口还在（.acam__head）')
     }
-    if (monitorCamera.graphCount === 5) {
-      const widths = monitorCamera.graphWidths
-      const narrowest = Math.min(...widths)
-      if (narrowest < 200) {
-        problems.push('五张图谱每张只有 ' + narrowest + 'px（放不下表头与坐标轴）：' +
-          JSON.stringify(widths))
-      }
+    if (monitorCamera.legacyStartButton > 0) {
+      problems.push('还有「开始接收」按钮：第 23 条要求数据默认实时接收')
     }
-    if (monitorCamera.rowOverflow === null || monitorCamera.rowOverflow > 1) {
-      problems.push('五张图谱那一排横向溢出：' + monitorCamera.rowOverflow +
+    if (!monitorCamera.statusText) {
+      problems.push('相机声学那一块没有状态行（[data-acam-state]）—— 空面板与安静的房间就分不出来了')
+    }
+    /*
+     * "占满整幅宽"：面板自己要占满（它是 `camera-board__wide`），而且并排那两列不许横向溢出。
+     */
+    if (monitorCamera.panelWidth <= 0) {
+      problems.push('量不到相机声学面板的宽度：' + JSON.stringify(monitorCamera))
+    }
+    if (monitorCamera.pairOverflow === null || monitorCamera.pairOverflow > 1) {
+      problems.push('声纹图 / 频谱图那一行横向溢出：' + monitorCamera.pairOverflow +
         '（窗口 ' + monitorCamera.viewportWidth + 'px）')
-    }
-    if (monitorCamera.rowFifthRight === null || monitorCamera.rowFifthRight > 1) {
-      problems.push('第五张图谱排到了这一排的外面：右边缘 +' + monitorCamera.rowFifthRight + 'px')
     }
     /*
      * ⑤ 16:9 视频窗口：窗口本身的宽高比必须是 16:9（1.7778 ± 0.05）。
@@ -3347,7 +3376,7 @@ async function run() {
       problems.push('能量点表格溢出了卡片：' + monitorCamera.tableOverflow + 'px')
     } else if (monitorCamera.tableOverflow === null) {
       log('monitor camera: 没有量到能量点表格（这台相机离线，没有实时能量点）——' +
-        ' 表格在 ' + monitorCamera.graphWidths + ' 宽的卡里的表现未验证')
+        ' 表格在 ' + JSON.stringify(monitorCamera.pairWidths) + ' 宽的卡里的表现未验证')
     }
   }
 

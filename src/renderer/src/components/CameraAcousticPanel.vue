@@ -42,6 +42,7 @@ import { useI18n } from 'vue-i18n'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { Fa371StreamKind } from '@shared/domain/fa371-stream'
 import { FA371_STALE_AFTER_MS, useFa371StreamStore } from '@renderer/stores/fa371Stream'
+import { useSessionStore } from '@renderer/stores/session'
 import { EMPTY_VALUE, formatBytes, formatNumber } from '@renderer/lib/format'
 import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
 import AudioLevelMeter from '@renderer/components/AudioLevelMeter.vue'
@@ -54,6 +55,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const camera = useFa371StreamStore()
+const session = useSessionStore()
 
 const busy = ref(false)
 const audioEnabled = ref(false)
@@ -146,6 +148,32 @@ async function toggleSession(): Promise<void> {
 }
 
 /**
+ * **默认实时接收**（业主 2026-09-18 第 10 批第 23 条：「删除「相机声学数据」窗口、
+ * 数据默认实时接收」）。
+ *
+ * 这一块原来是一个"窗口"：标题 + 状态徽标 + 一颗「开始接收」+ 管理员说明 + 握手信息。
+ * 第 23 条把那个窗口删掉、并要求数据默认就在收 —— 于是开启不再是一个动作，而是**选中相机
+ * 就发生的事**。
+ *
+ * 三条不能省的判断：
+ *   1. **先 `refreshState()` 再决定**：主进程可能还留着上一次访问时开的会话，
+ *      不看就"再开一次"是重复订阅（两套 socket 推同一路数据）；
+ *   2. **只有管理员才自动开**：主进程对 `fa371Stream.start` 有角色检查，非管理员点也没用
+ *      —— 与其打出一次注定失败的调用，不如把那一句「属于管理员操作」照实显示出来；
+ *   3. **失败不吞**：`camera.error` 会被 `sessionError` 渲染成页面上的一句话。
+ *      自动开始的坏处正是"用户没点，所以失败了也没人知道"。
+ */
+async function ensureStreaming(): Promise<void> {
+  if (!canStart.value || camera.isActive || busy.value) return
+  busy.value = true
+  try {
+    await camera.start()
+  } finally {
+    busy.value = false
+  }
+}
+
+/**
  * The admin guard is enforced by `fa371Stream.start` in the MAIN process: the
  * handler opens sockets on the hardware. Rendering the refusal is this
  * component's only job — mirroring `cameraLive.start` keeps the two device
@@ -156,6 +184,28 @@ const sessionError = computed(() => {
   if (camera.state !== 'error') return ''
   // 'no-device' is a sentinel the store uses when nothing is selected.
   return camera.error === 'no-device' ? t('cameraStreamUi.noDevice') : camera.error
+})
+
+/**
+ * 非管理员看得到图，但开不了流 —— 那一句说明只在**这种情况**下出现。
+ *
+ * 用同一个 `session.isAdmin` 判断渲染，而不是等主进程拒绝：主进程那边仍然是唯一的**执行**点
+ * （见上面那段注释），这里只是别让操作员对着一排空面板猜为什么。
+ */
+const canStart = computed(() => session.isAdmin)
+
+/** 握手方式那一条：窗口删掉之后它是状态徽标的悬停说明（支持时要看的就是这个值）。 */
+const handshakeTitle = computed(() =>
+  camera.monitorState?.handshakeAuthId
+    ? t('cameraStreamUi.handshake', { id: camera.monitorState.handshakeAuthId })
+    : undefined
+)
+
+/** 一行状态：接收中 / 未启动 / 失败。**不**再是一个窗口（第 23 条）。 */
+const statusText = computed(() => {
+  if (camera.isActive) return t('cameraStreamUi.sessionRunning')
+  if (camera.state === 'error') return t('cameraStreamUi.sessionError')
+  return t('cameraStreamUi.sessionIdle')
 })
 
 // ---------------------------------------------------------------------------
@@ -442,6 +492,8 @@ onMounted(async () => {
   // Reflect a session the main process already has (left running by a previous
   // visit) instead of claiming "not started" for a live stream.
   await camera.refreshState()
+  // 第 23 条：数据**默认实时接收**（原来要按一次「开始接收」）。
+  await ensureStreaming()
   // The stale clock only exists while the page is open; the store's phases are
   // computed from it, so leaving it out would freeze every "stale" badge at "live".
   clock = setInterval(() => camera.touchClock(), 1_000)
@@ -463,6 +515,8 @@ watch(
     await camera.stop()
     camera.selectDevice(id)
     await camera.refreshState()
+    // 换了一台相机同样默认开始接收（第 23 条）。
+    await ensureStreaming()
   }
 )
 </script>
@@ -474,73 +528,102 @@ watch(
     类名（`.acam` / `.cctl`）去猜哪两块才是那一对。
   -->
   <div class="acam camera-board__panel">
-    <section class="card acam__head">
-      <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.title') }}</h3>
-        <span class="badge" :class="camera.isActive ? 'badge--accent' : ''">
-          {{
-            camera.isActive
-              ? t('cameraStreamUi.sessionRunning')
-              : camera.state === 'error'
-                ? t('cameraStreamUi.sessionError')
-                : t('cameraStreamUi.sessionIdle')
-          }}
-        </span>
-      </div>
+    <!--
+      **这里原来是一个窗口**（标题「相机声学数据」+ 状态徽标 + 「开始接收」+ 管理员说明 +
+      握手信息）。业主 2026-09-18 第 10 批第 23 条要求删掉那个窗口，并让数据**默认实时接收**，
+      所以它变成了**一行状态**：
 
-      <div class="btn-row">
-        <button
-          type="button"
-          class="btn btn--sm"
-          :class="{ 'btn--primary': !camera.isActive }"
-          :disabled="busy"
-          @click="toggleSession"
-        >
-          {{ camera.isActive ? t('cameraStreamUi.stop') : t('cameraStreamUi.start') }}
-        </button>
-        <span class="muted acam__guard">{{ t('cameraStreamUi.adminOnlyHint') }}</span>
-      </div>
-
-      <p v-if="sessionError" class="alert alert--danger" role="alert">{{ sessionError }}</p>
-
-      <p v-if="camera.monitorState?.handshakeAuthId" class="muted acam__note">
-        {{ t('cameraStreamUi.handshake', { id: camera.monitorState.handshakeAuthId }) }}
+        · 状态还必须留着 —— 这一块的每张图都会区分"未启动 / 尚无数据 / 已停止"，
+          没有这一行的话，"面板是空的"会被读成"环境很安静"（那是本仓库明令禁止的那种错）；
+        · 「停止接收」也留着（只在接收中时出现）：默认自动开始之后，如果没有停的地方，
+          操作员就没有任何办法关掉它。
+    -->
+    <div class="acam__status" data-acam-status>
+      <span
+        class="badge"
+        :class="camera.isActive ? 'badge--accent' : ''"
+        :title="handshakeTitle"
+        data-acam-state
+      >
+        {{ statusText }}
+      </span>
+      <button
+        v-if="camera.isActive"
+        type="button"
+        class="btn btn--sm"
+        :disabled="busy"
+        data-action="acam-stop"
+        @click="toggleSession"
+      >
+        {{ t('cameraStreamUi.stop') }}
+      </button>
+      <span v-else-if="!canStart" class="muted acam__guard">
+        {{ t('cameraStreamUi.adminOnlyHint') }}
+      </span>
+      <p v-if="sessionError" class="alert alert--danger acam__status-error" role="alert">
+        {{ sessionError }}
       </p>
-    </section>
+    </div>
 
     <!--
-      五路图谱**排成一排**（业主 2026-09-17 的 ⑧）。
-
-      为什么是这一块：相机有且只有五路 WebSocket（`/fftData` 频谱、`/voiceprintData` 声纹、
-      `/energyData` 能量、`/pcmData` 音频、`/detectFeedback` 检测反馈），它们**同时**是活的
-      —— 竖着排会让"同时看五路"这件事需要滚动，而滚动的时候前两路已经不在眼里了。
-      窄窗口下会退化成 3 / 2 / 1 列（见样式里的三档）：五列挤到 200px 宽每个都读不出来。
+      视频下方（业主第 24 条）：**声纹图与频谱图 16:9 各占 50%**，并排一行。
+      两块的画布都是 `aspect-ratio: 16 / 9`（`.acam__stage--ratio`），空态也用同一个比例 ——
+      空面板与有数据的面板一样大，数据来了页面不会跳。
     -->
-    <div class="acam__row">
-    <!-- ---- 1. voiceprint image ------------------------------------------ -->
-    <section class="card acam__panel">
-      <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.voiceprintTitle') }}</h3>
-        <span :class="phaseClass('voiceprintData')">{{ phaseLabel('voiceprintData') }}</span>
-      </div>
-      <span class="muted acam__meta">{{ phaseMeta('voiceprintData') }}</span>
-      <p v-if="layoutWarning('voiceprintData')" class="alert alert--warning" role="status">
-        {{ layoutWarning('voiceprintData') }}
-      </p>
+    <div class="acam__pair" data-acam-pair>
+      <!-- ---- 1. voiceprint image ---------------------------------------- -->
+      <section class="card acam__panel">
+        <div class="section-header">
+          <h3 class="section-title">{{ t('cameraStreamUi.voiceprintTitle') }}</h3>
+          <span :class="phaseClass('voiceprintData')">{{ phaseLabel('voiceprintData') }}</span>
+        </div>
+        <span class="muted acam__meta">{{ phaseMeta('voiceprintData') }}</span>
+        <p v-if="layoutWarning('voiceprintData')" class="alert alert--warning" role="status">
+          {{ layoutWarning('voiceprintData') }}
+        </p>
 
-      <div v-if="phase('voiceprintData') === 'live' && voiceprintDataUrl" class="acam__stage">
-        <img class="acam__image" :src="voiceprintDataUrl" :alt="t('cameraStreamUi.voiceprintAlt')" />
-      </div>
-      <div v-else-if="phase('voiceprintData') === 'live' && voiceprintIsMatrix" class="acam__stage">
-        <canvas ref="voiceprintCanvas" class="acam__canvas"></canvas>
-      </div>
-      <div v-else class="acam__empty">
-        <span>{{ emptyHint('voiceprintData') }}</span>
-      </div>
-      <p v-if="voiceprintMeta" class="muted acam__meta">{{ voiceprintMeta }}</p>
-    </section>
+        <div
+          v-if="phase('voiceprintData') === 'live' && voiceprintDataUrl"
+          class="acam__stage acam__stage--ratio"
+        >
+          <img class="acam__image" :src="voiceprintDataUrl" :alt="t('cameraStreamUi.voiceprintAlt')" />
+        </div>
+        <div
+          v-else-if="phase('voiceprintData') === 'live' && voiceprintIsMatrix"
+          class="acam__stage acam__stage--ratio"
+        >
+          <canvas ref="voiceprintCanvas" class="acam__canvas"></canvas>
+        </div>
+        <div v-else class="acam__empty acam__stage--ratio">
+          <span>{{ emptyHint('voiceprintData') }}</span>
+        </div>
+        <p v-if="voiceprintMeta" class="muted acam__meta">{{ voiceprintMeta }}</p>
+      </section>
 
-    <!-- ---- 2. live audio ------------------------------------------------ -->
+      <!-- ---- 2. FFT spectrum -------------------------------------------- -->
+      <section class="card acam__panel">
+        <div class="section-header">
+          <h3 class="section-title">{{ t('cameraStreamUi.fftTitle') }}</h3>
+          <span :class="phaseClass('fftData')">{{ phaseLabel('fftData') }}</span>
+        </div>
+        <span class="muted acam__meta">{{ phaseMeta('fftData') }}</span>
+        <p v-if="layoutWarning('fftData')" class="alert alert--warning" role="status">
+          {{ layoutWarning('fftData') }}
+        </p>
+        <div
+          v-if="phase('fftData') === 'live'"
+          class="acam__scope acam__stage--ratio"
+        >
+          <EChart :option="fftOption" height="100%" />
+        </div>
+        <div v-else class="acam__empty acam__stage--ratio">
+          <span>{{ emptyHint('fftData') }}</span>
+        </div>
+        <p v-if="fftAxisHint" class="muted acam__meta">{{ fftAxisHint }}</p>
+      </section>
+    </div>
+
+    <!-- ---- 3. live audio (时域波形图) ---------------------------------- -->
     <section class="card acam__panel">
       <div class="section-header">
         <h3 class="section-title">{{ t('cameraStreamUi.audioTitle') }}</h3>
@@ -564,10 +647,10 @@ watch(
         <span v-if="audioError" class="alert alert--danger acam__meta" role="alert">{{ audioError }}</span>
       </div>
 
-      <div v-if="phase('pcmData') === 'live'" class="acam__scope">
-        <EChart :option="pcmOption" height="160px" />
+      <div v-if="phase('pcmData') === 'live'" class="acam__scope acam__stage--ratio">
+        <EChart :option="pcmOption" height="100%" />
       </div>
-      <div v-else class="acam__empty acam__empty--short">
+      <div v-else class="acam__empty acam__stage--ratio">
         <span>{{ emptyHint('pcmData') }}</span>
       </div>
 
@@ -584,88 +667,68 @@ watch(
       </p>
     </section>
 
-    <!-- ---- 3. FFT spectrum --------------------------------------------- -->
-    <section class="card acam__panel">
-      <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.fftTitle') }}</h3>
-        <span :class="phaseClass('fftData')">{{ phaseLabel('fftData') }}</span>
-      </div>
-      <span class="muted acam__meta">{{ phaseMeta('fftData') }}</span>
-      <p v-if="layoutWarning('fftData')" class="alert alert--warning" role="status">
-        {{ layoutWarning('fftData') }}
-      </p>
-      <div v-if="phase('fftData') === 'live'" class="acam__scope">
-        <EChart :option="fftOption" height="180px" />
-      </div>
-      <div v-else class="acam__empty acam__empty--short">
-        <span>{{ emptyHint('fftData') }}</span>
-      </div>
-      <p v-if="fftAxisHint" class="muted acam__meta">{{ fftAxisHint }}</p>
-    </section>
-
     <!--
-      原来的 `.acam__columns` 包裹层（把最后两张卡单独排成一个 2 列网格）**已删**：
-      ⑧ 要求五张排成**同一排**，而多嵌一层网格之后，后两张永远落在新的一行里。
-      现在五张卡都是 `.acam__row` 的直接子项，列数由那一条规则统一决定。
+      能量点与检测结果（短块，两列）。
     -->
-    <!-- ---- 4. energy points ------------------------------------------- -->
-    <section class="card acam__panel">
-      <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.energyTitle') }}</h3>
-        <span :class="phaseClass('energyData')">{{ phaseLabel('energyData') }}</span>
-      </div>
-      <span class="muted acam__meta">{{ phaseMeta('energyData') }}</span>
-      <p v-if="layoutWarning('energyData')" class="alert alert--warning" role="status">
-        {{ layoutWarning('energyData') }}
-      </p>
-      <table v-if="phase('energyData') === 'live' && energyTargets.length > 0" class="acam__table">
-        <thead>
-          <tr>
-            <th scope="col">{{ t('cameraStreamUi.energyValue') }}</th>
-            <th scope="col">{{ t('cameraStreamUi.energyPixelX') }}</th>
-            <th scope="col">{{ t('cameraStreamUi.energyPixelY') }}</th>
-            <th scope="col">{{ t('cameraStreamUi.energySwath') }}</th>
-            <th scope="col">{{ t('cameraStreamUi.energyAzimuth') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(target, index) in energyTargets" :key="index">
-            <td>{{ target.energy }}</td>
-            <td>{{ target.pixelX }}</td>
-            <td>{{ target.pixelY }}</td>
-            <td>{{ target.swathAngle }}</td>
-            <td>{{ target.azimuthAngle }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else-if="phase('energyData') === 'live'" class="acam__empty acam__empty--short">
-        <span>{{ t('cameraStreamUi.energyNoTarget') }}</span>
-      </div>
-      <div v-else class="acam__empty acam__empty--short">
-        <span>{{ emptyHint('energyData') }}</span>
-      </div>
-    </section>
+    <div class="acam__pair">
+      <!-- ---- 4. energy points ------------------------------------------- -->
+      <section class="card acam__panel">
+        <div class="section-header">
+          <h3 class="section-title">{{ t('cameraStreamUi.energyTitle') }}</h3>
+          <span :class="phaseClass('energyData')">{{ phaseLabel('energyData') }}</span>
+        </div>
+        <span class="muted acam__meta">{{ phaseMeta('energyData') }}</span>
+        <p v-if="layoutWarning('energyData')" class="alert alert--warning" role="status">
+          {{ layoutWarning('energyData') }}
+        </p>
+        <table v-if="phase('energyData') === 'live' && energyTargets.length > 0" class="acam__table">
+          <thead>
+            <tr>
+              <th scope="col">{{ t('cameraStreamUi.energyValue') }}</th>
+              <th scope="col">{{ t('cameraStreamUi.energyPixelX') }}</th>
+              <th scope="col">{{ t('cameraStreamUi.energyPixelY') }}</th>
+              <th scope="col">{{ t('cameraStreamUi.energySwath') }}</th>
+              <th scope="col">{{ t('cameraStreamUi.energyAzimuth') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(target, index) in energyTargets" :key="index">
+              <td>{{ target.energy }}</td>
+              <td>{{ target.pixelX }}</td>
+              <td>{{ target.pixelY }}</td>
+              <td>{{ target.swathAngle }}</td>
+              <td>{{ target.azimuthAngle }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else-if="phase('energyData') === 'live'" class="acam__empty acam__empty--short">
+          <span>{{ t('cameraStreamUi.energyNoTarget') }}</span>
+        </div>
+        <div v-else class="acam__empty acam__empty--short">
+          <span>{{ emptyHint('energyData') }}</span>
+        </div>
+      </section>
 
-    <!-- ---- 5. detection feedback -------------------------------------- -->
-    <section class="card acam__panel">
-      <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.detectTitle') }}</h3>
-        <span :class="phaseClass('detectFeedback')">{{ phaseLabel('detectFeedback') }}</span>
-      </div>
-      <span class="muted acam__meta">{{ phaseMeta('detectFeedback') }}</span>
-      <p v-if="layoutWarning('detectFeedback')" class="alert alert--warning" role="status">
-        {{ layoutWarning('detectFeedback') }}
-      </p>
-      <ul v-if="detectRows.length > 0" class="acam__log">
-        <li v-for="row in detectRows" :key="row.key">
-          <span class="acam__log-time">{{ row.time }}</span>
-          <span>{{ row.text }}</span>
-        </li>
-      </ul>
-      <div v-else class="acam__empty acam__empty--short">
-        <span>{{ emptyHint('detectFeedback') }}</span>
-      </div>
-    </section>
+      <!-- ---- 5. detection feedback -------------------------------------- -->
+      <section class="card acam__panel">
+        <div class="section-header">
+          <h3 class="section-title">{{ t('cameraStreamUi.detectTitle') }}</h3>
+          <span :class="phaseClass('detectFeedback')">{{ phaseLabel('detectFeedback') }}</span>
+        </div>
+        <span class="muted acam__meta">{{ phaseMeta('detectFeedback') }}</span>
+        <p v-if="layoutWarning('detectFeedback')" class="alert alert--warning" role="status">
+          {{ layoutWarning('detectFeedback') }}
+        </p>
+        <ul v-if="detectRows.length > 0" class="acam__log">
+          <li v-for="row in detectRows" :key="row.key">
+            <span class="acam__log-time">{{ row.time }}</span>
+            <span>{{ row.text }}</span>
+          </li>
+        </ul>
+        <div v-else class="acam__empty acam__empty--short">
+          <span>{{ emptyHint('detectFeedback') }}</span>
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -678,31 +741,55 @@ watch(
 }
 
 /*
- * 五张图谱卡：**能放开就是一排五列**，放不下时按"还能放几张"自动退（§15.31）。
- *
- * 为什么不是 `repeat(5, minmax(0, 1fr))` 加几条 `@media`：这一块的宽度不由**窗口**决定，
- * 而由外层排布板给它的那一格决定（因为它是整幅宽的那一块，宽度 = 板子的可用宽度）。
- * 第一版写的是 `@media (max-width: 1500px)` 退成 3 列 —— 在那台探针窗口（1440）上，
- * 五张图被折成了 3 + 2，而**版面本身并没有变窄**。媒体查询问的是窗口，不是这一排。
- *
- * `auto-fit` + 最小 200px 问的才是这一排自己：探针实测这一排在 1440 窗口下是 1166px，
- * 正好放下 5 列、每列 220px；窄到放不下第 5 列时会先变成 4 列（第 5 张折行），
- * 再窄就 3 / 2 / 1。列宽里的 `0` 与 `minmax(0, …)` 是必要的：用 `auto` 时 ECharts 的
- * canvas 会把列撑到内容宽，横向滚动条就出来了。
+ * 一行状态（第 23 条把那个窗口删掉之后留下的最小形态）。
+ * 它不是卡片、没有标题：只是一枚状态徽标 + 一颗「停止接收」+（非管理员时）一句说明。
  */
-.acam__row {
+.acam__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.acam__status-error {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+/*
+ * 并排两块（第 24 条：声纹图与频谱图 **16:9 各占 50%**）。
+ *
+ * `minmax(0, 1fr)` 里的 `0` 是必要的：ECharts 的 canvas 会把列撑到内容宽，
+ * 用 `auto` 时横向滚动条就出来了（这一条在设备管理那张表上也踩过）。
+ * 窄窗口折成一列 —— 两块各 50% 在 700px 以下都读不出坐标轴。
+ */
+.acam__pair {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
   gap: var(--space-4);
-  /* 各自按内容高，不被同排最高的一张拉到一样高（空卡片的下半截看起来像没数据）。 */
   align-items: start;
 }
 
-.acam__head,
-.acam__panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+/*
+ * 16:9 的那一层（第 24 条）。**画布与空态用同一个比例**：空面板与有数据的面板一样大，
+ * 数据来了页面不会跳（这一条原来是靠 `min-height: 240px` 做的，比例一定就会失效）。
+ *
+ * `aspect-ratio` 让高度由宽度算出来，所以"各占 50%"与"16:9"两条同时成立。
+ */
+.acam__stage--ratio {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+  width: 100%;
+}
+
+/*
+ * 图表容器要能被 ECharts 填满：`height="100%"` 只有在父元素有确定高度时才成立，
+ * 而这里的高度来自 `aspect-ratio`。
+ */
+.acam__scope.acam__stage--ratio {
+  display: block;
+  padding: 0;
+  border-style: solid;
 }
 
 .acam__note,
@@ -740,6 +827,14 @@ watch(
 
 /* A fixed-height stage for all four "no data" cases, so an empty panel is the
    same size as a live one and the page does not jump when data starts. */
+.acam__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* A fixed 16:9 stage for the two ratio panels (see `.acam__stage--ratio`), and the
+   same shape for the short "no data" cases below it. */
 .acam__stage,
 .acam__empty {
   position: relative;

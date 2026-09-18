@@ -1943,8 +1943,6 @@ export const zhCN = {
    * distinct, honest fact rather than as a quiet measurement.
    */
   cameraStreamUi: {
-    title: '相机声学数据',
-    start: '开始接收',
     stop: '停止接收',
     adminOnlyHint: '开启与停止相机数据流属于管理员操作。',
     noDevice: '请先选择一台相机。',

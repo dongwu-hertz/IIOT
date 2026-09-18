@@ -1742,8 +1742,6 @@ export const tr: MessageSchema = {
    * Camera acoustic streams (FA371 manual §5.2). No message may contain `@`.
    */
   cameraStreamUi: {
-    title: 'Kamera akustik verileri',
-    start: 'Almayı başlat',
     stop: 'Almayı durdur',
     adminOnlyHint: 'Kamera akışlarını başlatmak ve durdurmak yönetici işlemidir.',
     noDevice: 'Önce bir kamera seçin.',

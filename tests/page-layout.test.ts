@@ -254,50 +254,92 @@ describe('实时监测页：删掉的、搬走的、留下的', () => {
 
     /**
      * ⑧（业主 2026-09-17 已确认）：五张图谱＝相机那五路实时数据（fft/voiceprint/energy/pcm/
-     * detectFeedback），**排成一排**。⑦ 删的是它的**旧版式**，⑧ 定的是新版式 ——
-     * 所以这里断言的是"回来了 + 一排"，而不是"没有了"。
+     * detectFeedback），**排成一排**。
+     *
+     * **2026-09-18 第 10 批第 24 条推翻了那个版式的一半**：声纹图与频谱图改为
+     * **16:9 各占 50%、放在视频下方**，时域波形图在它们下面。所以这里断言的是新版式
+     * （`.acam__pair` 两列 + `.acam__stage--ratio` 16:9），不是"一排五张"。
+     * 旧断言按"被更新的要求覆盖"改写，不是删掉。
      */
     assert.ok(
       monitor.includes('<CameraAcousticPanel'),
-      '实时监测页没有那五张图谱（⑧ 要求它们排成一排）'
+      '实时监测页没有那五张图谱（第 24 条把它们重排了，不是删掉）'
     )
     /**
      * 这一块必须**整幅宽**：它在排布板里只占一格时（1440 窗口下 ~378px），
-     * "一排五张"会变成每张 ~60px 的一排 —— 那还是"一排"，但读不出来。
+     * 两块"各占 50%"会变成各 ~180px —— 那还是并排，但坐标轴读不出来。
      */
     const panelUsage = between(monitor, '<CameraAcousticPanel', '/>', '相机五路图谱那一块')
     assert.ok(
       panelUsage.includes('camera-board__wide'),
-      '相机图谱那一块没有整幅宽（camera-board__wide）—— 五张图会挤在排布板的一格里'
+      '相机图谱那一块没有整幅宽（camera-board__wide）—— 两块各占 50% 会挤在排布板的一格里'
     )
 
     const panel = stripComments(read('src/renderer/src/components/CameraAcousticPanel.vue'))
-    const row = ruleBody(panel, '.acam__row')
+    const pair = ruleBody(panel, '.acam__pair')
     /*
-     * 列数由**这一排自己的宽度**决定（`auto-fit` + 最小 200px），**不是**由窗口宽度决定。
+     * 两列等宽（`minmax(..., 1fr)`），**不是**由窗口宽度决定。
      *
-     * 第一版写的是 `repeat(5, minmax(0,1fr))` 加 `@media (max-width: 1500px)` 退 3 列 ——
-     * 在那台探针窗口（1440）上，五张图被折成了 3 + 2，而版面本身并没有变窄：
-     * 媒体查询问的是窗口，这一块的宽度由外层排布板给。
+     * 这一条是从上一版继承下来的教训：第一版写的是 `repeat(5, …)` 加
+     * `@media (max-width: 1500px)` 退 3 列 —— 在那台探针窗口（1440）上，
+     * 列数被折叠了而**版面本身并没有变窄**：媒体查询问的是窗口，这一块的宽度由外层排布板给。
      */
-    const minTrack = /repeat\(\s*auto-fit\s*,\s*minmax\((\d+)px\s*,\s*1fr\)\s*\)/.exec(row)
-    assert.ok(minTrack, '五张图谱那一排不是 auto-fit 的等宽列：' + row)
-    const trackMin = Number(minTrack[1])
-    /*
-     * 最小列宽要**恰好让 5 列放得进这一块**：探针窗口（1440）下面板实测 ~1176px，
-     * 减去 4 个间距（--space-4 = 16px）后每列 ~222px。200px 的门槛留了余量，
-     * 又不至于让第 5 列在正常窗口上掉到第二行。
-     */
-    assert.ok(
-      trackMin >= 190 && trackMin <= 210,
-      `图谱列的最小宽度是 ${trackMin}px：太小会让第 5 列掉行，太大则每张图读不出来`
+    assert.match(
+      pair,
+      /grid-template-columns:\s*repeat\(\s*auto-fit\s*,\s*minmax\(/,
+      '声纹图 + 频谱图那一行不是 auto-fit 的等宽列：' + pair
     )
-    // 退化**不许**再由窗口宽度决定（那正是这一版修掉的问题）。
+    // 退化**不许**再由窗口宽度决定（那正是上一版修掉的问题）。
     assert.equal(
-      /@media[^{]*\{[^@]*\.acam__row\s*\{/.test(panel),
+      /@media[^{]*\{[^@]*\.acam__(pair|row)\s*\{/.test(panel),
       false,
-      '图谱那一排的列数又改回由窗口宽度（@media）决定了 —— 它应该跟着这一排自己的宽度退'
+      '声纹图/频谱图那一行的列数又改回由窗口宽度（@media）决定了'
     )
+    // 16:9 那一层必须在，而且两处（画布与空态）共用它。
+    const ratio = ruleBody(panel, '.acam__stage--ratio')
+    assert.match(ratio, /aspect-ratio:\s*16\s*\/\s*9/, '声纹图/频谱图那一层不是 16:9：' + ratio)
+    assert.match(ratio, /min-height:\s*0/, '16:9 那一层还留着 min-height：比例会被它顶掉')
+  })
+
+  /**
+   * 第 23 条：「删除「相机声学数据」窗口、数据默认实时接收」。
+   *
+   * 三件都要钉住，而且**每一件都能"源码里删对了但屏幕上不对"**：
+   *   1. 那个窗口的标题与「开始接收」按钮真的没有了（连目录键一起删，免得被画回来）；
+   *   2. 数据**默认开始接收**（`onMounted` 里就调，不是等用户点）；
+   *   3. 状态**仍然看得见**：删掉窗口不等于可以不说"流没起来" —— 空了的面板与安静的房间
+   *      在屏幕上长得一样，而这一页的每一张图都靠这一行区分。
+   */
+  it('㉓ 「相机声学数据」窗口已删，数据默认实时接收，状态仍然看得见', () => {
+    const panel = stripComments(read('src/renderer/src/components/CameraAcousticPanel.vue'))
+
+    // ① 窗口没有了：标题卡片与「开始接收」都不在。
+    assert.equal(/acam__head/.test(panel), false, '「相机声学数据」那个窗口又回来了（.acam__head）')
+    assert.equal(
+      /cameraStreamUi\.(title|start)\b/.test(panel),
+      false,
+      '组件里又引用了已删除的窗口标题 / 「开始接收」文案'
+    )
+    assert.ok(panel.includes('data-acam-status'), '没有那一行状态（data-acam-status）')
+    assert.ok(panel.includes("t('cameraStreamUi.sessionIdle')"), '状态行没有"未启动"这一档')
+    assert.ok(panel.includes("t('cameraStreamUi.sessionRunning')"), '状态行没有"接收中"这一档')
+    assert.ok(panel.includes('data-action="acam-stop"'), '没有「停止接收」—— 默认开始之后就没法关了')
+
+    // ② 默认接收：挂载与换设备两条路径都要调，而且**先读一次状态**再决定。
+    const mounted = panel.slice(panel.indexOf('onMounted(async () => {'))
+    const mountedBody = mounted.slice(0, mounted.indexOf('})'))
+    assert.match(mountedBody, /refreshState\(\)[\s\S]*ensureStreaming\(\)/,
+      'onMounted 里没有"先读状态、再默认开始接收"')
+    assert.match(
+      panel,
+      /watch\(\s*\(\) => props\.deviceId,[\s\S]*?ensureStreaming\(\)/,
+      '换了一台相机之后没有默认开始接收'
+    )
+    // 非管理员与"已经在收"两种情况下都不许重复开（重复订阅＝两套 socket 推同一路数据）。
+    const ensure = panel.slice(panel.indexOf('async function ensureStreaming('))
+    const ensureBody = ensure.slice(0, ensure.indexOf('\n}'))
+    assert.match(ensureBody, /canStart\.value/, 'ensureStreaming 没有管理员判断')
+    assert.match(ensureBody, /camera\.isActive/, 'ensureStreaming 没有"已经在收就不重开"的判断')
   })
 
   it('⑦ 相机控制与告警并排（告警卡片在同一块板子里，不是对话框里的一句话）', () => {
