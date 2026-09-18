@@ -2408,11 +2408,8 @@ export const tr: MessageSchema = {
     detailSourceUnavailable: 'Bu kaynak şu anda okunamadı; birazdan yeniden deneyin',
 
     detailAck: 'Bu olayı onayla',
-    detailUnack: 'Onayı kaldır',
     detailAckUnsupported:
       'Kamera tarafında algılama günlükleri için onay arayüzü yok (kılavuzun 32 açık arayüzünün hiçbiri), bu yüzden bu kayıt onaylanamaz.',
-    detailAckDone: '{count} olay onaylandı',
-    detailAckFailed: 'Onaylama başarısız: {reason}',
 
     detailRecordingTitle: 'Yerel kayıt ve görüntü',
     detailRecordingNone: 'Bu olayın bu makinede kaydı yok.',
@@ -2533,6 +2530,29 @@ export const tr: MessageSchema = {
     relatedSameDevice: 'Aynı cihaz',
     relatedSameKind: 'Aynı olay türü',
     relatedTimeWindow: '10 dakika içinde',
+
+    // --- Phase 5 (UI): eylemler / zaman çizelgesi / ilgili / etkinlik -------
+    relatedTitle: 'İlgili olaylar',
+    relatedScope: 'İlgili olaylar yüklenen {loaded} satır arasında aranır',
+    relatedEmpty: 'İlgili başka olay bulunamadı.',
+    relatedOpen: 'Bunu aç',
+
+    timelineTitle: 'Zaman çizelgesi',
+    timelineDetected: 'İlk algılama',
+
+    activityTitle: 'İşlem kaydı',
+    activityEmpty: 'Bu olay için henüz işlem kaydı yok.',
+    activityStatusLine: '{actor} durumu "{from}" iken "{to}" yaptı',
+    activityAssignLine: '{actor} {name} kişisine atadı',
+    activityNoteLine: '{actor} not ekledi',
+    statusChangeDone: 'Durum "{status}" olarak değiştirildi',
+    assignDone: '{name} kişisine atandı',
+    actionAssignee: 'Şuna ata',
+    actionNote: 'Not ekle',
+    actionReopenNotePlaceholder: 'Yeniden açma nedeni (zorunlu)',
+    actionNoteEmpty: 'Önce bir neden yazın',
+    actionConfirm: 'Onayla',
+    actionCancel: 'Vazgeç'
 
   }
 }

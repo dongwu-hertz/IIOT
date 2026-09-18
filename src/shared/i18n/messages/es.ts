@@ -2407,11 +2407,8 @@ export const es: MessageSchema = {
     detailSourceUnavailable: 'Esta fuente falló al leerse ahora mismo; inténtalo de nuevo',
 
     detailAck: 'Confirmar este evento',
-    detailUnack: 'Quitar la confirmación',
     detailAckUnsupported:
       'El lado de la cámara no tiene interfaz de confirmación para los registros de detección (ninguna de las 32 interfaces abiertas del manual), así que esta entrada no se puede confirmar.',
-    detailAckDone: 'Se confirmaron {count} eventos',
-    detailAckFailed: 'Error al confirmar: {reason}',
 
     detailRecordingTitle: 'Grabación e imagen locales',
     detailRecordingNone: 'Este evento no tiene ninguna grabación en este equipo.',
@@ -2532,6 +2529,29 @@ export const es: MessageSchema = {
     relatedSameDevice: 'Mismo equipo',
     relatedSameKind: 'Mismo tipo de evento',
     relatedTimeWindow: 'Dentro de 10 minutos',
+
+    // --- Fase 5 (UI): acciones / cronología / relacionados / actividad -------
+    relatedTitle: 'Eventos relacionados',
+    relatedScope: 'Los eventos relacionados se buscan entre las {loaded} filas cargadas',
+    relatedEmpty: 'No se encontraron otros eventos relacionados.',
+    relatedOpen: 'Abrir este',
+
+    timelineTitle: 'Cronología',
+    timelineDetected: 'Primera detección',
+
+    activityTitle: 'Registro de gestión',
+    activityEmpty: 'Este evento aún no tiene registro de gestión.',
+    activityStatusLine: '{actor} cambió el estado de «{from}» a «{to}»',
+    activityAssignLine: '{actor} lo asignó a {name}',
+    activityNoteLine: '{actor} comentó',
+    statusChangeDone: 'Estado cambiado a «{status}»',
+    assignDone: 'Asignado a {name}',
+    actionAssignee: 'Asignar a',
+    actionNote: 'Añadir nota',
+    actionReopenNotePlaceholder: 'Motivo de la reapertura (obligatorio)',
+    actionNoteEmpty: 'Escribe primero un motivo',
+    actionConfirm: 'Confirmar',
+    actionCancel: 'Cancelar'
 
   }
 }

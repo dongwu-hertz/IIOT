@@ -2673,11 +2673,8 @@ export const zhCN = {
     detailSourceUnavailable: '这一路来源本次读取失败，请稍后重试',
 
     detailAck: '确认该事件',
-    detailUnack: '取消确认',
     detailAckUnsupported:
       '相机侧的检测日志没有确认接口（手册的 32 个开放接口里没有），因此这一条不能确认。',
-    detailAckDone: '已确认 {count} 条事件',
-    detailAckFailed: '确认失败：{reason}',
 
     detailRecordingTitle: '本机录像与画面',
     detailRecordingNone: '这条事件在本机没有对应的录像文件。',
@@ -2796,9 +2793,31 @@ export const zhCN = {
     },
 
 
-    relatedSameDevice: '同一台设备',
-    relatedSameKind: '同一种事件',
+    relatedSameDevice: '同一台设备',    relatedSameKind: '同一种事件',
     relatedTimeWindow: '前后 10 分钟',
+
+    // --- Phase 5（界面）：动作 / 时间线 / 相关性 / 处置记录 -------------------
+    relatedTitle: '关联事件',
+    relatedScope: '相关性只在已加载的 {loaded} 条里找',
+    relatedEmpty: '没有找到相关的其它事件。',
+    relatedOpen: '查看这一条',
+
+    timelineTitle: '时间线',
+    timelineDetected: '首次探测到',
+
+    activityTitle: '处置记录',
+    activityEmpty: '这一条还没有任何处置记录。',
+    activityStatusLine: '{actor} 把状态从「{from}」改为「{to}」',
+    activityAssignLine: '{actor} 指派给 {name}',
+    activityNoteLine: '{actor} 留言',
+    statusChangeDone: '状态已改为「{status}」',
+    assignDone: '已指派给 {name}',
+    actionAssignee: '指派给',
+    actionNote: '添加说明',
+    actionReopenNotePlaceholder: '重新开启的原因（必填）',
+    actionNoteEmpty: '请先填写原因',
+    actionConfirm: '确定',
+    actionCancel: '取消'
 
   }
 }

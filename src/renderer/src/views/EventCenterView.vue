@@ -38,7 +38,10 @@ import {
   EVENT_VIEW_MODES,
   EVENT_VIEW_MODE_STORAGE_KEY,
   ackFilterToQuery,
+  activityRows,
   alertOverviewFields,
+  alertStatusLabelKey,
+  alertTimeline,
   clampDrawerWidth,
   drawerWidthForViewport,
   emptyEventFilter,
@@ -54,15 +57,18 @@ import {
   parseEventFilter,
   parseEventViewMode,
   querySeverityFor,
+  relatedGroups,
   savedViewFromMs,
   serializeEventFilter,
   toAlertViewModels
 } from '@shared/domain/event-view'
 import type {
   AlertViewModel,
+  EventActivityView,
   EventDetailTab,
   EventQueueFilter,
   EventSavedView,
+  EventStatusAction,
   EventViewMode
 } from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
@@ -320,6 +326,8 @@ onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
   // 联动待处理列表只有在这里读一次，才能把「已确认/未确认」与顶栏角标对齐。
   if (!linkage.loaded) void linkage.load()
+  // 账户列表（「指派」要用）：读不到就不显示那个动作。
+  void loadAssignees()
   unsubscribeProgress = window.events.onEventCenterDownloadProgress(
     (progress: EventDownloadProgress) => store.handleProgress(progress)
   )
@@ -396,15 +404,19 @@ function openDetail(alert: AlertViewModel): void {
   detail.value = alert
   // 换事件时页签回到 Overview：停在 Evidence 上看另一条事件，会让人以为这条也有图。
   drawerTab.value = 'overview'
+  // 处置记录跟着换：先清空（否则会短暂显示上一条的记录）。
+  activities.value = []
   playerRecordingId.value = defaultPlayerId(alert.entry)
   videoUrl.value = ''
   videoError.value = ''
   closeEvidenceImage()
   void loadEvidenceImage()
+  void loadActivity(alert.id)
 }
 
 function closeDetail(): void {
   detail.value = null
+  activities.value = []
   playerRecordingId.value = null
   // 先清地址再卸载 `<video>`：元素会释放回环连接（与 RecordingsView 同一顺序）。
   videoUrl.value = ''
@@ -600,39 +612,119 @@ async function playDetectFile(file: {
 // 确认
 // ---------------------------------------------------------------------------
 
-/** 该事件的确认能力：设备检测日志没有这个接口，所以整块不渲染。 */
+/** 该事件的确认能力：设备检测日志没有这个接口，所以「确认」这个动作不出现。 */
 const detailCanAcknowledge = computed(() => detail.value?.source !== 'deviceDetect')
 
-async function toggleAcknowledge(): Promise<void> {
-  const current = detail.value
-  if (!current || current.source === 'deviceDetect') return
-  const payload = await store.acknowledge([current.id])
-  if (!payload) return
-  const perSource = payload.perSource.find((entry) => entry.source === current.source)
-  if (perSource?.unsupported) {
-    store.notice = t('eventsUi.detailAckUnsupported')
-    return
-  }
-  if (perSource?.error) {
-    store.notice = t('eventsUi.detailAckFailed', { reason: perSource.error })
-    return
-  }
-  // 视图模型与它带着的原始行一起更新：抽屉里的状态与「确认」按钮都看它们。
-  detail.value = {
-    ...current,
-    status: 'acknowledged',
-    entry: { ...current.entry, acknowledged: true }
-  }
-  store.notice = t('eventsUi.detailAckDone', { count: payload.acknowledged })
+// ---------------------------------------------------------------------------
+// 处置（规格 §2.2 / §11.2 / §13）
+// ---------------------------------------------------------------------------
+
+/**
+ * 可以指派给谁（现有账户的账户名）。
+ *
+ * 用**账户名**而不是显示名：Activity 的 `actor` 也是账户名，两者要对得上；
+ * 显示名可以改，账户名不能（见 `EventActivityView` 的注释）。
+ */
+const assignees = ref<Array<{ username: string; displayName?: string }>>([])
+/** 处置动作正在提交（抽屉里的按钮据此禁用，避免连点两次状态变更）。 */
+const statusBusy = ref(false)
+/** 这一条事件的处置记录（新的在前）。 */
+const activities = ref<EventActivityView[]>([])
+
+/** 读一次账户列表（打不开时「指派」不出现 —— 点开只有一个空列表比没有按钮更糟）。 */
+async function loadAssignees(): Promise<void> {
+  const result = await callApi(() => window.api.auth.listUsers())
+  if (!result.success) return
+  const users = unwrap(result) ?? []
+  assignees.value = users
+    .filter((user) => typeof user.username === 'string' && user.username !== '')
+    .map((user) => ({
+      username: user.username,
+      ...(user.displayName !== undefined && user.displayName !== ''
+        ? { displayName: user.displayName }
+        : {})
+    }))
 }
 
-/** 联动待处理记录只能「确认」，没有取消确认的接口——所以已确认时不渲染按钮。 */
-const detailAckVisible = computed(() => {
+/** 读这一条事件的处置记录。换条之后**晚到的结果不许覆盖**当前这一条的。 */
+async function loadActivity(entryId: string): Promise<void> {
+  const result = await callApi(() => window.api.eventCenter.activity(entryId))
+  if (detail.value?.id !== entryId) return
+  activities.value = result.success ? (unwrap(result) ?? []) : []
+}
+
+const timelineNodes = computed(() =>
+  detail.value
+    ? alertTimeline(detail.value, activities.value, detail.value.entry.linkageActions ?? [])
+    : []
+)
+const activityList = computed(() => activityRows(activities.value))
+const related = computed(() => (detail.value ? relatedGroups(detail.value, alerts.value) : []))
+
+/** 相关性分组里的一个按钮文字：时间 + 事件种类（够认出是哪一条）。 */
+function relatedLabel(id: string): string {
+  const target = allAlerts.value.find((item) => item.id === id)
+  if (!target) return id
+  return `${formatDateTime(target.at)} · ${eventKindLabel(target.kind)}`
+}
+
+function openRelated(id: string): void {
+  const target = allAlerts.value.find((item) => item.id === id)
+  if (target) openDetail(target)
+}
+
+/**
+ * 提交一次处置（规格 §2.2）。
+ *
+ * 三件事按顺序做完，缺一不可：
+ *   1. 写（`eventCenter.changeStatus`：服务端判迁移合法性、写状态 + Activity、写回读）；
+ *   2. **重查**（状态由主进程合并进每一条事件，队列 / KPI / 筛选面板都要跟着变）；
+ *   3. **抽屉不关**（规格 §15.1：确认后立即更新状态、写入 Activity、不关 Drawer）——
+ *      所以这里不走 `reload()`（它会关抽屉），而是自己重查再按 id 重新指向那一条。
+ */
+async function onStatusAction(payload: {
+  action: EventStatusAction
+  assignee?: string
+  note?: string
+}): Promise<void> {
   const current = detail.value
-  if (!current || current.source === 'deviceDetect') return false
-  if (current.source === 'linkage') return !current.entry.acknowledged
-  return true
-})
+  if (!current) return
+  statusBusy.value = true
+  const result = await callApi(() =>
+    window.api.eventCenter.changeStatus({
+      entryId: current.id,
+      action: payload.action,
+      ...(payload.assignee !== undefined ? { assignee: payload.assignee } : {}),
+      ...(payload.note !== undefined ? { note: payload.note } : {}),
+      // 指派时把"界面看到的当前状态"带下去：状态行不存在时用它建行，
+      // 免得指派顺手把一条已确认的事件退回「待处理」（仓储层的注释写了完整推理）。
+      currentStatus: current.status
+    })
+  )
+  statusBusy.value = false
+
+  if (!result.success) {
+    store.error = resultMessage(result)
+    return
+  }
+
+  await store.applyQuery(buildQuery())
+  const refreshed = allAlerts.value.find((item) => item.id === current.id)
+  if (refreshed) {
+    // 只换数据、不动页签：操作员可能正停在 Activity 上看刚写进去的那一条。
+    detail.value = refreshed
+    playerRecordingId.value = defaultPlayerId(refreshed.entry)
+  }
+  await loadActivity(current.id)
+
+  const view = unwrap(result)
+  store.notice =
+    payload.action === 'assign'
+      ? t('eventsUi.assignDone', { name: payload.assignee ?? '' })
+      : t('eventsUi.statusChangeDone', {
+          status: t(alertStatusLabelKey(view?.status ?? current.status))
+        })
+}
 
 // ---------------------------------------------------------------------------
 // 跳转与展示
@@ -849,41 +941,141 @@ async function goToPage(offset: number): Promise<void> {
     </section>
 
     <!--
-      详情抽屉（规格 §11）。结构（几何/页签/头部/键盘）在组件里，动作仍在页面里 ——
-      见 `EventDetailDrawer.vue` 头部第 1 条：确认与下载已经有一条验证过的路径，
-      搬进组件只会多一层 props 转发。
+      详情抽屉（规格 §11）。结构（几何/页签/头部/键盘）在组件里，**写库的动作在页面里** ——
+      状态是页面的数据，而且写完要重查一次（队列与 KPI 都要跟着变）。
     -->
     <EventDetailDrawer
       v-if="detail"
       :alert="detail"
       :width="drawerWidth"
       :tab="drawerTab"
+      :assignees="assignees"
+      :busy="statusBusy"
       @close="closeDetail"
       @resize="setDrawerWidth"
       @update:tab="drawerTab = $event"
       @prev="stepAlert(-1)"
       @next="stepAlert(1)"
       @open-device="openDevice(detail.deviceId)"
+      @status-action="onStatusAction"
     >
-      <!-- 头部的主 CTA（规格 §11.2：一次只有一个）。没有确认接口的来源不渲染按钮。 -->
-      <template #actions>
-        <button
-          v-if="detailCanAcknowledge && detailAckVisible"
-          type="button"
-          class="btn btn--primary btn--sm"
-          :disabled="store.ackBusy"
-          data-action="drawer-acknowledge"
-          @click="toggleAcknowledge"
-        >
-          {{
-            detail.source === 'linkage' || !detail.entry.acknowledged
-              ? t('eventsUi.detailAck')
-              : t('eventsUi.detailUnack')
-          }}
-        </button>
-        <span v-else-if="detailCanAcknowledge" class="badge badge--success">
-          {{ t('eventsUi.ackAcknowledged') }}
-        </span>
+      <!-- Timeline（规格 §13.1）：从"首次探测到"开始，把我们的动作与来源的事实排成一条线。 -->
+      <template #timeline>
+        <section class="drawer__section drawer__section--first">
+          <h4 class="drawer__section-title">{{ t('eventsUi.timelineTitle') }}</h4>
+          <ol class="timeline" data-panel-list="timeline">
+            <li
+              v-for="(node, index) in timelineNodes"
+              :key="`${node.kind}-${node.at}-${index}`"
+              class="timeline__node"
+            >
+              <span class="timeline__dot" aria-hidden="true"></span>
+              <span class="timeline__time">{{ formatDateTime(node.at) }}</span>
+              <span class="timeline__text">
+                <template v-if="node.kind === 'detected'">
+                  {{ t('eventsUi.timelineDetected') }}
+                  <span v-if="node.approximate" class="chip chip--tiny">
+                    {{ t('eventsUi.approximateBadge') }}
+                  </span>
+                </template>
+                <template v-else-if="node.kind === 'status'">
+                  {{
+                    t('eventsUi.activityStatusLine', {
+                      actor: node.actor,
+                      from: t(alertStatusLabelKey(node.from)),
+                      to: t(alertStatusLabelKey(node.to))
+                    })
+                  }}
+                  <span v-if="node.note" class="muted">· {{ node.note }}</span>
+                </template>
+                <template v-else-if="node.kind === 'assign'">
+                  {{ t('eventsUi.activityAssignLine', { actor: node.actor, name: node.assignee }) }}
+                </template>
+                <template v-else-if="node.kind === 'note'">
+                  {{ t('eventsUi.activityNoteLine', { actor: node.actor }) }}：{{ node.note }}
+                </template>
+                <template v-else>
+                  {{
+                    t('eventsUi.detailActionLine', {
+                      action: actionLabel(node.action),
+                      status: actionStateLabel(node.status)
+                    })
+                  }}
+                  <span v-if="node.reason" class="muted">· {{ node.reason }}</span>
+                </template>
+              </span>
+            </li>
+          </ol>
+        </section>
+      </template>
+
+      <!-- Related（规格 §13.2）：三组相关性，点击切到那一条。 -->
+      <template #related>
+        <section class="drawer__section drawer__section--first">
+          <h4 class="drawer__section-title">{{ t('eventsUi.relatedTitle') }}</h4>
+          <p class="muted related__scope">
+            {{ t('eventsUi.relatedScope', { loaded: allAlerts.length }) }}
+          </p>
+          <div v-for="group in related" :key="group.id" class="related__group">
+            <div class="related__head">
+              <span class="field-label">{{ t(group.labelKey) }}</span>
+              <span class="muted">{{ t('eventsUi.panelCount', { count: group.ids.length }) }}</span>
+            </div>
+            <div v-if="group.ids.length > 0" class="chip-row">
+              <button
+                v-for="id in group.ids.slice(0, 8)"
+                :key="id"
+                type="button"
+                class="chip related__chip"
+                :title="t('eventsUi.relatedOpen')"
+                @click="openRelated(id)"
+              >
+                {{ relatedLabel(id) }}
+              </button>
+              <span v-if="group.ids.length > 8" class="muted">
+                {{ t('eventsUi.metricMore', { count: group.ids.length - 8 }) }}
+              </span>
+            </div>
+          </div>
+          <p v-if="related.every((group) => group.ids.length === 0)" class="muted">
+            {{ t('eventsUi.relatedEmpty') }}
+          </p>
+        </section>
+      </template>
+
+      <!-- Activity（规格 §13.3）：状态变更 / 指派 / 留言，新的在前。 -->
+      <template #activity>
+        <section class="drawer__section drawer__section--first">
+          <h4 class="drawer__section-title">{{ t('eventsUi.activityTitle') }}</h4>
+          <p v-if="activityList.length === 0" class="muted">{{ t('eventsUi.activityEmpty') }}</p>
+          <ul v-else class="activity" data-panel-list="activity">
+            <li
+              v-for="(row, index) in activityList"
+              :key="`${row.kind}-${row.at}-${index}`"
+              class="activity__row"
+            >
+              <span class="activity__time">{{ formatDateTime(row.at) }}</span>
+              <span class="activity__text">
+                <template v-if="row.kind === 'status'">
+                  {{
+                    t('eventsUi.activityStatusLine', {
+                      actor: row.actor,
+                      from: t(alertStatusLabelKey(row.from)),
+                      to: t(alertStatusLabelKey(row.to))
+                    })
+                  }}
+                  <span v-if="row.note" class="muted">· {{ row.note }}</span>
+                </template>
+                <template v-else-if="row.kind === 'assign'">
+                  {{ t('eventsUi.activityAssignLine', { actor: row.actor, name: row.assignee }) }}
+                </template>
+                <template v-else>
+                  {{ t('eventsUi.activityNoteLine', { actor: row.actor }) }}：{{ row.note }}
+                </template>
+              </span>
+            </li>
+          </ul>
+        </section>
       </template>
 
       <template #overview>
@@ -1196,6 +1388,104 @@ async function goToPage(offset: number): Promise<void> {
 
 .event-filters__clear {
   align-self: flex-end;
+}
+
+/*
+ * 时间线（规格 §13.1）：节点 8px、线 1px —— 规格明确不要大圆点或大色块。
+ * 用左边一条竖线 + 每行一个点，行距靠 padding 撑开。
+ */
+.timeline {
+  margin: 0;
+  padding: 0 0 0 var(--space-2);
+  list-style: none;
+  border-left: 1px solid var(--color-border);
+}
+
+.timeline__node {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-3) var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.timeline__dot {
+  position: absolute;
+  left: calc(-1 * var(--space-2) - 4px);
+  top: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+
+.timeline__time,
+.activity__time {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline__text,
+.activity__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 处置记录（规格 §13.3）：一行一条，时间在左。 */
+.activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-small);
+}
+
+.activity__row:last-child {
+  border-bottom: 0;
+}
+
+/* 相关性分组（规格 §13.2）。 */
+.related__scope {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-meta);
+}
+
+.related__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.related__group:last-of-type {
+  border-bottom: 0;
+}
+
+.related__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.related__chip {
+  cursor: pointer;
+}
+
+.related__chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent-hover);
 }
 
 .filter-note {

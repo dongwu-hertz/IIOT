@@ -357,9 +357,25 @@ const GAP_TOLERANCE_PX = 2
  * 与 `run()` 里那个 `layout()` 的分工：`layout()` 会先切路由再跑（它测的是某一页的
  * 结构），这里的片段与路由无关（它们问的是主进程/设备），所以不切页。
  */
-async function execJson(win, label, source) {
+/**
+ * 跑一段页面脚本并把结果解析成对象，**带超时**。
+ *
+ * 为什么需要超时（2026-09-18 实测）：`executeJavaScript` 等的是那段脚本自己 resolve。
+ * 渲染进程被拖住（机器忙、设备轮询堆在事件循环里）时这个 Promise 可以**几个小时不 settle**
+ * —— 那一次探针跑了 4.5 小时才回来，而报告里只有一句"某一步超时"。
+ * 探针的每一次往返都必须有自己的时间上限，否则一次自动化验证会把一整个下午吃掉。
+ */
+async function execJson(win, label, source, timeoutMs = 30_000) {
   try {
-    const raw = await win.webContents.executeJavaScript(source)
+    const raw = await Promise.race([
+      win.webContents.executeJavaScript(source),
+      sleep(timeoutMs).then(() => null)
+    ])
+    if (raw === null) {
+      log(label + ' TIMEOUT after ' + timeoutMs + 'ms')
+      problems.push(label + ' 超时（' + timeoutMs + 'ms 没有返回）—— 渲染进程可能被拖住了')
+      return { ok: false, probeTimeout: true }
+    }
     return typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch (error) {
     log(label + ' threw: ' + (error && error.message))
@@ -549,19 +565,45 @@ try {
 // The app creates its own window; attach listeners as it is created so no
 // early console error or preload failure is missed.
 app.on('browser-window-created', (_event, win) => {
+  /**
+   * **关掉后台定时器节流** —— 这一行解释了前几轮那些"探针挂住几个小时"的谜。
+   *
+   * 实测（2026-09-18）：机器被别的窗口占着时，探针的窗口是**被遮挡/后台**的，Chromium 于是把
+   * `setTimeout` 节流（先是 1 秒一次，隐藏 5 分钟后变成 1 分钟一次）。探针的每一步都是
+   * `await sleep(...)`，于是"4 秒的等待"变成几分钟，一次运行从 6 分钟涨到 4.5 小时，
+   * 报告里全是"超时"——而**渲染进程本身是好的**（`executeJavaScript` 照样立刻回话，
+   * 所以超时之后还能读到"卡在哪一步"）。
+   *
+   * 这解释了三件事：为什么超时总卡在某个 `sleep` 之前、为什么同一段代码昨天是绿的、
+   * 为什么"假失败"会成片出现（每个 `waitForRow` 循环都被拖成几十秒）。
+   */
+  try {
+    win.webContents.setBackgroundThrottling(false)
+  } catch {
+    // 老版本没有这个方法：那时只能靠 window.focus()，不影响后面的断言。
+  }
   win.webContents.on('console-message', (...a) => {
-    // Electron >= 33 passes a single details object; older versions pass
-    // (event, level, message, line, source). Support both, since the pinned
-    // Electron version and the locally available one may differ.
+    /*
+     * 两种签名都要认，而且**两边的 level 都可能是字符串或数字**。
+     *
+     * 这一处踩过（2026-09-18）：Electron ≥33 传一个 details 对象，但那一版里 `level`
+     * 可能是数字（0–3）。第一版只比较 `'error'` / `'warning'` 字符串，于是**渲染层的错误
+     * 一条都没被报出来** —— 探针看起来"没有 console 错误"，其实它一只眼是瞎的。
+     * 老签名是 `(event, level:number, message, line, source)`。
+     */
+    const isBad = (level) => {
+      const text = String(level)
+      // 老签名：2 = warning，3 = error；新签名：字符串。
+      return text === 'warning' || text === 'error' || text === '2' || text === '3'
+    }
     const d = a[0]
     if (d && typeof d === 'object' && 'level' in d) {
-      if (String(d.level) === 'error' || String(d.level) === 'warning') {
-        problems.push('console[' + d.level + '] ' + d.message + ' (' + d.sourceId + ':' + d.lineNumber + ')')
+      if (isBad(d.level)) {
+        problems.push('console[' + String(d.level) + '] ' + d.message + ' (' + d.sourceId + ':' + d.lineNumber + ')')
       }
       return
     }
-    const level = a[0]
-    if (level >= 2) problems.push('console[' + level + '] ' + a[1] + ' (' + a[3] + ':' + a[2] + ')')
+    if (isBad(a[0])) problems.push('console[' + String(a[0]) + '] ' + a[1] + ' (' + a[3] + ':' + a[2] + ')')
   })
   win.webContents.on('preload-error', (_e, p, err) => problems.push('preload-error ' + p + ': ' + err.message))
   win.webContents.on('render-process-gone', (_e, details) => problems.push('render-process-gone: ' + JSON.stringify(details)))
@@ -753,8 +795,13 @@ async function run() {
    * 超时可以按调用点放宽（第三参数）：**浏览器里真的点完一整条链**的那种探针
    * （加设备 → 进详情 → 保存 → 去点位图 → 同步 → 取抓图）光是显式 `wait` 就有 15 秒以上，
    * 30 秒在机器忙的时候会误报超时 —— 而"误报超时"与"真的挂住"在报告里长得一样。
+   *
+   * 默认值从 30 秒提到 **60 秒**（2026-09-18 实测）：那台机器上有一个**不是本项目**的
+   * node 进程常驻吃 CPU，同一次运行里 `/devices` 一页 30 秒都渲染不出来，于是设备表、
+   * 事件中心、听诊盒子三条探针全是"超时"—— 报告里 12 条问题**没有一条是内容断言**。
+   * 放宽默认值不会掩盖真缺陷（真挂住时仍会报超时），但能少报一堆假失败。
    */
-  const layout = async (route, script, timeoutMs = 30_000) => {
+  const layout = async (route, script, timeoutMs = 60_000) => {
     await win.webContents.executeJavaScript(
       'location.hash = ' + JSON.stringify('#' + route) + '; true'
     )
@@ -1849,11 +1896,20 @@ async function run() {
     '  pageTitles: [...document.querySelectorAll(".page-title")].map((n) => n.textContent.trim())' +
     '});})()')
   log('devices chrome: ' + JSON.stringify(devicesChrome))
-  if (!devicesChrome.addButtonPresent) problems.push('设备管理页找不到「添加设备」按钮')
-  if (!devicesChrome.addInsideTree) problems.push('「添加设备」不在左侧拓扑树里')
-  if (devicesChrome.addInsideContent) problems.push('「添加设备」仍然在右侧内容区里')
-  if (devicesChrome.pageTitles.length > 0) {
-    problems.push('设备管理页仍然有页面标题：' + JSON.stringify(devicesChrome.pageTitles))
+  /*
+   * 超时那一支**只报超时**，不读字段：`layout()` 已经推了一条问题，这里再读
+   * `devicesChrome.pageTitles.length` 会抛 `TypeError`，把整份报告一起带走
+   * （2026-09-18 实测：就是这一行让一次运行白跑）。
+   */
+  if (devicesChrome.probeTimeout === true) {
+    problems.push('设备管理页的界面断言超时（30 秒没有返回）—— 这一段没有任何结论')
+  } else {
+    if (!devicesChrome.addButtonPresent) problems.push('设备管理页找不到「添加设备」按钮')
+    if (!devicesChrome.addInsideTree) problems.push('「添加设备」不在左侧拓扑树里')
+    if (devicesChrome.addInsideContent) problems.push('「添加设备」仍然在右侧内容区里')
+    if (devicesChrome.pageTitles.length > 0) {
+      problems.push('设备管理页仍然有页面标题：' + JSON.stringify(devicesChrome.pageTitles))
+    }
   }
 
   /**
@@ -2617,8 +2673,27 @@ async function run() {
   const eventsCenter = await layout('/events', '(async () => {' +
     'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    /*
+     * 先记下"这一页到底挂上了没有"。
+     *
+     * 为什么（2026-09-18 实测）：有一次运行里事件中心这一段全是空的（KPI 条、搜索框、
+     * 队列一个都没有），而**日志里没有任何报错** —— 事后完全分不清是"页面没挂载"、
+     * "挂在登录页上"还是"路由被重定向了"。这几个字段就是为那一刻准备的：
+     * hash / 外壳在不在 / 登录框在不在 / 正文开头。
+     */
+    'const diag = {' +
+    '  hashAtStart: location.hash,' +
+    '  hasShell: !!document.querySelector(".sidebar, .app-shell, .app-content"),' +
+    '  hasLogin: !!document.querySelector("input[type=password]"),' +
+    '  bodyHead: (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 120)' +
+    '};' +
     // 首屏要等一次全量查询（相机 HTTP + 声纹 SQLite + 联动内存），所以等的是 KPI 条出现。
     'for (let i = 0; i < 60 && !document.querySelector(".kpi-strip"); i += 1) await sleep(500);' +
+    'diag.hashAfterWait = location.hash;' +
+    'diag.hasKpi = !!document.querySelector(".kpi-strip");' +
+    'diag.shellAfterWait = !!document.querySelector(".sidebar, .app-shell, .app-content");' +
+    'diag.loginAfterWait = !!document.querySelector("input[type=password]");' +
+    'diag.bodyAfterWait = (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 200);' +
     /*
      * 每一步都往 `window` 上留一个进度标记。
      *
@@ -2674,6 +2749,7 @@ async function run() {
     '};' +
     'const firstRow = document.querySelector(".alert-row");' +
     'if (firstRow) {' +
+    '  window.__eventsProbeStep = "drawer-open";' +
     '  firstRow.click();' +
     '  await sleep(700);' +
     '  const drawerEl = document.querySelector(".drawer");' +
@@ -2691,13 +2767,39 @@ async function run() {
     '    drawerInfo.evidenceVisible = panelVisible("evidence");' +
     '    drawerInfo.focusInside = drawerEl.contains(document.activeElement);' +
     '    const evidenceTab = drawerEl.querySelector("[data-tab=evidence]");' +
+    '    window.__eventsProbeStep = "drawer-evidence";' +
     '    if (evidenceTab) { evidenceTab.click(); await sleep(1200); }' +
     '    drawerInfo.afterTabOverview = panelVisible("overview");' +
     '    drawerInfo.afterTabEvidence = panelVisible("evidence");' +
     '    drawerInfo.evidenceImages = document.querySelectorAll("[data-action=evidence-image]").length;' +
     '    drawerInfo.evidenceNote = text(document.querySelector(".drawer [data-panel=evidence] .muted"));' +
+    /*
+     * Phase 5 的三个页签（Timeline / Related / Activity）与处置动作按钮。
+     * 这一段**只读**：只看"控件在不在、切得过去切不回来"，点击动作在最后那一条写探针里做。
+     */
+    '    const relatedTab = drawerEl.querySelector("[data-tab=related]");' +
+    '    window.__eventsProbeStep = "drawer-related";' +
+    '    if (relatedTab) { relatedTab.click(); await sleep(500); }' +
+    '    drawerInfo.afterTabRelated = panelVisible("related");' +
+    '    drawerInfo.relatedGroups = document.querySelectorAll(".drawer [data-panel=related] .related__group").length;' +
+    '    drawerInfo.relatedScope = text(document.querySelector(".drawer [data-panel=related] .related__scope"));' +
+    '    const activityTab = drawerEl.querySelector("[data-tab=activity]");' +
+    '    window.__eventsProbeStep = "drawer-activity";' +
+    '    if (activityTab) { activityTab.click(); await sleep(500); }' +
+    '    drawerInfo.afterTabActivity = panelVisible("activity");' +
+    '    const timelineTab = drawerEl.querySelector("[data-tab=timeline]");' +
+    '    window.__eventsProbeStep = "drawer-timeline";' +
+    '    if (timelineTab) { timelineTab.click(); await sleep(500); }' +
+    '    drawerInfo.afterTabTimeline = panelVisible("timeline");' +
+    '    drawerInfo.timelineNodes = document.querySelectorAll(".drawer [data-panel=timeline] .timeline__node").length;' +
+    '    drawerInfo.statusActions = [...drawerEl.querySelectorAll("[data-status-action]")].map(' +
+    '      (b) => b.getAttribute("data-status-action"));' +
+    '    drawerInfo.primaryAction = (drawerEl.querySelector("[data-action=status-primary]") || {}).dataset' +
+    '      ? drawerEl.querySelector("[data-action=status-primary]").getAttribute("data-status-action")' +
+    '      : null;' +
     // 键盘改宽度：焦点在抓手上按 ←，宽度 +16 且**写回 localStorage**。
     '    if (handle) {' +
+    '      window.__eventsProbeStep = "drawer-resize";' +
     '      handle.focus();' +
     '      handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));' +
     '      await sleep(300);' +
@@ -2707,6 +2809,7 @@ async function run() {
     '      drawerInfo.storedWidth = window.localStorage.getItem("hertzinno.eventCenter.drawerWidth");' +
     '    } catch (error) { drawerInfo.storedWidth = "READ_FAILED"; }' +
     '  }' +
+    '  window.__eventsProbeStep = "drawer-close";' +
     '  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));' +
     '  await sleep(400);' +
     '  drawerClosedByEsc = !document.querySelector(".drawer");' +
@@ -2724,9 +2827,28 @@ async function run() {
     /*
      * 记忆的**读回**：界面往 localStorage 写了一份筛选，就从 localStorage 把它读回来 ——
      * "写了"与"写对了"是两件事（工程规则：每个写操作写完要读回验证）。
+     * **必须在清筛选之前读**：清完之后读回来的是清空后的那一份（下面单独断言它）。
      */
     'let storedFilter = null;' +
     'try { storedFilter = window.localStorage.getItem("hertzinno.eventCenter.filters"); } catch (error) { storedFilter = "READ_FAILED"; }' +
+    /*
+     * 把它自己弄出来的筛选**清掉**。
+     *
+     * 为什么（2026-09-18 实测）：这一段为了验证"点 KPI 就是加筛选"把严重度点成了 critical，
+     * 于是那条**写探针**（排在所有只读探针之后）进到 `/events` 时队列是空的，报了一个
+     * `no-rows` 的假失败 —— 而真相是"上一条探针留下了筛选"。只读探针就该把现场还原。
+     *
+     * 清筛选会触发一次**全量查询**（含相机 HTTP），所以要**等行出现**而不是等一个固定秒数：
+     * 第一版等 2 秒，结果队列还是空的，报告里又多一条假失败。
+     */
+    'let cleared = false;' +
+    'const clearButton = [...document.querySelectorAll(".page button")]' +
+    '  .find((b) => text(b) === "清除全部");' +
+    'if (clearButton) { clearButton.click(); cleared = true; }' +
+    'for (let i = 0; i < 60 && document.querySelectorAll(".alert-row").length === 0; i += 1) await sleep(500);' +
+    'const rowsAfterClear = document.querySelectorAll(".alert-row").length;' +
+    'let storedFilterAfterClear = null;' +
+    'try { storedFilterAfterClear = window.localStorage.getItem("hertzinno.eventCenter.filters"); } catch (error) { storedFilterAfterClear = "READ_FAILED"; }' +
     /*
      * 版面几何。结构对了不等于版面没坏：三栏挤在一起、出现横向滚动条、KPI 被挤成两行，
      * 都是"控件都在、断言全绿"却肉眼一看就废的那种。这几条量的是**关系**（谁在谁左边、
@@ -2743,16 +2865,17 @@ async function run() {
     'const viewport = window.innerWidth + "x" + window.innerHeight;' +
     'window.__eventsProbeStep = "done";' +
     'return JSON.stringify({' +
-    '  tileLabels, tileValues, scope, hasSearchBox: !!searchBox, panelWidth, groups, optionCount,' +
+    '  diag, tileLabels, tileValues, scope, hasSearchBox: !!searchBox, panelWidth, groups, optionCount,' +
     '  panelScope, savedLabels, modeLabels, oldTable: !!oldTable, summary, rowCounts, heights,' +
     '  drawerOpened, drawerClosedByEsc, drawerInfo, hashAfterKpi, pressedAfterKpi, activeOptions, storedFilter,' +
+    '  cleared, rowsAfterClear, storedFilterAfterClear,' +
     '  viewport, overflowX,' +
     '  panelRight: panelRect ? Math.round(panelRect.right) : null,' +
     '  queueLeft: queueRect ? Math.round(queueRect.left) : null,' +
     '  queueWidth: queueRect ? Math.round(queueRect.width) : null,' +
     '  stripHeight: stripRect ? Math.round(stripRect.height) : null' +
     '});' +
-    '})()', 90_000)
+    '})()', 240_000)
   log('events center : ' + JSON.stringify(eventsCenter))
   /*
    * 探针超时时**只报超时，不编造别的结论**。
@@ -2844,6 +2967,12 @@ async function run() {
        * Overview 是 2 列属性网格、切到 Evidence 真的切过去、键盘改宽度写回 localStorage。
        */
       const info = eventsCenter.drawerInfo || {}
+      // 页面根本没挂上来时：先把"当时页面上是什么"报出来，再谈别的（否则全是连带噪声）。
+      if (info === undefined || eventsCenter.diag?.hasKpi !== true) {
+        problems.push(
+          '事件中心页没有挂载（KPI 条不存在）——当时页面：' + JSON.stringify(eventsCenter.diag)
+        )
+      }
       if (info.width !== 400) {
         problems.push('抽屉默认宽度不是规格的 400px（1440×900 下）：' + info.width)
       }
@@ -2852,11 +2981,35 @@ async function run() {
       } else if (info.min !== '400' || info.max !== '560') {
         problems.push('抓手的 400–560 范围不对：' + info.min + '–' + info.max)
       }
-      if (JSON.stringify(info.tabs) !== JSON.stringify(['概览', '证据'])) {
-        problems.push(
-          '抽屉页签不是"已实现的那两个"（Timeline/Related/Activity 属于 Phase 5）：' +
-            JSON.stringify(info.tabs)
-        )
+      if (JSON.stringify(info.tabs) !== JSON.stringify(['概览', '证据', '时间线', '关联', '活动'])) {
+        problems.push('抽屉页签不是规格的五个：' + JSON.stringify(info.tabs))
+      }
+      // Phase 5 的三个新页签：切得过去、内容有东西、作用域写着。
+      if (info.afterTabRelated !== true) {
+        problems.push('点「关联」页签没有切过去：' + JSON.stringify(info))
+      }
+      if (!(info.relatedGroups >= 3)) {
+        problems.push('关联页签的分组少于三组（同设备/同类型/时间窗口）：' + info.relatedGroups)
+      }
+      if (String(info.relatedScope || '').indexOf('已加载') < 0) {
+        problems.push('关联页签没有说明作用域（只在已加载的那一页里找）：' + JSON.stringify(info.relatedScope))
+      }
+      if (info.afterTabActivity !== true) {
+        problems.push('点「处置记录」页签没有切过去：' + JSON.stringify(info))
+      }
+      if (info.afterTabTimeline !== true) {
+        problems.push('点「时间线」页签没有切过去：' + JSON.stringify(info))
+      }
+      // 时间线至少要有"首次探测到"那一个节点。
+      if (!(info.timelineNodes >= 1)) {
+        problems.push('时间线一个节点都没有（连"首次探测到"都没有）：' + info.timelineNodes)
+      }
+      // 处置动作：至少一个，且有一个主 CTA（规格 §11.2：一次只有一个）。
+      if (!(Array.isArray(info.statusActions) && info.statusActions.length >= 1)) {
+        problems.push('抽屉头部没有任何处置动作：' + JSON.stringify(info.statusActions))
+      }
+      if (info.primaryAction === null || info.primaryAction === undefined) {
+        problems.push('抽屉头部没有主 CTA：' + JSON.stringify(info))
       }
       if (!(info.gridFields >= 8)) {
         problems.push('Overview 属性网格的字段太少：' + info.gridFields)
@@ -2898,6 +3051,21 @@ async function run() {
     if (!eventsCenter.activeOptions.some((option) => option.startsWith('严重'))) {
       problems.push(
         '点 KPI「严重」没有同步到左侧筛选面板：' + JSON.stringify(eventsCenter.activeOptions)
+      )
+    }
+    // 只读探针要把现场还原（否则后面那条写探针会继承一个"筛到 0 条"的状态）。
+    if (eventsCenter.cleared !== true) {
+      problems.push('事件中心那一段没有把筛选清回去（下一条探针会继承它）')
+    } else if (!(eventsCenter.rowsAfterClear > 0)) {
+      problems.push('清掉筛选之后队列仍然是空的：' + eventsCenter.rowsAfterClear)
+    }
+    if (
+      typeof eventsCenter.storedFilterAfterClear !== 'string' ||
+      !eventsCenter.storedFilterAfterClear.includes('"severity":""')
+    ) {
+      problems.push(
+        '清筛选之后 localStorage 里那一份没有跟着清：' +
+          JSON.stringify(eventsCenter.storedFilterAfterClear)
       )
     }
     // 写进 localStorage 的那一份要能读回来（"写了"与"写对了"是两件事）。
@@ -3509,6 +3677,127 @@ async function run() {
    * 之后 —— 探针之间不该互相影响：第一版把它插在添加设备对话框那一条后面，结果是后面
    * 的相机探针在设备下拉里只看到这一台新设备，报了一个"切不到相机"的假失败。
    */
+
+  /**
+   * 事件中心的**处置闭环**（规格 §2.2 / §15.1，Phase 5）。
+   *
+   * 这是**写探针**（它改一条事件的状态、写 `event_status` 与 `event_activity`），
+   * 所以和上面那两条一样排在**所有只读探针之后**：只读探针看的是"操作员库原样"，
+   * 一条事件的状态被改过之后，抽屉里那一段的结构断言就不再落在同一个起点上。
+   *
+   * 写的是**一次性 profile 里那份副本**，操作员的真库不受影响。
+   *
+   * 断言分三层，缺一不可：
+   *   1. 界面**真的点了**（按钮存在、点的是主 CTA）；
+   *   2. 服务端**真的写进去了**（直接 `eventCenter.query` 读回那一条的状态：这是"读完写回"）；
+   *   3. 界面**跟着变了**（抽屉不关、状态文字变了、处置记录里出现"谁在什么时候改的"）。
+   */
+  const eventsHandling = await layout('/events', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    'const out = { ok: false };' +
+    /*
+     * 先**绕一圈再回来**：`layout()` 只是设置 hash，如果上一条探针已经停在 `/events`，
+     * 重新设同一个 hash **不会重新挂载**，于是这里会继承上一条留下的状态（实测：上一条清完
+     * 筛选后队列是空的，于是这一条报 `no-rows`，而真相是"根本没重新查"）。
+     */
+    'location.hash = "#/alarms";' +
+    'await sleep(1200);' +
+    'location.hash = "#/events";' +
+    'await sleep(1200);' +
+    'for (let i = 0; i < 60 && !document.querySelector(".alert-row"); i += 1) await sleep(500);' +
+    'const row = document.querySelector(".alert-row");' +
+    'if (!row) {' +
+    /*
+     * 空队列时**直接问一次主进程**：这样能分开两种完全不同的故障 ——
+     * "查询真的返回 0 条"（数据/过滤的问题）与"查询返回了但界面没画"（渲染/store 的问题）。
+     */
+    '  const direct = await window.api.eventCenter.query({ limit: 50, offset: 0 });' +
+    '  return JSON.stringify({' +
+    '    ok: false, reason: "no-rows",' +
+    '    directOk: direct && direct.success === true,' +
+    '    directItems: direct && direct.success ? direct.data.items.length : null,' +
+    '    directTotal: direct && direct.success ? direct.data.total : null,' +
+    '    directCounts: direct && direct.success ? direct.data.countsBySource : null,' +
+    '    bodyHead: (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 200),' +
+    '    errorText: text(document.querySelector(".page .alert--danger")),' +
+    '    summary: text(document.querySelector(".pager .muted")),' +
+    '    kpi: !!document.querySelector(".kpi-strip")' +
+    '  });' +
+    '}' +
+    'row.click();' +
+    'await sleep(800);' +
+    'const drawer = document.querySelector(".drawer");' +
+    'if (!drawer) return JSON.stringify({ ok: false, reason: "no-drawer" });' +
+    'const primary = drawer.querySelector("[data-action=status-primary]");' +
+    'out.action = primary ? primary.getAttribute("data-status-action") : null;' +
+    'out.entryId = text(document.querySelector(".drawer .drawer__grid .drawer__field--wide .drawer__value"));' +
+    // 先记下"改之前"的状态：只读地读一次 IPC（不改任何东西）。
+    'const beforeQuery = await window.api.eventCenter.query({ limit: 50, offset: 0 });' +
+    'const beforeItems = beforeQuery && beforeQuery.success ? beforeQuery.data.items : [];' +
+    'const beforeFirst = beforeItems.find((item) => item.id === out.entryId);' +
+    'out.statusBefore = beforeFirst ? (beforeFirst.status || "(none)") : "(missing)";' +
+    'if (!primary) return JSON.stringify(Object.assign(out, { reason: "no-primary" }));' +
+    'primary.click();' +
+    'await sleep(2500);' +
+    'out.formShown = !!document.querySelector(".drawer [data-action=status-form]");' +
+    'if (out.formShown) {' +
+    '  const confirm = document.querySelector(".drawer [data-action=status-confirm]");' +
+    '  const note = document.querySelector(".drawer [data-field=note]");' +
+    '  if (note) { note.value = "探针：重新开启的原因"; note.dispatchEvent(new Event("input", { bubbles: true })); }' +
+    '  if (confirm) confirm.click();' +
+    '  await sleep(2500);' +
+    '}' +
+    // ② 读回：直接问主进程"这一条现在是什么状态"。
+    'const afterQuery = await window.api.eventCenter.query({ limit: 50, offset: 0 });' +
+    'const afterItems = afterQuery && afterQuery.success ? afterQuery.data.items : [];' +
+    'const afterFirst = afterItems.find((item) => item.id === out.entryId);' +
+    'out.statusAfter = afterFirst ? (afterFirst.status || "(none)") : "(missing)";' +
+    // ③ 处置记录：写进去的那一条要能读回来（谁、什么时候、从什么到什么）。
+    'const activity = await window.api.eventCenter.activity(out.entryId);' +
+    'const rows = activity && activity.success ? activity.data : [];' +
+    'out.activityCount = rows.length;' +
+    'out.activityKind = rows.length > 0 ? rows[0].kind : null;' +
+    'out.activityActor = rows.length > 0 ? rows[0].actor : null;' +
+    'out.activityTo = rows.length > 0 ? rows[0].toStatus : null;' +
+    'out.notice = text(document.querySelector(".page .alert--success"));' +
+    'out.drawerStillOpen = !!document.querySelector(".drawer");' +
+    // 界面上状态文字也跟着变了吗（Overview 的「状态」那一格）。
+    'const activityTab = document.querySelector(".drawer [data-tab=activity]");' +
+    'if (activityTab) { activityTab.click(); await sleep(600); }' +
+    'out.activityRows = document.querySelectorAll(".drawer [data-panel=activity] .activity__row").length;' +
+    'out.activityText = text(document.querySelector(".drawer [data-panel=activity] .activity__row"));' +
+    'out.ok = true;' +
+    'return JSON.stringify(out);' +
+    '})()', 120_000)
+  log('events handling: ' + JSON.stringify(eventsHandling))
+  if (!eventsHandling.ok) {
+    problems.push('事件中心的处置闭环没有走通：' + JSON.stringify(eventsHandling))
+  } else {
+    if (eventsHandling.action === null) {
+      problems.push('抽屉头部没有可点的主 CTA（拿不到 data-status-action）')
+    }
+    if (String(eventsHandling.entryId).trim() === '') {
+      problems.push('没能在抽屉里拿到这条事件的标识（Overview 的长字段）')
+    }
+    if (eventsHandling.statusAfter === eventsHandling.statusBefore) {
+      problems.push(
+        '点了主 CTA 之后状态没有变（写没落库？）：' + eventsHandling.statusBefore + ' → ' + eventsHandling.statusAfter
+      )
+    }
+    if (!(eventsHandling.activityCount >= 1)) {
+      problems.push('处置之后没有产生任何处置记录：' + JSON.stringify(eventsHandling))
+    }
+    if (eventsHandling.activityActor !== 'admin') {
+      problems.push('处置记录里的操作者不是当前会话（admin）：' + JSON.stringify(eventsHandling.activityActor))
+    }
+    if (eventsHandling.drawerStillOpen !== true) {
+      problems.push('处置之后抽屉被关掉了（规格 §15.1：不关 Drawer）')
+    }
+    if (!(eventsHandling.activityRows >= 1)) {
+      problems.push('界面上的处置记录页签里没有那一行：' + JSON.stringify(eventsHandling))
+    }
+  }
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)
 
@@ -3530,6 +3819,16 @@ async function run() {
 app.whenReady().then(() =>
   run().catch((error) => {
     log('FATAL: harness threw: ' + (error && error.stack ? error.stack : String(error)))
+    /*
+     * 抛出也要**把已经收集到的问题打出来**。
+     *
+     * 为什么（2026-09-18 实测）：一条探针超时之后，后面的断言读到了 `undefined.length`，
+     * 于是 driver 直接抛 —— 报告一行都没打印，**这一次运行等于白跑**（连"哪一步超时了"
+     * 都看不出来，因为 problems 只存在于内存里）。异常本身仍是一条问题，但已经查到的
+     * 那些必须留下。
+     */
+    log('problems     : ' + (problems.length + 1) + '（含上面那一条 harness 异常）')
+    for (const problem of problems) log('  ! ' + problem)
     app.exit(1)
   })
 )

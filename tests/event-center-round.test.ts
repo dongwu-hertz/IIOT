@@ -226,6 +226,7 @@ const filterPanel = read('src/renderer/src/components/event-center/EventFilterPa
 const alertQueue = read('src/renderer/src/components/event-center/AlertQueue.vue')
 const drawer = read('src/renderer/src/components/event-center/EventDetailDrawer.vue')
 const eventView = read('src/renderer/src/views/EventCenterView.vue')
+const store = read('src/renderer/src/stores/eventCenter.ts')
 const eventViewDomain = read('src/shared/domain/event-view.ts')
 
 /** 新组件里不许出现写死的颜色（工程规则：颜色只在 main.css 的 token 里）。 */
@@ -427,12 +428,34 @@ describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
     )
   })
 
-  it('地址栏同步：URL > localStorage，且"地址里写了空筛选"不会被旧条件顶回来', () => {
-    assert.ok(eventView.includes('hasEventFilterQuery(query)'), '没有区分"地址里没写筛选"')
+  it('筛选记在地址栏与本机，并且**取消筛选真的取消得掉**', () => {
     assert.ok(
       eventView.includes('void router.replace({ query: eventFilterToQuery(filters) })'),
       '筛选没有写回地址栏'
     )
+    /*
+     * `applyQuery` 必须**替换**查询，不能在旧查询上打补丁。
+     *
+     * 这是 2026-09-18 由 GUI 探针抓到的**真缺陷**：页面侧的 `buildQuery()` 只带上生效的筛选
+     * （取消一个筛选 = 补丁里没有那个键），而 `{...query.value, ...patch}` 会把它留在 query 里
+     * —— 点「清除全部」之后界面写着"没有筛选"，查询却仍然按旧的等级过滤，页面显示
+     * 「本次筛选命中 0 条事件」。探针报的是"清掉筛选之后队列仍然是空的：0"。
+     */
+    assert.match(
+      stripComments(store),
+      /async function applyQuery\(patch: Partial<EventCenterQuery>\): Promise<void> \{[\s\S]{0,200}?query\.value = \{ \.\.\.emptyQuery\(\), \.\.\.patch, offset: 0 \}/,
+      'applyQuery 没有从干净的一页开始（取消筛选会取消不掉）'
+    )
+    // `setQuery`（打补丁）本身是对的；错的是"换筛选时也打补丁"。
+    assert.equal(
+      /query\.value = \{ \.\.\.query\.value, \.\.\.patch, offset: 0 \}/.test(stripComments(store)),
+      false,
+      'applyQuery 还在旧查询上打补丁（取消筛选会留在 query 里）'
+    )
+  })
+
+  it('地址栏同步：URL > localStorage，且"地址里写了空筛选"不会被旧条件顶回来', () => {
+    assert.ok(eventView.includes('hasEventFilterQuery(query)'), '没有区分"地址里没写筛选"')
     assert.ok(
       eventView.indexOf('eventFilterFromQuery(query)') <
         eventView.indexOf('EVENT_FILTER_STORAGE_KEY)'),
@@ -477,7 +500,8 @@ describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
       '旧的事件表格还在（队列已经取代它）'
     )
     assert.ok(eventView.includes('<AlertQueue'), '页面没有挂上队列')
-    assert.ok(eventView.includes('toggleAcknowledge'), '确认逻辑被删掉了')
+    // 确认从 Phase 5 起是**一次状态变更**（`onStatusAction`）：不再有单独的确认函数。
+    assert.ok(eventView.includes('onStatusAction'), '处置逻辑不在（确认/指派/解决都走它）')
     assert.ok(eventView.includes('downloadFile('), '结果文件下载逻辑被删掉了')
   })
 
@@ -524,9 +548,16 @@ describe('Phase 4 · 抽屉本体（规格 §11）', () => {
       false,
       '页面里还留着旧的内联抽屉'
     )
-    assert.ok(drawer.includes('<slot name="overview" />'), '抽屉没有 Overview 插槽')
-    assert.ok(drawer.includes('<slot name="evidence" />'), '抽屉没有 Evidence 插槽')
-    assert.ok(drawer.includes('<slot name="actions" />'), '头部没有动作插槽（主 CTA 要放在头部）')
+    for (const slot of ['overview', 'evidence', 'timeline', 'related', 'activity']) {
+      assert.ok(drawer.includes(`<slot name="${slot}" />`), `抽屉没有 ${slot} 插槽`)
+    }
+    /*
+     * 处置按钮**在抽屉里**（它要知道状态与表单），写库由页面做（`status-action` 事件）——
+     * Phase 4 的 `#actions` 插槽已经拆掉了：一个槽位塞一行按钮，谁也不知道那一行是什么。
+     */
+    assert.equal(drawer.includes('<slot name="actions" />'), false, '旧的 actions 插槽还在')
+    assert.ok(drawer.includes("(event: 'status-action'"), '抽屉没有把处置动作交给页面')
+    assert.ok(eventView.includes('@status-action="onStatusAction"'), '页面没有接住处置动作')
   })
 
   it('宽度 400–560：常量来自纯函数层，抓手带 role=separator 与 min/max', () => {
@@ -569,7 +600,7 @@ describe('Phase 4 · 抽屉本体（规格 §11）', () => {
   it('页签条只渲染**已经做出来**的页签，且选中态是 2px 橙线不是整块橙', () => {
     assert.ok(
       drawer.includes('v-for="item in IMPLEMENTED_DETAIL_TABS"'),
-      '页签条没有按"已实现的页签"渲染（会画出空的 Timeline/Related/Activity）'
+      '页签条没有按"已实现的页签"渲染（会画出空的页签）'
     )
     assert.ok(drawer.includes('role="tablist"'), '页签条没有 tablist 角色')
     assert.ok(drawer.includes(':aria-selected="tab === item"'), '页签没有 aria-selected')
@@ -589,6 +620,31 @@ describe('Phase 4 · 抽屉本体（规格 §11）', () => {
     )
   })
 
+  it('五个页签都在了（Phase 5 把 Timeline / Related / Activity 补上）', () => {
+    assert.match(
+      eventViewDomain,
+      /IMPLEMENTED_DETAIL_TABS[\s\S]{0,200}?'overview',\s*'evidence',\s*'timeline',\s*'related',\s*'activity'/,
+      '已实现的页签不是五个'
+    )
+    for (const slot of ['timeline', 'related', 'activity']) {
+      assert.ok(eventView.includes(`<template #${slot}>`), `页面没有提供 ${slot} 页签的内容`)
+    }
+  })
+
+  it('头部动作由**状态机**决定：主 CTA 恰好一个，没有确认接口的来源不出现「确认」', () => {
+    assert.ok(drawer.includes('statusActionsFor(props.alert.status'), '头部动作没有走状态机纯函数')
+    assert.ok(drawer.includes("locked: props.alert.statusLocked"), '没有把"没有确认接口"传进状态机')
+    assert.ok(drawer.includes('data-action="status-primary"'), '主 CTA 没有探针标记')
+    assert.ok(drawer.includes('data-status-action'), '次要动作没有探针标记')
+    // 指派只在有可选账户时出现（点开一个空列表比没有按钮更糟）。
+    assert.ok(drawer.includes("canAssign: (props.assignees?.length ?? 0) > 0"), '指派的可用性没有看账户列表')
+    // 需要输入的动作（指派/重新开启）走行内表单，不是再叠一层弹窗。
+    assert.ok(drawer.includes('data-action="status-form"'), '没有需要输入的动作表单')
+    assert.ok(drawer.includes('data-field="assignee"'), '指派表单里没有账户选择')
+    assert.ok(drawer.includes('data-field="note"'), '重新开启的表单里没有原因输入')
+    assert.ok(drawer.includes("t('eventsUi.actionNoteEmpty')"), '空白原因没有提示')
+  })
+
   it('头部有等级、标题、设备链接、首次探测时间与一个主 CTA（规格 §11.2）', () => {
     assert.ok(drawer.includes('drawer__severity'), '头部没有等级')
     assert.ok(drawer.includes('t(alert.titleKey)'), '头部标题没有走目录键')
@@ -597,8 +653,34 @@ describe('Phase 4 · 抽屉本体（规格 §11）', () => {
       drawer.includes('formatRelativeTime(props.alert.firstDetectedAt)'),
       '头部没有"首次探测到多久以前"'
     )
-    assert.ok(eventView.includes('data-action="drawer-acknowledge"'), '头部没有确认这个主 CTA')
-    assert.ok(eventView.includes('class="btn btn--primary btn--sm"'), '主 CTA 不是 primary 按钮')
+    assert.ok(drawer.includes('data-action="status-primary"'), '头部没有主 CTA')
+    assert.ok(drawer.includes('class="btn btn--primary btn--sm"'), '主 CTA 不是 primary 按钮')
+  })
+
+  it('处置写完**重查**、且不关抽屉（规格 §15.1：确认后更新状态、写 Activity、不关 Drawer）', () => {
+    assert.ok(eventView.includes('window.api.eventCenter.changeStatus('), '页面没有调用处置 IPC')
+    assert.ok(eventView.includes('await store.applyQuery(buildQuery())'), '处置之后没有重查')
+    assert.equal(
+      /async function onStatusAction[\s\S]{0,2000}?await reload\(\)/.test(eventView),
+      false,
+      '处置之后走了 reload()（它会关抽屉，违反"不关 Drawer"）'
+    )
+    assert.ok(eventView.includes("store.notice"), '处置成功没有回执')
+    assert.ok(eventView.includes('currentStatus: current.status'), '指派没有把当前状态带下去')
+    // 状态变了，q队列里的状态徽标要跟着变：视图模型的 status 来自服务端合并。
+    assert.ok(eventView.includes('window.api.eventCenter.activity('), '没有读处置记录')
+  })
+
+  it('三个新页签的内容来自纯函数（时间线 / 相关性 / 处置记录）', () => {
+    assert.ok(eventView.includes('alertTimeline(detail.value, activities.value'), '时间线没有走纯函数')
+    assert.ok(eventView.includes('activityRows(activities.value)'), '处置记录没有走纯函数')
+    assert.ok(eventView.includes('relatedGroups(detail.value, alerts.value)'), '相关性没有走纯函数')
+    // 相关性按钮点了要能切到那一条（"相关"必须可操作，否则就只是一堆数字）。
+    assert.ok(eventView.includes('openRelated(id)'), '相关性分组不可点')
+    // 相关性只在已加载的那一页里找 —— 这件事要印出来。
+    assert.ok(eventView.includes("t('eventsUi.relatedScope'"), '没有说明相关性的作用域')
+    // 时间线与处置记录都用同一批行（同一份事实，两种排法）。
+    assert.ok(eventView.includes("t('eventsUi.activityStatusLine'"), '处置记录没有写成一句人话')
   })
 
   it('Overview 用属性网格（2 列，长字段跨两列），字段来自纯函数', () => {

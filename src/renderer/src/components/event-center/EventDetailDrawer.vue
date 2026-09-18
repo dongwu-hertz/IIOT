@@ -27,9 +27,15 @@ import {
   DETAIL_DRAWER_MIN,
   IMPLEMENTED_DETAIL_TABS,
   clampDrawerWidth,
-  detailTabLabelKey
+  detailTabLabelKey,
+  statusActionsFor
 } from '@shared/domain/event-view'
-import type { AlertViewModel, EventDetailTab } from '@shared/domain/event-view'
+import type {
+  AlertViewModel,
+  EventDetailTab,
+  EventStatusAction,
+  StatusActionDescriptor
+} from '@shared/domain/event-view'
 import { formatRelativeTime } from '@renderer/lib/format'
 
 const props = defineProps<{
@@ -38,6 +44,13 @@ const props = defineProps<{
   width: number
   /** 当前页签（受控，`v-model:tab`）。 */
   tab: EventDetailTab
+  /**
+   * 可以指派给谁。空数组（或没给）时**不出现**「指派」这个动作 ——
+   * 点开只有一个空列表比没有这个按钮更糟。
+   */
+  assignees?: readonly { username: string; displayName?: string }[]
+  /** 处置动作正在提交（禁用按钮，避免连点两次状态变更）。 */
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -48,6 +61,13 @@ const emit = defineEmits<{
   (event: 'next'): void
   /** 点头部那台设备的名字（跳到设备详情页；路由由页面决定）。 */
   (event: 'open-device'): void
+  /**
+   * 请求一次处置（状态变更 / 指派）。
+   *
+   * 抽屉只负责"点了哪个动作、填了什么"，**写库由页面做**：状态是页面的数据，
+   * 而且写完要重查一次（页面才知道怎么刷新队列与 KPI）。
+   */
+  (event: 'status-action', payload: { action: EventStatusAction; assignee?: string; note?: string }): void
 }>()
 
 const { t } = useI18n()
@@ -70,6 +90,78 @@ const sourceText = computed(() => t(`domain.eventSource.${props.alert.source}`))
 const firstDetected = computed(() => formatRelativeTime(props.alert.firstDetectedAt))
 
 const width = computed(() => clampDrawerWidth(props.width))
+
+// ---------------------------------------------------------------------------
+// 处置动作（规格 §2.2 / §11.2）
+// ---------------------------------------------------------------------------
+
+/**
+ * 当前状态下能做什么（规格 §11.2：主 CTA 只有一个）。
+ *
+ * `statusActionsFor` 是纯函数（有单测）：它保证主 CTA 恰好一个、没有确认接口的来源里
+ * 不出现「确认」、`reopen` 必须带原因、`muted` 只给一个「取消静默」。
+ */
+const statusActions = computed(() =>
+  statusActionsFor(props.alert.status, {
+    locked: props.alert.statusLocked,
+    canAssign: (props.assignees?.length ?? 0) > 0
+  })
+)
+const primaryAction = computed(() => statusActions.value.find((action) => action.primary === true))
+const secondaryActions = computed(() =>
+  statusActions.value.filter((action) => action.primary !== true)
+)
+
+/** 正在等一个输入的动作（指派要选人、重新开启要写原因）。 */
+const pendingAction = ref<EventStatusAction | null>(null)
+const assigneeDraft = ref('')
+const noteDraft = ref('')
+const noteMissing = ref(false)
+
+function runAction(action: StatusActionDescriptor): void {
+  if (action.id === 'assign') {
+    pendingAction.value = 'assign'
+    assigneeDraft.value = props.assignees?.[0]?.username ?? ''
+    return
+  }
+  if (action.requiresNote === true) {
+    pendingAction.value = action.id
+    noteDraft.value = ''
+    noteMissing.value = false
+    return
+  }
+  emit('status-action', { action: action.id })
+}
+
+function confirmPending(): void {
+  const action = pendingAction.value
+  if (action === null) return
+  if (action === 'assign') {
+    if (assigneeDraft.value.trim() === '') return
+    emit('status-action', { action: 'assign', assignee: assigneeDraft.value })
+  } else {
+    const note = noteDraft.value.trim()
+    if (note === '') {
+      // 规格 §2.2：重新开启要记原因。空白原因不许提交（服务端也会拒绝，这里是提前说清）。
+      noteMissing.value = true
+      return
+    }
+    emit('status-action', { action, note })
+  }
+  pendingAction.value = null
+  noteMissing.value = false
+}
+
+function cancelPending(): void {
+  pendingAction.value = null
+  noteMissing.value = false
+}
+
+// 换一条事件时把没提交完的表单收掉：否则上一条的原因会挂在另一条上。
+watch(
+  () => props.alert.id,
+  () => cancelPending()
+)
 
 // ---------------------------------------------------------------------------
 // 键盘
@@ -208,7 +300,29 @@ watch(
           </div>
         </div>
         <div class="drawer__header-actions">
-          <slot name="actions" />
+          <!-- 主 CTA（规格 §11.2：一次只有一个）。没有确认接口的来源里不出现「确认」。 -->
+          <button
+            v-if="primaryAction"
+            type="button"
+            class="btn btn--primary btn--sm"
+            :disabled="busy === true"
+            data-action="status-primary"
+            :data-status-action="primaryAction.id"
+            @click="runAction(primaryAction)"
+          >
+            {{ t(primaryAction.labelKey) }}
+          </button>
+          <button
+            v-for="action in secondaryActions"
+            :key="action.id"
+            type="button"
+            class="btn btn--sm"
+            :disabled="busy === true"
+            :data-status-action="action.id"
+            @click="runAction(action)"
+          >
+            {{ t(action.labelKey) }}
+          </button>
           <button
             type="button"
             class="btn btn--ghost btn--icon"
@@ -227,6 +341,53 @@ watch(
           </button>
         </div>
       </header>
+
+      <!--
+        需要输入的处置动作（指派要选人、重新开启要写原因）。
+        这是**行内表单**而不是弹出层：抽屉本身已经是覆盖层，再叠一层弹窗就得处理两层 Esc。
+      -->
+      <div v-if="pendingAction" class="drawer__action-form" data-action="status-form">
+        <template v-if="pendingAction === 'assign'">
+          <label class="field">
+            <span class="field-label">{{ t('eventsUi.actionAssignee') }}</span>
+            <select v-model="assigneeDraft" class="select" data-field="assignee">
+              <option v-for="person in assignees" :key="person.username" :value="person.username">
+                {{ person.displayName ?? person.username }}
+              </option>
+            </select>
+          </label>
+        </template>
+        <template v-else>
+          <label class="field drawer__action-note">
+            <span class="field-label">{{ t('eventsUi.actionNote') }}</span>
+            <input
+              v-model="noteDraft"
+              class="input"
+              type="text"
+              data-field="note"
+              :placeholder="t('eventsUi.actionReopenNotePlaceholder')"
+              @keydown.enter.prevent="confirmPending"
+            />
+          </label>
+        </template>
+        <div class="btn-row">
+          <button
+            type="button"
+            class="btn btn--primary btn--sm"
+            :disabled="busy === true"
+            data-action="status-confirm"
+            @click="confirmPending"
+          >
+            {{ t('eventsUi.actionConfirm') }}
+          </button>
+          <button type="button" class="btn btn--sm" @click="cancelPending">
+            {{ t('eventsUi.actionCancel') }}
+          </button>
+        </div>
+        <p v-if="noteMissing" class="alert alert--warning" role="alert">
+          {{ t('eventsUi.actionNoteEmpty') }}
+        </p>
+      </div>
 
       <!--
         页签（规格 §11.3）：高 40、13/500，选中项是**文字变深 + 2px 橙色下划线**，
@@ -254,6 +415,15 @@ watch(
         </div>
         <div v-show="tab === 'evidence'" role="tabpanel" data-panel="evidence">
           <slot name="evidence" />
+        </div>
+        <div v-show="tab === 'timeline'" role="tabpanel" data-panel="timeline">
+          <slot name="timeline" />
+        </div>
+        <div v-show="tab === 'related'" role="tabpanel" data-panel="related">
+          <slot name="related" />
+        </div>
+        <div v-show="tab === 'activity'" role="tabpanel" data-panel="activity">
+          <slot name="activity" />
         </div>
       </div>
     </aside>
@@ -374,6 +544,29 @@ watch(
   align-items: center;
   gap: var(--space-2);
   flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* 需要输入的处置动作：贴在头部下面的一条行内表单。 */
+.drawer__action-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.drawer__action-note {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.drawer__action-form .alert {
+  flex: 1 1 100%;
+  margin: 0;
 }
 
 .drawer__tabs {

@@ -109,9 +109,18 @@ export const useEventCenterStore = defineStore('eventCenter', () => {
     query.value = { ...query.value, ...patch }
   }
 
-  /** Apply a filter change and reload from the first page. */
+  /**
+   * Apply a filter change and reload from the first page.
+   *
+   * **从"干净的一页"开始，而不是在旧查询上打补丁**（2026-09-18 修的真缺陷）：
+   * `buildQuery()`（页面侧）**只带上生效的筛选**，所以"取消一个筛选"在补丁里表现为
+   * **没有那个键**；而 `{...query.value, ...patch}` 会把它留在 query 里 —— 于是点「清除全部」
+   * 之后界面写着"没有筛选"，查询却仍然按旧的等级过滤，页面显示「本次筛选命中 0 条事件」。
+   * 这是**界面在骗人**的那一类缺陷（筛选项空了、结果却还是筛过的），由 GUI 探针抓到：
+   * "清掉筛选之后队列仍然是空的：0"。
+   */
   async function applyQuery(patch: Partial<EventCenterQuery>): Promise<void> {
-    query.value = { ...query.value, ...patch, offset: 0 }
+    query.value = { ...emptyQuery(), ...patch, offset: 0 }
     await load()
   }
 

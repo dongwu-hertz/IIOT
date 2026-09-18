@@ -2434,11 +2434,8 @@ export const en: MessageSchema = {
     detailSourceUnavailable: 'This source failed to read just now; try again in a moment',
 
     detailAck: 'Acknowledge this event',
-    detailUnack: 'Remove acknowledgement',
     detailAckUnsupported:
       'The camera side has no acknowledge endpoint for detection logs (none of the manual 32 open interfaces), so this entry cannot be acknowledged.',
-    detailAckDone: 'Acknowledged {count} events',
-    detailAckFailed: 'Acknowledge failed: {reason}',
 
     detailRecordingTitle: 'Local recording and image',
     detailRecordingNone: 'This event has no recording on this machine.',
@@ -2562,6 +2559,29 @@ export const en: MessageSchema = {
     relatedSameDevice: 'Same device',
     relatedSameKind: 'Same event type',
     relatedTimeWindow: 'Within 10 minutes',
+
+    // --- Phase 5 (UI): actions / timeline / related / activity ---------------
+    relatedTitle: 'Related events',
+    relatedScope: 'Related events are searched among the {loaded} loaded rows',
+    relatedEmpty: 'No related events were found.',
+    relatedOpen: 'Open this one',
+
+    timelineTitle: 'Timeline',
+    timelineDetected: 'First detected',
+
+    activityTitle: 'Handling record',
+    activityEmpty: 'No handling record for this event yet.',
+    activityStatusLine: '{actor} changed the status from "{from}" to "{to}"',
+    activityAssignLine: '{actor} assigned it to {name}',
+    activityNoteLine: '{actor} commented',
+    statusChangeDone: 'Status changed to "{status}"',
+    assignDone: 'Assigned to {name}',
+    actionAssignee: 'Assign to',
+    actionNote: 'Add note',
+    actionReopenNotePlaceholder: 'Reason for reopening (required)',
+    actionNoteEmpty: 'Please enter a reason first',
+    actionConfirm: 'Confirm',
+    actionCancel: 'Cancel'
 
   }
 }

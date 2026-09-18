@@ -1102,11 +1102,18 @@ export const EVENT_DETAIL_TABS: readonly EventDetailTab[] = [
 /**
  * **已经做出来**的页签。
  *
- * Phase 4 只交付 Overview 与 Evidence（规格 §18.1 把 Timeline / Related / Activity 排在
- * Phase 5，因为它们的素材是状态变更记录与聚合结果 —— 现在库里没有这两样）。所以页签条里
- * 只有这两个：画出三个永远空着的页签，比不画更糟（工程规则：不存在的能力不渲染）。
+ * Phase 5 起五个页签都在了（Overview / Evidence / Timeline / Related / Activity）：
+ * 时间线与相关性由纯函数算（`alertTimeline` / `relatedGroups`），Activity 来自
+ * `event_activity` 表。常量留着是因为**页签的可用性不该由渲染层硬编码** ——
+ * 将来某一块拿不到数据时，把它从这里去掉就是"不渲染"，而不是留一个空页签。
  */
-export const IMPLEMENTED_DETAIL_TABS: readonly EventDetailTab[] = ['overview', 'evidence']
+export const IMPLEMENTED_DETAIL_TABS: readonly EventDetailTab[] = [
+  'overview',
+  'evidence',
+  'timeline',
+  'related',
+  'activity'
+]
 
 export function isEventDetailTab(value: unknown): value is EventDetailTab {
   return typeof value === 'string' && (EVENT_DETAIL_TABS as readonly string[]).includes(value)

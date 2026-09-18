@@ -534,8 +534,11 @@ describe('内置视图（规格 §9.4）', () => {
 })
 
 describe('详情抽屉（规格 §11）', () => {
-  it('页签条只列**已经做出来**的页签（Timeline/Related/Activity 是 Phase 5）', () => {
-    assert.deepEqual([...IMPLEMENTED_DETAIL_TABS], ['overview', 'evidence'])
+  it('页签条列的是**已经做出来**的页签（Phase 5 起是五个）', () => {
+    assert.deepEqual(
+      [...IMPLEMENTED_DETAIL_TABS],
+      ['overview', 'evidence', 'timeline', 'related', 'activity']
+    )
     for (const tab of IMPLEMENTED_DETAIL_TABS) {
       assert.ok((EVENT_DETAIL_TABS as readonly string[]).includes(tab), `${tab} 不在规格的五个页签里`)
     }
