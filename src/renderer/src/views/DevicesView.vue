@@ -7,32 +7,24 @@
  * 协议字段名。通道数不在 `Device` 上，所以读 store 缓存的通道表；那一次调用成功之前显示
  * "—" 而不是猜一个数。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import type { AlarmQuery } from '@shared/domain/models'
-import type { Channel, Device, DeviceKind } from '@shared/domain/models'
-import type { ChannelConfigView } from '@shared/domain/device-config'
+import type { Device } from '@shared/domain/models'
 import { isPointComplete, parseInstallation } from '@shared/domain/device-installation'
+import { callApi, unwrap } from '@renderer/lib/result'
 import { useDevicesStore } from '@renderer/stores/devices'
-import { useDeviceTreeStore } from '@renderer/stores/deviceTree'
-import { useCameraWallStore } from '@renderer/stores/liveWall'
 import { useSessionStore } from '@renderer/stores/session'
 import { channelState } from '@renderer/lib/channelState'
-import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import AddDeviceDialog from '@renderer/components/AddDeviceDialog.vue'
 import AppModal from '@renderer/components/AppModal.vue'
-import DeviceRenameDialog from '@renderer/components/DeviceRenameDialog.vue'
-import DeviceTree from '@renderer/components/DeviceTree.vue'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
 
 const { t } = useI18n()
-const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
-const tree = useDeviceTreeStore()
-const wall = useCameraWallStore()
 
 /**
  * Adding, editing and removing devices are administrator actions (see
@@ -105,26 +97,13 @@ const cards = computed(() => devices.devices)
 // ---------------------------------------------------------------------------
 
 /**
- * 树上应当高亮的设备。
- *
- * 判定只走 `stores/deviceTree.selectedForRoute()` 一处（查询串 > 记住的 > 第一台），
- * 所以「点树跳转」与「直接输入地址栏 / 刷新 / 后退」落到的是同一个节点 —— 这正是
- * 产品要求里的「用别的方式来到这个路由也要高亮正确的节点」。
- *
- * 高亮读的是 `/monitor` 的查询串：拓扑树的点击语义是「看这台设备的实时画面」，
- * 所以选中态跟着监测页走，而不是跟着本页的设备卡片走。
- */
-const treeSelection = computed(() => tree.selectedForRoute(route.query.device))
-
-/**
  * 表格里被选中的那一行（本页自己的选中态）。
  *
  * 为什么表格的"点一行"**不再跳走**：业主第 4 条要的是「**双击**设备 IP 打开设备 Web 界面」，
  * 而双击的前半段一定是两次单击 —— 只要单击这一行会导航（上一版的行点击就是跳去 `/monitor`），
  * 第一次单击就已经离开这一页了，双击永远落不到 IP 上。所以这一页的行点击改成**选中**：
  *   行点击 = 选中这一台（高亮 + 把 store 的当前设备切过去），
- *   要跳转就用右边那两列 —— 「查看」去实时检测、「配置」去设备详情。
- * 树上的点击仍然是"看这台设备的实时画面"（那是拓扑树的语义，没变）。
+ *   要跳转就用右边那两列 —— 「查看」去实时检测、「设置」去设备详情。
  */
 const activeRowId = ref('')
 
@@ -140,40 +119,14 @@ function selectRow(device: Device): void {
  */
 function ignoreClick(): void {}
 
-/**
- * 选中一台设备：**走路由**，让查询串成为选择的唯一真相。
- *
- * 这样浏览器的后退键、外部链接和刷新都会高亮同一台设备；如果只改 store 不改路由，
- * 后退之后树与页面就会各说各话。
- */
-function selectDevice(deviceId: string): void {
-  wall.bindDevices(devices.devices)
-  void router.push({ path: '/monitor', query: { ...route.query, device: deviceId } })
-}
-
-/**
- * 双击设备 = 放进视频墙的当前格（产品要求）。
- *
- * 除了改路由（让监控页显示这台设备），还要把设备放进视频墙的状态格：双击的语义
- * 是「看它」，而下拉选择/拖拽都能做同一件事，所以这里不依赖任何鼠标手势是否成功。
- */
-function openDeviceInWall(deviceId: string): void {
-  wall.bindDevices(devices.devices)
-  const slot = wall.slotForDevice(deviceId)
-  wall.placeDevice(slot, deviceId)
-  wall.setActive(slot)
-  void router.push({ path: '/monitor', query: { ...route.query, device: deviceId } })
-}
-
 onMounted(() => {
-  tree.ensureDefaultExpansion()
   /*
    * 列表为空时**这一页自己读一次**。
    *
    * 其他列表页早就各自这么做了（`MonitorView` / `RecordingsView` / `AlarmsView` /
    * `TrendsView` / `SamplesView` / `EventCenterView` / `DeviceDetailView`），只有设备管理页
    * 原来完全依赖外壳（`AppShell`）在启动时读的那一次。而这一页恰恰最不该把"还没读到"显示成
-   * "没有设备"：`DeviceTree` 对 `devices.length === 0` 只画一句"没有设备"。
+   * "没有设备"。
    *
    * ⚠️ 诚实说明：**这不是** 2026-09-17 那条探针观察到的现象的成因。那次观察到的是
    * "加完设备之后实时监测页的设备下拉里只有这一台（库里 3 台）"，而当时的 store 并不是空的
@@ -186,10 +139,10 @@ onMounted(() => {
   void loadAlarmCounts()
 })
 
-onUnmounted(() => {
-  // 行末的 `⋮` 菜单按第 8 条删掉了（编辑与删除升成两列），所以这里不再有"点外面关菜单"
-  // 的监听器 —— 少一个监听器也少一处"关不掉的浮层"。
-})
+/*
+ * 这里**没有卸载钩子**（第 8 条把行末那个 `⋮` 菜单删掉之后，本页最后一个全局监听器
+ * ——"点外面关菜单"——跟着消失了）。少一个监听器，也少一处关不掉的浮层。
+ */
 
 /**
  * Channel counts are per-device facts, so they can only come from the device.
@@ -398,386 +351,216 @@ function onAdded(deviceId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 右键重命名（产品要求：右键设备行改设备名、右键通道行改通道名）
+// 页面
 // ---------------------------------------------------------------------------
-
-/**
- * 正在改的对象。
- *
- * 用判别联合而不是「一堆可空字段」：`channelIndex` 只在改通道时存在，而 `renameError`
- * / `renameNotice` 这类字段一旦可以同时为空或同时有值，就会出现「改设备名时用到了
- * 一个 undefined 的通道号」这种只有运行时才发现的错。
- */
-type RenameTarget =
-  | { kind: 'device'; deviceId: string }
-  | { kind: 'channel'; deviceId: string; channelIndex: number }
-
-const renameOpen = ref(false)
-const renameTarget = ref<RenameTarget | null>(null)
-const renameError = ref('')
-const renameSaving = ref(false)
-
-/** 正在改的设备；它被删掉时对话框里的名字会退回空串而不是留在上一台。 */
-const renameDevice = computed<Device | undefined>(() => {
-  const target = renameTarget.value
-  return target ? devices.byId(target.deviceId) : undefined
-})
-
-const renameKind = computed<DeviceKind>(() => renameDevice.value?.kind ?? 'acousticBox')
-
-const renameChannel = computed<Channel | undefined>(() => {
-  const target = renameTarget.value
-  if (!target || target.kind !== 'channel') return undefined
-  return (devices.channels[target.deviceId] ?? []).find(
-    (channel) => channel.channelIndex === target.channelIndex
-  )
-})
-
-/**
- * 输入框的初值。
- *
- * 改设备名时读**数据库里的名字**（不是树上的显示名）：树上相机的地址不会出现，
- * 但那是显示规则，把它当成输入初值会让一次「保存」把本地名字默默改成「声学相机」。
- * 改通道名时读设备上报的通道名（就是树上那个名字）。
- */
-const renameCurrentName = computed(() => {
-  const target = renameTarget.value
-  if (!target) return ''
-  if (target.kind === 'device') return renameDevice.value?.name ?? ''
-  return renameChannel.value?.channelName ?? ''
-})
-
-const renameChannelLabel = computed(() => {
-  const target = renameTarget.value
-  if (!target || target.kind !== 'channel') return ''
-  return `CH${target.channelIndex + 1}`
-})
-
-function onRenameDevice(deviceId: string): void {
-  renameTarget.value = { kind: 'device', deviceId }
-  renameError.value = ''
-  renameOpen.value = true
-}
-
-function onRenameChannel(deviceId: string, channelIndex: number): void {
-  renameTarget.value = { kind: 'channel', deviceId, channelIndex }
-  renameError.value = ''
-  renameOpen.value = true
-}
-
-/**
- * 写入新名字；返回 `true` 才关闭对话框。
- *
- * 落点按 `kind` 分（绝不按名字或地址猜）：
- *   - **声纹设备**：本机数据库 + 设备自身（`config.setDeviceName`）。两件事都做完才算
- *     成功；只改成本地那一半会让本机显示一个新名字而设备仍然叫旧名字，而这正是这一
- *     轮要消灭的那种谎话 —— 所以设备侧被拒时本机那一半会被**回滚**（见
- *     `renameDeviceName`）。
- *   - **声学相机**：**只有本机数据库**。FA371 的开放接口没有设备名称端点
- *     （`docs/reference/FA371-api-spec.md` §3：手册 32 个接口里没有「设备重命名」，
- *     表后注明确把它列为「Open Interface 未开放」），所以这里不可能有第二种结果；
- *     对话框会当面把这件事说给操作员（`deviceRename.cameraHint`），成功提示也明说
- *     「相机本身没有改名」。
- *   - **通道**：写在设备上（`config.updateChannel`），成功之后**重新读**本机那份通道表，
- *     否则树和卡片会继续显示旧名字。
- *
- * 失败一律返回 `false` 并把原因留在对话框里：主进程对这三个写入都要求管理员，
- * 权限不足会被如实拒绝，而一个被拒绝的写入绝不能看起来像成功过。
- *
- * **声纹设备改名失败必须回滚本机那一半**：设备比本机权威（真实名字在设备上），
- * 而「本机显示新名字、设备仍叫旧名字」正是这一轮要消灭的那种谎话。所以失败时用
- * `devices.update` 把本机改回原名，并把「设备的原文 + 本机已恢复」一起说给操作员；
- * 万一连回滚也失败，就直说本机与设备现在不一致，而不是假装没事。
- */
-async function submitRename(name: string): Promise<boolean> {
-  const target = renameTarget.value
-  if (!target) return false
-  renameSaving.value = true
-  renameError.value = ''
-  const ok = target.kind === 'device' ? await renameDeviceName(name) : await renameChannelName(name, target)
-  renameSaving.value = false
-  return ok
-}
-
-/** 改设备名（本地 + 设备侧，见 `submitRename` 的说明）。 */
-async function renameDeviceName(name: string): Promise<boolean> {
-  const device = renameDevice.value
-  if (!device) return false
-
-  // 回滚要用的原值必须**在写入之前**取：`renameDevice` 是 store 上的计算属性，
-  // 本地那一半一改，它立刻就是新名字了。
-  const previousLocalName = device.name
-
-  const updated = await devices.update({ id: device.id, name })
-  if (!updated) {
-    renameError.value = devices.error || t('deviceRename.deviceFailed')
-    return false
-  }
-
-  if (device.kind === 'acousticBox') {
-    const result = await callApi(() => window.api.config.setDeviceName(device.id, name))
-    if (!result.success) {
-      // 设备侧被拒（多半是权限、设备不可达或设备不认这个名称）。本机那一半刚刚已经
-      // 落库了，先把它改回去，否则树会显示一个设备并不具备的名字。
-      const restored = await devices.update({ id: device.id, name: previousLocalName })
-      if (!restored) {
-        renameError.value = t('deviceRename.renameBoxRestoreFailed', {
-          reason: resultMessage(result),
-          name: previousLocalName
-        })
-        return false
-      }
-      renameError.value = t('deviceRename.renameBoxRestored', {
-        reason: resultMessage(result),
-        name: previousLocalName
-      })
-      return false
-    }
-    notice.value = t('deviceRename.renameBoxNotice', { name: updated.name })
-    return true
-  }
-
-  // 相机：本地数据库是**唯一**的落点（见函数头）。
-  notice.value = t('deviceRename.renameCameraNotice', { name: updated.name })
-  return true
-}
-
-/** 改通道名：写设备，再把本机那份通道表读回来（否则界面继续显示旧名字）。 */
-async function renameChannelName(
-  name: string,
-  target: Extract<RenameTarget, { kind: 'channel' }>
-): Promise<boolean> {
-  const result = await callApi(() =>
-    window.api.config.updateChannel(target.deviceId, target.channelIndex, { name })
-  )
-  if (!result.success) {
-    renameError.value = resultMessage(result)
-    return false
-  }
-  const channels = unwrap(result) as ChannelConfigView[] | undefined
-  await devices.loadChannels(target.deviceId, true)
-  const written = channels?.find((channel) => channel.channelIndex === target.channelIndex)
-  notice.value = t('deviceRename.renameChannelNotice', { name: written?.name ?? name })
-  return true
-}
 </script>
 
 <template>
   <div class="page">
     <!--
-      这一页**没有页头**（产品要求）：外层框架的标题栏已经写了「设备管理」，这里再写一遍
-      是同一条事实的第二处实现。「添加设备」也跟着搬进了左侧拓扑树的树头（参考 ThingsBoard
-      的设备管理架构：左侧列表自带新增入口），所以整块 `page-header` 都删掉了 ——
-      留一个只剩按钮的空页头，等于把"被删掉的那一行"换成一个更占地方的占位。
+      这一页**没有页头**（产品要求）。「添加设备」按业主 2026-09-18 第 5 条搬进了**顶栏**——
+      原来是挂在左侧拓扑树的树头上，而第 5 条要求整棵树下架。
+
+      投到 `#topbar-page-slot`（顶栏里标题与右侧指示器之间的那一格，见 `AppTopbar.vue`）：
+        · 它在 `.page` 的**第一个**子节点位置，所以**没有设备时也在** —— 空列表那一屏
+          唯一的那个动作就是"添加设备"，把按钮跟着表格一起 `v-if` 掉会让新装的机器无路可走；
+        · 靠右放（`margin-left: auto`）：紧挨着右边的设备数量/在线/告警指示器，
+          与"这一屏能加设备"这件事同处一条视觉线上。
     -->
+    <Teleport to="#topbar-page-slot">
+      <!-- 只有管理员能加设备：普通账号连这个对话框都打不开（与设备表的删除列同一条口径）。 -->
+      <div v-if="session.isAdmin" class="devices-topbar-add">
+        <button
+          type="button"
+          class="btn btn--primary btn--sm"
+          data-action="device-add"
+          @click="addOpen = true"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M8 3.2v9.6M3.2 8h9.6" />
+          </svg>
+          {{ t('devicesUi.addButton') }}
+        </button>
+      </div>
+    </Teleport>
 
     <p v-if="actionError" class="alert alert--danger" role="alert">{{ actionError }}</p>
     <p v-if="notice" class="alert alert--success" role="status">{{ notice }}</p>
 
+    <EmptyState v-if="cards.length === 0" :title="t('devices.empty')" />
+
     <!--
-      两列：左边拓扑（选择设备 + 新增设备），右边设备表（管理设备）。
-      拓扑不再是全局侧栏的一部分——产品要求它属于设备管理的内容。小屏下折成单列，
-      顺序是「先看拓扑，再看设备表」，与阅读顺序一致。
-    -->
-    <div class="devices-layout">
-      <section class="card devices-topology">
-        <DeviceTree
-          :selected-device-id="treeSelection"
-          :can-add-device="session.isAdmin"
-          @select="selectDevice"
-          @open="openDeviceInWall"
-          @add="addOpen = true"
-          @rename-device="onRenameDevice"
-          @rename-channel="onRenameChannel"
-        />
-      </section>
-
-      <div class="devices-main">
-        <EmptyState v-if="cards.length === 0" :title="t('devices.empty')" />
-
-        <!--
-          设备表（业主 2026-09-17 第 3 条；**列清单在 2026-09-18 第 8 条里重给了**）：
-          序号 / 设备名称 / IP地址 / 设备类型 / 状态 / 告警数量 / 通道数 / 查看 / 设置 / 删除。
-          与上一版清单的差别逐条写进 `docs/Ivcs4200…` 那一份（见 §15.50）：多了"序号"，
+      设备表（业主 2026-09-17 第 3 条；**列清单在 2026-09-18 第 8 条里重给了**）：
+      序号 / 设备名称 / IP地址 / 设备类型 / 状态 / 告警数量 / 通道数 / 查看 / 设置 / 删除。
+          与上一版清单的差别逐条写进 `docs/Ivms4200-UX-REFERENCE.md` 那一份（见 §15.50）：多了"序号"，
           "是否在线"改叫"状态"、"设备通道"改叫"通道数"，而原来藏在 `⋮` 菜单里的"编辑/删除"
           升成了两个图标列（`设置` / `删除`），菜单本身删掉。
 
           扁平化（业主 2026-09-18 第 2b 条）：这一页**不再用 `.table-wrap` 那张卡片**，
           改成一条上边线 + 每行一条分隔线（`.devices-table-flat`，见下面样式）。
         -->
-        <section v-else class="devices-table-flat">
-          <table class="table devices-table">
-            <thead>
-              <tr>
-                <th scope="col" class="devices-table__num">{{ t('devicesUi.indexColumn') }}</th>
-                <th scope="col">{{ t('devices.name') }}</th>
-                <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
-                <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
-                <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
-                <th scope="col" class="devices-table__num">{{ t('devicesUi.alarmCountColumn') }}</th>
-                <th scope="col" class="devices-table__num">{{ t('devicesUi.channelColumn') }}</th>
-                <th scope="col" class="devices-table__actions">{{ t('devicesUi.viewColumn') }}</th>
-                <th scope="col" class="devices-table__actions">{{ t('devicesUi.settingColumn') }}</th>
-                <th scope="col" class="devices-table__actions">{{ t('devicesUi.deleteColumn') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(device, index) in cards"
-                :key="device.id"
-                :class="[
-                  'is-clickable',
-                  {
-                    'devices-table__row--selected':
-                      device.id === (activeRowId || treeSelection)
-                  }
-                ]"
-                @click="selectRow(device)"
+    <section v-else class="devices-table-flat">
+      <table class="table devices-table">
+        <thead>
+          <tr>
+            <th scope="col" class="devices-table__num">{{ t('devicesUi.indexColumn') }}</th>
+            <th scope="col">{{ t('devices.name') }}</th>
+            <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
+            <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
+            <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
+            <th scope="col" class="devices-table__num">{{ t('devicesUi.alarmCountColumn') }}</th>
+            <th scope="col" class="devices-table__num">{{ t('devicesUi.channelColumn') }}</th>
+            <th scope="col" class="devices-table__actions">{{ t('devicesUi.viewColumn') }}</th>
+            <th scope="col" class="devices-table__actions">{{ t('devicesUi.settingColumn') }}</th>
+            <th scope="col" class="devices-table__actions">{{ t('devicesUi.deleteColumn') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="(device, index) in cards"
+            :key="device.id"
+            :class="[
+              'is-clickable',
+              {
+                'devices-table__row--selected': device.id === activeRowId
+              }
+            ]"
+            @click="selectRow(device)"
+          >
+            <td class="devices-table__num muted">{{ index + 1 }}</td>
+            <td>
+              <!--
+                设备名是一**个入口**：点它进设备详情/配置页（业主第 8 条的列清单里没有
+                "详情"这一列，而那个页面装着通道配置、告警策略、维护与升级 —— 它必须还在
+                某个地方；名字是控制台里最自然的那一个）。
+              -->
+              <button
+                type="button"
+                class="devices-table__name devices-table__name--action"
+                :title="t('devicesUi.openDetail')"
+                data-action="device-detail"
+                @click.stop="go(`/devices/${device.id}`)"
               >
-                <td class="devices-table__num muted">{{ index + 1 }}</td>
-                <td>
-                  <!--
-                    设备名是一**个入口**：点它进设备详情/配置页（业主第 8 条的列清单里没有
-                    "详情"这一列，而那个页面装着通道配置、告警策略、维护与升级 —— 它必须还在
-                    某个地方；名字是控制台里最自然的那一个）。
-                  -->
-                  <button
-                    type="button"
-                    class="devices-table__name devices-table__name--action"
-                    :title="t('devicesUi.openDetail')"
-                    data-action="device-detail"
-                    @click.stop="go(`/devices/${device.id}`)"
-                  >
-                    {{ device.name }}
-                  </button>
-                  <!--
-                    地址信息是**工具提示**而不是一列：业主给的列清单里没有它，而它又是
-                    已经录进库的事实。放在名字的 title 上，既不占列，又不丢信息。
-                  -->
-                  <span
-                    v-if="device.installation"
-                    class="devices-table__install"
-                    :title="installationTitle(device)"
-                  >
-                    {{ t('installUi.point') }}
-                  </span>
-                </td>
-                <td>
-                  <!--
-                    **双击** IP 打开设备自己的 Web 界面（业主 2026-09-17 第 4 条）。
-                    用 <button> 而不是给 <td> 绑双击，是为了键盘也能到它 —— 但**单击不打开**：
-                    单击这一格的人多半是想选中这一行（行点击 = 选中设备），把单击也接上浏览器的后果
-                    是"想选设备，却弹出一个浏览器窗口"。所以：
-                      · `click` 只阻止冒泡（不选中行、也不打开任何东西）；
-                      · `dblclick` 打开设备页面；
-                      · Enter / 空格（键盘的"激活"）打开，读屏与纯键盘用户不会少一条路。
-                  -->
-                  <button
-                    type="button"
-                    class="devices-table__ip mono"
-                    :title="t('devicesUi.ipDoubleClickHint')"
-                    @click.stop="ignoreClick"
-                    @dblclick.stop="openWebUi(device)"
-                    @keydown.enter.prevent.stop="openWebUi(device)"
-                    @keydown.space.prevent.stop="openWebUi(device)"
-                  >
-                    {{ device.ip || '—' }}<span v-if="device.httpPort">:{{ device.httpPort }}</span>
-                  </button>
-                </td>
-                <td>{{ t(`domain.deviceKind.${device.kind}`) }}</td>
-                <td><StatusBadge :status="device.status" :connection-type="device.connectionType" /></td>
-                <td class="devices-table__num">{{ alarmCount(device.id) ?? '—' }}</td>
-                <td class="devices-table__num">
-                  {{ channelCount(device.id) ?? '—' }}
-                  <!--
-                    通道数的**明细**（几路在用）挪进 `title`：这一列现在有十列，1280×720 下
-                    横排放不下 —— 数字留着（它是列的含义），"8 路里开了几路"放进悬停。
-                  -->
-                  <span
-                    v-if="enabledChannelSummary(device.id)"
-                    class="devices-table__hint"
-                    :title="enabledChannelSummary(device.id)"
-                    aria-hidden="true"
-                  ></span>
-                </td>
-                <td class="devices-table__actions">
-                  <!-- 「查看」= 按机型进入对应的实时检测界面（三个不同的内容）。 -->
-                  <button
-                    type="button"
-                    class="btn btn--ghost btn--icon"
-                    :aria-label="t('devicesUi.viewColumn')"
-                    :title="t('devicesUi.viewColumn')"
-                    data-action="device-monitor"
-                    @click.stop="monitor(device)"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
-                      <path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8Z" />
-                      <circle cx="8" cy="8" r="1.8" />
-                    </svg>
-                  </button>
-                </td>
-                <!--
-                  「设置」= 编辑这一台设备（名称 / 端口 / 凭据 / 地址信息），业主第 10 条
-                  要的那个对话框。它原来是 `⋮` 菜单里的"编辑" —— 第 8 条的列清单把
-                  编辑与删除升成了两列，菜单因此删掉（一个入口胜过两个）。
-                -->
-                <td class="devices-table__actions">
-                  <button
-                    v-if="session.isAdmin"
-                    type="button"
-                    class="btn btn--ghost btn--icon"
-                    :aria-label="t('devicesUi.settingColumn')"
-                    :title="t('devicesUi.settingColumn')"
-                    data-action="device-configure"
-                    @click.stop="startEdit(device)"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
-                      <circle cx="8" cy="8" r="2.1" />
-                      <path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5" />
-                    </svg>
-                  </button>
-                </td>
-                <td class="devices-table__actions">
-                  <button
-                    v-if="session.isAdmin"
-                    type="button"
-                    class="btn btn--ghost btn--icon devices-table__delete"
-                    :aria-label="t('devicesUi.deleteColumn')"
-                    :title="t('devicesUi.deleteColumn')"
-                    data-action="device-delete"
-                    @click.stop="askRemove(device)"
-                  >
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
-                      <path d="M2.8 4.2h10.4M6.4 4.2V2.9h3.2v1.3M4.2 4.2l.7 9h6.2l.7-9" />
-                      <path d="M6.8 6.8v4.4M9.2 6.8v4.4" />
-                    </svg>
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      </div>
-    </div>
+                {{ device.name }}
+              </button>
+              <!--
+                地址信息是**工具提示**而不是一列：业主给的列清单里没有它，而它又是
+                已经录进库的事实。放在名字的 title 上，既不占列，又不丢信息。
+              -->
+              <span
+                v-if="device.installation"
+                class="devices-table__install"
+                :title="installationTitle(device)"
+              >
+                {{ t('installUi.point') }}
+              </span>
+            </td>
+            <td>
+              <!--
+                **双击** IP 打开设备自己的 Web 界面（业主 2026-09-17 第 4 条）。
+                用 <button> 而不是给 <td> 绑双击，是为了键盘也能到它 —— 但**单击不打开**：
+                单击这一格的人多半是想选中这一行（行点击 = 选中设备），把单击也接上浏览器的后果
+                是"想选设备，却弹出一个浏览器窗口"。所以：
+                  · `click` 只阻止冒泡（不选中行、也不打开任何东西）；
+                  · `dblclick` 打开设备页面；
+                  · Enter / 空格（键盘的"激活"）打开，读屏与纯键盘用户不会少一条路。
+              -->
+              <button
+                type="button"
+                class="devices-table__ip mono"
+                :title="t('devicesUi.ipDoubleClickHint')"
+                @click.stop="ignoreClick"
+                @dblclick.stop="openWebUi(device)"
+                @keydown.enter.prevent.stop="openWebUi(device)"
+                @keydown.space.prevent.stop="openWebUi(device)"
+              >
+                {{ device.ip || '—' }}<span v-if="device.httpPort">:{{ device.httpPort }}</span>
+              </button>
+            </td>
+            <td>{{ t(`domain.deviceKind.${device.kind}`) }}</td>
+            <td><StatusBadge :status="device.status" :connection-type="device.connectionType" /></td>
+            <td class="devices-table__num">{{ alarmCount(device.id) ?? '—' }}</td>
+            <td class="devices-table__num">
+              {{ channelCount(device.id) ?? '—' }}
+              <!--
+                通道数的**明细**（几路在用）挪进 `title`：这一列现在有十列，1280×720 下
+                横排放不下 —— 数字留着（它是列的含义），"8 路里开了几路"放进悬停。
+              -->
+              <span
+                v-if="enabledChannelSummary(device.id)"
+                class="devices-table__hint"
+                :title="enabledChannelSummary(device.id)"
+                aria-hidden="true"
+              ></span>
+            </td>
+            <td class="devices-table__actions">
+              <!-- 「查看」= 按机型进入对应的实时检测界面（三个不同的内容）。 -->
+              <button
+                type="button"
+                class="btn btn--ghost btn--icon"
+                :aria-label="t('devicesUi.viewColumn')"
+                :title="t('devicesUi.viewColumn')"
+                data-action="device-monitor"
+                @click.stop="monitor(device)"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8Z" />
+                  <circle cx="8" cy="8" r="1.8" />
+                </svg>
+              </button>
+            </td>
+            <!--
+              「设置」= 编辑这一台设备（名称 / 端口 / 凭据 / 地址信息），业主第 10 条
+              要的那个对话框。它原来是 `⋮` 菜单里的"编辑" —— 第 8 条的列清单把
+              编辑与删除升成了两列，菜单因此删掉（一个入口胜过两个）。
+            -->
+            <td class="devices-table__actions">
+              <button
+                v-if="session.isAdmin"
+                type="button"
+                class="btn btn--ghost btn--icon"
+                :aria-label="t('devicesUi.settingColumn')"
+                :title="t('devicesUi.settingColumn')"
+                data-action="device-configure"
+                @click.stop="startEdit(device)"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <circle cx="8" cy="8" r="2.1" />
+                  <path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5" />
+                </svg>
+              </button>
+            </td>
+            <td class="devices-table__actions">
+              <button
+                v-if="session.isAdmin"
+                type="button"
+                class="btn btn--ghost btn--icon devices-table__delete"
+                :aria-label="t('devicesUi.deleteColumn')"
+                :title="t('devicesUi.deleteColumn')"
+                data-action="device-delete"
+                @click.stop="askRemove(device)"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+                  <path d="M2.8 4.2h10.4M6.4 4.2V2.9h3.2v1.3M4.2 4.2l.7 9h6.2l.7-9" />
+                  <path d="M6.8 6.8v4.4M9.2 6.8v4.4" />
+                </svg>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
 
     <AddDeviceDialog v-model="addOpen" @added="onAdded" />
-
-    <!--
-      右键菜单里的「修改设备名称 / 修改通道名称」。
-      三种落点（本地 + 设备 / 只有本地 / 只有设备）由对话框当面说明，写入由本页执行：
-      它拿着设备 store 与 IPC 桥，也知道失败之后该显示哪一句。
-    -->
-    <DeviceRenameDialog
-      v-model="renameOpen"
-      :target="renameTarget?.kind ?? 'device'"
-      :kind="renameKind"
-      :device-name="renameDevice?.name ?? ''"
-      :channel-label="renameChannelLabel"
-      :current-name="renameCurrentName"
-      :saving="renameSaving"
-      :error="renameError"
-      :on-submit="submitRename"
-    />
 
     <!--
       编辑设备（业主 2026-09-18 第 10 条）：
@@ -932,39 +715,23 @@ async function renameChannelName(
 
 <style scoped>
 /*
- * 拓扑 + 卡片两列。左列固定宽度（树的层级缩进需要可预期的宽度），右列吃掉剩余空间。
- * `align-items: start` 让拓扑卡按内容高度收住，而不是被拉成与设备卡片一样高。
+ * 顶栏那一格里的「添加设备」（业主第 5 条）。
  *
- * 左列的第一行是**树的第一个行**，所以 `.devices-topology` 自己不加上内边距：
- * 卡片在内容盒的左上角，树行就在卡片内容盒的左上角 —— 与总览页那块内容列同一个
- * 视觉起点（`--space-6` 由 `.app-content` 提供，是这页与总览页共用的唯一来源）。
+ * 这一格是顶栏的 `#topbar-page-slot`（`flex: 1 1 50%; max-width: 50%; margin-left: auto`），
+ * 里面只有一个按钮，所以靠右收在指示器旁边。`scoped` 对 `Teleport` 出去的内容照样生效 ——
+ * 节点是本组件渲染的，`data-v-*` 在渲染时就打上了（总览页那个设备下拉也是这么做的）。
  */
-.devices-layout {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-4);
-}
-
-@media (max-width: 900px) {
-  .devices-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.devices-topology {
-  /* 只有右上左三个方向的内边距；上边距为 0，树从卡片顶部开始。 */
-  padding: 0 var(--space-3) var(--space-2);
-  /* 设备多起来时树自己滚，不去撑高整页——页面滚动条已经由内容区管着。 */
-  max-height: 60vh;
-  overflow: auto;
-}
-
-.devices-main {
-  min-width: 0;
+.devices-topbar-add {
+  margin-left: auto;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  align-items: center;
+}
+
+.devices-topbar-add .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
 }
 
 /*
@@ -979,7 +746,7 @@ async function renameChannelName(
  *   ① 数字列（序号 / 告警数量 / 通道数）右对齐 —— 位数不同的两行才读得成一列；
  *   ② 最后三列是图标按钮，宽度收到内容宽，不参与分配剩余宽度（否则图标会被甩到很右边）；
  *   ③ IP 那一格是 `<button>`（双击开设备 Web 界面），要看起来像一格文字而不是一个按钮；
- *   ④ 被选中的那一行加底色 —— 与左侧拓扑树里高亮的是同一台设备。
+ *   ④ 被选中的那一行加底色 —— 选中态由本页自己拿着（`activeRowId`），不再与任何左侧面板共享。
  */
 .devices-table-flat {
   /* 只有上下两条线，没有卡片：上边线是这一段的起点，下边线把它与页脚内容分开。 */

@@ -23,7 +23,7 @@
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "npm run test:build && node --test \".test-build/tests/**/*.test.js\"",
-    "test:build": "tsc -p tsconfig.tests.json && node scripts/rewrite-aliases.cjs",
+    "test:build": "node scripts/clean-test-build.cjs && tsc -p tsconfig.tests.json && node scripts/rewrite-aliases.cjs",
     "smoke": "node scripts/smoke.cjs",
     "diagnose": "npm run test:build && node scripts/protocol-diagnose.cjs",
     "mock-device": "node scripts/mock-device.cjs",

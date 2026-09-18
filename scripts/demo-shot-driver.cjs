@@ -927,7 +927,9 @@ async function run() {
 
   const overview = await layout('/', '(() => {' +
     'const sidebar = document.querySelector(".sidebar");' +
-    'const tree = document.querySelector(".device-tree");' +
+    // 业主 2026-09-18 第 5 条把左侧拓扑树整棵下架了，所以这一条从"树在侧栏里"翻了过来：
+    // 现在断言的是**任何地方都不该再有** `.device-tree`（含侧栏与设备管理页）。
+    'const trees = document.querySelectorAll(".device-tree").length;' +
     'const footer = document.querySelector(".app-footer");' +
     'const main = document.querySelector(".app-main");' +
     'const box = footer ? footer.getBoundingClientRect() : null;' +
@@ -951,8 +953,7 @@ async function run() {
     'const text = footer ? footer.textContent.replace(/\\s+/g, " ").trim() : "";' +
     'const link = footer ? footer.querySelector(".app-footer__link") : null;' +
     'return JSON.stringify({' +
-    '  treeInSidebar: !!(sidebar && tree && sidebar.contains(tree)),' +
-    '  treeOnOverview: !!tree,' +
+    '  treesOnOverview: trees,' +
     '  footerPresent: !!footer,' +
     '  footerIsLastChild: !!(main && footer && main.lastElementChild === footer),' +
     '  footerInsideScroller: !!(footer && footer.closest(".app-content")),' +
@@ -978,8 +979,9 @@ async function run() {
     '});' +
     '})()')
 
-  if (overview.treeInSidebar) problems.push('设备拓扑仍挂在侧栏里')
-  if (overview.treeOnOverview) problems.push('总览页出现了设备拓扑（它应该只在设备管理页）')
+  if (overview.treesOnOverview > 0) {
+    problems.push('总览页出现了设备拓扑（业主 2026-09-18 第 5 条已把整棵树下架）')
+  }
   if (!overview.footerPresent) problems.push('页脚不存在')
   if (!overview.footerIsLastChild) problems.push('页脚不是 .app-main 的最后一个子元素')
   if (overview.footerInsideScroller) {
@@ -1078,32 +1080,29 @@ async function run() {
   }
 
   /**
-   * 设备管理页：树在左列、左上间距与总览一致、删掉的两句话真的不在、没有横向溢出、
-   * 没有被裁掉的控件。
+   * 设备管理页：**单列**（拓扑树已下架）、左上间距与总览一致、删掉的两句话真的不在、
+   * 十列放得下、没有横向溢出、没有被裁掉的控件。
    *
    * WHY THIS IS ONE PROBE AND NOT SEVERAL
-   * 这一轮的产品要求是一句话：「打开该界面后，左侧一个设备拓扑树 …… 左侧间距和高度间距
-   * 和总览的改动后的保持一致」。它有五个可测的分句（位置、左上间距、两句被删掉的文案、
-   * 溢出、裁切），但它们说的是**同一帧屏幕**：分开量会得到不同时刻的 DOM，而「树在左列
-   * 但页面横向溢出了」这种组合恰恰是要一起看的。
+   * 这一轮的产品要求是几句话：第 5 条「移除左侧拓扑树」+ 第 2b 条「扁平化，去掉卡片」。
+   * 它们说的是**同一帧屏幕**：分开量会得到不同时刻的 DOM，而「表是单列但页面横向溢出了」
+   * 这种组合恰恰是要一起看的。
    *
-   * 间距量的是**内容盒**（`.app-content` 的 padding 之内、滚动条之外）到树卡片外框的
+   * 间距量的是**内容盒**（`.app-content` 的 padding 之内、滚动条之外）到设备表外框的
    * 距离。`.page` 与总览页是同一个流式列（`assets/main.css` 的 `.page` 没有 max-width
-   * 也没有自动外边距），所以两层合起来就是产品说的「和总览的改动后保持一致」：
-   * `.app-content` 的 `--space-6` 加上两个页面共用的同一个 `.page`。
+   * 也没有自动外边距），所以两层合起来就是产品说的「和总览的改动后保持一致」。
    *
-   * 「删除掉」判的是**渲染出来的元素文字**（`textContent`），不是源码：`aria-label`
-   * 里合法地留着同一个词（树的无障碍名字），断言标签会把那件事误判成没删干净。
+   * 第 5 条之后「树不在这一页」是**反面断言** —— `.device-tree` 一个都不许有。这条比原来的
+   * 「树在左列」更容易被下一次改动悄悄破坏：加回一棵树不需要删掉任何断言就"看起来对"。
+   *
+   * 「删除掉」判的是**渲染出来的元素文字**（`textContent`），不是源码。
    */
   const devicesLayout = await layout('/devices', '(() => {' +
-    'const tree = document.querySelector(".device-tree");' +
-    'const sidebar = document.querySelector(".sidebar");' +
+    'const trees = document.querySelectorAll(".device-tree").length;' +
     'const page = document.querySelector(".page");' +
-    'const layoutEl = document.querySelector(".devices-layout");' +
-    'const card = document.querySelector(".devices-topology");' +
     'const content = document.querySelector(".app-content");' +
-    'const firstRow = document.querySelector(".device-tree__row");' +
-    'const head = document.querySelector(".device-tree__head");' +
+    'const flat = document.querySelector(".devices-table-flat");' +
+    'const table = document.querySelector("table.devices-table");' +
     'const round = (n) => Math.round(n);' +
     'const rectOf = (el) => { const r = el.getBoundingClientRect();' +
     '  return { left: round(r.left), top: round(r.top), width: round(r.width), height: round(r.height), right: round(r.right) }; };' +
@@ -1155,24 +1154,24 @@ async function run() {
     '  return r.left < -0.5 || r.right > window.innerWidth + 0.5;' +
     '}).map((el) => (el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 24));' +
     'return JSON.stringify({' +
-    '  treeOnDevices: !!tree,' +
-    '  treeInsidePage: !!(page && tree && page.contains(tree)),' +
-    '  treeInSidebar: !!(sidebar && tree && sidebar.contains(tree)),' +
-    '  twoColumn: !!layoutEl,' +
+    // 第 5 条：整棵树下架 —— 这一个数必须是 0。
+    '  treesOnDevices: trees,' +
     '  cards: document.querySelectorAll(".device-card").length,' +
     '  tableRows: document.querySelectorAll("table.devices-table tbody tr").length,' +
     '  viewport: { w: window.innerWidth, h: window.innerHeight },' +
     '  contentBox: contentBox,' +
     '  page: page ? rectOf(page) : null,' +
-    // 左列判定：卡片是两列网格的第一个子元素，且**真的在页面左半边**。
-    '  cardIsFirstChild: !!(layoutEl && card && layoutEl.firstElementChild === card),' +
-    '  card: card ? rectOf(card) : null,' +
-    '  tree: tree ? rectOf(tree) : null,' +
-    '  firstRow: firstRow ? rectOf(firstRow) : null,' +
-    '  head: head ? rectOf(head) : null,' +
-    '  cardContentLeft: card ? round(card.getBoundingClientRect().left + (parseFloat(getComputedStyle(card).paddingLeft) || 0)) : null,' +
-    '  cardContentTop: card ? round(card.getBoundingClientRect().top + (parseFloat(getComputedStyle(card).paddingTop) || 0)) : null,' +
-    '  treeText: tree ? visibleText(tree).slice(0, 240) : null,' +
+    // 单列判定（第 5 条）：设备表是 `.page` 的直接子节点，而且真的占满内容宽度。
+    '  flatIsDirectChild: !!(page && flat && flat.parentElement === page),' +
+    '  flat: flat ? rectOf(flat) : null,' +
+    '  flatRightGapPx: (flat && contentBox) ? round(contentBox.right - flat.getBoundingClientRect().right) : null,' +
+    '  table: table ? rectOf(table) : null,' +
+    '  tableScrollWidth: table ? table.scrollWidth : null,' +
+    '  tableClientWidth: table ? table.clientWidth : null,' +
+    '  tableHeadings: table ? Array.prototype.slice.call(table.querySelectorAll("thead th"))' +
+    '    .map((th) => (th.textContent || "").trim()) : null,' +
+    // 卡片版式的两个类名都不该再出现在这一页上（第 2b 条扁平化）。
+    '  legacyCardShell: document.querySelectorAll(".table-wrap").length,' +
     '  headingHits: headingHits,' +
     '  countHits: countHits,' +
     '  overflow: overflow,' +
@@ -1181,12 +1180,27 @@ async function run() {
     '});' +
     '})()')
 
-  if (!devicesLayout.treeOnDevices) problems.push('设备管理页没有设备拓扑')
-  if (!devicesLayout.treeInsidePage) problems.push('设备拓扑不在设备管理页的内容区里')
-  if (devicesLayout.treeInSidebar) problems.push('设备拓扑同时在侧栏里（重复渲染）')
-  if (!devicesLayout.twoColumn) problems.push('设备管理页不是两列布局（.devices-layout 不存在）')
-  if (!devicesLayout.cardIsFirstChild) {
-    problems.push('拓扑卡片不是 .devices-layout 的第一个子元素，所以它不在左边那一列')
+  if (devicesLayout.treesOnDevices > 0) {
+    problems.push('设备管理页出现了设备拓扑（第 5 条已把整棵树下架）：' +
+      devicesLayout.treesOnDevices + ' 个 .device-tree')
+  }
+  if (!devicesLayout.flatIsDirectChild) {
+    problems.push('设备表不是 .page 的直接子节点（第 5 条之后这一页是单列，没有布局容器）')
+  }
+  if (devicesLayout.flatRightGapPx === null || devicesLayout.flatRightGapPx > GAP_TOLERANCE_PX) {
+    problems.push('设备表没有占满内容宽度：右边空着 ' + devicesLayout.flatRightGapPx +
+      'px（单列之后不应该再有第二列）')
+  }
+  if (devicesLayout.tableScrollWidth > devicesLayout.tableClientWidth + 1) {
+    problems.push('设备表放不下这十列：表自身 scrollWidth ' + devicesLayout.tableScrollWidth +
+      ' > clientWidth ' + devicesLayout.tableClientWidth)
+  }
+  if (devicesLayout.tableHeadings && devicesLayout.tableHeadings.length !== 10) {
+    problems.push('设备表的表头是 ' + devicesLayout.tableHeadings.length + ' 列，应为 10：' +
+      JSON.stringify(devicesLayout.tableHeadings))
+  }
+  if (devicesLayout.legacyCardShell > 0) {
+    problems.push('设备管理页又用回了卡片外壳（.table-wrap）：' + devicesLayout.legacyCardShell + ' 个')
   }
   if (devicesLayout.headingHits > 0) {
     problems.push('设备管理页仍然渲染着 ' + devicesLayout.headingHits + ' 处「设备拓扑」标题')
@@ -1201,14 +1215,14 @@ async function run() {
   if (devicesLayout.cards > 0) {
     problems.push('设备管理页还有卡片版式的节点（.device-card）：' + devicesLayout.cards + ' 个')
   }
-  log('devices tree  : ' + JSON.stringify({
+  log('devices flat  : ' + JSON.stringify({
     viewport: devicesLayout.viewport,
     contentBox: devicesLayout.contentBox,
     page: devicesLayout.page,
-    card: devicesLayout.card,
-    tree: devicesLayout.tree,
-    firstRow: devicesLayout.firstRow,
-    text: devicesLayout.treeText
+    flat: devicesLayout.flat,
+    table: devicesLayout.table,
+    columns: devicesLayout.tableHeadings ? devicesLayout.tableHeadings.length : null,
+    rightGapPx: devicesLayout.flatRightGapPx
   }))
   {
     /**
@@ -1216,13 +1230,12 @@ async function run() {
      *
      * 总览页的改动是：`.page` 不再有 `max-width`、不再有自动外边距，它从内容盒的左上角
      * 开始，左/上间距由 `.app-content` 的 `--space-6` 唯一提供。所以「一致」在这里等于
-     * 三件事：
+     * 两件事：
      *   1. `.page` 的左上角**就是**内容盒的左上角（两个页面公用同一条 `.page` 规则）；
-     *   2. 拓扑卡片贴住内容盒的**左边**（左列从最左边开始）；
-     *   3. 卡片的内容盒顶端与卡片顶端重合（上内边距为 0），所以树不是被一层内边距推下去的。
+     *   2. 设备表贴住内容盒的**左右两边**（第 5 条之后是单列，没有左列要留位置）。
      *
-     * 卡片的上边缘**在**页头下面（页面标题与「添加设备」按钮占了那一行），所以拿
-     * 卡片顶端去比内容盒顶端是错的 —— 正确的参照物是 `.page` 自己。
+     * 表格的上边缘**在**警告条/空状态下面，所以拿表格顶端去比内容盒顶端是错的 —— 正确的
+     * 参照物是 `.page` 自己。
      */
     const pageLeftGap = devicesLayout.page && devicesLayout.contentBox
       ? devicesLayout.page.left - devicesLayout.contentBox.left
@@ -1230,55 +1243,20 @@ async function run() {
     const pageTopGap = devicesLayout.page && devicesLayout.contentBox
       ? devicesLayout.page.top - devicesLayout.contentBox.top
       : null
-    const cardLeftGap = devicesLayout.card && devicesLayout.contentBox
-      ? devicesLayout.card.left - devicesLayout.contentBox.left
-      : null
-    const cardTopGap = devicesLayout.card && devicesLayout.contentBox
-      ? devicesLayout.card.top - devicesLayout.contentBox.top
-      : null
-    const rowLeftGap = devicesLayout.firstRow && devicesLayout.cardContentLeft !== null
-      ? devicesLayout.firstRow.left - devicesLayout.cardContentLeft
-      : null
-    // 第一行之前**只允许**有那一条工具条（＋ / －）。用的参照物因此是工具条的底边，
-    // 而不是卡片内容盒的顶边：把工具条算成“空白”会得出一个 48px 的假问题。
-    const headGap = devicesLayout.head && devicesLayout.cardContentLeft !== null
-      ? devicesLayout.head.left - devicesLayout.cardContentLeft
-      : null
-    const headTopGap = devicesLayout.head && devicesLayout.cardContentTop !== null
-      ? devicesLayout.head.top - devicesLayout.cardContentTop
+    const flatLeftGap = devicesLayout.flat && devicesLayout.contentBox
+      ? devicesLayout.flat.left - devicesLayout.contentBox.left
       : null
     log('devices gap   : .page left=' + pageLeftGap + 'px top=' + pageTopGap +
-      'px; card left=' + cardLeftGap + 'px top=' + cardTopGap +
-      'px (first element of the content column); toolbar inside the card: left=' + headGap +
-      'px top=' + headTopGap + 'px')
+      'px; table from the content box left=' + flatLeftGap +
+      'px right=' + devicesLayout.flatRightGapPx + 'px (single column)')
     if (pageLeftGap === null || pageLeftGap > GAP_TOLERANCE_PX) {
       problems.push('设备管理页的 .page 没有从内容盒左边开始：' + pageLeftGap + 'px（总览页是 0）')
     }
     if (pageTopGap === null || pageTopGap > GAP_TOLERANCE_PX) {
       problems.push('设备管理页的 .page 没有从内容盒上边开始：' + pageTopGap + 'px（总览页是 0）')
     }
-    if (cardLeftGap === null || cardLeftGap > GAP_TOLERANCE_PX) {
-      problems.push('设备拓扑没有贴住内容盒左边：左间距 ' + cardLeftGap + 'px（应为 0）')
-    }
-    /*
-     * 页头已被产品要求删掉（「设备管理界面的右侧内容区域：去掉标题」），所以拓扑卡片是
-     * 内容列里的**第一个**元素：它的上边缘必须正好落在固定间距上（0px）。
-     *
-     * 这比改动之前那条「正数且小于 120px」**更强**：那时间距由页头决定、是可变的；现在
-     * 没有任何东西能把它推下去，非 0 就说明有人加回了页头或加了外边距。
-     */
-    if (cardTopGap === null || Math.abs(cardTopGap) > GAP_TOLERANCE_PX) {
-      problems.push('设备拓扑卡片没有从内容盒顶部开始（' + cardTopGap + 'px）：' +
-        '页头已删，它是内容列的第一个元素')
-    }
-    if (headGap !== null && headGap > GAP_TOLERANCE_PX) {
-      problems.push('树的工具条没有贴住卡片内容盒左边：还空着 ' + headGap + 'px')
-    }
-    if (headTopGap !== null && headTopGap > GAP_TOLERANCE_PX) {
-      problems.push('树的工具条没有从卡片内容盒顶部开始：还空着 ' + headTopGap + 'px')
-    }
-    if (rowLeftGap !== null && rowLeftGap > GAP_TOLERANCE_PX) {
-      problems.push('树的第一行没有贴住卡片内容盒左边：还空着 ' + rowLeftGap + 'px')
+    if (flatLeftGap === null || flatLeftGap > GAP_TOLERANCE_PX) {
+      problems.push('设备表没有贴住内容盒左边：左间距 ' + flatLeftGap + 'px（应为 0）')
     }
     const clipped = devicesLayout.clipped || []
     if (clipped.length > 0) {
@@ -1298,17 +1276,23 @@ async function run() {
   }
 
   /**
-   * 四档窗口尺寸下 `/devices` 上**树**的几何。
+   * 四档窗口尺寸下 `/devices` 的**单列**几何（业主 2026-09-18 第 5 条把拓扑树下架之后）。
+   *
+   * 这一段原来是量"树卡片在左列里的位置"。树下架之后，要守的东西变成了它的反面 ——
+   * 设备表是内容区里**唯一**一块，所以：
+   *   1. 表格的左右两边都要贴住内容盒（左边距与右边距都是 0）。两列布局一旦回来，
+   *      右边距会立刻变成一个非 0 的数，这一条就会红；
+   *   2. 十列在**每一档**都放得下：表格自己不横向滚动（`scrollWidth <= clientWidth`），
+   *      内容区与窗口都不出横向滚动条，而且没有被窗口裁掉的控件。四档里 1280×720 最紧 ——
+   *      第 8 条那次十列清单就是在这里被量出来"删除被裁掉"的；
+   *   3. `.page` 仍然从内容盒左上角开始（与总览页共用同一条 `.page` 规则），
+   *      而且**逐档相同**：间距由 `--space-6` 唯一提供，不按窗口宽度算。
    *
    * 每一档都重新读一次：`win.setContentSize()` 之后必须等一次重排落定，否则量到的是
-   * 过渡中的数字。四档的结论有两条 ——
-   *   1. 树卡片的左/上间距（相对内容盒）**逐像素相同**：这就是「和总览的改动后的保持一致」，
-   *      因为总览页与这一页共用同一个 `.app-content` 内边距和同一个 `.page` 流式列；
-   *   2. 树仍然在左列（卡片左边缘贴着内容盒左侧、且卡片宽度远小于内容盒宽度），页面宽度
-   *      随窗口变宽而树列的宽度不变 —— 左列是固定的 220–280px。
+   * 过渡中的数字。
    */
-  const treeGeometry = []
-  /** 每档窗口**实际**的内容尺寸（见下面那段说明）。与 `treeGeometry` 同序。 */
+  const flatGeometry = []
+  /** 每档窗口**实际**的内容尺寸（见下面那段说明）。与 `flatGeometry` 同序。 */
   const actualContentSizes = []
   for (const size of TREE_SIZES) {
     win.setContentSize(size[0], size[1])
@@ -1318,18 +1302,18 @@ async function run() {
      *
      * 这是测量口径的修正（2026-09-16 发现）：断言原来是拿"请求值"去比渲染层的
      * `window.innerWidth`，中间隔着 Windows 的边框与非 100% 的 DPI 缩放 —— 四档一律偏
-     * +6 / +17，而**布局本身全都正常**（卡片间距、树的列宽、贴边全部通过）。那说明偏的
-     * 不是界面，而是"拿什么当基准"：视口尺寸由窗口决定，不由我们的请求决定。
+     * +6 / +17，而**布局本身全都正常**。那说明偏的不是界面，而是"拿什么当基准"：
+     * 视口尺寸由窗口决定，不由我们的请求决定。
      */
     const actualContent = win.getContentSize()
     actualContentSizes.push({ w: actualContent[0], h: actualContent[1] })
     const measured = await layout('/devices', '(() => {' +
-      'const tree = document.querySelector(".device-tree");' +
       'const page = document.querySelector(".page");' +
-      'const card = document.querySelector(".devices-topology");' +
+      'const flat = document.querySelector(".devices-table-flat");' +
+      'const table = document.querySelector("table.devices-table");' +
       'const content = document.querySelector(".app-content");' +
-      'if (!tree || !page || !card || !content) return JSON.stringify({ found: false,' +
-      '  hasTree: !!tree, hasPage: !!page, hasCard: !!card, hasContent: !!content });' +
+      'if (!page || !flat || !table || !content) return JSON.stringify({ found: false,' +
+      '  hasPage: !!page, hasFlat: !!flat, hasTable: !!table, hasContent: !!content });' +
       'content.scrollTop = 0;' +
       'const round = (n) => Math.round(n);' +
       'const contentStyle = getComputedStyle(content);' +
@@ -1338,21 +1322,9 @@ async function run() {
       '  top: content.getBoundingClientRect().top + (parseFloat(contentStyle.paddingTop) || 0),' +
       '  right: content.getBoundingClientRect().left + content.clientWidth - (parseFloat(contentStyle.paddingRight) || 0)' +
       '};' +
-      'const cardRect = card.getBoundingClientRect();' +
-      'const treeRect = tree.getBoundingClientRect();' +
-      'const head = document.querySelector(".device-tree__head");' +
-      'const headRect = head ? head.getBoundingClientRect() : null;' +
-      'const row = tree.querySelector(".device-tree__row");' +
-      'const rows = Array.prototype.slice.call(tree.querySelectorAll(".device-tree__row"));' +
-      'const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;' +
-      'const cardStyle = getComputedStyle(card);' +
-      'const rowRect = row ? row.getBoundingClientRect() : null;' +
-      'const cardContentBox = {' +
-      '  left: cardRect.left + (parseFloat(cardStyle.paddingLeft) || 0),' +
-      '  top: cardRect.top + (parseFloat(cardStyle.paddingTop) || 0),' +
-      '  right: cardRect.left + card.clientWidth - (parseFloat(cardStyle.paddingRight) || 0),' +
-      '  bottom: cardRect.top + card.clientHeight - (parseFloat(cardStyle.paddingBottom) || 0)' +
-      '};' +
+      'const pageRect = page.getBoundingClientRect();' +
+      'const flatRect = flat.getBoundingClientRect();' +
+      'const tableRect = table.getBoundingClientRect();' +
       'const interactive = Array.prototype.slice.call(document.querySelectorAll("button, select, input, [role=tab]"))' +
       '  .filter((el) => {' +
       '    if (el.closest("[role=dialog]")) return false;' +
@@ -1363,38 +1335,24 @@ async function run() {
       '  const r = el.getBoundingClientRect();' +
       '  return r.left < -0.5 || r.right > window.innerWidth + 0.5;' +
       '}).map((el) => (el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 24));' +
+      'const headers = Array.prototype.slice.call(table.querySelectorAll("thead th"))' +
+      '  .map((th) => (th.textContent || "").trim());' +
       'return JSON.stringify({' +
       '  found: true,' +
       '  viewport: { w: window.innerWidth, h: window.innerHeight },' +
       '  contentBox: { left: round(box.left), top: round(box.top), right: round(box.right) },' +
-      '  card: { left: round(cardRect.left), top: round(cardRect.top), width: round(cardRect.width), right: round(cardRect.right) },' +
-      '  tree: { left: round(treeRect.left), top: round(treeRect.top), width: round(treeRect.width) },' +
-      '  firstRow: rowRect ? { left: round(rowRect.left), top: round(rowRect.top), height: round(rowRect.height) } : null,' +
-      '  head: headRect ? { left: round(headRect.left), top: round(headRect.top), height: round(headRect.height) } : null,' +
-      '  cardContentBox: { left: round(cardContentBox.left), top: round(cardContentBox.top),' +
-      '    right: round(cardContentBox.right), bottom: round(cardContentBox.bottom) },' +
-      '  cardContentLeft: round(cardContentBox.left),' +
-      '  cardContentTop: round(cardContentBox.top),' +
-      '  treeBox: { left: round(treeRect.left), top: round(treeRect.top), width: round(treeRect.width), height: round(treeRect.height) },' +
-      // 树必须**填满**卡片的内容盒（左/上贴边、宽高相同）：左边/上边留白是产品点名的
-      // 那两条，右边/下边相同则说明卡片没有把树推到角落里。
-      '  treeInContentBoxPx: { left: round(treeRect.left - cardContentBox.left), top: round(treeRect.top - cardContentBox.top),' +
-      '    right: round(cardContentBox.right - treeRect.right), bottom: round(cardContentBox.bottom - treeRect.bottom) },' +
-      // 第一行与最后一行必须分别贴着内容盒的顶/底（中间允许有状态说明文字与列表）。
-      '  firstRowInContentBoxPx: rowRect ? round(rowRect.top - cardContentBox.top) : null,' +
-      '  lastRowInContentBoxPx: lastRow ? round(cardContentBox.bottom - lastRow.getBoundingClientRect().bottom) : null,' +
-      '  rowCount: rows.length,' +
-      // 三组间距：相对内容盒（左/上，产品说的那两句）、卡片内树的位置、以及树自身的内边距。
-      '  gapFromContentBoxPx: { left: round(cardRect.left - box.left), top: round(cardRect.top - box.top),' +
-      '    right: round(box.right - cardRect.right) },' +
-      // 工具条相对卡片内容盒的位置，以及第一行相对工具条底边的位置：第一行之前**允许**
-      // 且有且只有那一条工具条，所以“贴着顶部”的判据落在工具条上。
-      '  headFromCardContentBoxPx: (headRect ? { left: round(headRect.left - (cardRect.left + (parseFloat(cardStyle.paddingLeft) || 0))),' +
-      '    top: round(headRect.top - (cardRect.top + (parseFloat(cardStyle.paddingTop) || 0))) } : null),' +
-      '  rowFromHeadBottomPx: (rowRect && headRect) ? round(rowRect.top - headRect.bottom) : null,' +
-      '  treePaddingPx: { left: cardStyle.paddingLeft, top: cardStyle.paddingTop, right: cardStyle.paddingRight, bottom: cardStyle.paddingBottom },' +
-      '  page: { left: round(page.getBoundingClientRect().left), top: round(page.getBoundingClientRect().top),' +
-      '    width: round(page.getBoundingClientRect().width) },' +
+      '  page: { left: round(pageRect.left), top: round(pageRect.top), width: round(pageRect.width) },' +
+      '  flat: { left: round(flatRect.left), top: round(flatRect.top),' +
+      '    width: round(flatRect.width), right: round(flatRect.right) },' +
+      '  table: { left: round(tableRect.left), width: round(tableRect.width), right: round(tableRect.right) },' +
+      '  headers: headers,' +
+      '  rowCount: table.querySelectorAll("tbody tr").length,' +
+      // 单列（第 5 条把拓扑树下架之后，设备表是内容区里唯一一块）：左右都必须贴住内容盒。
+      // 两列布局一旦回来，右边距会立刻变成一个非 0 的数。
+      '  flatGapFromContentBoxPx: { left: round(flatRect.left - box.left), right: round(box.right - flatRect.right) },' +
+      // 十列在每一档都要放得下：表格自身不许横向滚动。
+      '  tableScrollWidth: table.scrollWidth,' +
+      '  tableClientWidth: table.clientWidth,' +
       '  contentClientWidth: content.clientWidth,' +
       '  contentScrollWidth: content.scrollWidth,' +
       '  windowInnerWidth: window.innerWidth,' +
@@ -1404,24 +1362,18 @@ async function run() {
       '  interactiveCount: interactive.length' +
       '});' +
       '})()')
-    treeGeometry.push(measured)
+    flatGeometry.push(measured)
     log('devices ' + size[0] + 'x' + size[1] + ' : ' + JSON.stringify(measured))
   }
 
   {
-    /**
-     * 四档之间必须**逐像素相同**的三组数字：`.page` 相对内容盒的位置（总览页与这一页
-     * 共用同一条 `.page` 规则）、拓扑卡片相对内容盒的左间距，以及第一行相对卡片内容盒的
-     * 位置。只要有一档不同，说明间距是按窗口宽度算出来的（居中列或百分比内边距）——
-     * 那正是产品说的「现在是中间对齐了」与「和左边和上边保持固定的距离」的差别。
-     */
-    const found = treeGeometry.filter((entry) => entry.found)
+    const found = flatGeometry.filter((entry) => entry.found)
     if (found.length !== TREE_SIZES.length) {
-      problems.push('设备树的几何只量到 ' + found.length + ' / ' + TREE_SIZES.length + ' 档：' +
-        JSON.stringify(treeGeometry))
+      problems.push('设备管理页的单列几何只量到 ' + found.length + ' / ' + TREE_SIZES.length + ' 档：' +
+        JSON.stringify(flatGeometry))
     }
-    for (let i = 0; i < treeGeometry.length; i += 1) {
-      const entry = treeGeometry[i]
+    for (let i = 0; i < flatGeometry.length; i += 1) {
+      const entry = flatGeometry[i]
       const size = TREE_SIZES[i]
       const actual = actualContentSizes[i]
       if (!entry.found) continue
@@ -1446,46 +1398,24 @@ async function run() {
         problems.push('设备管理页在 ' + size[0] + 'x' + size[1] + ' 的 .page 没有从内容盒左上角开始：' +
           pageLeft + 'px / ' + pageTop + 'px')
       }
-      if (entry.gapFromContentBoxPx.left > GAP_TOLERANCE_PX) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 没有贴住内容盒左边：左间距 ' +
-          entry.gapFromContentBoxPx.left + 'px')
+      // 第 5 条之后这一页是**单列**：设备表的左右两边都要贴住内容盒。
+      if (entry.flatGapFromContentBoxPx.left > GAP_TOLERANCE_PX) {
+        problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 没有贴住内容盒左边：左间距 ' +
+          entry.flatGapFromContentBoxPx.left + 'px')
       }
-      if (entry.gapFromContentBoxPx.top > GAP_TOLERANCE_PX) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的上间距不是 0：' +
-          entry.gapFromContentBoxPx.top + 'px（页头已删，树卡片是内容列第一个元素）')
+      if (entry.flatGapFromContentBoxPx.right > GAP_TOLERANCE_PX) {
+        problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 没有占满内容宽度（第 5 条之后是单列）：' +
+          '右边还空着 ' + entry.flatGapFromContentBoxPx.right + 'px —— 两列布局回来了？')
       }
-      // 卡片自己的上内边距必须是 0：树不是被一层内边距推下去的。
-      if ((parseFloat(entry.treePaddingPx.top) || 0) !== 0) {
-        problems.push('设备树卡片在 ' + size[0] + 'x' + size[1] + ' 有上内边距 ' +
-          entry.treePaddingPx.top + '：树被推下去了')
+      // 十列（第 8 条的清单）在每一档都放得下：表格自己不横向滚动。
+      if (entry.tableScrollWidth > entry.tableClientWidth + 1) {
+        problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 放不下这十列：表自身 scrollWidth ' +
+          entry.tableScrollWidth + ' > clientWidth ' + entry.tableClientWidth)
       }
-      // 工具条（＋ / －）必须从卡片内容盒的左上角开始。
-      if (entry.headFromCardContentBoxPx &&
-          (entry.headFromCardContentBoxPx.left > GAP_TOLERANCE_PX ||
-           entry.headFromCardContentBoxPx.top > GAP_TOLERANCE_PX)) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的工具条没有从卡片内容盒左上角开始：' +
-          JSON.stringify(entry.headFromCardContentBoxPx))
-      }
-      // 树必须填满卡片的内容盒：左/上贴边（产品点名的两条），右/下也贴边（树不是被推到
-      // 角落里的）。
-      if (entry.treeInContentBoxPx.left > GAP_TOLERANCE_PX ||
-          entry.treeInContentBoxPx.top > GAP_TOLERANCE_PX ||
-          entry.treeInContentBoxPx.right > GAP_TOLERANCE_PX ||
-          entry.treeInContentBoxPx.bottom > GAP_TOLERANCE_PX) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 没有填满卡片的内容盒：' +
-          JSON.stringify(entry.treeInContentBoxPx))
-      }
-      // 第一行与内容盒顶部之间是**工具条**（＋ / －）；设备列表为空时还多一句状态文字。
-      // 所以「第一行贴顶」不是这一页的约束 —— 贴顶的是工具条（上面那一条），而树整体
-      // 必须填满内容盒（再上一条）。
-      if (entry.lastRowInContentBoxPx !== null && entry.lastRowInContentBoxPx > GAP_TOLERANCE_PX) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 的最后一个行与卡片内容盒底部之间空着 ' +
-          entry.lastRowInContentBoxPx + 'px')
-      }      // 左列判定：树卡片必须落在内容盒的**左半部分**（而不是被推到中间或右边）。
-      const half = (entry.contentBox.right - entry.contentBox.left) / 2
-      if (entry.card.left - entry.contentBox.left > half) {
-        problems.push('设备树在 ' + size[0] + 'x' + size[1] + ' 不在左列：卡片距内容盒左边 ' +
-          (entry.card.left - entry.contentBox.left) + 'px，超过内容宽度的一半 ' + Math.round(half) + 'px')
+      // 表头在每一档都必须是那十列、顺序一致（列清单在 1280×720 下最容易掉队）。
+      if (entry.headers && entry.headers.length !== 10) {
+        problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 的表头是 ' + entry.headers.length +
+          ' 列，应为 10：' + JSON.stringify(entry.headers))
       }
       if (entry.clipped.length > 0) {
         problems.push('设备管理页在 ' + size[0] + 'x' + size[1] + ' 有被裁掉的控件：' +
@@ -1500,11 +1430,12 @@ async function run() {
           entry.windowInnerWidth)
       }
     }
-    const lefts = found.map((entry) => entry.gapFromContentBoxPx.left)
-    const tops = found.map((entry) => entry.gapFromContentBoxPx.top)
-    if (new Set(lefts).size > 1 || new Set(tops).size > 1) {
-      problems.push('设备树相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
-        JSON.stringify(lefts) + ' top=' + JSON.stringify(tops))
+    // 单列的两条间距在四档之间必须**逐像素相同** —— 与窗口宽度无关。
+    const lefts = found.map((entry) => entry.flatGapFromContentBoxPx.left)
+    const rights = found.map((entry) => entry.flatGapFromContentBoxPx.right)
+    if (new Set(lefts).size > 1 || new Set(rights).size > 1) {
+      problems.push('设备表相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
+        JSON.stringify(lefts) + ' right=' + JSON.stringify(rights))
     }
     const pageLefts = found.map((entry) => entry.page.left - entry.contentBox.left)
     const pageTops = found.map((entry) => entry.page.top - entry.contentBox.top)
@@ -1512,26 +1443,7 @@ async function run() {
       problems.push('.page 相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
         JSON.stringify(pageLefts) + ' top=' + JSON.stringify(pageTops))
     }
-    const headLefts = found
-      .map((entry) => (entry.headFromCardContentBoxPx ? entry.headFromCardContentBoxPx.left : null))
-      .filter((value) => value !== null)
-    const headTops = found
-      .map((entry) => (entry.headFromCardContentBoxPx ? entry.headFromCardContentBoxPx.top : null))
-      .filter((value) => value !== null)
-    const rowGaps = found
-      .map((entry) => entry.treeInContentBoxPx.left)
-      .filter((value) => value !== null)
-    if (new Set(headLefts).size > 1 || new Set(headTops).size > 1 || new Set(rowGaps).size > 1) {
-      problems.push('树相对卡片内容盒的位置在四档尺寸下不是同一个数：工具条 left=' +
-        JSON.stringify(headLefts) + ' top=' + JSON.stringify(headTops) +
-        ' treeLeft=' + JSON.stringify(rowGaps))
-    }
-    // 左列宽度是固定的 220–280px，右列才是流式的：窗口变宽时树不该跟着变宽。
-    const cardWidths = found.map((entry) => entry.card.width)
-    if (new Set(cardWidths).size > 1) {
-      problems.push('设备树所在左列的宽度在四档尺寸下变了：' + JSON.stringify(cardWidths) +
-        '（左列应当是固定的 220-280px，只有右列随窗口变宽）')
-    }
+    // 单列是**流式**的：窗口变宽，内容列必须跟着变宽。
     const pageWidths = found.map((entry) => entry.page.width)
     for (let i = 1; i < pageWidths.length; i += 1) {
       if (!(pageWidths[i] > pageWidths[i - 1])) {
@@ -1540,11 +1452,12 @@ async function run() {
       }
     }
     log('devices gaps  : .page left=' + JSON.stringify(pageLefts) + ' top=' + JSON.stringify(pageTops) +
-      '; card left=' + JSON.stringify(lefts) + ' top=' + JSON.stringify(tops) +
-      ' (px from the content box; tolerance ' + GAP_TOLERANCE_PX + ')')
-    log('devices rows  : toolbar ' + JSON.stringify(headLefts) + ' / ' + JSON.stringify(headTops) +
-      ', tree↔contentBox left ' + JSON.stringify(rowGaps) +
-      ' cardWidths=' + JSON.stringify(cardWidths) + ' pageWidths=' + JSON.stringify(pageWidths))
+      '; table from content box left=' + JSON.stringify(lefts) + ' right=' + JSON.stringify(rights) +
+      ' (px; tolerance ' + GAP_TOLERANCE_PX + ')')
+    log('devices widths: table ' + JSON.stringify(found.map((e) => e.table.width)) +
+      ' page ' + JSON.stringify(pageWidths) +
+      ' rows ' + JSON.stringify(found.map((e) => e.rowCount)) +
+      ' columns ' + JSON.stringify(found.map((e) => (e.headers || []).length)))
   }
 
   // 量完把窗口恢复成主进程创建时的尺寸，后面的探针才在一个正常的尺寸下读数。
@@ -2090,32 +2003,35 @@ async function run() {
   }
 
   /**
-   * 三项界面改造（业主 2026-09-16）的屏幕级断言。
+   * 三项界面改造（业主 2026-09-16）的屏幕级断言 —— 第 1 条已由第 5 条（2026-09-18）改写。
    *
    * 三条要求都能"源码里改对了但屏幕上没生效"，所以每条都读 DOM：
-   *   1. 设备管理页右侧内容区没有标题，且「添加设备」在**左侧拓扑树里面**；
-   *   2. **所有**页面都没有页面内标题（外层框架的标题栏已经写了）；
+   *   1. 设备管理页右侧内容区没有标题，且「添加设备」在**顶栏那一格**里
+   *      （原来是"在左侧拓扑树里面"；第 5 条把树下架之后入口搬到了 `#topbar-page-slot`）；
+   *   2. **所有**页面都没有页面内标题（外层框架的标题栏已经写了）;
    *   3. 告警图标点开是那张面板：没有告警时写「当前无告警」，角标与列表同源。
    */
   const devicesChrome = await layout('/devices', '(async () => {' +
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
     /*
-     * 等拓扑树出现再断言，而不是"切过来 1.2 秒后一定已经渲染好了"。
+     * 等那颗按钮出现再断言，而不是"切过来 1.2 秒后一定已经渲染好了"。
      *
      * 2026-09-17 第 9 批实测：机器忙的时候（操作员库里 200 条告警 + 每 10 秒一轮设备探活）
-     * 这一页 1.2 秒内还没画出树，于是"找不到「添加设备」按钮"被报成产品问题 —— 而紧接着
+     * 这一页 1.2 秒内还没画完，于是"找不到「添加设备」按钮"被报成产品问题 —— 而紧接着
      * 的 addDialog 探针（同一页，晚一两秒）就找到了那个按钮。**同一个东西一次找不到、
      * 一次找得到，说明问题在探针的等待上，不在界面上。**
      */
-    'for (let i = 0; i < 24 && !document.querySelector(".device-tree"); i += 1) await wait(250);' +
-    'const add = [...document.querySelectorAll("button")]' +
-    '  .find((b) => b.textContent.trim().includes("添加设备"));' +
-    'const tree = document.querySelector(".device-tree");' +
-    'const content = document.querySelector(".devices-main");' +
+    'for (let i = 0; i < 24 && !document.querySelector("[data-action=\\"device-add\\"]"); i += 1) await wait(250);' +
+    'const add = document.querySelector("[data-action=\\"device-add\\"]");' +
+    'const slot = document.querySelector("#topbar-page-slot");' +
+    'const content = document.querySelector(".app-content");' +
     'return JSON.stringify({' +
     '  addButtonPresent: !!add,' +
-    '  addInsideTree: !!(add && tree && tree.contains(add)),' +
+    // 第 5 条：入口在顶栏那一格里，而且**不在**内容区里。
+    '  addInsideTopbarSlot: !!(add && slot && slot.contains(add)),' +
     '  addInsideContent: !!(add && content && content.contains(add)),' +
+    '  addIsAdminGated: !!add,' +
+    '  treesOnEveryPage: document.querySelectorAll(".device-tree").length,' +
     '  pageTitles: [...document.querySelectorAll(".page-title")].map((n) => n.textContent.trim())' +
     '});})()')
   log('devices chrome: ' + JSON.stringify(devicesChrome))
@@ -2127,9 +2043,12 @@ async function run() {
   if (devicesChrome.probeTimeout === true) {
     problems.push('设备管理页的界面断言超时（30 秒没有返回）—— 这一段没有任何结论')
   } else {
-    if (!devicesChrome.addButtonPresent) problems.push('设备管理页找不到「添加设备」按钮')
-    if (!devicesChrome.addInsideTree) problems.push('「添加设备」不在左侧拓扑树里')
+    if (!devicesChrome.addButtonPresent) problems.push('设备管理页找不到「添加设备」按钮（data-action="device-add"）')
+    if (!devicesChrome.addInsideTopbarSlot) problems.push('「添加设备」不在顶栏那一格（#topbar-page-slot）里')
     if (devicesChrome.addInsideContent) problems.push('「添加设备」仍然在右侧内容区里')
+    if (devicesChrome.treesOnEveryPage > 0) {
+      problems.push('设备管理页出现了设备拓扑（第 5 条已整棵下架）')
+    }
     if (devicesChrome.pageTitles.length > 0) {
       problems.push('设备管理页仍然有页面标题：' + JSON.stringify(devicesChrome.pageTitles))
     }
@@ -2146,8 +2065,9 @@ async function run() {
    * "控件没渲染"与"没有数据"在这类探针里长得一样（§15.13.5），所以数量必须写死。
    */
   const addDialog = await layout('/devices', '(() => {' +
-    'const add = [...document.querySelectorAll("button")]' +
-    '  .find((b) => b.textContent.trim().includes("添加设备"));' +
+    // 入口在顶栏那一格里（第 5 条），按稳定的探针钩子找，不按文字找：
+    // 文字随语言变，而这个钩子在四个语言里都是同一个。
+    'const add = document.querySelector("[data-action=\\"device-add\\"]");' +
     'if (!add) return JSON.stringify({ opened: false });' +
     'add.click();' +
     'return new Promise((resolve) => setTimeout(() => {' +
@@ -3629,8 +3549,8 @@ async function run() {
     '  out.storeAtStart = storeDeviceCount();' +
     '  out.ipcAtStart = await ipcDeviceCount();' +
     '  out.storeErrorAtStart = storeError();' +
-    '  out.treeRowsAtStart = document.querySelectorAll(".device-tree__row").length;' +
-    '  const add = [...document.querySelectorAll("button")].find((b) => text(b).includes("添加设备"));' +
+    '  out.tableRowsAtStart = document.querySelectorAll("table.devices-table tbody tr").length;' +
+    '  const add = document.querySelector("[data-action=\\"device-add\\"]");' +
     '  if (!add) return JSON.stringify({ ok: false, reason: "no-add-button" });' +
     '  add.click(); await wait(600);' +
     '  let dlg = addDialog();' +
@@ -3953,7 +3873,7 @@ async function run() {
     '    (findButton(open, "取消") || findButton(open, "Cancel")).click(); await wait(400);' +
     '  }' +
     '  location.hash = "#/devices"; await wait(900);' +
-    '  const add = [...document.querySelectorAll("button")].find((b) => text(b).includes("添加设备"));' +
+    '  const add = document.querySelector("[data-action=\\"device-add\\"]");' +
     '  if (!add) return JSON.stringify({ ok: false, reason: "no-add-button" });' +
     '  add.click(); await wait(600);' +
     '  let dlg = addDialog();' +

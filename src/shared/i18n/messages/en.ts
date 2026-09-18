@@ -15,28 +15,6 @@ export const en: MessageSchema = {
    * (vue-i18n's linked-message sigil — it fails to compile at render time, and
    * `tests/i18n.test.ts` compiles every message to prove it).
    */
-  deviceTreeUi: {
-    empty: 'No devices yet',
-    filterLabel: 'Filter devices',
-    filterPlaceholder: 'Filter by name or address…',
-    filterClear: 'Clear filter',
-    filterEmpty: 'No device matches "{query}"',
-    expandAll: 'Expand all',
-    collapseAll: 'Collapse all',
-    expandNode: 'Expand this item',
-    collapseNode: 'Collapse this item',
-    openInWall: 'Open in video wall',
-    statusOnline: 'Online',
-    statusOffline: 'Offline',
-    statusUnknown: 'Status unknown',
-    kindBox: 'Acoustic box',
-    kindCamera: 'Acoustic camera',
-    cameraStreamNode: 'Live video',
-    channelsUnavailable: 'Channel table not read yet',
-    renameDevice: 'Rename device',
-    renameChannel: 'Rename channel'
-  },
-
   common: {
     confirm: 'Confirm',
     cancel: 'Cancel',
@@ -335,23 +313,6 @@ export const en: MessageSchema = {
     deleteBody: 'Delete the device “{name}”? Its alarm history and recordings are kept, but locally stored connection credentials are erased.',
     removing: 'Deleting…',
     confirmDelete: 'Delete'
-  },
-
-  deviceRename: {
-    titleDevice: 'Rename device',
-    titleChannel: 'Rename channel',
-    fieldDevice: 'Device name',
-    fieldChannel: 'Channel name',
-    sameName: 'Enter a different name.',
-    deviceFailed: 'Rename failed.',
-    cameraHint: 'The acoustic camera’s open interface has no device-name endpoint, so the new name is stored in this computer’s database only. The name inside the camera does not change, and other software still sees the old one.',
-    deviceHint: 'This name is written both to the local database and to the acoustic box itself.',
-    channelHint: 'The channel name is stored on the acoustic box; this computer re-reads its channel table afterwards.',
-    renameBoxNotice: 'Device name changed to “{name}”, and the name was written to the device itself.',
-    renameBoxRestored: 'The device refused the rename: {reason}. The local name was restored to “{name}”.',
-    renameBoxRestoreFailed: 'The device refused the rename: {reason}. The local name is still “{name}” and could not be restored — this computer and the device now disagree; change it back by hand.',
-    renameCameraNotice: 'Device name changed to “{name}” on this computer only (the camera itself was not renamed).',
-    renameChannelNotice: 'Channel name changed to “{name}” and written to the acoustic box.'
   },
 
   time: {

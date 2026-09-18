@@ -25,28 +25,6 @@ export const zhCN = {
    * 这里的措辞决定「操作员能不能一眼看出这台设备通不通」，所以每一条状态
    * 都用完整句子，不用 `OK` / `NG` 之类的缩写。
    */
-  deviceTreeUi: {
-    empty: '还没有添加任何设备',
-    filterLabel: '筛选设备',
-    filterPlaceholder: '按名称或地址筛选…',
-    filterClear: '清除筛选',
-    filterEmpty: '没有匹配「{query}」的设备',
-    expandAll: '全部展开',
-    collapseAll: '全部收起',
-    expandNode: '展开这一项',
-    collapseNode: '收起这一项',
-    openInWall: '在视频墙中打开',
-    statusOnline: '在线',
-    statusOffline: '离线',
-    statusUnknown: '状态未知',
-    kindBox: '声纹设备',
-    kindCamera: '声学相机',
-    cameraStreamNode: '实时视频',
-    channelsUnavailable: '尚未读取到通道表',
-    renameDevice: '修改设备名称',
-    renameChannel: '修改通道名称'
-  },
-
   common: {
     confirm: '确认',
     cancel: '取消',
@@ -426,32 +404,6 @@ export const zhCN = {
    * 因此成功提示分成 `renameBoxNotice` / `renameCameraNotice` 两条：操作员读完这一句
    * 必须知道**刚刚到底改动了什么**，而「已重命名」四个字会让他以为相机的名字也改了。
    */
-  deviceRename: {
-    titleDevice: '修改设备名称',
-    titleChannel: '修改通道名称',
-    fieldDevice: '设备名称',
-    fieldChannel: '通道名称',
-    sameName: '请输入一个新的名称。',
-    deviceFailed: '重命名失败。',
-    cameraHint: '声学相机的开放接口没有设备名称端点，因此新名称只保存在本机数据库中；相机内部的名字不会改变，其他软件看到的仍然是原来的名字。',
-    deviceHint: '这个名称会同时写入本机数据库和声纹设备自身。',
-    channelHint: '通道名称保存在声纹设备上，本机的通道表随后会重新读取。',
-    renameBoxNotice: '已把设备名称改为「{name}」，设备自身的名称也已写入。',
-    /*
-     * 设备侧改名失败时说的话。
-     *
-     * 本机那一半在失败时已经被**回滚**，所以这里必须把两件事一起说出来：设备为什么
-     * 拒绝（设备的原文，`{reason}`），以及本机的名字现在是哪个（`{name}`，就是原来的
-     * 那个）。只说「失败」会让操作员不确定本机显示的名字还算不算数。
-     * 回滚本身也失败时用另一条（`renameBoxRestoreFailed`）——那时两边确实不一致，
-     * 不能含糊过去。
-     */
-    renameBoxRestored: '设备改名失败：{reason}。本机名称已恢复为「{name}」。',
-    renameBoxRestoreFailed: '设备改名失败：{reason}。本机名称仍是「{name}」，没有恢复成功 —— 本机记录与设备上的名字现在不一致，请手动改回。',
-    renameCameraNotice: '已在本机把设备名称改为「{name}」（相机本身没有改名）。',
-    renameChannelNotice: '已把通道名称改为「{name}」，该名称已写入声纹设备。'
-  },
-
   time: {
     justNow: '刚刚',
     secondsAgo: '{count} 秒前',

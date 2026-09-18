@@ -16,28 +16,6 @@ export const es: MessageSchema = {
    * contener `@`** (es el signo de mensaje enlazado de vue-i18n y no compila al
    * renderizar; `tests/i18n.test.ts` compila todos los mensajes).
    */
-  deviceTreeUi: {
-    empty: 'Todavía no hay dispositivos',
-    filterLabel: 'Filtrar dispositivos',
-    filterPlaceholder: 'Filtrar por nombre o dirección…',
-    filterClear: 'Quitar filtro',
-    filterEmpty: 'Ningún dispositivo coincide con "{query}"',
-    expandAll: 'Expandir todo',
-    collapseAll: 'Contraer todo',
-    expandNode: 'Expandir este elemento',
-    collapseNode: 'Contraer este elemento',
-    openInWall: 'Abrir en el muro de vídeo',
-    statusOnline: 'En línea',
-    statusOffline: 'Sin conexión',
-    statusUnknown: 'Estado desconocido',
-    kindBox: 'Equipo acústico',
-    kindCamera: 'Cámara acústica',
-    cameraStreamNode: 'Vídeo en directo',
-    channelsUnavailable: 'Aún no se ha leído la tabla de canales',
-    renameDevice: 'Cambiar el nombre del equipo',
-    renameChannel: 'Cambiar el nombre del canal'
-  },
-
   common: {
     confirm: 'Confirmar',
     cancel: 'Cancelar',
@@ -326,23 +304,6 @@ export const es: MessageSchema = {
     deleteBody: '¿Eliminar el equipo «{name}»? Su historial de alarmas y sus grabaciones se conservan, pero las credenciales de conexión guardadas localmente se borran.',
     removing: 'Eliminando…',
     confirmDelete: 'Eliminar'
-  },
-
-  deviceRename: {
-    titleDevice: 'Cambiar el nombre del equipo',
-    titleChannel: 'Cambiar el nombre del canal',
-    fieldDevice: 'Nombre del equipo',
-    fieldChannel: 'Nombre del canal',
-    sameName: 'Introduzca un nombre diferente.',
-    deviceFailed: 'No se pudo cambiar el nombre.',
-    cameraHint: 'La interfaz abierta de la cámara acústica no tiene ningún punto de acceso para el nombre del equipo, así que el nombre nuevo se guarda solo en la base de datos de este ordenador. El nombre interno de la cámara no cambia y otros programas siguen viendo el anterior.',
-    deviceHint: 'Este nombre se escribe en la base de datos local y también en el propio equipo acústico.',
-    channelHint: 'El nombre del canal se guarda en el equipo acústico; este ordenador vuelve a leer su tabla de canales después.',
-    renameBoxNotice: 'Nombre del equipo cambiado a «{name}» y escrito también en el propio equipo.',
-    renameBoxRestored: 'El equipo rechazó el cambio de nombre: {reason}. El nombre local se ha restaurado a «{name}».',
-    renameBoxRestoreFailed: 'El equipo rechazó el cambio de nombre: {reason}. El nombre local sigue siendo «{name}» y no se pudo restaurar; este ordenador y el equipo ya no coinciden, cámbielo a mano.',
-    renameCameraNotice: 'Nombre del equipo cambiado a «{name}» solo en este ordenador (la cámara no se renombró).',
-    renameChannelNotice: 'Nombre del canal cambiado a «{name}» y escrito en el equipo acústico.'
   },
 
   time: {

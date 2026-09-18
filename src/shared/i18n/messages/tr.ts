@@ -24,28 +24,6 @@ export const tr: MessageSchema = {
    * (vue-i18n'in bağlantılı mesaj imi; render sırasında derlenmez ve
    * `tests/i18n.test.ts` her mesajı derler).
    */
-  deviceTreeUi: {
-    empty: 'Henüz cihaz yok',
-    filterLabel: 'Cihazları filtrele',
-    filterPlaceholder: 'Ada veya adrese göre filtrele…',
-    filterClear: 'Filtreyi temizle',
-    filterEmpty: '"{query}" ile eşleşen cihaz yok',
-    expandAll: 'Tümünü aç',
-    collapseAll: 'Tümünü kapat',
-    expandNode: 'Bu öğeyi aç',
-    collapseNode: 'Bu öğeyi kapat',
-    openInWall: 'Video duvarında aç',
-    statusOnline: 'Çevrimiçi',
-    statusOffline: 'Çevrimdışı',
-    statusUnknown: 'Durum bilinmiyor',
-    kindBox: 'Akustik cihaz',
-    kindCamera: 'Akustik kamera',
-    cameraStreamNode: 'Canlı video',
-    channelsUnavailable: 'Kanal tablosu henüz okunmadı',
-    renameDevice: 'Cihaz adını değiştir',
-    renameChannel: 'Kanal adını değiştir'
-  },
-
   common: {
     confirm: 'Onayla',
     cancel: 'İptal',
@@ -334,23 +312,6 @@ export const tr: MessageSchema = {
     deleteBody: '«{name}» cihazı silinsin mi? Alarm geçmişi ve kayıtları korunur, ancak yerel olarak saklanan bağlantı kimlik bilgileri silinir.',
     removing: 'Siliniyor…',
     confirmDelete: 'Sil'
-  },
-
-  deviceRename: {
-    titleDevice: 'Cihaz adını değiştir',
-    titleChannel: 'Kanal adını değiştir',
-    fieldDevice: 'Cihaz adı',
-    fieldChannel: 'Kanal adı',
-    sameName: 'Farklı bir ad girin.',
-    deviceFailed: 'Ad değiştirilemedi.',
-    cameraHint: 'Akustik kameranın açık arayüzünde cihaz adı için bir uç nokta yoktur; bu nedenle yeni ad yalnızca bu bilgisayarın veritabanında saklanır. Kameranın kendi içindeki ad değişmez ve diğer yazılımlar eski adı görmeye devam eder.',
-    deviceHint: 'Bu ad hem yerel veritabanına hem de akustik cihazın kendisine yazılır.',
-    channelHint: 'Kanal adı akustik cihazda saklanır; bu bilgisayar kanal tablosunu ardından yeniden okur.',
-    renameBoxNotice: 'Cihaz adı «{name}» olarak değiştirildi ve cihazın kendisine de yazıldı.',
-    renameBoxRestored: 'Cihaz ad değişikliğini reddetti: {reason}. Yerel ad «{name}» olarak geri alındı.',
-    renameBoxRestoreFailed: 'Cihaz ad değişikliğini reddetti: {reason}. Yerel ad hâlâ «{name}» ve geri alınamadı; bu bilgisayar ile cihaz artık uyuşmuyor, elle düzeltin.',
-    renameCameraNotice: 'Cihaz adı yalnızca bu bilgisayarda «{name}» olarak değiştirildi (kameranın adı değişmedi).',
-    renameChannelNotice: 'Kanal adı «{name}» olarak değiştirildi ve akustik cihaza yazıldı.'
   },
 
   time: {
