@@ -34,6 +34,7 @@ import type {
   CameraModeRequestedValues,
   EventCenterQuery,
   EventDetectDownloadInput,
+  EventEvidenceImageInput,
   Fa371MonitorState,
   Fa371RunModeValue,
   Fa371StreamKind,
@@ -2514,6 +2515,28 @@ export function registerIpcHandlers(): void {
         by: actor()
       })
       return result
+    })
+  )
+
+  /**
+   * 事件的图片证据（规格 §12.1 的 Visual）。
+   *
+   * **只读**：它把库里的一条相对路径变成回环地址，不连设备、不写盘、不写库 ——
+   * 所以与 `EVENT_CENTER_QUERY` 同级，不要管理员（抽屉一打开就要取图，
+   * 让它是特权操作只会让普通账户看到一个永远空的证据页）。
+   */
+  ipcMain.handle(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE, (_event, input: EventEvidenceImageInput) =>
+    toResult(async () => {
+      requirePermission('viewEvents')
+      const request: EventEvidenceImageInput = input ?? {}
+      return getServices().eventCenter.evidenceImage(request)
+    })
+  )
+
+  ipcMain.handle(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE_CLOSE, () =>
+    toResult(async () => {
+      requirePermission('viewEvents')
+      getServices().eventCenter.closeEvidenceImage()
     })
   )
 

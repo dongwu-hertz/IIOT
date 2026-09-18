@@ -2407,7 +2407,6 @@ export const tr: MessageSchema = {
     detailDownloadNeedAdmin: 'Sonuç dosyalarını indirmek yönetici hesabı gerektirir',
     detailSourceUnavailable: 'Bu kaynak şu anda okunamadı; birazdan yeniden deneyin',
 
-    detailAckTitle: 'Onayla',
     detailAck: 'Bu olayı onayla',
     detailUnack: 'Onayı kaldır',
     detailAckUnsupported:
@@ -2488,7 +2487,30 @@ export const tr: MessageSchema = {
     evidenceRecording: 'Kayıt',
     evidenceFrame: 'Kare',
     evidenceFiles: '{count} dosya',
-    metricMore: '+{count} daha'
+    metricMore: '+{count} daha',
+
+    // --- Phase 4: ayrıntı paneli / Overview / Evidence (spec §11–§12) --------
+    detailTab: {
+      overview: 'Genel bakış',
+      evidence: 'Kanıt',
+      timeline: 'Zaman çizelgesi',
+      related: 'İlgili',
+      activity: 'Etkinlik'
+    },
+    overviewStatus: 'Durum',
+    overviewFirstDetected: 'İlk algılama',
+    overviewLastDetected: 'Son algılama',
+    overviewDuration: 'Süre',
+    overviewOccurrences: 'Tekrar sayısı',
+    drawerResize: 'Paneli yeniden boyutlandırmak için sürükleyin',
+
+    evidenceVisualTitle: 'Görsel kanıt',
+    evidenceNone: 'Bu olayın görsel kanıtı yok.',
+    evidenceNotCaptured: 'Cihaz görüntü yakalamadı (eşitleme sırasında görüntü indirme kapalı olabilir).',
+    evidenceFilesGone: 'Kayıt bu görüntüyü biliyor, ancak dosya artık bu makinede yok.',
+    evidenceNotImage: 'Dosya var, ancak görüntülenebilen bir görüntü biçimi değil.',
+    evidenceNotFound: 'Bu görsel kanıt için kullanılabilir bir yol yok.',
+    evidenceError: 'Görsel kanıt okunamadı.'
 
   }
 }

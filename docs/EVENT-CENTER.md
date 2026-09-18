@@ -23,8 +23,8 @@
 | §8.2 KPI 条 | 五个可点 KPI（点后转筛选，不跳页） | 顶栏三个指示器（设备数/在线/未确认告警） | **✅ Phase 3 做了四格**（严重/高/未确认/平均确认耗时）+ 点一下转筛选；「聚合事件」属 Phase 6，所以没有那一格（见 3.7） |
 | §9 筛选 | 搜索 260–320px、六个下拉、Chippy 激活态、Saved Views、URL 同步 | 筛选栏（设备/等级/时间等） | **✅ Phase 3**：搜索（260–320px）+ 左侧四组带计数面板 + 六个内置视图 + URL/localStorage 记忆。关键字只在已加载页内搜（见 3.8），"六个下拉"变成"面板四组 + 时间两个"（见 3.9） |
 | §10 告警队列 | 88–104px 行、3px 左竖条、三种视图模式（Compact/Standard/Evidence）、偏好保留 | 表格行（`.table`） | **✅ Phase 3**：表格 → 队列行（56/88/104 三档、3px 严重度色条、键盘 ↑/↓）；Evidence 模式没有缩略图（见 3.10） |
-| §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 有右侧详情面板（滚动分区，无页签、无宽度拖拽） | Phase 4（Phase 3 已接上 Esc 关闭与 ↑/↓ 选中） |
-| §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | Phase 4（**冲突**：见 3.1） |
+| §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 右侧覆盖层抽屉（滚动分区，无页签、无宽度拖拽、宽度写死 480） | **✅ Phase 4**：400–560 可拖（拖拽 + 键盘 ←→，偏好 localStorage）、默认 400（≥1600 用 440）、不跳页、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、页签条只渲染**已实现**的两个（Timeline/Related/Activity 属 Phase 5） |
+| §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | **✅ Phase 4 做了 Acoustic 一个渲染器**：图片证据（联动抓帧 / 声纹告警的球机抓图）+ 录音录像 + 指标（频谱与测量）+ 检测结果文件；链接按来源选路（`evidenceImageSource`）。DTS/DAS/DGA **不做**（**冲突**：见 3.1）。每一条事件只有**一张**图（见 3.10） |
 | §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | Phase 5（Activity 需要落库） |
 | §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | Phase 6（**冲突**：见 3.3）。Phase 3 的视图模型已带 `occurrenceCount`（恒为 1，界面在 1 时不渲染 ×N） |
 | §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | Phase 3 已做：点行不跳页、↑/↓ 选中并同步焦点、Esc 关抽屉、行与筛选项都有焦点环 |
@@ -179,15 +179,32 @@ Phase 5 做等级迁移（v13：把等级**存进库**）时，要改的只有�
 Owner / Assignee 那一组属于 Phase 5（状态机带指派人）—— 现在没有指派人这个字段，
 画出来就是一个永远为空的筛选。
 
-### 3.10 Evidence 视图模式里**没有缩略图**（Phase 3）
+### 3.10 Evidence 里**每条事件只有一张图**（Phase 4 落地版）
 
-规格 §10 的 Evidence 模式带证据缩略图。联动抓帧在我们这儿只有一条**存储根相对路径**
-（`EventCenterEntry.frameRelativePath`，目前只用于邮件附件与文本显示），把它变成 `<img>`
-需要一个**新的回环图片接口**（`video-file-server` 里的 `serveImages()` 已经有了，
-但还没为抓帧接过 IPC），那是 Phase 4 证据页一起做的事。
+规格 §12.1 的 Visual 一列列了「声学图 / 可见光图 / 热成像图」，§10 的 Evidence 模式还要缩略图。
+我们能提供的图片证据只有**两处**：
 
-Phase 3 的 Evidence 模式画的是**这条事件有哪些证据**（录像 / 抓帧 / 结果文件 N 个）+ 最多五个指标。
-"有证据"与"证据长什么样"是两件事，前者我们已经知道，后者要等接口。
+| 来源 | 图从哪来 | 走哪个接口 |
+|---|---|---|
+| 本机联动告警（`linkage`） | `frameRelativePath`（抓帧在存储根下的相对路径） | 新接口 `eventCenter.evidenceImage({relativePath})` |
+| 声纹告警（`localAlarm`，**仅听诊盒子 / 空气声呐**） | `alarms.snapshot_dir`（球机抓图目录） | **已有**接口 `e2.alarmSnapshots(deviceId, alarmId)`（第 8 批做的，不重复造） |
+| 相机检测日志（`deviceDetect`） | 图是**设备侧结果文件**，要先下载到本机 | 不在这里：走 Evidence 页签的「结果文件」列表 |
+
+所以 Phase 4 的 Evidence 渲染的是**一张**图（不是一组），并在取不到时说清是哪一种"没有"：
+`not-captured`（设备上本来就没有）/ `files-gone`（库里有、盘上没了）/ `not-image`（不是图片格式）/
+`not-found`（路径认不出来）/ `error`（IPC 自己失败）。**一条事件的多次触发各有一张图**
+（聚合是 Phase 6 之后的事），所以"一条事件几张图"这个问题要等聚合做出来才谈得上。
+
+Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Evidence 视图模式那一条）：
+队列一屏 50 行、每行一张回环图，一次就是 50 个 `<img>` 与 50 次令牌请求。
+队列那一档现在显示的是"有哪些证据"（录像 / 抓帧 / N 个结果文件）—— 要看图进抽屉。
+这一条是**取舍**，不是遗漏。
+
+### 3.11 抽屉里没有 Assign / ⋯（主 CTA 只有一个）
+
+规格 §11.2 的头部是 `[Acknowledge] [Assign ▼] [⋯]`。Phase 4 只做了 `[Acknowledge]`：
+Assign（指派人）与 `⋯` 菜单里的动作都属于 Phase 5 的状态机（库里现在没有指派人这一列，
+也没有状态变更记录）。一个点开只有「暂无选项」的菜单比没有更糟，所以先不画。
 
 ---
 
@@ -198,8 +215,8 @@ Phase 3 的 Evidence 模式画的是**这条事件有哪些证据**（录像 / �
 | Phase 1 | Design Tokens + 基础组件样式 | **✅**：token 取值对齐 + 补齐（含严重度五级、页面底色、控件高度、焦点环、事件行度量、三栏宽度、字号档位）；按钮/输入/chip/card 的圆角与高度按规格改；页面底色 `#F7F8FA` |
 | Phase 2 | 侧栏（232/64 折叠）+ 顶栏 + 事件中心骨架 | **✅ 侧栏**（折叠动画 200ms、3px 橙色竖条、偏好 localStorage、折叠后 tooltip） |
 | Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | **✅ 本轮**：<br>· 纯函数层 `src/shared/domain/event-view.ts`（`AlertViewModel` 适配器、`eventKpis`、`eventFilterCounts`、筛选/URL/存取的容错解析）+ `tests/event-view.test.ts`（40 条）<br>· `EventKpiStrip.vue`（四格、可点、作用域印在下面）<br>· `EventFilterPanel.vue`（等级/来源/确认状态/设备四组带计数、216px）<br>· `AlertQueue.vue`（三档行高、3px 严重度色条、↑/↓ 选中并同步焦点、整行是 button、等级文字每一档都印）<br>· `EventCenterView.vue`：表格 → 队列、搜索 + 时间 + 六个内置视图 + 视图模式、URL/localStorage 记忆、Esc 关抽屉、来源读况改为**只在失败/截断时**出现、关键字不再触发重新查询<br>· `main.css`：`.severity--<五档>`（一个类给出强调色 + 软底色）、`.alert-row`、`.chip--tiny` 提升为全局<br>· 探针：`scripts/demo-shot-driver.cjs` 增加事件中心一段（KPI 四格与作用域、平均确认耗时是「—」、面板 216px 与四组、六个视图、三档行高、点行开抽屉 + Esc 关、点 KPI「严重」后地址栏/面板/localStorage 三处都对、四条版面关系），并修掉三处**探针自己**的缺陷（见 `docs/Ivms4200-UX-REFERENCE.md` §15.41.6） |
-| Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | 待做（Evidence 只做 Acoustic，见 3.1；缩略图接口见 3.10） |
-| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | 待做（需要 schema v13：状态、指派人、Activity 表，以及四级→五级严重度的旧数据映射；`AlertStatus` 类型与标签**已经在**了） |
+| Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | **✅ 本轮**：<br>· 纯函数层新增：`AlertViewModel` 的 `firstDetectedAt` / `lastDetectedAt` / `durationMs`、抽屉宽度常量与容错（400–560）、`alertOverviewFields()`（§11.4 的字段表）、`evidenceImageSource()`（图从哪来）<br>· 新组件 `EventDetailDrawer.vue`：拖拽 + 键盘改宽度（偏好 localStorage）、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、40px 页签条 + 2px 橙色下划线、头部等级/标题/设备链接/首次探测时间/主 CTA<br>· `EventCenterView.vue`：Overview 2 列属性网格 + Evidence（图片 / 录音录像 / 指标 / 结果文件），旧的内联抽屉拆干净<br>· **新 IPC** `eventCenter.evidenceImage` / `closeEvidenceImage`（只读；四道关：路径来源 `recordingId` 优先 → 存储根越界保护 → 文件在不在 → 是不是图片）<br>· `main.css`：新增 `--color-scrim`（模态与抽屉共用一个遮罩值，顺手修掉 `AppModal` 里写死的 rgba）<br>· 探针：抽屉默认宽度 400、抓手 400–560、页签只有两个、Overview ≥8 格且有一格跨两列、切页签真的切过去、Evidence 有图或有说明、焦点进入抽屉、键盘 ← 改宽度并**写回 localStorage** |
+| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | 待做（需要 schema v13：状态、指派人、Activity 表，以及四级→五级严重度的旧数据映射；`AlertStatus` 类型与标签、`AlertViewModel` 的三个聚合字段、五个页签里缺的三个标签**都已经在**了） |
 | Phase 6 | 重复触发聚合 + 人工 Incident | 待做（需要聚合键与 Incident 表；`AlertViewModel.occurrenceCount` 已经带着，界面在它等于 1 时不渲染 ×N） |
 
 **每一阶段的交付口径**（与仓库既有规矩一致）：四语言文案 + 单测/源码守卫 + 探针断言 +
@@ -211,6 +228,20 @@ Phase 3 的 Evidence 模式画的是**这条事件有哪些证据**（录像 / �
 - **筛选面板的计数在"结果超过一页"时的说服力**：作用域已经印出来了，但"点一个计数为 0 的设备
   仍然可能在别的页上有数据"这件事只在文案里说明，没有在界面上做过实验。
 - **多显示器 / 缩放比例**：三栏在 1440×900 的窗口里验过（探针量了 216px），其它分辨率没有量。
-- **四语言的实际排版**：es/tr 的文案更长（"Confirmación media"、"Onaylanmadı"），窄栏里
+- **四语言的实际排版**：es/tr 的文案更长（"Confirmación media"、"Onayunmadı"），窄栏里
   是否换行、KPI 首屏是否被挤成两行**没有逐语言看过**。
+
+**Phase 4 的已知未验证**（同样是探针跑通 ≠ 全都验过）：
+- **拖拽改宽度只验了键盘那一路**：探针在抓手上按 ← 量到 416px 并读回 localStorage；
+  鼠标拖拽（`mousedown` + `mousemove`）**没有被自动验证**（合成鼠标事件在 Electron 里
+  能触发，但那验证的是探针自己的事件合成，不是真实拖拽手感）。手感要人拖一下。
+- **图片证据在真机上没验过**：探针跑的是操作员库的副本（**只复制数据库、不复制存储根**），
+  所以联动抓帧与声纹抓图在那次运行里都取不到文件 —— 探针只能证明"取不到时有正确的说法"。
+  "真的显示出一张图"要等真机上有抓帧、且存储根里有那个文件时才能看到。
+- **一条事件的图与它自己是否对得上**：`recordings.findById` / `snapshot_dir` 给的路径是
+  权威，但"这张图确实是这条告警那一刻的"这件事没有第三方证据（设备侧不留这种指纹）。
+- **四语言的抽屉排版**：头部三行 + 页签条 + 属性网格在 es/tr 下是否换行、是否溢出，
+  没有逐语言看过（探针在 zh-CN 下量的）。
+- **Evidence 页签里"链接到图片"的行为**：实现成 `target="_blank"` 打开回环地址，
+  但没有验证窗口里点开之后浏览器/内嵌视图的表现。
 

@@ -224,6 +224,7 @@ describe('Phase 2 · 侧栏折叠（规格 §3.2 / §3.3）', () => {
 const kpiStrip = read('src/renderer/src/components/event-center/EventKpiStrip.vue')
 const filterPanel = read('src/renderer/src/components/event-center/EventFilterPanel.vue')
 const alertQueue = read('src/renderer/src/components/event-center/AlertQueue.vue')
+const drawer = read('src/renderer/src/components/event-center/EventDetailDrawer.vue')
 const eventView = read('src/renderer/src/views/EventCenterView.vue')
 const eventViewDomain = read('src/shared/domain/event-view.ts')
 
@@ -480,16 +481,181 @@ describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
     assert.ok(eventView.includes('downloadFile('), '结果文件下载逻辑被删掉了')
   })
 
-  it('Esc 关抽屉（监听在 window 上，且只在抽屉开着时响应）', () => {
+  it('Esc 关抽屉由抽屉组件负责（监听在 window 上，↑/↓ 只在焦点位于抽屉内时才接管）', () => {
+    assert.ok(drawer.includes("if (event.key === 'Escape')"), 'Esc 没有关抽屉')
     assert.ok(
-      eventView.includes("if (event.key === 'Escape' && detail.value) closeDetail()"),
-      'Esc 没有关抽屉'
+      drawer.includes("window.addEventListener('keydown', onWindowKeydown)"),
+      '没有挂上键盘监听'
     )
-    assert.ok(eventView.includes("window.addEventListener('keydown', onWindowKeydown)"), '没有挂上键盘监听')
     assert.ok(
-      eventView.includes("window.removeEventListener('keydown', onWindowKeydown)"),
+      drawer.includes("window.removeEventListener('keydown', onWindowKeydown)"),
       '卸载时没有摘掉键盘监听'
     )
+    // ↑/↓ 与队列自己的键盘入口会打架：抽屉只在焦点落到自己身上时才接管（一次按键跳两条
+    // 是一个很难查的"跳着走"缺陷）。
+    assert.match(
+      drawer,
+      /drawerRef\.value\?\.contains\(node\)[\s\S]{0,120}?return/,
+      '抽屉在 window 上无条件接管了 ↑/↓（会与队列的 ↑/↓ 重复触发）'
+    )
+    // 页面里不该再留一份窗口监听（两份监听会让 Esc 关两次、↑/↓ 跳两条）。
+    assert.equal(
+      eventView.includes("window.addEventListener('keydown'"),
+      false,
+      '页面里还有一份窗口键盘监听'
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 4：详情抽屉 / Overview / Evidence（规格 §11–§12）
+// ---------------------------------------------------------------------------
+
+describe('Phase 4 · 抽屉本体（规格 §11）', () => {
+  it('抽屉是独立组件，页面只负责塞内容（结构在组件里，动作在页面里）', () => {
+    assert.ok(eventView.includes('<EventDetailDrawer'), '页面没有挂上抽屉组件')
+    assert.ok(
+      eventView.includes("import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'"),
+      '抽屉组件的导入路径不对'
+    )
+    // 旧的内联抽屉必须拆干净：留着就是两份头部/两份宽度逻辑。
+    assert.equal(
+      /<aside class="drawer"/.test(stripComments(eventView)),
+      false,
+      '页面里还留着旧的内联抽屉'
+    )
+    assert.ok(drawer.includes('<slot name="overview" />'), '抽屉没有 Overview 插槽')
+    assert.ok(drawer.includes('<slot name="evidence" />'), '抽屉没有 Evidence 插槽')
+    assert.ok(drawer.includes('<slot name="actions" />'), '头部没有动作插槽（主 CTA 要放在头部）')
+  })
+
+  it('宽度 400–560：常量来自纯函数层，抓手带 role=separator 与 min/max', () => {
+    assert.match(eventViewDomain, /DETAIL_DRAWER_MIN = 400/, '最小宽度不是规格的 400')
+    assert.match(eventViewDomain, /DETAIL_DRAWER_MAX = 560/, '最大宽度不是规格的 560')
+    assert.ok(drawer.includes('role="separator"'), '拖拽抓手没有 separator 角色')
+    assert.ok(drawer.includes(':aria-valuemin="DETAIL_DRAWER_MIN"'), '抓手没有报告最小值')
+    assert.ok(drawer.includes(':aria-valuemax="DETAIL_DRAWER_MAX"'), '抓手没有报告最大值')
+    assert.ok(drawer.includes('data-action="drawer-resize"'), '抓手没有探针标记')
+    assert.ok(drawer.includes('@mousedown="onResizeStart"'), '抓手不能拖')
+    // 拖的时候用 clientX 的差值：movementX 累加会漂。
+    assert.ok(drawer.includes('event.clientX - dragStartX'), '拖拽算法没有用起点差值')
+    assert.ok(drawer.includes('clampDrawerWidth('), '宽度没有夹到 400–560')
+    /*
+     * **宽度必须真的绑到元素上**。
+     *
+     * 这一条是探针抓到的真缺陷：第一版算了 `width`、也写进了 localStorage，
+     * 但 `.drawer` 的宽度只由 CSS 的 `var(--detail-panel)` 给，于是"存了 416、
+     * 看起来还是 400"—— 拖了没反应，而所有断言（含 aria）都是绿的。
+     */
+    assert.match(
+      drawer,
+      /:style="\{ width: `\$\{width\}px` \}"/,
+      '抽屉没有把宽度绑到元素上（拖了/改了宽度但看起来不变）'
+    )
+  })
+
+  it('宽度偏好记在 localStorage（页面侧的受控宽度 + 一个读点一个写点）', () => {
+    assert.ok(
+      eventView.includes('window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY)'),
+      '没有读回上次的抽屉宽度'
+    )
+    assert.ok(
+      eventView.includes('window.localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY'),
+      '没有记住抽屉宽度'
+    )
+    assert.match(eventViewDomain, /DRAWER_WIDTH_STORAGE_KEY = 'hertzinno\.eventCenter\.drawerWidth'/, '存储键不对')
+  })
+
+  it('页签条只渲染**已经做出来**的页签，且选中态是 2px 橙线不是整块橙', () => {
+    assert.ok(
+      drawer.includes('v-for="item in IMPLEMENTED_DETAIL_TABS"'),
+      '页签条没有按"已实现的页签"渲染（会画出空的 Timeline/Related/Activity）'
+    )
+    assert.ok(drawer.includes('role="tablist"'), '页签条没有 tablist 角色')
+    assert.ok(drawer.includes(':aria-selected="tab === item"'), '页签没有 aria-selected')
+    const tabBlock = drawer.slice(drawer.indexOf('.drawer__tab {'), drawer.indexOf('.drawer__body {'))
+    assert.match(tabBlock, /height:\s*40px/, '页签高度不是规格的 40px')
+    assert.match(tabBlock, /border-bottom:\s*2px solid transparent/, '页签没有预留 2px 下划线位置')
+    assert.match(
+      tabBlock,
+      /\.drawer__tab--active \{[\s\S]*?border-bottom-color:\s*var\(--color-accent\)/,
+      '选中页签的下划线不是橙色 token'
+    )
+    assert.match(tabBlock, /\.drawer__tab--active \{[\s\S]*?color:\s*var\(--color-text\)/, '选中页签文字没有变深')
+    assert.equal(
+      /\.drawer__tab--active \{[\s\S]{0,200}?background:\s*var\(--color-accent\)/.test(tabBlock),
+      false,
+      '选中页签被填成了整块橙色（规格明确禁止）'
+    )
+  })
+
+  it('头部有等级、标题、设备链接、首次探测时间与一个主 CTA（规格 §11.2）', () => {
+    assert.ok(drawer.includes('drawer__severity'), '头部没有等级')
+    assert.ok(drawer.includes('t(alert.titleKey)'), '头部标题没有走目录键')
+    assert.ok(drawer.includes("emit('open-device')"), '头部的设备名不可点（进不了设备详情页）')
+    assert.ok(
+      drawer.includes('formatRelativeTime(props.alert.firstDetectedAt)'),
+      '头部没有"首次探测到多久以前"'
+    )
+    assert.ok(eventView.includes('data-action="drawer-acknowledge"'), '头部没有确认这个主 CTA')
+    assert.ok(eventView.includes('class="btn btn--primary btn--sm"'), '主 CTA 不是 primary 按钮')
+  })
+
+  it('Overview 用属性网格（2 列，长字段跨两列），字段来自纯函数', () => {
+    assert.ok(eventView.includes('alertOverviewFields(detail.value)'), 'Overview 没有用纯函数的字段表')
+    assert.ok(eventView.includes('drawer__field--wide'), '没有跨两列的字段处理')
+    const grid = drawer.slice(drawer.indexOf('.drawer__grid {'), drawer.indexOf('.drawer__field--wide'))
+    assert.match(grid, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/, '属性网格不是 2 列')
+    assert.match(
+      drawer,
+      /\.drawer__field--wide \{[\s\S]*?grid-column:\s*1 \/ -1/,
+      '长字段没有跨两列'
+    )
+    // 「—」那一档必须在：持续时长在聚合之前、没有确认能力的来源状态都用它。
+    assert.ok(eventView.includes('<template v-else>—</template>'), '空值没有渲染成「—」')
+  })
+
+  it('Evidence 按来源选渲染器（Acoustic 一条；DTS/DAS/DGA 不做）', () => {
+    assert.ok(
+      eventView.includes('evidenceImageSource(alert, deviceKind)'),
+      'Evidence 没有走"图从哪来"的纯函数（也没把机型传进去）'
+    )
+    assert.ok(
+      eventView.includes('devices.devices.find((device) => device.id === alert.deviceId)?.kind'),
+      '没有把设备机型传进去（AE08 会被拿去问一个不存在的抓图接口）'
+    )
+    assert.ok(
+      eventView.includes("window.api.eventCenter.evidenceImage("),
+      '联动抓帧没有走新的回环图片接口'
+    )
+    assert.ok(
+      eventView.includes('window.api.e2.alarmSnapshots('),
+      '声纹告警的球机抓图没有复用已有接口（重复造了一份）'
+    )
+    assert.ok(eventView.includes('evidenceImageNote()'), '四种取不到图的情况没有各自的说法')
+    assert.ok(eventView.includes('closeEvidenceImage()'), '关抽屉时没有关掉图片端点')
+    // 四种 state 的文案都在目录里（缺一个就会印出裸 key）。
+    for (const key of [
+      'evidenceNotCaptured',
+      'evidenceFilesGone',
+      'evidenceNotImage',
+      'evidenceNotFound',
+      'evidenceError'
+    ]) {
+      assert.ok(eventView.includes(`eventsUi.${key}`), `缺少 ${key} 的说法`)
+    }
+  })
+
+  it('抽屉与队列的 ↑/↓ 不会互相打架：抽屉只在焦点落到自己身上时接管', () => {
+    assert.ok(drawer.includes("emit('prev')"), '抽屉没有 ↑ 换条')
+    assert.ok(drawer.includes("emit('next')"), '抽屉没有 ↓ 换条')
+    assert.ok(drawer.includes("key === 'k'"), '抽屉没有支持 J/K')
+    assert.ok(eventView.includes('stepAlert(-1)'), '页面的 ↑ 换条没有接上')
+    assert.ok(eventView.includes('stepAlert(1)'), '页面的 ↓ 换条没有接上')
+  })
+
+  it('新组件里没有写死的颜色', () => {
+    expectNoHardcodedColor(drawer, 'EventDetailDrawer.vue')
   })
 })
 

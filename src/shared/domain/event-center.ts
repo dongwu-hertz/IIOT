@@ -600,3 +600,37 @@ export interface EventAlarmLookup {
   query(query: AlarmQuery): AlarmPage
   acknowledge(ids: readonly string[], acknowledged: boolean): number
 }
+
+// ---------------------------------------------------------------------------
+// 图片证据（规格 §12.1 的 Visual）
+// ---------------------------------------------------------------------------
+
+/**
+ * 取一条事件的**图片证据**的入参。
+ *
+ * 两种都允许，但最终只会用一个：`recordingId` 优先（它是一条已经落到本机的行，
+ * 路径由库回答）。
+ */
+export interface EventEvidenceImageInput {
+  /** 存储根**相对**路径（绝对路径会被拒绝：存储根可以搬家，绝对路径会随之失效）。 */
+  relativePath?: string
+  /** 已登记的录像行 id（相机检测日志下载下来的照片走这条）。 */
+  recordingId?: string
+}
+
+/**
+ * 图片证据的取回结果。
+ *
+ * 四种情况必须分得开（画一个空框或者一张破图是最糟的失败方式）：
+ *   - `ok`：有地址，交给 `<img src>`；
+ *   - `not-found`：既没有可用的路径，给的路径也认不出来（例如绝对路径）；
+ *   - `files-gone`：路径在库里，但文件已经不在磁盘上（换过存储根、被手工删掉）；
+ *   - `not-image`：文件在，但不是能渲染的图片（把一段 mp4 当图片取）。
+ */
+export interface EventEvidenceImageView {
+  state: 'ok' | 'not-found' | 'files-gone' | 'not-image'
+  /** 回环地址（含每会话令牌）；只有 `ok` 时有。 */
+  url?: string
+  /** 文件名（用于下载名与 alt 文本）。 */
+  name?: string
+}

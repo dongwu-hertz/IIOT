@@ -2406,7 +2406,6 @@ export const es: MessageSchema = {
     detailDownloadNeedAdmin: 'Descargar archivos de resultado requiere una cuenta de administrador',
     detailSourceUnavailable: 'Esta fuente falló al leerse ahora mismo; inténtalo de nuevo',
 
-    detailAckTitle: 'Confirmar',
     detailAck: 'Confirmar este evento',
     detailUnack: 'Quitar la confirmación',
     detailAckUnsupported:
@@ -2487,7 +2486,30 @@ export const es: MessageSchema = {
     evidenceRecording: 'Grabación',
     evidenceFrame: 'Fotograma',
     evidenceFiles: '{count} archivos',
-    metricMore: '+{count} más'
+    metricMore: '+{count} más',
+
+    // --- Fase 4: panel de detalle / Overview / Evidence (spec §11–§12) ------
+    detailTab: {
+      overview: 'Resumen',
+      evidence: 'Evidencia',
+      timeline: 'Cronología',
+      related: 'Relacionados',
+      activity: 'Actividad'
+    },
+    overviewStatus: 'Estado',
+    overviewFirstDetected: 'Primera detección',
+    overviewLastDetected: 'Última detección',
+    overviewDuration: 'Duración',
+    overviewOccurrences: 'Ocurrencias',
+    drawerResize: 'Arrastra para cambiar el ancho del panel',
+
+    evidenceVisualTitle: 'Evidencia de imagen',
+    evidenceNone: 'Este evento no tiene evidencia de imagen.',
+    evidenceNotCaptured: 'El equipo no capturó ninguna imagen (puede que la descarga de capturas estuviera desactivada al sincronizar).',
+    evidenceFilesGone: 'La base registra esta imagen, pero el archivo ya no está en este equipo.',
+    evidenceNotImage: 'El archivo existe, pero no es un formato de imagen que se pueda mostrar.',
+    evidenceNotFound: 'No hay una ruta utilizable para esta evidencia de imagen.',
+    evidenceError: 'No se pudo leer la evidencia de imagen.'
 
   }
 }

@@ -2662,13 +2662,53 @@ async function run() {
     'let drawerOpened = false;' +
     'let drawerClosedByEsc = false;' +
     'window.__eventsProbeStep = "drawer";' +
+    /*
+     * 详情抽屉（规格 §11）。这一段量的都是"结构真的在、并且真的按规格长"：
+     * 默认宽度 400、抓手带 400–560、页签只有已实现的两个、Overview 是 2 列属性网格、
+     * 切到 Evidence 能切过去、键盘能改宽度**并且写回 localStorage**（写操作读回验证）。
+     */
+    'const drawerInfo = {};' +
+    'const panelVisible = (name) => {' +
+    '  const node = document.querySelector(`.drawer [data-panel="${name}"]`);' +
+    '  return !!node && getComputedStyle(node).display !== "none";' +
+    '};' +
     'const firstRow = document.querySelector(".alert-row");' +
     'if (firstRow) {' +
     '  firstRow.click();' +
-    '  await sleep(600);' +
-    '  drawerOpened = !!document.querySelector(".drawer");' +
+    '  await sleep(700);' +
+    '  const drawerEl = document.querySelector(".drawer");' +
+    '  drawerOpened = !!drawerEl;' +
+    '  if (drawerEl) {' +
+    '    drawerInfo.width = Math.round(drawerEl.getBoundingClientRect().width);' +
+    '    const handle = drawerEl.querySelector("[data-action=drawer-resize]");' +
+    '    drawerInfo.hasHandle = !!handle;' +
+    '    drawerInfo.min = handle ? handle.getAttribute("aria-valuemin") : null;' +
+    '    drawerInfo.max = handle ? handle.getAttribute("aria-valuemax") : null;' +
+    '    drawerInfo.tabs = [...drawerEl.querySelectorAll("[data-tab]")].map(text);' +
+    '    drawerInfo.gridFields = drawerEl.querySelectorAll(".drawer__grid .drawer__field").length;' +
+    '    drawerInfo.wideFields = drawerEl.querySelectorAll(".drawer__field--wide").length;' +
+    '    drawerInfo.overviewVisible = panelVisible("overview");' +
+    '    drawerInfo.evidenceVisible = panelVisible("evidence");' +
+    '    drawerInfo.focusInside = drawerEl.contains(document.activeElement);' +
+    '    const evidenceTab = drawerEl.querySelector("[data-tab=evidence]");' +
+    '    if (evidenceTab) { evidenceTab.click(); await sleep(1200); }' +
+    '    drawerInfo.afterTabOverview = panelVisible("overview");' +
+    '    drawerInfo.afterTabEvidence = panelVisible("evidence");' +
+    '    drawerInfo.evidenceImages = document.querySelectorAll("[data-action=evidence-image]").length;' +
+    '    drawerInfo.evidenceNote = text(document.querySelector(".drawer [data-panel=evidence] .muted"));' +
+    // 键盘改宽度：焦点在抓手上按 ←，宽度 +16 且**写回 localStorage**。
+    '    if (handle) {' +
+    '      handle.focus();' +
+    '      handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));' +
+    '      await sleep(300);' +
+    '    }' +
+    '    drawerInfo.widthAfterKey = Math.round(drawerEl.getBoundingClientRect().width);' +
+    '    try {' +
+    '      drawerInfo.storedWidth = window.localStorage.getItem("hertzinno.eventCenter.drawerWidth");' +
+    '    } catch (error) { drawerInfo.storedWidth = "READ_FAILED"; }' +
+    '  }' +
     '  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));' +
-    '  await sleep(300);' +
+    '  await sleep(400);' +
     '  drawerClosedByEsc = !document.querySelector(".drawer");' +
     '}' +
     // KPI → 筛选：点「严重」那一格（这一条查询只读声纹 SQLite，不会去连相机）。
@@ -2705,7 +2745,7 @@ async function run() {
     'return JSON.stringify({' +
     '  tileLabels, tileValues, scope, hasSearchBox: !!searchBox, panelWidth, groups, optionCount,' +
     '  panelScope, savedLabels, modeLabels, oldTable: !!oldTable, summary, rowCounts, heights,' +
-    '  drawerOpened, drawerClosedByEsc, hashAfterKpi, pressedAfterKpi, activeOptions, storedFilter,' +
+    '  drawerOpened, drawerClosedByEsc, drawerInfo, hashAfterKpi, pressedAfterKpi, activeOptions, storedFilter,' +
     '  viewport, overflowX,' +
     '  panelRight: panelRect ? Math.round(panelRect.right) : null,' +
     '  queueLeft: queueRect ? Math.round(queueRect.left) : null,' +
@@ -2798,6 +2838,50 @@ async function run() {
       }
       if (!eventsCenter.drawerClosedByEsc) {
         problems.push('Esc 没有关掉详情抽屉')
+      }
+      /*
+       * 抽屉本体（规格 §11）：默认宽度 400、抓手 400–560、页签只有已实现的两个、
+       * Overview 是 2 列属性网格、切到 Evidence 真的切过去、键盘改宽度写回 localStorage。
+       */
+      const info = eventsCenter.drawerInfo || {}
+      if (info.width !== 400) {
+        problems.push('抽屉默认宽度不是规格的 400px（1440×900 下）：' + info.width)
+      }
+      if (!info.hasHandle) {
+        problems.push('抽屉没有可拖的宽度抓手')
+      } else if (info.min !== '400' || info.max !== '560') {
+        problems.push('抓手的 400–560 范围不对：' + info.min + '–' + info.max)
+      }
+      if (JSON.stringify(info.tabs) !== JSON.stringify(['概览', '证据'])) {
+        problems.push(
+          '抽屉页签不是"已实现的那两个"（Timeline/Related/Activity 属于 Phase 5）：' +
+            JSON.stringify(info.tabs)
+        )
+      }
+      if (!(info.gridFields >= 8)) {
+        problems.push('Overview 属性网格的字段太少：' + info.gridFields)
+      }
+      if (!(info.wideFields >= 1)) {
+        problems.push('Overview 里没有跨两列的长字段（事件标识）')
+      }
+      if (info.overviewVisible !== true || info.evidenceVisible !== false) {
+        problems.push('打开抽屉时默认没有停在 Overview：' + JSON.stringify(info))
+      }
+      if (info.afterTabEvidence !== true || info.afterTabOverview !== false) {
+        problems.push('点「证据」页签没有切过去：' + JSON.stringify(info))
+      }
+      // 有图，或者有四种"取不到图"的说法之一 —— 空框是最糟的形态。
+      if (!(info.evidenceImages > 0) && String(info.evidenceNote || '').trim() === '') {
+        problems.push('Evidence 页签既没有图也没有说明：' + JSON.stringify(info))
+      }
+      if (!info.focusInside) {
+        problems.push('打开抽屉后焦点没有进入抽屉（↑/↓ 与读屏都要它）')
+      }
+      if (info.widthAfterKey !== 416) {
+        problems.push('抓手上按 ← 没有把宽度改成 416：' + info.widthAfterKey)
+      }
+      if (String(info.storedWidth) !== '416') {
+        problems.push('抽屉宽度没有写回 localStorage（或写错了）：' + JSON.stringify(info.storedWidth))
       }
     } else {
       log(

@@ -373,8 +373,16 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
     'sample:ai-label'
   ],
   viewTrends: ['trend:query', 'trend:coverage', 'trend:stats'],
-  /** 事件中心的读 + **确认**；理由同上一条。 */
-  viewEvents: ['event-center:query', 'event-center:detect-logs', 'event-center:acknowledge']
+  /** 事件中心的读 + **确认** + 取图片证据；理由同上一条。 */
+  viewEvents: [
+    'event-center:query',
+    'event-center:detect-logs',
+    'event-center:acknowledge',
+    // Phase 4（详情抽屉的 Evidence 页签）：把库里的相对路径变成回环图片地址。**只读**：
+    // 不连设备、不写盘、不写库 —— 所以它与 `query` 同级，不是特权操作。
+    'event-center:evidence-image',
+    'event-center:evidence-image-close'
+  ]
 }
 
 /**

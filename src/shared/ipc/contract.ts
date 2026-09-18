@@ -564,20 +564,25 @@ export const IpcChannels = {
   /**
    * 事件与告警中心（产品要求：「设置事件和告警中心。」）。
    *
-   * 四个通道对应界面对这一页的四种操作：
+   * 六个通道对应界面对这一页的六种操作：
    *   - `EVENT_CENTER_QUERY`              读合并后的分页结果（读，不加管理员校验）；
    *   - `EVENT_CENTER_DETECT_LOGS`        读一台相机的检测库（读）；
    *   - `EVENT_CENTER_ACKNOWLEDGE`        确认/清除事件（**写，要管理员**，与
    *     `ALARM_ACKNOWLEDGE` / `LINKAGE_ACKNOWLEDGE` 一致）；
    *   - `EVENT_CENTER_DOWNLOAD_DETECT_FILE` 把设备的结果文件下载到本机并登记
-   *     （**写，要管理员**：它会连设备、写盘、登记录像行）。
+   *     （**写，要管理员**：它会连设备、写盘、登记录像行）；
+   *   - `EVENT_CENTER_EVIDENCE_IMAGE`     把一个存储根相对路径（或一条录像行）变成
+   *     回环图片地址（读；图片字节不过 IPC，与本地录像回放同一条做法）；
+   *   - `EVENT_CENTER_EVIDENCE_IMAGE_CLOSE` 关掉上一次打开的图片端点（读）。
    *
    * 「合并」发生在主进程，因此界面只需要一个查询通道，不必自己拼三路来源。
    */
   EVENT_CENTER_QUERY: 'event-center:query',
   EVENT_CENTER_DETECT_LOGS: 'event-center:detect-logs',
   EVENT_CENTER_ACKNOWLEDGE: 'event-center:acknowledge',
-  EVENT_CENTER_DOWNLOAD_DETECT_FILE: 'event-center:download-detect-file'
+  EVENT_CENTER_DOWNLOAD_DETECT_FILE: 'event-center:download-detect-file',
+  EVENT_CENTER_EVIDENCE_IMAGE: 'event-center:evidence-image',
+  EVENT_CENTER_EVIDENCE_IMAGE_CLOSE: 'event-center:evidence-image-close'
 } as const
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]
@@ -1153,6 +1158,8 @@ export type {
   EventDetectLogView,
   EventDownloadProgress,
   EventDownloadStage,
+  EventEvidenceImageInput,
+  EventEvidenceImageView,
   EventKind,
   EventLocalAlarmDetail,
   EventMetrics,
@@ -1167,7 +1174,9 @@ import type {
   EventDetectDownloadInput,
   EventDetectDownloadResult,
   EventDetectLibraryPage,
-  EventDownloadProgress
+  EventDownloadProgress,
+  EventEvidenceImageInput,
+  EventEvidenceImageView
 } from '../domain/event-center'
 
 /** 手动录像的状态（界面据此显示录制指示器）。 */
@@ -2372,6 +2381,26 @@ export interface RendererApi {
     downloadDetectFile(
       input: EventDetectDownloadInput
     ): Promise<DeviceResult<EventDetectDownloadResult>>
+    /**
+     * 一条事件的**图片证据**（规格 §12.1 的 Visual 那一项）。
+     *
+     * 两种入参，二选一：
+     *   - `relativePath`：存储根相对路径（联动告警的抓帧就是这种）；
+     *   - `recordingId`：一条已经落到本机的录像行（相机检测日志下载下来的照片就是这种）。
+     *
+     * 返回主进程回环 HTTP 上的地址（含每会话令牌）。`state` 把四种情况分开：
+     * `ok`（有图）/ `not-found`（既没给路径、路径也认不出来）/ `files-gone`
+     * （路径在库里，但文件已经不在磁盘上）/ `not-image`（文件在，但不是能渲染的图片格式）。
+     * 界面照 `state` 说人话，而不是画一个空框或者一个破图。
+     */
+    evidenceImage(input: EventEvidenceImageInput): Promise<DeviceResult<EventEvidenceImageView>>
+    /**
+     * 关掉上一次打开的图片端点（界面关抽屉或换一条事件时调用）。
+     *
+     * 与 `devices.closeSnapshots()` 同一条取舍：主进程一次只留一个端点，但"离开"这件事
+     * 只有界面知道；让端口挂到 TTL（30 分钟）是一种浪费，TTL 仍然兜底。
+     */
+    closeEvidenceImage(): Promise<DeviceResult<void>>
   }
 }
 

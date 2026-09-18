@@ -134,6 +134,14 @@
   --event-row-padding-y: 12px;
   /** 焦点环（规格 §15.3）：只在键盘聚焦时出现，不用颜色单独表达状态。 */
   --focus-ring: 0 0 0 2px rgba(255, 106, 26, 0.35);
+  /**
+   * 覆盖层遮罩（模态与事件抽屉共用）。
+   *
+   * 为什么要有这个 token：`AppModal` 与事件抽屉各写过一个 `rgba(23,23,23,…)`
+   * （0.32 与 0.24），于是"遮罩有多暗"这件事在应用里有两个答案，而组件里的 rgba
+   * 与写死的 hex 是同一类问题。统一成一个值，组件只写 `var(--color-scrim)`。
+   */
+  --color-scrim: rgba(23, 23, 23, 0.32);
 
   /* --- Type scale（规格 §5.2） -------------------------------------------- */
   /*
@@ -791,6 +799,26 @@ table {
 .chip--tiny {
   padding: 1px 5px;
   font-size: 10.5px;
+}
+
+/* 看起来像链接的按钮：真按钮（可 Tab、可读屏）但不带按钮外观。 */
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.link-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* --------------------------------------------------------------------------

@@ -680,7 +680,11 @@ export async function initServices(): Promise<AppServices> {
     recordings: {
       findById: (id) => recordingRepo.findById(id),
       listByDevice: (deviceId) => recordingRepo.query({ deviceId, limit: 1000, offset: 0 }).items
-    }
+    },
+    // 图片证据：回环端点用与录像回放**同一个**实例（那一套"只绑回环 + 每会话令牌 +
+    // 不对就 403 并记日志"的推理只需要在一处成立），路径解析用存储服务（内含越界保护）。
+    images: videoFiles,
+    storage
   })
 
   // ---- Startup tasks ------------------------------------------------------

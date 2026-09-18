@@ -2433,7 +2433,6 @@ export const en: MessageSchema = {
     detailDownloadNeedAdmin: 'Downloading result files requires an administrator account',
     detailSourceUnavailable: 'This source failed to read just now; try again in a moment',
 
-    detailAckTitle: 'Acknowledge',
     detailAck: 'Acknowledge this event',
     detailUnack: 'Remove acknowledgement',
     detailAckUnsupported:
@@ -2515,7 +2514,32 @@ export const en: MessageSchema = {
     evidenceRecording: 'Recording',
     evidenceFrame: 'Frame',
     evidenceFiles: '{count} files',
-    metricMore: '+{count} more'
+    metricMore: '+{count} more',
+
+    // --- Phase 4: detail drawer / Overview / Evidence (spec §11–§12) --------
+    // All five tabs get a name: Timeline / Related / Activity only render in Phase 5,
+    // but the tab type is complete — a missing name would print a bare key that day.
+    detailTab: {
+      overview: 'Overview',
+      evidence: 'Evidence',
+      timeline: 'Timeline',
+      related: 'Related',
+      activity: 'Activity'
+    },
+    overviewStatus: 'Status',
+    overviewFirstDetected: 'First detected',
+    overviewLastDetected: 'Last detected',
+    overviewDuration: 'Duration',
+    overviewOccurrences: 'Occurrences',
+    drawerResize: 'Drag to resize the drawer',
+
+    evidenceVisualTitle: 'Image evidence',
+    evidenceNone: 'No image evidence for this event.',
+    evidenceNotCaptured: 'The device captured no image (snapshot download may have been off during sync).',
+    evidenceFilesGone: 'The library records this image, but the file is gone from this machine.',
+    evidenceNotImage: 'The file exists, but it is not an image format that can be displayed.',
+    evidenceNotFound: 'No usable path for this image evidence.',
+    evidenceError: 'Reading the image evidence failed.'
 
   }
 }

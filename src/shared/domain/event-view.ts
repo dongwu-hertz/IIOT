@@ -25,6 +25,7 @@ import type {
   EventSourceKind
 } from './event-center'
 import { EVENT_SOURCE_KINDS } from './event-center'
+import type { DeviceKind } from './models'
 
 // ---------------------------------------------------------------------------
 // 等级：规格 §2.3 的五级
@@ -236,6 +237,19 @@ export interface AlertViewModel {
    * 占位符；界面在它等于 1 时不渲染"×N"。
    */
   occurrenceCount: number
+  /**
+   * 首次 / 最后一次探测到（规格 §16.2 的 `firstDetectedAt` / `lastDetectedAt`）。
+   *
+   * 聚合（Phase 6）之前两者都等于 `at`：一条事件只有一个时刻。Phase 6 把同一次触发的
+   * 连续上报并起来时，只改适配器里的这两个数，界面与抽屉不必动。
+   */
+  firstDetectedAt: number
+  lastDetectedAt: number
+  /**
+   * 持续时长（ms）。聚合之前是 **0**（一条瞬时事件没有时长），
+   * 抽屉据此显示「—」而不是「0 秒」。
+   */
+  durationMs: number
   entry: EventCenterEntry
 }
 
@@ -264,6 +278,9 @@ export function toAlertViewModel(entry: EventCenterEntry): AlertViewModel {
     hasFrame: entry.frameRelativePath !== undefined,
     evidenceFileCount: entry.detect?.files.length ?? 0,
     occurrenceCount: 1,
+    firstDetectedAt: entry.at,
+    lastDetectedAt: entry.at,
+    durationMs: 0,
     entry
   }
 }
@@ -675,3 +692,220 @@ export function eventFilterFromQuery(query: Record<string, unknown> | null | und
     ack: query.ack
   })
 }
+
+// ---------------------------------------------------------------------------
+// 详情抽屉（规格 §11）
+// ---------------------------------------------------------------------------
+
+/** 规格 §11.3 的五个页签。 */
+export type EventDetailTab = 'overview' | 'evidence' | 'timeline' | 'related' | 'activity'
+
+export const EVENT_DETAIL_TABS: readonly EventDetailTab[] = [
+  'overview',
+  'evidence',
+  'timeline',
+  'related',
+  'activity'
+]
+
+/**
+ * **已经做出来**的页签。
+ *
+ * Phase 4 只交付 Overview 与 Evidence（规格 §18.1 把 Timeline / Related / Activity 排在
+ * Phase 5，因为它们的素材是状态变更记录与聚合结果 —— 现在库里没有这两样）。所以页签条里
+ * 只有这两个：画出三个永远空着的页签，比不画更糟（工程规则：不存在的能力不渲染）。
+ */
+export const IMPLEMENTED_DETAIL_TABS: readonly EventDetailTab[] = ['overview', 'evidence']
+
+export function isEventDetailTab(value: unknown): value is EventDetailTab {
+  return typeof value === 'string' && (EVENT_DETAIL_TABS as readonly string[]).includes(value)
+}
+
+export function detailTabLabelKey(tab: EventDetailTab): string {
+  return `eventsUi.detailTab.${tab}`
+}
+
+/** 抽屉宽度：规格 §11.1 给的三档（Default 400 / Large screen 440 / Resizable 400–560）。 */
+export const DETAIL_DRAWER_MIN = 400
+export const DETAIL_DRAWER_MAX = 560
+export const DETAIL_DRAWER_DEFAULT = 400
+export const DETAIL_DRAWER_WIDE = 440
+/**
+ * "大屏"的断点取 1600：与规格 §4.1 的内边距规则（≥1600 用 32）同一条线，
+ * 免得同一份规格里出现两个"大屏"。
+ */
+export const DETAIL_DRAWER_WIDE_VIEWPORT = 1600
+
+export function clampDrawerWidth(value: number): number {
+  if (!Number.isFinite(value)) return DETAIL_DRAWER_DEFAULT
+  return Math.min(DETAIL_DRAWER_MAX, Math.max(DETAIL_DRAWER_MIN, Math.round(value)))
+}
+
+export function drawerWidthForViewport(viewportWidth: number): number {
+  return viewportWidth >= DETAIL_DRAWER_WIDE_VIEWPORT ? DETAIL_DRAWER_WIDE : DETAIL_DRAWER_DEFAULT
+}
+
+/** localStorage 键（与其他视觉偏好同一套命名）。 */
+export const DRAWER_WIDTH_STORAGE_KEY = 'hertzinno.eventCenter.drawerWidth'
+
+/** 存下来的宽度：容错 + 夹到 400–560（坏值不能把抽屉变成 12px 或者半屏）。 */
+export function parseDrawerWidth(raw: unknown, fallback: number = DETAIL_DRAWER_DEFAULT): number {
+  const text = typeof raw === 'string' ? raw.trim() : typeof raw === 'number' ? String(raw) : ''
+  if (text === '') return clampDrawerWidth(fallback)
+  const value = Number(text)
+  if (!Number.isFinite(value)) return clampDrawerWidth(fallback)
+  return clampDrawerWidth(value)
+}
+
+// ---------------------------------------------------------------------------
+// Overview 字段（规格 §11.4）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一个字段的值。
+ *
+ * 为什么把"值"做成带类型的东西而不是字符串：格式化（时间/时长/小数位）与翻译都在渲染层，
+ * 而"这一格到底有没有值"必须在纯函数里定死 —— 例如持续时长在聚合之前**没有**值
+ * （一条瞬时事件没有时长），显示 `0 秒` 会被读成"持续了 0 秒"。
+ */
+export type OverviewValue =
+  | { kind: 'text'; text: string; mono?: boolean }
+  | { kind: 'time'; at: number; approximate: boolean }
+  | { kind: 'duration'; ms: number }
+  | { kind: 'number'; value: number; digits: number; unit: string }
+  /** 目录键（等级 / 状态 / 来源 / 事件种类）。 */
+  | { kind: 'label'; labelKey: string; severity?: AlertSeverity; unknown?: boolean }
+  /** 这一刻没有值：界面显示「—」。 */
+  | { kind: 'empty' }
+
+export interface OverviewField {
+  labelKey: string
+  value: OverviewValue
+  /** 长字段（事件标识、设备目录等）跨两列（规格 §11.4）。 */
+  wide?: boolean
+}
+
+/**
+ * 抽屉 Overview 的属性表（规格 §11.4：2 列属性网格，长字段跨两列）。
+ *
+ * 规格列了 Severity / Status / First detected / Duration / AI Confidence / Occurrences。
+ * 我们对得上的是前四个加 Occurrences；**AI Confidence 不做**：事件中心里没有任何一次
+ * 推理（AI 标注是样本库那边的离线动作，见 `docs/BASELINE.md` §8），画一格永远是「—」的
+ * 置信度会让人以为"系统看过但没给分"。资产的字段同理（我们没有 asset 这一层，设备就是
+ * 我们的资产）。
+ */
+export function alertOverviewFields(alert: AlertViewModel): OverviewField[] {
+  const fields: OverviewField[] = [
+    {
+      labelKey: 'eventsUi.detailSeverity',
+      value: alert.severityUnknown
+        ? { kind: 'label', labelKey: 'eventsUi.severityUnknown', unknown: true }
+        : { kind: 'label', labelKey: alertSeverityLabelKey(alert.severity), severity: alert.severity }
+    },
+    {
+      labelKey: 'eventsUi.overviewStatus',
+      // 没有确认能力的来源（相机检测日志）显示「—」：一个谁也点不掉的「待处理」是假话。
+      value: alert.statusLocked
+        ? { kind: 'empty' }
+        : { kind: 'label', labelKey: alertStatusLabelKey(alert.status) }
+    },
+    {
+      labelKey: 'eventsUi.overviewFirstDetected',
+      value: { kind: 'time', at: alert.firstDetectedAt, approximate: alert.atApproximate }
+    },
+    {
+      labelKey: 'eventsUi.overviewLastDetected',
+      value: { kind: 'time', at: alert.lastDetectedAt, approximate: alert.atApproximate }
+    },
+    {
+      labelKey: 'eventsUi.overviewDuration',
+      // 聚合之前没有时长可言（见 `OverviewValue` 的注释）。
+      value: alert.occurrenceCount > 1 ? { kind: 'duration', ms: alert.durationMs } : { kind: 'empty' }
+    },
+    {
+      labelKey: 'eventsUi.overviewOccurrences',
+      value: { kind: 'number', value: alert.occurrenceCount, digits: 0, unit: '' }
+    },
+    {
+      labelKey: 'eventsUi.detailSource',
+      value: { kind: 'label', labelKey: `domain.eventSource.${alert.source}` }
+    },
+    {
+      labelKey: 'eventsUi.detailKind',
+      value: { kind: 'label', labelKey: alert.titleKey }
+    },
+    {
+      labelKey: 'eventsUi.detailDevice',
+      value: { kind: 'text', text: alert.deviceName }
+    },
+    { labelKey: 'eventsUi.detailEventId', value: { kind: 'text', text: alert.id, mono: true }, wide: true }
+  ]
+
+  for (const metric of alert.metrics) {
+    fields.push({
+      labelKey: metric.labelKey,
+      value: { kind: 'number', value: metric.value, digits: metric.digits, unit: metric.unit }
+    })
+  }
+
+  /**
+   * 设备回的**原始**等级（未换算）：它是一条证据，不是我们的等级。
+   * 只有真的回了才出现（相机从未回过这个字段）。
+   */
+  const rawLevel = alert.entry.alarmLevelRaw
+  if (typeof rawLevel === 'number' && Number.isFinite(rawLevel)) {
+    fields.push({
+      labelKey: 'eventsUi.detailAlarmLevel',
+      value: { kind: 'number', value: rawLevel, digits: 0, unit: '' }
+    })
+  }
+
+  return fields
+}
+
+// ---------------------------------------------------------------------------
+// Evidence：图片证据从哪来（规格 §12.1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条事件的**图片证据**出处。
+ *
+ * 三种来源我们真的有两种：
+ *   - 联动告警：`frameRelativePath`（本机存储根下的抓帧）→ 需要一个新的"按相对路径取图"
+ *     回环接口（`eventCenter.evidenceImage`）；
+ *   - 声纹告警：`alarms.snapshot_dir`（球机抓图目录），已经有现成接口
+ *     （`devices.alarmSnapshots(deviceId, alarmId)`，见第 8 批）→ 直接用，不重复造；
+ *   - 相机检测日志：图是**设备侧的结果文件**，要操作员先下载到本机（下载后成为录像行），
+ *     所以它走"文件列表"而不是这里 —— 这里返回 `null`。
+ *
+ * 返回 `null` 的含义是"这条路没有图"，界面据此显示「没有图片证据」，而不是画一个空框。
+ */
+export type EvidenceImageSource =
+  | { kind: 'frame'; relativePath: string }
+  | { kind: 'alarm-snapshot'; alarmId: string }
+
+/**
+ * @param deviceKind 这台设备的机型（可选）。声纹告警的球机抓图只有**听诊盒子/空气声呐**
+ *   （`acclimationBox` 那一族的 `auscultationBox`）才有；AE08 这类声纹盒子根本没有抓图概念。
+ *   传进来就能把"这台设备不提供图片证据"与"这次没抓到图"分开 —— 前者是 `null`
+ *   （界面说「没有图片证据」），后者是 `not-captured`（界面说「设备上没有抓到图」）。
+ *   机型还不知道时（设备列表没加载完）**照旧返回抓图那条路**：多试一次不会有副作用，
+ *   而少试一次会让一张真的存在的图不显示。
+ */
+export function evidenceImageSource(
+  alert: AlertViewModel,
+  deviceKind?: DeviceKind
+): EvidenceImageSource | null {
+  const frame = alert.entry.frameRelativePath
+  if (alert.source === 'linkage' && typeof frame === 'string' && frame.trim() !== '') {
+    return { kind: 'frame', relativePath: frame }
+  }
+  if (alert.source === 'localAlarm') {
+    if (deviceKind !== undefined && deviceKind !== 'auscultationBox') return null
+    // 条目 id 是 `alarm:<alarmId>`，那一段就是告警 id（`eventEntryIdPayload` 同一套规则）。
+    const alarmId = alert.id.startsWith('alarm:') ? alert.id.slice('alarm:'.length) : ''
+    if (alarmId !== '') return { kind: 'alarm-snapshot', alarmId }
+  }
+  return null
+}
+

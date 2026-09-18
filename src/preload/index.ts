@@ -28,6 +28,7 @@ import type {
   EventCenterQuery,
   EventDetectDownloadInput,
   EventDownloadProgress,
+  EventEvidenceImageInput,
   Fa371DetectFeedbackPreview,
   Fa371EnergyPreview,
   Fa371FftPreview,
@@ -460,7 +461,11 @@ const api: RendererApi = {
     detectLogs: (deviceId: string, detectId?: number) =>
       ipcRenderer.invoke(IpcChannels.EVENT_CENTER_DETECT_LOGS, deviceId, detectId),
     downloadDetectFile: (input: EventDetectDownloadInput) =>
-      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_DOWNLOAD_DETECT_FILE, input)
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_DOWNLOAD_DETECT_FILE, input),
+    evidenceImage: (input: EventEvidenceImageInput) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE, input),
+    closeEvidenceImage: () =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE_CLOSE)
   }
 }
 

@@ -21,7 +21,13 @@ import type { EventCenterEntry } from '../src/shared/domain/event-center'
 import {
   ALERT_SEVERITIES,
   ALERT_STATUSES,
+  DETAIL_DRAWER_DEFAULT,
+  DETAIL_DRAWER_MAX,
+  DETAIL_DRAWER_MIN,
+  DETAIL_DRAWER_WIDE_VIEWPORT,
+  DRAWER_WIDTH_STORAGE_KEY,
   EMPTY_EVENT_FILTER,
+  EVENT_DETAIL_TABS,
   EVENT_SAVED_VIEWS,
   EVENT_SEVERITY_FILTERS,
   EVENT_VIEW_MODES,
@@ -29,20 +35,28 @@ import {
   EVENT_FILTER_STORAGE_KEY,
   EVENT_FILTER_QUERY_KEYS,
   EVENT_VIEW_MODE_STORAGE_KEY,
+  IMPLEMENTED_DETAIL_TABS,
   VISIBLE_ALERT_SEVERITIES,
   ackFilterToQuery,
   alertMetrics,
+  alertOverviewFields,
   alertSeverityLabelKey,
   alertSeverityOf,
   alertStatusLabelKey,
+  clampDrawerWidth,
+  detailTabLabelKey,
+  drawerWidthForViewport,
   eventFilterCounts,
   eventFilterFromQuery,
   eventFilterToQuery,
   eventKpis,
+  evidenceImageSource,
   hasEventFilterQuery,
+  isEventDetailTab,
   isEventFilterActive,
   isSeverityUnknown,
   matchEventSearch,
+  parseDrawerWidth,
   parseEventFilter,
   parseEventViewMode,
   querySeverityFor,
@@ -505,5 +519,175 @@ describe('内置视图（规格 §9.4）', () => {
     const plain = EVENT_SAVED_VIEWS[0]
     assert.ok(plain)
     assert.equal(savedViewFromMs(plain, now), undefined)
+  })
+})
+
+describe('详情抽屉（规格 §11）', () => {
+  it('页签条只列**已经做出来**的页签（Timeline/Related/Activity 是 Phase 5）', () => {
+    assert.deepEqual([...IMPLEMENTED_DETAIL_TABS], ['overview', 'evidence'])
+    for (const tab of IMPLEMENTED_DETAIL_TABS) {
+      assert.ok((EVENT_DETAIL_TABS as readonly string[]).includes(tab), `${tab} 不在规格的五个页签里`)
+    }
+    assert.deepEqual(
+      [...EVENT_DETAIL_TABS],
+      ['overview', 'evidence', 'timeline', 'related', 'activity']
+    )
+    assert.equal(detailTabLabelKey('evidence'), 'eventsUi.detailTab.evidence')
+    assert.equal(isEventDetailTab('overview'), true)
+    assert.equal(isEventDetailTab('Overview'), false)
+  })
+
+  it('抽屉宽度：400–560 之间的取值被夹住，坏值退回默认（不许变成 12px 或半屏）', () => {
+    assert.equal(clampDrawerWidth(300), DETAIL_DRAWER_MIN)
+    assert.equal(clampDrawerWidth(900), DETAIL_DRAWER_MAX)
+    assert.equal(clampDrawerWidth(487.6), 488)
+    assert.equal(clampDrawerWidth(Number.NaN), DETAIL_DRAWER_DEFAULT)
+    assert.equal(parseDrawerWidth('520'), 520)
+    assert.equal(parseDrawerWidth('  480  '), 480)
+    assert.equal(parseDrawerWidth(505), 505)
+    assert.equal(parseDrawerWidth('abc'), DETAIL_DRAWER_DEFAULT)
+    assert.equal(parseDrawerWidth(''), DETAIL_DRAWER_DEFAULT)
+    assert.equal(parseDrawerWidth(null), DETAIL_DRAWER_DEFAULT)
+    assert.equal(parseDrawerWidth('900'), DETAIL_DRAWER_MAX)
+    assert.equal(parseDrawerWidth('100'), DETAIL_DRAWER_MIN)
+    // 存坏了也不许把抽屉顶到窗口外面：默认值本身也要被夹一遍。
+    assert.equal(parseDrawerWidth(null, 999), DETAIL_DRAWER_MAX)
+  })
+
+  it('大屏默认 440、普通屏默认 400（规格 §11.1），断点与 §4.1 的内边距同一条线', () => {
+    assert.equal(drawerWidthForViewport(1440), 400)
+    assert.equal(drawerWidthForViewport(DETAIL_DRAWER_WIDE_VIEWPORT - 1), 400)
+    assert.equal(drawerWidthForViewport(DETAIL_DRAWER_WIDE_VIEWPORT), 440)
+    assert.equal(drawerWidthForViewport(1920), 440)
+    assert.ok(DETAIL_DRAWER_MIN < DETAIL_DRAWER_MAX)
+    assert.equal(DRAWER_WIDTH_STORAGE_KEY, 'hertzinno.eventCenter.drawerWidth')
+  })
+
+  it('视图模型带上规格 §16.2 的三个聚合字段（Phase 6 只改适配器）', () => {
+    const alert = view({ at: 1_700_000_000_000 })
+    assert.equal(alert.firstDetectedAt, 1_700_000_000_000)
+    assert.equal(alert.lastDetectedAt, 1_700_000_000_000)
+    assert.equal(alert.durationMs, 0)
+    assert.equal(alert.occurrenceCount, 1)
+  })
+})
+
+describe('Overview 字段（规格 §11.4）', () => {
+  it('只列我们真的有数据的字段：没有 AI 置信度、没有资产（那是别人的模型）', () => {
+    const fields = alertOverviewFields(view())
+    const labels = fields.map((field) => field.labelKey)
+    assert.ok(labels.includes('eventsUi.detailSeverity'), '没有等级')
+    assert.ok(labels.includes('eventsUi.overviewStatus'), '没有状态')
+    assert.ok(labels.includes('eventsUi.overviewFirstDetected'), '没有首次探测时间')
+    assert.ok(labels.includes('eventsUi.overviewLastDetected'), '没有最后探测时间')
+    assert.ok(labels.includes('eventsUi.overviewDuration'), '没有持续时长')
+    assert.ok(labels.includes('eventsUi.overviewOccurrences'), '没有次数')
+    assert.equal(
+      labels.some((label) => /confidence|aiConfidence/i.test(label)),
+      false,
+      '出现了我们拿不到的 AI 置信度字段'
+    )
+    assert.equal(labels.some((label) => /asset/i.test(label)), false, '出现了我们不存在的资产字段')
+  })
+
+  it('持续时长在聚合之前是「—」而不是 0 秒（0 秒会被读成"持续了 0 秒"）', () => {
+    const fields = alertOverviewFields(view())
+    const duration = fields.find((field) => field.labelKey === 'eventsUi.overviewDuration')
+    assert.ok(duration)
+    assert.deepEqual(duration.value, { kind: 'empty' })
+  })
+
+  it('没有确认能力的来源，状态是「—」而不是一个点不掉的「待处理」', () => {
+    const detect = alertOverviewFields(
+      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    )
+    const status = detect.find((field) => field.labelKey === 'eventsUi.overviewStatus')
+    assert.ok(status)
+    assert.deepEqual(status.value, { kind: 'empty' })
+    const linkage = alertOverviewFields(view({ source: 'linkage', kind: 'linkageAlarm' }))
+    const linkageStatus = linkage.find((field) => field.labelKey === 'eventsUi.overviewStatus')
+    assert.ok(linkageStatus)
+    assert.equal(linkageStatus.value.kind, 'label')
+  })
+
+  it('等级未知走「等级未知」这一档，不是「提示」', () => {
+    const fields = alertOverviewFields(
+      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    )
+    const severity = fields.find((field) => field.labelKey === 'eventsUi.detailSeverity')
+    assert.ok(severity)
+    assert.deepEqual(severity.value, {
+      kind: 'label',
+      labelKey: 'eventsUi.severityUnknown',
+      unknown: true
+    })
+  })
+
+  it('事件标识是长字段（跨两列），设备名是普通字段', () => {
+    const fields = alertOverviewFields(view({ id: 'linkage:abc' }))
+    const id = fields.find((field) => field.labelKey === 'eventsUi.detailEventId')
+    assert.ok(id)
+    assert.equal(id.wide, true)
+    assert.deepEqual(id.value, { kind: 'text', text: 'linkage:abc', mono: true })
+  })
+
+  it('指标按各自的单位与小数位出现在字段里', () => {
+    const fields = alertOverviewFields(view({ metrics: { spl: 61.25, leakCost: 3.5 } }))
+    const spl = fields.find((field) => field.labelKey === 'metrics.spl')
+    assert.ok(spl)
+    assert.deepEqual(spl.value, { kind: 'number', value: 61.25, digits: 2, unit: 'dB' })
+    const cost = fields.find((field) => field.labelKey === 'eventsUi.metricLeakCost')
+    assert.ok(cost)
+    assert.deepEqual(cost.value, { kind: 'number', value: 3.5, digits: 3, unit: '' })
+  })
+
+  it('设备回的原始等级只有真的回过才出现（未换算，是一条证据）', () => {
+    const without = alertOverviewFields(view())
+    assert.equal(without.some((field) => field.labelKey === 'eventsUi.detailAlarmLevel'), false)
+    const withRaw = alertOverviewFields(view({ alarmLevelRaw: 3 }))
+    const raw = withRaw.find((field) => field.labelKey === 'eventsUi.detailAlarmLevel')
+    assert.ok(raw)
+    assert.deepEqual(raw.value, { kind: 'number', value: 3, digits: 0, unit: '' })
+  })
+})
+
+describe('Evidence 的图片从哪来（规格 §12.1）', () => {
+  it('联动告警用抓帧的相对路径（要走新的回环图片接口）', () => {
+    const alert = view({
+      source: 'linkage',
+      kind: 'linkageAlarm',
+      frameRelativePath: 'linkage/frames/2026-09-17/a.jpg'
+    })
+    assert.deepEqual(evidenceImageSource(alert), {
+      kind: 'frame',
+      relativePath: 'linkage/frames/2026-09-17/a.jpg'
+    })
+  })
+
+  it('声纹告警用**已有**的抓图接口（告警 id 从条目 id 里取），不重复造一个', () => {
+    const alert = view({ id: 'alarm:alm_123', source: 'localAlarm', kind: 'localAlarm' })
+    assert.deepEqual(evidenceImageSource(alert), { kind: 'alarm-snapshot', alarmId: 'alm_123' })
+    // 机型已知且**不是**听诊盒子那一族时，这台设备根本没有抓图：返回 null（说"没有图片证据"），
+    // 而不是去问一个不存在的接口、再在界面上报一句假故障。
+    assert.equal(evidenceImageSource(alert, 'acousticBox'), null)
+    assert.deepEqual(evidenceImageSource(alert, 'auscultationBox'), {
+      kind: 'alarm-snapshot',
+      alarmId: 'alm_123'
+    })
+  })
+
+  it('相机检测日志没有"一张图"这条路：图是设备侧文件，要先下载到本机', () => {
+    const alert = view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    assert.equal(evidenceImageSource(alert), null)
+  })
+
+  it('联动告警没抓到帧时返回 null（界面显示"没有图片证据"，不画空框）', () => {
+    assert.equal(evidenceImageSource(view({ source: 'linkage', kind: 'linkageAlarm' })), null)
+    assert.equal(
+      evidenceImageSource(
+        view({ source: 'linkage', kind: 'linkageAlarm', frameRelativePath: '   ' })
+      ),
+      null
+    )
   })
 })

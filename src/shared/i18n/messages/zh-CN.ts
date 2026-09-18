@@ -2672,7 +2672,6 @@ export const zhCN = {
     detailDownloadNeedAdmin: '下载结果文件需要管理员账户',
     detailSourceUnavailable: '这一路来源本次读取失败，请稍后重试',
 
-    detailAckTitle: '确认',
     detailAck: '确认该事件',
     detailUnack: '取消确认',
     detailAckUnsupported:
@@ -2752,7 +2751,32 @@ export const zhCN = {
     evidenceRecording: '录像',
     evidenceFrame: '抓帧',
     evidenceFiles: '{count} 个文件',
-    metricMore: '另有 {count} 项'
+    metricMore: '另有 {count} 项',
+
+    // --- Phase 4：详情抽屉 / Overview / Evidence（规格 §11–§12） --------------
+    // 五个页签都给名字：Timeline / Related / Activity 要到 Phase 5 才渲染，
+    // 但页签类型是完整的 —— 少一个名字，那天就会印出裸 key。
+    detailTab: {
+      overview: '概览',
+      evidence: '证据',
+      timeline: '时间线',
+      related: '关联',
+      activity: '活动'
+    },
+    overviewStatus: '状态',
+    overviewFirstDetected: '首次探测',
+    overviewLastDetected: '最后探测',
+    overviewDuration: '持续时长',
+    overviewOccurrences: '次数',
+    drawerResize: '拖动调整抽屉宽度',
+
+    evidenceVisualTitle: '画面与图片',
+    evidenceNone: '这条事件没有图片证据。',
+    evidenceNotCaptured: '设备上没有抓到图（同步时可能没有打开抓图下载）。',
+    evidenceFilesGone: '库里记着这份图，但本机磁盘上已经没有了。',
+    evidenceNotImage: '这份文件在，但不是能显示的图片格式。',
+    evidenceNotFound: '找不到这份图片证据的路径。',
+    evidenceError: '读取图片证据失败。'
 
   }
 }

@@ -32,19 +32,25 @@ import type {
 } from '@shared/ipc/contract'
 import { eventCenterPerSourceCap } from '@shared/domain/event-center'
 import {
+  DRAWER_WIDTH_STORAGE_KEY,
   EVENT_FILTER_STORAGE_KEY,
   EVENT_SAVED_VIEWS,
   EVENT_VIEW_MODES,
   EVENT_VIEW_MODE_STORAGE_KEY,
   ackFilterToQuery,
+  alertOverviewFields,
+  clampDrawerWidth,
+  drawerWidthForViewport,
   emptyEventFilter,
   eventFilterCounts,
   eventFilterFromQuery,
   eventFilterToQuery,
   eventKpis,
+  evidenceImageSource,
   hasEventFilterQuery,
   isEventFilterActive,
   matchEventSearch,
+  parseDrawerWidth,
   parseEventFilter,
   parseEventViewMode,
   querySeverityFor,
@@ -54,12 +60,15 @@ import {
 } from '@shared/domain/event-view'
 import type {
   AlertViewModel,
+  EventDetailTab,
   EventQueueFilter,
   EventSavedView,
   EventViewMode
 } from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
+import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
+import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
 import EventFilterPanel from '@renderer/components/event-center/EventFilterPanel.vue'
 import EventKpiStrip from '@renderer/components/event-center/EventKpiStrip.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
@@ -69,13 +78,13 @@ import {
   detectFileKindLabel,
   eventDownloadStageLabel,
   eventKindLabel,
-  eventSeverityLabel,
   eventSourceLabel
 } from '@renderer/lib/labels'
 import {
   channelLabel,
   formatBytes,
   formatDateTime,
+  formatDuration,
   formatNumber,
   fromDateTimeLocalValue,
   toDateTimeLocalValue
@@ -133,7 +142,13 @@ const filterPanelOpen = ref(true)
 /** 最近一次点过的内置视图；手动改任何一项筛选就清空（不给一个假的"当前视图"高亮）。 */
 const activeSavedViewId = ref<string | null>(null)
 
-const detail = ref<EventCenterEntry | null>(null)
+/**
+ * 抽屉里的那一条（规格 §16.2 的 `eventSelection`）。
+ *
+ * 存的是**视图模型**而不是原始行：头部要等级/标题键、页签要聚合字段，都要它；
+ * 需要原始字段的动作（下载、播放、检测细节）通过 `detail.entry` 拿 —— 一条数据一条路径。
+ */
+const detail = ref<AlertViewModel | null>(null)
 /** 队列里当前选中的告警 id（↑/↓ 与详情抽屉都看它）。 */
 const selectedId = ref<string | null>(null)
 /** 抽屉里正在播放的音频录像行（deviceDetect 的结果文件按需切换）。 */
@@ -142,6 +157,50 @@ const playerRecordingId = ref<string | null>(null)
 const videoUrl = ref('')
 const videoError = ref('')
 const videoBusy = ref(false)
+
+// ---------------------------------------------------------------------------
+// 抽屉的宽度与页签（规格 §11.1 / §11.3）
+// ---------------------------------------------------------------------------
+
+/** 默认宽度：大屏 440、普通屏 400（规格 §11.1），拖过之后记住上次的。 */
+function readInitialDrawerWidth(): number {
+  const fallback = drawerWidthForViewport(window.innerWidth)
+  try {
+    return parseDrawerWidth(window.localStorage.getItem(DRAWER_WIDTH_STORAGE_KEY), fallback)
+  } catch {
+    // 读不到偏好不是错误：用按屏幕算出来的默认值（与筛选/视图模式同一条取舍）。
+    return fallback
+  }
+}
+
+const drawerWidth = ref(readInitialDrawerWidth())
+const drawerTab = ref<EventDetailTab>('overview')
+
+function setDrawerWidth(next: number): void {
+  drawerWidth.value = clampDrawerWidth(next)
+  try {
+    window.localStorage.setItem(DRAWER_WIDTH_STORAGE_KEY, String(drawerWidth.value))
+  } catch {
+    // 同上：偏好存不下不影响使用。
+  }
+}
+
+/**
+ * 图片证据的取回结果。
+ *
+ * `state` 直接来自主进程（四种）+ `error`（IPC 自己失败）。界面按 state 说人话：
+ * 「设备上没有抓到图」与「图在本机但文件没了」是两件不同的事，都不该画一个空框。
+ */
+interface EvidenceImageState {
+  state: 'ok' | 'not-captured' | 'files-gone' | 'not-image' | 'not-found' | 'error'
+  url?: string
+  name?: string
+}
+
+const evidenceImage = ref<EvidenceImageState | null>(null)
+const evidenceImageBusy = ref(false)
+/** 这一张图是从哪条路取来的（关闭时要调对应的 close，别把另一个端点关掉）。 */
+const evidenceImageKind = ref<'frame' | 'alarm-snapshot' | null>(null)
 
 const rows = computed(() => store.items)
 /** 整页告警的视图模型（规格 §16.2）。 */
@@ -257,21 +316,10 @@ function setViewMode(mode: EventViewMode): void {
 
 let unsubscribeProgress: (() => void) | undefined
 
-/**
- * Esc 关抽屉（规格 §10.3）。
- *
- * 监听在 `window` 上而不是某个元素上：抽屉是覆盖层，焦点可能在任何地方（甚至是刚点完的
- * 下载按钮）。只在抽屉确实开着时才响应，避免把其它页面的 Esc 语义吃掉。
- */
-function onWindowKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && detail.value) closeDetail()
-}
-
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
   // 联动待处理列表只有在这里读一次，才能把「已确认/未确认」与顶栏角标对齐。
   if (!linkage.loaded) void linkage.load()
-  window.addEventListener('keydown', onWindowKeydown)
   unsubscribeProgress = window.events.onEventCenterDownloadProgress(
     (progress: EventDownloadProgress) => store.handleProgress(progress)
   )
@@ -279,10 +327,15 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', onWindowKeydown)
   unsubscribeProgress?.()
   unsubscribeProgress = undefined
+  closeEvidenceImage()
 })
+
+/**
+ * Esc 与 ↑/↓ 由抽屉组件自己处理（`EventDetailDrawer` 里的 window 监听）——
+ * 那里知道"焦点在不在抽屉里"，而"↑/↓ 要不要接管"正是靠这件事判断的。
+ */
 
 /**
  * 把当前筛选写回 localStorage 与地址栏。
@@ -338,11 +391,16 @@ function defaultPlayerId(entry: EventCenterEntry): string | null {
 
 /** 队列选中一条 → 打开详情。选中态留在队列上（关掉抽屉后还能从原处继续按 ↑/↓）。 */
 function openDetail(alert: AlertViewModel): void {
+  if (detail.value?.id === alert.id) return
   selectedId.value = alert.id
-  detail.value = alert.entry
+  detail.value = alert
+  // 换事件时页签回到 Overview：停在 Evidence 上看另一条事件，会让人以为这条也有图。
+  drawerTab.value = 'overview'
   playerRecordingId.value = defaultPlayerId(alert.entry)
   videoUrl.value = ''
   videoError.value = ''
+  closeEvidenceImage()
+  void loadEvidenceImage()
 }
 
 function closeDetail(): void {
@@ -351,6 +409,104 @@ function closeDetail(): void {
   // 先清地址再卸载 `<video>`：元素会释放回环连接（与 RecordingsView 同一顺序）。
   videoUrl.value = ''
   videoError.value = ''
+  closeEvidenceImage()
+}
+
+/**
+ * ↑/↓ 在抽屉里换条（规格 §11.1）。
+ *
+ * 顺序取**队列当前显示的**那批（`alerts`）：抽屉里走一条，队列里也跟着选中，两边一致；
+ * 换到的那条如果是筛选后的最后一个，就停在原地（不做环形，环形的"跳回第一条"会让人
+ * 以为自己看漏了）。
+ */
+function stepAlert(delta: number): void {
+  const list = alerts.value
+  const current = list.findIndex((alert) => alert.id === selectedId.value)
+  if (current < 0 || list.length === 0) return
+  const next = list[current + delta]
+  if (!next) return
+  openDetail(next)
+}
+
+// ---------------------------------------------------------------------------
+// 图片证据（规格 §12.1 的 Visual）
+// ---------------------------------------------------------------------------
+
+/** 主进程那两路接口的返回都不一样，这里归一成一个小结构给模板用。 */
+function normaliseSnapshot(view: E2AlarmSnapshotView): EvidenceImageState {
+  if (view.state === 'ok') {
+    const first = view.files[0]
+    if (first) return { state: 'ok', url: first.url, name: first.name }
+    // `ok` 却说没有文件：如实当成"设备上没有图"，而不是画一个空框。
+    return { state: 'not-captured' }
+  }
+  return { state: view.state }
+}
+
+/**
+ * 取这一条事件的图片证据。
+ *
+ * 两条来源（`evidenceImageSource` 里写着为什么只有两条）：联动抓帧走新的
+ * `eventCenter.evidenceImage`，声纹告警的球机抓图走**已有的**
+ * `devices.alarmSnapshots`（第 8 批做的，不重复造一个）。
+ */
+async function loadEvidenceImage(): Promise<void> {
+  const alert = detail.value
+  evidenceImage.value = null
+  evidenceImageKind.value = null
+  if (!alert) return
+  // 机型也传进去：AE08 这类声纹盒子没有球机抓图，别去问一个不存在的接口
+  // （问了一定失败，界面上就成了"读取图片证据失败"——那是假故障）。
+  const deviceKind = devices.devices.find((device) => device.id === alert.deviceId)?.kind
+  const source = evidenceImageSource(alert, deviceKind)
+  if (!source) return
+
+  evidenceImageBusy.value = true
+  if (source.kind === 'frame') {
+    evidenceImageKind.value = 'frame'
+    const result = await callApi(() =>
+      window.api.eventCenter.evidenceImage({ relativePath: source.relativePath })
+    )
+    evidenceImageBusy.value = false
+    // 期间用户可能已经换了另一条事件：晚到的结果不许覆盖当前这一条。
+    if (detail.value?.id !== alert.id) return
+    evidenceImage.value = result.success
+      ? (unwrap(result) as EvidenceImageState)
+      : { state: 'error' }
+    return
+  }
+
+  evidenceImageKind.value = 'alarm-snapshot'
+  const result = await callApi(() =>
+    window.api.e2.alarmSnapshots(alert.deviceId, source.alarmId)
+  )
+  evidenceImageBusy.value = false
+  if (detail.value?.id !== alert.id) return
+  const view = unwrap(result)
+  evidenceImage.value = result.success && view ? normaliseSnapshot(view) : { state: 'error' }
+}
+
+/** 关掉当前图片端点（TTL 兜底，但让端口白挂半小时是一种浪费）。 */
+function closeEvidenceImage(): void {
+  const kind = evidenceImageKind.value
+  evidenceImageKind.value = null
+  evidenceImage.value = null
+  if (kind === 'frame') {
+    void window.api.eventCenter.closeEvidenceImage().catch(() => undefined)
+  } else if (kind === 'alarm-snapshot') {
+    void window.api.e2.closeSnapshots().catch(() => undefined)
+  }
+}
+
+/** 图片取不到时的说明：四种 state 各有各的说法（都不许画成一个空框）。 */
+function evidenceImageNote(): string {
+  const state = evidenceImage.value?.state
+  if (state === 'not-captured') return t('eventsUi.evidenceNotCaptured')
+  if (state === 'files-gone') return t('eventsUi.evidenceFilesGone')
+  if (state === 'not-image') return t('eventsUi.evidenceNotImage')
+  if (state === 'not-found') return t('eventsUi.evidenceNotFound')
+  if (state === 'error') return t('eventsUi.evidenceError')
+  return ''
 }
 
 /** 打开一段 MP4 录像（回环 HTTP，支持 Range）。拿不到地址时明说无法播放。 */
@@ -412,8 +568,9 @@ async function downloadFile(
   if (result) {
     // 下载完成后把新登记的录像就地接上：列表已在 store 里重读过，
     // 抽屉里的这一份也要跟着更新，否则按钮还停在「下载」。
-    const refreshed = store.items.find((item) => item.id === entry.id)
-    if (refreshed) detail.value = refreshed
+    // 从**整页**的视图模型里找（不是过滤后的队列）：关键字筛选不该让这一份更新落空。
+    const refreshed = allAlerts.value.find((item) => item.id === entry.id)
+    if (refreshed && detail.value?.id === entry.id) detail.value = refreshed
     store.notice = t('eventsUi.downloadDone', {
       name: fileName,
       size: formatBytes(result.bytes)
@@ -460,7 +617,12 @@ async function toggleAcknowledge(): Promise<void> {
     store.notice = t('eventsUi.detailAckFailed', { reason: perSource.error })
     return
   }
-  detail.value = { ...current, acknowledged: true }
+  // 视图模型与它带着的原始行一起更新：抽屉里的状态与「确认」按钮都看它们。
+  detail.value = {
+    ...current,
+    status: 'acknowledged',
+    entry: { ...current.entry, acknowledged: true }
+  }
   store.notice = t('eventsUi.detailAckDone', { count: payload.acknowledged })
 }
 
@@ -468,7 +630,7 @@ async function toggleAcknowledge(): Promise<void> {
 const detailAckVisible = computed(() => {
   const current = detail.value
   if (!current || current.source === 'deviceDetect') return false
-  if (current.source === 'linkage') return !current.acknowledged
+  if (current.source === 'linkage') return !current.entry.acknowledged
   return true
 })
 
@@ -488,35 +650,13 @@ function actionStateLabel(status: string): string {
   return t(`linkage.actionState.${status}` as never)
 }
 
-/** 事件详情里按需展示的指标（只显示存在的，绝不填 0）。 */
-const detailMetrics = computed<Array<{ label: string; value: string }>>(() => {
-  const metrics = detail.value?.metrics
-  if (!metrics) return []
-  const out: Array<{ label: string; value: string }> = []
-  if (metrics.spl !== undefined) out.push({ label: t('metrics.spl'), value: `${formatNumber(metrics.spl, 2)} dB` })
-  if (metrics.mainFrequency !== undefined) {
-    out.push({ label: t('metrics.mainFrequency'), value: `${formatNumber(metrics.mainFrequency, 2)} Hz` })
-  }
-  if (metrics.smoothness !== undefined) {
-    out.push({ label: t('metrics.smoothness'), value: formatNumber(metrics.smoothness, 3) })
-  }
-  if (metrics.bandEnergyRatio !== undefined) {
-    out.push({ label: t('metrics.bandEnergyRatio'), value: formatNumber(metrics.bandEnergyRatio, 3) })
-  }
-  if (metrics.soundmapIntensity !== undefined) {
-    out.push({
-      label: t('eventsUi.metricSoundmapIntensity'),
-      value: formatNumber(metrics.soundmapIntensity, 2)
-    })
-  }
-  if (metrics.leakVolume !== undefined) {
-    out.push({ label: t('eventsUi.metricLeakVolume'), value: formatNumber(metrics.leakVolume, 3) })
-  }
-  if (metrics.leakCost !== undefined) {
-    out.push({ label: t('eventsUi.metricLeakCost'), value: formatNumber(metrics.leakCost, 3) })
-  }
-  return out
-})
+/**
+ * 抽屉 Overview 的属性表（规格 §11.4）。
+ *
+ * 字段由纯函数决定（`alertOverviewFields`，有单测）：哪几格存在、持续时长在聚合之前是
+ * 「—」、没有确认能力的来源状态是「—」、设备回的原始等级只有真回过才出现。
+ */
+const overviewFields = computed(() => (detail.value ? alertOverviewFields(detail.value) : []))
 
 async function goToPage(offset: number): Promise<void> {
   closeDetail()
@@ -708,301 +848,325 @@ async function goToPage(offset: number): Promise<void> {
       </div>
     </section>
 
-    <!-- 详情抽屉 -->
-    <div v-if="detail" class="drawer-overlay" @click.self="closeDetail">
-      <aside class="drawer" role="dialog" aria-modal="true" :aria-label="t('eventsUi.detailTitle')">
-        <header class="drawer__header">
-          <div>
-            <h3 class="section-title">{{ t('eventsUi.detailTitle') }}</h3>
-            <p class="muted drawer__sub">
-              {{ formatDateTime(detail.at) }}
-              <span v-if="detail.atApproximate" class="chip chip--tiny">
-                {{ t('eventsUi.approximateBadge') }}
-              </span>
-            </p>
-          </div>
-          <button
-            type="button"
-            class="btn btn--ghost btn--icon"
-            :aria-label="t('common.close')"
-            @click="closeDetail"
+    <!--
+      详情抽屉（规格 §11）。结构（几何/页签/头部/键盘）在组件里，动作仍在页面里 ——
+      见 `EventDetailDrawer.vue` 头部第 1 条：确认与下载已经有一条验证过的路径，
+      搬进组件只会多一层 props 转发。
+    -->
+    <EventDetailDrawer
+      v-if="detail"
+      :alert="detail"
+      :width="drawerWidth"
+      :tab="drawerTab"
+      @close="closeDetail"
+      @resize="setDrawerWidth"
+      @update:tab="drawerTab = $event"
+      @prev="stepAlert(-1)"
+      @next="stepAlert(1)"
+      @open-device="openDevice(detail.deviceId)"
+    >
+      <!-- 头部的主 CTA（规格 §11.2：一次只有一个）。没有确认接口的来源不渲染按钮。 -->
+      <template #actions>
+        <button
+          v-if="detailCanAcknowledge && detailAckVisible"
+          type="button"
+          class="btn btn--primary btn--sm"
+          :disabled="store.ackBusy"
+          data-action="drawer-acknowledge"
+          @click="toggleAcknowledge"
+        >
+          {{
+            detail.source === 'linkage' || !detail.entry.acknowledged
+              ? t('eventsUi.detailAck')
+              : t('eventsUi.detailUnack')
+          }}
+        </button>
+        <span v-else-if="detailCanAcknowledge" class="badge badge--success">
+          {{ t('eventsUi.ackAcknowledged') }}
+        </span>
+      </template>
+
+      <template #overview>
+        <p v-if="detail.atApproximate" class="alert alert--warning">
+          {{
+            detail.source === 'deviceDetect' && detail.entry.detect?.startTimeRaw === undefined
+              ? t('eventsUi.timeUnknown')
+              : t('eventsUi.approximateHint')
+          }}
+        </p>
+
+        <!-- 属性网格（规格 §11.4：2 列，长字段跨两列）。 -->
+        <div class="drawer__grid">
+          <div
+            v-for="field in overviewFields"
+            :key="field.labelKey"
+            class="drawer__field"
+            :class="{ 'drawer__field--wide': field.wide }"
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M3 3l10 10M13 3L3 13"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-        </header>
+            <div class="field-label">{{ t(field.labelKey) }}</div>
+            <div
+              class="drawer__value"
+              :class="[
+                field.value.kind === 'text' && field.value.mono ? 'mono' : '',
+                field.value.kind === 'label' && field.value.severity
+                  ? `severity--${field.value.severity}`
+                  : '',
+                field.value.kind === 'label' && field.value.unknown ? 'severity--unknown' : ''
+              ]"
+            >
+              <template v-if="field.value.kind === 'label'">
+                <span class="drawer__value-label">{{ t(field.value.labelKey) }}</span>
+              </template>
+              <template v-else-if="field.value.kind === 'time'">
+                {{ formatDateTime(field.value.at) }}
+                <span v-if="field.value.approximate" class="chip chip--tiny">
+                  {{ t('eventsUi.approximateBadge') }}
+                </span>
+              </template>
+              <template v-else-if="field.value.kind === 'duration'">
+                {{ formatDuration(field.value.ms) }}
+              </template>
+              <template v-else-if="field.value.kind === 'number'">
+                {{ formatNumber(field.value.value, field.value.digits) }}{{ field.value.unit }}
+              </template>
+              <template v-else-if="field.value.kind === 'text'">{{ field.value.text }}</template>
+              <template v-else>—</template>
+            </div>
+          </div>
+        </div>
 
-        <div class="drawer__body">
-          <p v-if="detail.atApproximate" class="alert alert--warning">
-            {{
-              detail.source === 'deviceDetect' && detail.detect?.startTimeRaw === undefined
-                ? t('eventsUi.timeUnknown')
-                : t('eventsUi.approximateHint')
-            }}
+        <!-- 声纹告警独有的细节：通道与告警类型（解码在主进程完成）。 -->
+        <section v-if="detail.entry.localAlarm" class="drawer__section">
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailLocalAlarmTypes') }}</h4>
+          <p>
+            <span class="muted">{{ t('eventsUi.detailLocalAlarmChannel') }}</span>
+            {{ channelLabel(detail.entry.localAlarm.channelId) }}
           </p>
+          <p>{{ describeAlarmMask(detail.entry.localAlarm.alarmMask) }}</p>
+          <div v-if="detail.entry.localAlarm.alarmTypes.length > 1" class="chip-row">
+            <span v-for="type in detail.entry.localAlarm.alarmTypes" :key="type" class="chip">
+              {{ alarmTypeLabel(type) }}
+            </span>
+          </div>
+        </section>
 
+        <!-- 相机检测日志独有的细节：原始时间戳、目录、日志编号（只读信息）。 -->
+        <section v-if="detail.entry.detect" class="drawer__section">
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailDetectTitle') }}</h4>
           <dl class="kv drawer__kv">
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailEventId') }}</dt>
-              <dd class="kv__value mono">{{ detail.id }}</dd>
+            <div v-if="detail.entry.detect.logId !== undefined" class="kv__item">
+              <dt class="kv__label">{{ t('eventsUi.detailLogId') }}</dt>
+              <dd class="kv__value">{{ detail.entry.detect.logId }}</dd>
+            </div>
+            <div v-if="detail.entry.detect.startTimeRaw !== undefined" class="kv__item">
+              <dt class="kv__label">{{ t('eventsUi.detailDeviceTime') }}</dt>
+              <dd class="kv__value">{{ detail.entry.detect.startTimeRaw }}</dd>
             </div>
             <div class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailDevice') }}</dt>
-              <dd class="kv__value">
-                <button type="button" class="link-btn" @click="openDevice(detail.deviceId)">
-                  {{ devices.nameById(detail.deviceId) }}
-                </button>
-              </dd>
+              <dt class="kv__label">{{ t('eventsUi.detailDeviceTimeUnit') }}</dt>
+              <dd class="kv__value mono">{{ detail.entry.detect.timeUnit }}</dd>
             </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailSource') }}</dt>
-              <dd class="kv__value">{{ eventSourceLabel(detail.source) }}</dd>
+            <div v-if="detail.entry.detect.savingPath" class="kv__item">
+              <dt class="kv__label">{{ t('eventsUi.detailSavingPath') }}</dt>
+              <dd class="kv__value mono">{{ detail.entry.detect.savingPath }}</dd>
             </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailKind') }}</dt>
-              <dd class="kv__value">{{ eventKindLabel(detail.kind) }}</dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailSeverity') }}</dt>
-              <dd class="kv__value">{{ eventSeverityLabel(detail.severity) }}</dd>
-            </div>
-            <div v-if="detail.alarmLevelRaw !== undefined" class="kv__item">
-              <dt class="kv__label">{{ t('eventsUi.detailAlarmLevel') }}</dt>
-              <dd class="kv__value">{{ detail.alarmLevelRaw }}</dd>
+            <div v-if="detail.entry.detect.detectMode !== undefined" class="kv__item">
+              <dt class="kv__label">{{ t('eventsUi.detailDetectMode') }}</dt>
+              <dd class="kv__value">{{ detail.entry.detect.detectMode }}</dd>
             </div>
           </dl>
+        </section>
 
-          <!-- 声纹告警独有的细节：通道与告警类型（解码在主进程完成）。 -->
-          <section v-if="detail.localAlarm" class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailLocalAlarmTypes') }}</h4>
-            <p>
-              <span class="muted">{{ t('eventsUi.detailLocalAlarmChannel') }}</span>
-              {{ channelLabel(detail.localAlarm.channelId) }}
-            </p>
-            <p>{{ describeAlarmMask(detail.localAlarm.alarmMask) }}</p>
-            <div v-if="detail.localAlarm.alarmTypes.length > 1" class="chip-row">
-              <span
-                v-for="type in detail.localAlarm.alarmTypes"
-                :key="type"
-                class="chip"
-              >
-                {{ alarmTypeLabel(type) }}
-              </span>
-            </div>
-          </section>
+        <!-- 没有确认接口时如实说明为什么（能力不存在 -> 不画一个灰按钮）。 -->
+        <p v-if="!detailCanAcknowledge" class="muted drawer__note">
+          {{ t('eventsUi.detailAckUnsupported') }}
+        </p>
+      </template>
 
-          <!-- 相机检测日志独有的细节：原始时间戳、目录、日志编号（只读信息）。 -->
-          <section v-if="detail.detect" class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailDetectTitle') }}</h4>
-            <dl class="kv drawer__kv">
-              <div v-if="detail.detect.logId !== undefined" class="kv__item">
-                <dt class="kv__label">{{ t('eventsUi.detailLogId') }}</dt>
-                <dd class="kv__value">{{ detail.detect.logId }}</dd>
-              </div>
-              <div v-if="detail.detect.startTimeRaw !== undefined" class="kv__item">
-                <dt class="kv__label">{{ t('eventsUi.detailDeviceTime') }}</dt>
-                <dd class="kv__value">{{ detail.detect.startTimeRaw }}</dd>
-              </div>
-              <div class="kv__item">
-                <dt class="kv__label">{{ t('eventsUi.detailDeviceTimeUnit') }}</dt>
-                <dd class="kv__value mono">{{ detail.detect.timeUnit }}</dd>
-              </div>
-              <div v-if="detail.detect.savingPath" class="kv__item">
-                <dt class="kv__label">{{ t('eventsUi.detailSavingPath') }}</dt>
-                <dd class="kv__value mono">{{ detail.detect.savingPath }}</dd>
-              </div>
-              <div v-if="detail.detect.detectMode !== undefined" class="kv__item">
-                <dt class="kv__label">{{ t('eventsUi.detailDetectMode') }}</dt>
-                <dd class="kv__value">{{ detail.detect.detectMode }}</dd>
-              </div>
-            </dl>
-          </section>
+      <template #evidence>
+        <!--
+          Evidence（规格 §12.1 的 Acoustic 那一列）：视觉 / 音频 / 频谱与测量 / 结果文件。
+          DTS / DAS / DGA 三个渲染器**不做**（我们一台那类设备都不管，见
+          `docs/EVENT-CENTER.md` §3.1），所以这里按来源选渲染器，而不是复制三份抽屉。
+        -->
+        <section class="drawer__section drawer__section--first">
+          <h4 class="drawer__section-title">{{ t('eventsUi.evidenceVisualTitle') }}</h4>
 
-          <!-- 播放区：音频走共享的 RecordingPlayer，视频走回环地址。 -->
-          <section class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailRecordingTitle') }}</h4>
+          <p v-if="evidenceImageBusy" class="muted">{{ t('common.loading') }}</p>
+          <template v-else-if="evidenceImage && evidenceImage.state === 'ok' && evidenceImage.url">
+            <a :href="evidenceImage.url" target="_blank" rel="noreferrer">
+              <img
+                class="evidence__image"
+                :src="evidenceImage.url"
+                :alt="evidenceImage.name ?? t('eventsUi.evidenceVisualTitle')"
+                data-action="evidence-image"
+              />
+            </a>
+            <p class="muted evidence__meta">{{ evidenceImage.name }}</p>
+          </template>
+          <p v-else-if="evidenceImage" class="muted">
+            {{ evidenceImageNote() }}
+          </p>
+          <p v-else class="muted">{{ t('eventsUi.evidenceNone') }}</p>
 
-            <div v-if="detail.recordingContainer === 'mp4' && detail.recordingId" class="video-block">
-              <button
-                v-if="videoUrl === ''"
-                type="button"
-                class="btn btn--primary btn--sm"
-                :disabled="videoBusy"
-                @click="openVideo(detail.recordingId)"
-              >
-                {{ t('eventsUi.detailFileOpenVideo') }}
-              </button>
-              <!-- 空 src 不变式：地址为空时这里渲染的是说明文字，不是黑框。 -->
-              <video
-                v-if="videoUrl"
-                class="video-player"
-                :src="videoUrl"
-                controls
-                autoplay
-              ></video>
-            </div>
+          <p v-if="detail.entry.frameRelativePath" class="muted evidence__meta">
+            {{ t('eventsUi.detailFrameTitle') }}
+            <span class="mono">{{ detail.entry.frameRelativePath }}</span>
+          </p>
+        </section>
 
-            <p v-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
+        <!-- 播放区：音频走共享的 RecordingPlayer，视频走回环地址。 -->
+        <section class="drawer__section">
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailRecordingTitle') }}</h4>
 
-            <RecordingPlayer :recording-id="playerRecordingId">
-              <template #action>
-                <p class="muted">
-                  {{
-                    detail.source === 'deviceDetect'
-                      ? t('eventsUi.detailRecordingPending')
-                      : t('eventsUi.detailRecordingNone')
-                  }}
-                </p>
-                <RouterLink class="btn btn--sm" to="/recordings">
-                  {{ t('eventsUi.detailRecordingGoto') }}
-                </RouterLink>
-              </template>
-            </RecordingPlayer>
+          <div
+            v-if="detail.entry.recordingContainer === 'mp4' && detail.entry.recordingId"
+            class="video-block"
+          >
+            <button
+              v-if="videoUrl === ''"
+              type="button"
+              class="btn btn--primary btn--sm"
+              :disabled="videoBusy"
+              @click="openVideo(detail.entry.recordingId)"
+            >
+              {{ t('eventsUi.detailFileOpenVideo') }}
+            </button>
+            <!-- 空 src 不变式：地址为空时这里渲染的是说明文字，不是黑框。 -->
+            <video v-if="videoUrl" class="video-player" :src="videoUrl" controls autoplay></video>
+          </div>
 
-            <p v-if="detail.frameRelativePath" class="muted">
-              {{ t('eventsUi.detailFrameTitle') }}：{{ detail.frameRelativePath }}
-            </p>
-          </section>
+          <p v-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
 
-          <!-- 指标：只列出存在的字段。 -->
-          <section v-if="detailMetrics.length > 0" class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailMetricsTitle') }}</h4>
-            <dl class="kv drawer__kv">
-              <div v-for="metric in detailMetrics" :key="metric.label" class="kv__item">
-                <dt class="kv__label">{{ metric.label }}</dt>
-                <dd class="kv__value">{{ metric.value }}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <!-- 联动动作：四个动作各自的成功/失败/跳过与原因。 -->
-          <section v-if="detail.linkageActions && detail.linkageActions.length > 0" class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailActionsTitle') }}</h4>
-            <ul class="actions">
-              <li v-for="record in detail.linkageActions" :key="`${record.action}-${record.at}`">
-                <span class="badge" :class="`badge--action-${record.status}`">
-                  {{
-                    t('eventsUi.detailActionLine', {
-                      action: actionLabel(record.action),
-                      status: actionStateLabel(record.status)
-                    })
-                  }}
-                </span>
-                <span v-if="record.reason" class="muted">
-                  {{ t('eventsUi.detailActionReason', { reason: record.reason }) }}
-                </span>
-              </li>
-            </ul>
-          </section>
-
-          <!--
-            确认区。相机检测日志**没有**确认接口，所以整块不渲染，
-            并如实说明为什么没有（能力不存在 -> 不画一个灰按钮）。
-          -->
-          <section class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailAckTitle') }}</h4>
-            <p v-if="!detailCanAcknowledge" class="muted">
-              {{ t('eventsUi.detailAckUnsupported') }}
-            </p>
-            <div v-else class="btn-row">
-              <button
-                v-if="detailAckVisible"
-                type="button"
-                class="btn"
-                :disabled="store.ackBusy"
-                @click="toggleAcknowledge"
-              >
+          <RecordingPlayer :recording-id="playerRecordingId">
+            <template #action>
+              <p class="muted">
                 {{
-                  detail.source === 'linkage' || !detail.acknowledged
-                    ? t('eventsUi.detailAck')
-                    : t('eventsUi.detailUnack')
+                  detail.source === 'deviceDetect'
+                    ? t('eventsUi.detailRecordingPending')
+                    : t('eventsUi.detailRecordingNone')
                 }}
-              </button>
-              <span v-else class="badge badge--success">
-                {{ t('eventsUi.ackAcknowledged') }}
-              </span>
+              </p>
+              <RouterLink class="btn btn--sm" to="/recordings">
+                {{ t('eventsUi.detailRecordingGoto') }}
+              </RouterLink>
+            </template>
+          </RecordingPlayer>
+        </section>
+
+        <!-- 频谱与测量：只列出真的存在的指标，绝不填 0。 -->
+        <section v-if="detail.metrics.length > 0" class="drawer__section">
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailMetricsTitle') }}</h4>
+          <dl class="kv drawer__kv">
+            <div v-for="metric in detail.metrics" :key="metric.field" class="kv__item">
+              <dt class="kv__label">{{ t(metric.labelKey) }}</dt>
+              <dd class="kv__value">
+                {{ formatNumber(metric.value, metric.digits) }}{{ metric.unit }}
+              </dd>
             </div>
-          </section>
+          </dl>
+        </section>
 
-          <!--
-            **设备侧动作放在最后**（iVMS 参考里的 R5：改设备/取设备的动作排在
-            改本机/看画面的动作之后）。这里是整页唯一会去连设备、写盘、登记录像
-            行的动作，因此它在抽屉的最底部——不会与「播放」「确认」抢手指。
-          -->
-          <section v-if="detail.detect" class="drawer__section">
-            <h4 class="drawer__section-title">{{ t('eventsUi.detailFilesTitle') }}</h4>
+        <!-- 联动动作：四个动作各自的成功/失败/跳过与原因。 -->
+        <section
+          v-if="detail.entry.linkageActions && detail.entry.linkageActions.length > 0"
+          class="drawer__section"
+        >
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailActionsTitle') }}</h4>
+          <ul class="actions">
+            <li v-for="record in detail.entry.linkageActions" :key="`${record.action}-${record.at}`">
+              <span class="badge" :class="`badge--action-${record.status}`">
+                {{
+                  t('eventsUi.detailActionLine', {
+                    action: actionLabel(record.action),
+                    status: actionStateLabel(record.status)
+                  })
+                }}
+              </span>
+              <span v-if="record.reason" class="muted">
+                {{ t('eventsUi.detailActionReason', { reason: record.reason }) }}
+              </span>
+            </li>
+          </ul>
+        </section>
 
-            <p v-if="detail.detect.files.length === 0" class="muted">
-              {{ t('eventsUi.detailFilesEmpty') }}
-            </p>
-            <ul v-else class="files">
-              <li v-for="file in detail.detect.files" :key="file.kind" class="files__row">
-                <div class="files__main">
-                  <span class="files__kind">{{ detectFileKindLabel(file.kind) }}</span>
-                  <span class="files__name mono">{{ file.fileName }}</span>
-                  <span class="chip chip--tiny">{{ file.container }}</span>
-                </div>
+        <!--
+          **设备侧动作放在最后**（iVMS 参考里的 R5：改设备/取设备的动作排在
+          改本机/看画面的动作之后）。这里是整页唯一会去连设备、写盘、登记录像
+          行的动作，因此它在抽屉的最底部——不会与「播放」「确认」抢手指。
+        -->
+        <section v-if="detail.entry.detect" class="drawer__section">
+          <h4 class="drawer__section-title">{{ t('eventsUi.detailFilesTitle') }}</h4>
 
-                <div class="files__actions">
-                  <!-- 已下载：只渲染真的能用的动作（音频播放 / 视频打开）。 -->
-                  <template v-if="file.downloadedRecordingId">
-                    <span class="badge badge--success">{{ t('eventsUi.detailFileDownloaded') }}</span>
-                    <button
-                      v-if="file.container === 'mp4'"
-                      type="button"
-                      class="btn btn--sm"
-                      :disabled="videoBusy"
-                      @click="playDetectFile(file)"
-                    >
-                      {{ t('eventsUi.detailFileOpenVideo') }}
-                    </button>
-                    <button
-                      v-else-if="canPlayAudio(file.container)"
-                      type="button"
-                      class="btn btn--sm"
-                      @click="playDetectFile(file)"
-                    >
-                      {{ t('eventsUi.detailFilePlay') }}
-                    </button>
-                  </template>
+          <p v-if="detail.entry.detect.files.length === 0" class="muted">
+            {{ t('eventsUi.detailFilesEmpty') }}
+          </p>
+          <ul v-else class="files">
+            <li v-for="file in detail.entry.detect.files" :key="file.kind" class="files__row">
+              <div class="files__main">
+                <span class="files__kind">{{ detectFileKindLabel(file.kind) }}</span>
+                <span class="files__name mono">{{ file.fileName }}</span>
+                <span class="chip chip--tiny">{{ file.container }}</span>
+              </div>
 
-                  <!-- 未下载：动作可能存在但此刻不可用 -> 禁用并给出原因。 -->
-                  <template v-else>
-                    <span v-if="downloadBlockedReason()" class="muted files__blocked">
-                      {{ downloadBlockedReason() }}
-                    </span>
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      :disabled="
-                        downloadBlockedReason() !== '' ||
-                        downloadState(detail, file.kind)?.stage === 'fetching'
-                      "
-                      @click="downloadFile(detail, file.kind, file.fileName)"
-                    >
-                      {{
-                        downloadState(detail, file.kind)?.stage === 'fetching'
-                          ? t('eventsUi.detailFileDownloading')
-                          : t('eventsUi.detailFileDownload')
-                      }}
-                    </button>
-                    <span v-if="downloadState(detail, file.kind)" class="muted files__blocked">
-                      {{ eventDownloadStageLabel(downloadState(detail, file.kind)?.stage ?? '') }}
-                    </span>
-                  </template>
-                </div>
-              </li>
-            </ul>
-          </section>
-        </div>
-      </aside>
-    </div>
+              <div class="files__actions">
+                <!-- 已下载：只渲染真的能用的动作（音频播放 / 视频打开）。 -->
+                <template v-if="file.downloadedRecordingId">
+                  <span class="badge badge--success">{{ t('eventsUi.detailFileDownloaded') }}</span>
+                  <button
+                    v-if="file.container === 'mp4'"
+                    type="button"
+                    class="btn btn--sm"
+                    :disabled="videoBusy"
+                    @click="playDetectFile(file)"
+                  >
+                    {{ t('eventsUi.detailFileOpenVideo') }}
+                  </button>
+                  <button
+                    v-else-if="canPlayAudio(file.container)"
+                    type="button"
+                    class="btn btn--sm"
+                    @click="playDetectFile(file)"
+                  >
+                    {{ t('eventsUi.detailFilePlay') }}
+                  </button>
+                </template>
+
+                <!-- 未下载：动作可能存在但此刻不可用 -> 禁用并给出原因。 -->
+                <template v-else>
+                  <span v-if="downloadBlockedReason()" class="muted files__blocked">
+                    {{ downloadBlockedReason() }}
+                  </span>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    :disabled="
+                      downloadBlockedReason() !== '' ||
+                      downloadState(detail.entry, file.kind)?.stage === 'fetching'
+                    "
+                    @click="downloadFile(detail.entry, file.kind, file.fileName)"
+                  >
+                    {{
+                      downloadState(detail.entry, file.kind)?.stage === 'fetching'
+                        ? t('eventsUi.detailFileDownloading')
+                        : t('eventsUi.detailFileDownload')
+                    }}
+                  </button>
+                  <span
+                    v-if="downloadState(detail.entry, file.kind)"
+                    class="muted files__blocked"
+                  >
+                    {{
+                      eventDownloadStageLabel(downloadState(detail.entry, file.kind)?.stage ?? '')
+                    }}
+                  </span>
+                </template>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </template>
+    </EventDetailDrawer>
   </div>
 </template>
 
@@ -1073,20 +1237,6 @@ async function goToPage(offset: number): Promise<void> {
 .badge--action-skipped {
   background: rgba(107, 114, 128, 0.14);
   color: #4b5563;
-}
-
-.link-btn {
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--color-text);
-  cursor: pointer;
-  font-size: 12.5px;
-}
-
-.link-btn:hover {
-  color: var(--color-accent);
-  text-decoration: underline;
 }
 
 .pager {

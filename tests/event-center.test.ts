@@ -31,7 +31,11 @@ import { AlarmRepository, RecordingRepository } from '../src/main/services/datab
 import { DeviceRepository } from '../src/main/services/database/device-repository'
 import { StorageService } from '../src/main/services/storage/storage-service'
 import { DetectLibraryService } from '../src/main/services/device/fa371/detect-library-service'
-import { EventCenterService } from '../src/main/services/events/event-center-service'
+import {
+  EventCenterService
+} from '../src/main/services/events/event-center-service'
+import type { EventCenterImageServer } from '../src/main/services/events/event-center-service'
+import { AppError, ErrorCodes } from '../src/shared/errors'
 import {
   deriveRecordingContainer,
   detectRemoteRecordingId,
@@ -223,10 +227,40 @@ function pendingRecord(
 /** A fixed clock so the fallback time of an untimed log is predictable. */
 const FIXED_NOW = 1_700_000_000_000
 
+/**
+ * 图片端点（回环 HTTP）的假实现（规格 §12.1 的 Visual）。
+ *
+ * 不真的起 HTTP：单测要证明的是**服务把哪个目录、哪个文件名交了出去**，
+ * 以及"该关的时候关掉了"，端口与字节是 `VideoFileServer` 自己的测试对象。
+ * 存储解析用**真的** `StorageService`：越界保护正是要断言的性质之一。
+ */
+interface ImageFakeState {
+  calls: Array<{ directory: string; names: string[] }>
+  closed: number
+  /** 设定后 `serveImages` 抛这条消息（模拟"这一组里没有可用的图片文件"）。 */
+  fail?: string
+}
+
+function createImageFake(state: ImageFakeState): EventCenterImageServer {
+  return {
+    async serveImages(directory, names) {
+      state.calls.push({ directory, names: [...names] })
+      if (state.fail) throw new AppError(ErrorCodes.STORAGE_ERROR, state.fail)
+      return {
+        files: names.map((name) => ({ name, url: `http://127.0.0.1:9/tok/${name}` })),
+        close: () => {
+          state.closed += 1
+        }
+      }
+    }
+  }
+}
+
 interface ServiceFixture {
   service: EventCenterService
   detectState: DetectFakeState
   linkageState: LinkageFakeState
+  imageState: ImageFakeState
 }
 
 function createService(options: {
@@ -234,9 +268,11 @@ function createService(options: {
   linkage?: LinkageFakeState
   devices?: typeof DEVICES
   detectLogLimit?: number
+  image?: ImageFakeState
 } = {}): ServiceFixture {
   const detectState = options.detect ?? { logs: [], downloads: [] }
   const linkageState = options.linkage ?? { items: [], dropped: 0, acknowledgedCalls: [] }
+  const imageState = options.image ?? { calls: [], closed: 0 }
   const service = new EventCenterService({
     listDevices: () => options.devices ?? DEVICES,
     detectLibrary: createDetectFake(detectState),
@@ -246,10 +282,12 @@ function createService(options: {
       findById: (id) => recordings.findById(id),
       listByDevice: (deviceId) => recordings.query({ deviceId, limit: 1000, offset: 0 }).items
     },
+    images: createImageFake(imageState),
+    storage,
     now: () => FIXED_NOW,
     ...(options.detectLogLimit !== undefined ? { detectLogLimit: options.detectLogLimit } : {})
   })
-  return { service, detectState, linkageState }
+  return { service, detectState, linkageState, imageState }
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +678,9 @@ describe('EventCenterService.acknowledge', () => {
       recordings: {
         findById: (id) => recordings.findById(id),
         listByDevice: (deviceId) => recordings.query({ deviceId, limit: 1000, offset: 0 }).items
-      }
+      },
+      images: createImageFake({ calls: [], closed: 0 }),
+      storage
     })
 
     const result = await broken.acknowledge([
@@ -884,5 +924,124 @@ describe('DetectLibraryService', () => {
     const kinds = page.items[0]?.files.map((file) => file.kind) ?? []
     assert.equal(kinds.length, 8)
     assert.equal(new Set(kinds).size, 8, 'each kind appears exactly once')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 图片证据（规格 §12.1 的 Visual，Phase 4）
+// ---------------------------------------------------------------------------
+
+describe('事件中心的图片证据（详情抽屉 Evidence 页签）', () => {
+  /** 在存储根下写一个**真的**文件：`evidenceImage` 会去磁盘上确认它在不在。 */
+  async function writeEvidenceFile(relativePath: string, bytes = [0xff, 0xd8, 0xff]): Promise<void> {
+    const absolute = path.join(root, relativePath)
+    await fs.mkdir(path.dirname(absolute), { recursive: true })
+    await fs.writeFile(absolute, Buffer.from(bytes))
+  }
+
+  it('相对路径 → 回环地址，且交出去的正是那一个文件（目录 + 文件名）', async () => {
+    const { service, imageState } = createService()
+    await writeEvidenceFile('linkage/frames/a.jpg')
+    const view = await service.evidenceImage({ relativePath: 'linkage/frames/a.jpg' })
+    assert.equal(view.state, 'ok')
+    assert.equal(view.name, 'a.jpg')
+    assert.ok(String(view.url).includes('/a.jpg'), '回环地址里没有那个文件名')
+    assert.equal(imageState.calls.length, 1)
+    assert.equal(imageState.calls[0]?.names.length, 1, '一次只该服务一张图')
+    assert.equal(
+      imageState.calls[0]?.directory,
+      path.join(root, 'linkage', 'frames'),
+      '交给端点的目录不是那个文件所在的目录'
+    )
+  })
+
+  it('录像行 id 优先：路径由库回答（相机检测日志下载下来的照片走这条）', async () => {
+    const { service } = createService()
+    await writeEvidenceFile('recordings/photo.jpg')
+    const deviceId = camera('evidence-rec')
+    const row = recordings.insert({
+      deviceId,
+      channelId: 1,
+      recordingType: 'manual',
+      startTime: FIXED_NOW,
+      sampleRate: 0,
+      audioFormat: null,
+      containerFormat: 'jpg',
+      relativePath: 'recordings/photo.jpg'
+    })
+    // 同时给一个**错的**相对路径：必须用库里的那一条。
+    const view = await service.evidenceImage({
+      recordingId: row.id,
+      relativePath: 'recordings/does-not-exist.jpg'
+    })
+    assert.equal(view.state, 'ok')
+    assert.equal(view.name, 'photo.jpg')
+  })
+
+  it('录像行查不到（id 拼错/行被删）→ not-found，而不是去猜路径', async () => {
+    const { service, imageState } = createService()
+    const view = await service.evidenceImage({ recordingId: 'rec_missing' })
+    assert.equal(view.state, 'not-found')
+    assert.equal(imageState.calls.length, 0, '认不出路径时不该去开端点')
+  })
+
+  it('既没给 id 也没给路径 → not-found', async () => {
+    const { service } = createService()
+    assert.equal((await service.evidenceImage({})).state, 'not-found')
+    assert.equal((await service.evidenceImage({ relativePath: '   ' })).state, 'not-found')
+  })
+
+  it('路径在库里、文件不在磁盘 → files-gone（换过存储根/被手工删掉，与"不是图片"不同）', async () => {
+    const { service, imageState } = createService()
+    const view = await service.evidenceImage({ relativePath: 'linkage/frames/gone.jpg' })
+    assert.equal(view.state, 'files-gone')
+    assert.equal(imageState.calls.length, 0, '文件不在时不该去开端点')
+  })
+
+  it('越界的相对路径被存储层拒绝 → not-found（不抛给界面）', async () => {
+    const { service, imageState } = createService()
+    const view = await service.evidenceImage({ relativePath: '../../etc/passwd.jpg' })
+    assert.equal(view.state, 'not-found')
+    assert.equal(imageState.calls.length, 0)
+  })
+
+  it('绝对路径不受理（存储根可以搬家，绝对路径会随之失效）', async () => {
+    const { service, imageState } = createService()
+    const view = await service.evidenceImage({ relativePath: path.join(root, 'linkage', 'a.jpg') })
+    assert.equal(view.state, 'not-found')
+    assert.equal(imageState.calls.length, 0)
+  })
+
+  it('文件在但不是能渲染的图片 → not-image（把 mp4 当图片取）', async () => {
+    const image = { calls: [], closed: 0, fail: '这一组里没有可用的图片文件' }
+    const { service } = createService({ image })
+    await writeEvidenceFile('linkage/frames/b.mp4', [0x00, 0x00, 0x00, 0x18])
+    const view = await service.evidenceImage({ relativePath: 'linkage/frames/b.mp4' })
+    assert.equal(view.state, 'not-image')
+  })
+
+  it('一次只留一个端点：开新的会关掉旧的，closeEvidenceImage() 也能关', async () => {
+    const { service, imageState } = createService()
+    await writeEvidenceFile('linkage/frames/one.jpg')
+    await writeEvidenceFile('linkage/frames/two.jpg')
+    await service.evidenceImage({ relativePath: 'linkage/frames/one.jpg' })
+    assert.equal(imageState.closed, 0, '第一张图不该被提前关掉')
+    await service.evidenceImage({ relativePath: 'linkage/frames/two.jpg' })
+    assert.equal(imageState.closed, 1, '开第二张时没有关掉第一张（端口会一直挂着）')
+    service.closeEvidenceImage()
+    assert.equal(imageState.closed, 2)
+    // 再关一次不该出错（界面可能连关两次：换事件 + 关抽屉）。
+    service.closeEvidenceImage()
+    assert.equal(imageState.closed, 2)
+  })
+
+  it('取图失败（not-image / files-gone）时不会把上一个端点关掉 —— 界面上那张图还在', async () => {
+    const image = { calls: [], closed: 0 }
+    const { service } = createService({ image })
+    await writeEvidenceFile('linkage/frames/keep.jpg')
+    await service.evidenceImage({ relativePath: 'linkage/frames/keep.jpg' })
+    const missing = await service.evidenceImage({ relativePath: 'linkage/frames/nope.jpg' })
+    assert.equal(missing.state, 'files-gone')
+    assert.equal(image.closed, 0, '失败的取图把已经在显示的那张图关掉了')
   })
 })

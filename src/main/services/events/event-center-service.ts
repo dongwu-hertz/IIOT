@@ -30,6 +30,8 @@
 
 import { AppError, ErrorCodes } from '@shared/errors'
 import { appLog, deviceLog } from '../logging/logger'
+import { existsSync, statSync } from 'node:fs'
+import path from 'node:path'
 import type { AlarmEvent, DeviceKind, Recording } from '@shared/domain/models'
 import type { PendingAlarmRecord, PendingAlarmSnapshot } from '@shared/domain/alarm-linkage'
 import type {
@@ -45,6 +47,8 @@ import type {
   EventDetectLibraryPage,
   EventDetectLogView,
   EventDownloadProgress,
+  EventEvidenceImageInput,
+  EventEvidenceImageView,
   EventMetrics,
   EventRecordingLookup,
   EventSourceKind,
@@ -91,12 +95,34 @@ export interface EventCenterLinkageSource {
   acknowledge(ids: readonly string[]): PendingAlarmSnapshot
 }
 
+/**
+ * 本机文件的回环端点能力（`VideoFileServer` 结构上满足它）。
+ *
+ * 接口写窄：事件中心只需要"给这一组图片开一个端点"这一件事，
+ * 于是测试里给一个假实现就够（与 `E2DeviceService` 的同名接口同一条推理）。
+ */
+export interface EventCenterImageServer {
+  serveImages(
+    directory: string,
+    names: readonly string[]
+  ): Promise<{ files: Array<{ name: string; url: string }>; close: () => void }>
+}
+
+/** 存储根解析能力（`StorageService.resolve` 结构上满足它，内含越界保护）。 */
+export interface EventCenterStorageResolver {
+  resolve(storedPath: string): string
+}
+
 export interface EventCenterServiceOptions {
   listDevices(): EventCenterDeviceRef[]
   detectLibrary: EventCenterDetectLibrary
   linkage: EventCenterLinkageSource
   alarms: EventAlarmLookup
   recordings: EventRecordingLookup
+  /** 图片证据的回环端点（详情抽屉的 Evidence 页签）。 */
+  images: EventCenterImageServer
+  /** 存储根解析（把库里的相对路径变回绝对路径，越界会抛）。 */
+  storage: EventCenterStorageResolver
   /**
    * 一台相机最多取回多少条检测日志。
    *
@@ -114,11 +140,98 @@ export class EventCenterService {
   private readonly options: EventCenterServiceOptions
   private readonly now: () => number
   private readonly detectLogLimit: number
+  /**
+   * 当前打开的图片端点。
+   *
+   * 一次只留一个：抽屉同时只显示一条事件的证据，留着上一个端点只是让一个端口白挂
+   * 到 TTL（30 分钟）。与 `E2DeviceService.snapshotHandle` 同一条做法。
+   */
+  private evidenceHandle: { close: () => void } | null = null
 
   constructor(options: EventCenterServiceOptions) {
     this.options = options
     this.now = options.now ?? (() => Date.now())
     this.detectLogLimit = options.detectLogLimit ?? DEFAULT_DETECT_LOG_LIMIT
+  }
+
+  // -------------------------------------------------------------------------
+  // 图片证据（规格 §12.1 的 Visual）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 把一个存储根相对路径（或一条录像行）变成回环图片地址。
+   *
+   * 四道关，每一道都有它存在的理由：
+   *   1. **路径从哪来**：优先 `recordingId`（库里的行是权威），否则用调用方给的相对路径。
+   *      绝对路径不受理 —— 交给 `storage.resolve()` 的话它会被当成"根之下的绝对路径"，
+   *      虽然也安全，但语义上是界面在猜本机布局，不该发生。
+   *   2. **越界**：`storage.resolve()` 会拒绝 `..` 逃出存储根的路径并抛错。这里**接住**它
+   *      并记一条 warn：路径越界是一次攻击尝试或者一次数据损坏，值得在设备日志里留痕，
+   *      但界面上只需要知道"这张图取不到"。
+   *   3. **文件在不在**：不在磁盘上就是 `files-gone`（换过存储根、被手工删掉），
+   *      与"不是图片"是两件不同的事实。
+   *   4. **是不是图片**：交给端点自己判断（`serveImages` 的白名单），
+   *      免得这里有第二份扩展名表 —— 两份表迟早会分叉。
+   */
+  async evidenceImage(input: EventEvidenceImageInput): Promise<EventEvidenceImageView> {
+    const relativePath = this.resolveEvidencePath(input)
+    if (relativePath === undefined || relativePath.trim() === '') return { state: 'not-found' }
+
+    let absolute: string
+    try {
+      absolute = this.options.storage.resolve(relativePath)
+    } catch (error) {
+      deviceLog().warn('事件中心：拒绝了一份取不到的证据路径', {
+        relativePath,
+        reason: describeError(error)
+      })
+      return { state: 'not-found' }
+    }
+
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) return { state: 'files-gone' }
+
+    // 上一组先关掉：端口与定时器都只该有一个。
+    this.closeEvidenceImage()
+
+    const directory = path.dirname(absolute)
+    const name = path.basename(absolute)
+    let handle: { files: Array<{ name: string; url: string }>; close: () => void }
+    try {
+      handle = await this.options.images.serveImages(directory, [name])
+    } catch (error) {
+      // 端点只服务图片扩展名；`serveImages` 在没有可用文件时抛 STORAGE_ERROR。
+      deviceLog().info('事件中心：这一份证据不是能渲染的图片', {
+        relativePath,
+        reason: describeError(error)
+      })
+      return { state: 'not-image' }
+    }
+
+    this.evidenceHandle = handle
+    const file = handle.files[0]
+    if (!file) return { state: 'not-image' }
+    return { state: 'ok', url: file.url, name: file.name }
+  }
+
+  /** 关掉当前图片端点（界面离开这条事件时调用；TTL 兜底）。 */
+  closeEvidenceImage(): void {
+    this.evidenceHandle?.close()
+    this.evidenceHandle = null
+  }
+
+  /** 入参 → 存储根相对路径。`recordingId` 优先：库里的行是权威。 */
+  private resolveEvidencePath(input: EventEvidenceImageInput): string | undefined {
+    const recordingId = typeof input.recordingId === 'string' ? input.recordingId.trim() : ''
+    if (recordingId !== '') {
+      return this.options.recordings.findById(recordingId)?.relativePath
+    }
+    const relativePath = typeof input.relativePath === 'string' ? input.relativePath.trim() : ''
+    /**
+     * 绝对路径不受理：界面只该拿到库里的相对路径（存储根可以搬家，绝对路径会随之失效）。
+     * 这一类调用是缺陷而不是攻击，所以直接当"取不到"。
+     */
+    if (relativePath === '' || path.isAbsolute(relativePath)) return undefined
+    return relativePath
   }
 
   // -------------------------------------------------------------------------
