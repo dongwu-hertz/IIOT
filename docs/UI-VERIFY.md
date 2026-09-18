@@ -1681,7 +1681,10 @@ CPU**（`Get-Process` 里一个从 9/16 起跑、累计 3600 秒以上 CPU 的 `
   > 相机上线后怎么验：连续进两次总览，数主进程日志里 **`Camera live view requested`** 的
   > 行数（应当 **+2**）；或者在设置里关掉「开机自动播放」再进一次（应当 **+0**）。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,103,297 字节**，sha256 `945F512A82F01E770C79EA721FED36DDB0DC54F6432A04657937185EAD229BF4`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
