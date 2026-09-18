@@ -303,16 +303,6 @@ onUnmounted(() => {
                 }}
               </dd>
             </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('installUi.soundLevel') }}</dt>
-              <dd class="kv__value">
-                {{
-                  selectedDevice.installation?.soundLevelDb === undefined
-                    ? t('installUi.unset')
-                    : `${selectedDevice.installation?.soundLevelDb} dB`
-                }}
-              </dd>
-            </div>
           </dl>
 
           <div class="btn-row">

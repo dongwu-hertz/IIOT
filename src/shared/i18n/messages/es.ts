@@ -496,9 +496,7 @@ export const es: MessageSchema = {
     channelSelect: 'Selección de canal',
     /** Insignia de familia para la rama del sónar. */
     sonarFamilyBadge: 'Sónar de aire SN-16',
-    /** Por qué esta pantalla no tiene gráfico en vivo. */
-    sonarLiveUnwired:
-      'Los flujos de audio/espectrograma en vivo aún no están integrados (el manual da rutas WebSocket que no hemos verificado en el equipo), así que aquí no hay gráfico en vivo: abajo están los parámetros de este equipo, la sincronización de alarmas y las grabaciones locales.',
+    /* `sonarLiveUnwired` eliminado por el punto 19 del propietario (2026-09-18). */
     /** La frase que queda tras quitar la tarjeta de estado de flujos: qué vía falla. */
     streamFailure: 'La vía {name} está fallando',
     currentValue: 'valor actual en {channel}',
@@ -1014,17 +1012,17 @@ export const es: MessageSchema = {
   },
 
   installUi: {
-    section: 'Información de instalación (opcional)',
+    /* Renombrado y sin nivel de referencia (propietario 2026-09-18, puntos 7 y 10). */
+    section: 'Información de dirección (opcional)',
     sectionHint: 'Solo para equipos de localización de fuentes sonoras (sónar de aire SN-16); deje en blanco para las demás familias. Latitud/longitud en WGS84 decimal.',
     latitude: 'Latitud (°)',
     longitude: 'Longitud (°)',
     azimuth: 'Azimut (°)',
     azimuthHint: '0 = norte, en sentido horario',
-    soundLevel: 'Nivel de referencia (dB)',
-    soundLevelHint: 'Nivel de referencia del punto, no el umbral de alarma',
     errLatitude: 'La latitud debe estar entre -90 y 90',
     errLongitude: 'La longitud debe estar entre -180 y 180',
     errAzimuth: 'El azimut debe estar entre 0 y 360 (escriba 0 para 360)',
+    /* La interfaz ya no lo muestra (punto 10); el dominio sigue validándolo (§15.49). */
     errSoundLevel: 'El nivel de referencia debe estar entre -50 y 200 dB',
     point: 'Punto',
     noPoint: 'Sin registrar',

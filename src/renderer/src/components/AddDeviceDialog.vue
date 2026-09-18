@@ -37,7 +37,8 @@ interface FormState {
   username: string
   password: string
   /**
-   * 安装信息（业主 2026-09-17 第 1 条）：点位（GIS 经纬度）/ 方位角 / 基准声压级。
+   * 地址信息（业主 2026-09-18 第 7 / 10 条：原「安装信息」改名为「地址信息」，
+   * 并且**删掉基准声压级**）：点位（GIS 经纬度）+ 方位角。
    *
    * 用**字符串**存：输入框给的就是字符串，而"没填"（空串）与"填了 0"必须能分开 ——
    * 用数字的话空输入会变成 0，界面上就出现一个看起来像实测值的纬度 0。
@@ -47,7 +48,6 @@ interface FormState {
     gisLatitude: string
     gisLongitude: string
     azimuthDeg: string
-    soundLevelDb: string
   }
 }
 
@@ -68,7 +68,7 @@ function emptyForm(): FormState {
     httpPort: 80,
     username: 'admin',
     password: '',
-    installation: { gisLatitude: '', gisLongitude: '', azimuthDeg: '', soundLevelDb: '' }
+    installation: { gisLatitude: '', gisLongitude: '', azimuthDeg: '' }
   }
 }
 
@@ -296,9 +296,9 @@ const probeChannelCount = computed(() =>
       </div>
 
       <!--
-        安装信息（业主 2026-09-17 第 1 条）。**与机型无关地一直显示**：
-        机型是自动识别的，而"探活之前不让填点位"会让没有凭据时完全录不进安装信息。
-        四项都可空；声源定位设备（Air Sonar / SN-16）才需要填，其他机型留空即可。
+        **地址信息**（业主 2026-09-18 第 7 / 10 条）：原「安装信息」，去掉基准声压级。
+        **与机型无关地一直显示**：机型是自动识别的，而"探活之前不让填点位"会让没有凭据时
+        完全录不进地址信息。经纬度与方位角都可空；声源定位设备（Air Sonar / SN-16）才需要填。
       -->
       <fieldset class="install">
         <legend class="field-label">{{ t('installUi.section') }}</legend>
@@ -340,19 +340,6 @@ const probeChannelCount = computed(() =>
               spellcheck="false"
             />
             <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('installUi.soundLevel') }}</span>
-            <input
-              v-model="form.installation.soundLevelDb"
-              class="input mono"
-              type="text"
-              inputmode="decimal"
-              placeholder="60"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span class="field-hint">{{ t('installUi.soundLevelHint') }}</span>
           </label>
         </div>
       </fieldset>

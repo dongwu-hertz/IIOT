@@ -498,12 +498,13 @@ export const en: MessageSchema = {
     channelSelect: 'Channel selection',
     /** Family badge for the sonar branch (top of the page). */
     sonarFamilyBadge: 'SN-16 air sonar',
-    /**
-     * Why this screen has no live chart. Without it a page of parameters looks like a
-     * broken realtime view rather than a documented limit.
+    /*
+     * `sonarLiveUnwired` ("live audio/spectrogram streams are not wired up yet …") was
+     * DELETED by the owner's 2026-09-18 item 19: it was both the banner on top of the page
+     * and the tooltip on the family badge. Online/offline is now answered by the green/grey
+     * dot next to the device selector instead of by a sentence explaining the absence of a
+     * live chart. Removed from all four catalogues together.
      */
-    sonarLiveUnwired:
-      'Live audio/spectrogram streams are not wired up yet (the manual gives WebSocket paths we have not verified on hardware), so there is no live chart here: below are this device’s parameters, alarm sync and local recordings.',
     /** One line left after the stream-status card was removed: which feed is failing. */
     streamFailure: 'The {name} feed is failing',
     currentValue: 'current value on {channel}',
@@ -1021,17 +1022,20 @@ export const en: MessageSchema = {
   },
 
   installUi: {
-    section: 'Installation info (optional)',
+    /*
+     * Renamed from "Installation info" and the reference sound level removed by the owner
+     * (2026-09-18, items 7 and 10). The DB column and the API keep it (see §15.49).
+     */
+    section: 'Address info (optional)',
     sectionHint: 'For sound-source-localisation devices (SN-16 air sonar) only; leave blank for other families. Latitude/longitude are decimal WGS84.',
     latitude: 'Latitude (°)',
     longitude: 'Longitude (°)',
     azimuth: 'Azimuth (°)',
     azimuthHint: '0 = true north, clockwise',
-    soundLevel: 'Reference sound level (dB)',
-    soundLevelHint: 'Site reference level, not the alarm threshold',
     errLatitude: 'Latitude must be between -90 and 90',
     errLongitude: 'Longitude must be between -180 and 180',
     errAzimuth: 'Azimuth must be between 0 and 360 (write 0 for 360)',
+    /* UI removed (item 10) but the domain still parses the field — see §15.49. */
     errSoundLevel: 'Reference level must be between -50 and 200 dB',
     point: 'Point',
     noPoint: 'Not recorded',

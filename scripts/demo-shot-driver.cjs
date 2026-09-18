@@ -752,6 +752,111 @@ async function run() {
     }
   }
 
+  /**
+   * 侧栏的折叠（业主 2026-09-18 第 4 条）：按钮在「协议实验室」**下方**，收起后 logo 变圆形。
+   *
+   * 三件都要量，因为三件都能"看起来做了"而屏幕上不成立：
+   *   1. **位置**：按钮必须在导航列里、且在**最后一个**导航项之后 —— 用 `compareDocumentPosition`
+   *      按 DOM 顺序判，而不是按源码里的行号；
+   *   2. **收起的可见后果**：宽度真的变成 `--sidebar-collapsed`（64）；
+   *   3. **圆形 logo**：收起后 logo 的盒子是正方形且 `border-radius` 解析成 50%（浏览器算过的值，
+   *      不是我们写进 CSS 的那一行）。
+   *
+   * 跑完**恢复展开**：后面的探针（尤其版面几何那几条）都假设侧栏是展开态。
+   */
+  const sidebarToggle = JSON.parse(
+    await win.webContents.executeJavaScript('(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const sidebar = document.querySelector(".sidebar");' +
+    'const toggle = document.querySelector("[data-action=sidebar-toggle]");' +
+    'if (!sidebar || !toggle) return JSON.stringify({ found: false });' +
+    'const nav = sidebar.querySelector(".sidebar__nav");' +
+    'const items = Array.prototype.slice.call(sidebar.querySelectorAll(".sidebar__nav a.nav-item"));' +
+    'const last = items[items.length - 1] || null;' +
+    'const widthOf = () => Math.round(sidebar.getBoundingClientRect().width);' +
+    'const logo = () => document.querySelector(".sidebar__logo");' +
+    'const styleOf = (el) => {' +
+    '  if (!el) return null;' +
+    '  const s = getComputedStyle(el);' +
+    '  const r = el.getBoundingClientRect();' +
+    '  return {' +
+    '    width: Math.round(r.width), height: Math.round(r.height),' +
+    '    radius: s.borderTopLeftRadius, background: s.backgroundColor' +
+    '  };' +
+    '};' +
+    'const out = {' +
+    '  found: true,' +
+    '  inNav: !!(nav && nav.contains(toggle)),' +
+    '  afterLastNavItem: !!(last && (last.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0),' +
+    '  lastNavLabel: last ? (last.textContent || "").trim() : "",' +
+    '  expandedWidth: widthOf(),' +
+    '  expandedLogo: styleOf(logo()),' +
+    '  expandedLabel: toggle.getAttribute("aria-label"),' +
+    '  expanded: toggle.getAttribute("aria-expanded")' +
+    '};' +
+    'toggle.click();' +
+    'await sleep(600);' +
+    'out.collapsedWidth = widthOf();' +
+    'out.collapsed = toggle.getAttribute("aria-expanded");' +
+    'out.collapsedLabel = toggle.getAttribute("aria-label");' +
+    'out.collapsedLogo = styleOf(logo());' +
+    'out.collapsedNavHidden = !!document.querySelector(".sidebar--collapsed .nav-item__label");' +
+    'toggle.click();' +
+    'await sleep(600);' +
+    'out.restoredWidth = widthOf();' +
+    'out.restoredExpanded = toggle.getAttribute("aria-expanded");' +
+    'return JSON.stringify(out);' +
+    '})()')
+  )
+  log('sidebar toggle: ' + JSON.stringify(sidebarToggle))
+  if (!sidebarToggle.found) {
+    problems.push('找不到侧栏的折叠按钮（[data-action=sidebar-toggle]）')
+  } else {
+    if (!sidebarToggle.inNav) {
+      problems.push('折叠按钮不在导航列里（业主第 4 条：放在协议实验室下方）')
+    }
+    if (!sidebarToggle.afterLastNavItem) {
+      problems.push(
+        '折叠按钮不在最后一个导航项之后（最后一项是「' + sidebarToggle.lastNavLabel + '」）'
+      )
+    }
+    if (sidebarToggle.collapsed !== 'false') {
+      problems.push('点了折叠按钮之后 aria-expanded 不是 false：' + JSON.stringify(sidebarToggle.collapsed))
+    }
+    if (!(sidebarToggle.collapsedWidth < sidebarToggle.expandedWidth)) {
+      problems.push(
+        '折叠之后侧栏没有变窄：' + sidebarToggle.expandedWidth + ' → ' + sidebarToggle.collapsedWidth
+      )
+    }
+    if (sidebarToggle.restoredExpanded !== 'true' || sidebarToggle.restoredWidth !== sidebarToggle.expandedWidth) {
+      problems.push(
+        '再点一次没有恢复展开：' + JSON.stringify({
+          width: sidebarToggle.restoredWidth,
+          expanded: sidebarToggle.restoredExpanded,
+          want: sidebarToggle.expandedWidth
+        })
+      )
+    }
+    // 收起后 logo 是**圆**：正方形盒子 + 解析出来的 50% 圆角。
+    const collapsedLogo = sidebarToggle.collapsedLogo
+    const expandedLogo = sidebarToggle.expandedLogo
+    if (!collapsedLogo) {
+      problems.push('收起之后 logo 元素不见了（第 4 条要求它变成圆形显示，不是消失）')
+    } else {
+      if (collapsedLogo.width !== collapsedLogo.height) {
+        problems.push(
+          '收起之后的 logo 不是正方形（' + collapsedLogo.width + '×' + collapsedLogo.height + '），圆形谈不上'
+        )
+      }
+      if (!/50%|9999px/.test(String(collapsedLogo.radius))) {
+        problems.push('收起之后的 logo 圆角不是 50%：' + JSON.stringify(collapsedLogo.radius))
+      }
+      if (expandedLogo && expandedLogo.radius === collapsedLogo.radius) {
+        problems.push('展开与收起时 logo 的圆角一样 —— 圆形那条规则没有按折叠状态切换')
+      }
+    }
+  }
+
   const list = ONLY ? ROUTES.filter((r) => r[1] === ONLY) : ROUTES
   for (const [name, route] of list) {
     // Hash history is what the router uses, so navigate by hash and let the
@@ -1948,15 +2053,21 @@ async function run() {
       )
     }
     if (!addDialog.hasLead) problems.push('添加设备对话框里没有那句"不用选机型"的说明')
-    if (addDialog.installInputs !== 4) {
+    // 业主 2026-09-18 第 10 条删掉了基准声压级，所以是**三个**输入框（经纬度 + 方位角）。
+    if (addDialog.installInputs !== 3) {
       problems.push(
-        '添加设备对话框里的安装信息输入不是四个（第 1 条）：' + addDialog.installInputs
+        '添加设备对话框里的地址信息输入不是三个（第 10 条删掉了基准声压级）：' + addDialog.installInputs
       )
     }
-    for (const label of ['纬度', '经度', '方位角', '基准声压级']) {
+    for (const label of ['纬度', '经度', '方位角']) {
       if (!(addDialog.installPoints || []).some((text) => text.includes(label))) {
-        problems.push('安装信息里没有「' + label + '」这一项：' + JSON.stringify(addDialog.installPoints))
+        problems.push('地址信息里没有「' + label + '」这一项：' + JSON.stringify(addDialog.installPoints))
       }
+    }
+    if ((addDialog.installPoints || []).some((text) => text.includes('基准声压级'))) {
+      problems.push(
+        '地址信息里又出现了「基准声压级」（第 10 条要求删除）：' + JSON.stringify(addDialog.installPoints)
+      )
     }
   }
 
@@ -2313,6 +2424,22 @@ async function run() {
     '  selectRatio: slotWidth > 0 && selectRect ? Math.round((selectRect.width / slotWidth) * 100) : -1,' +
     '  selectRightGapToSlot: slotRect && selectRect ? Math.round(slotRect.right - selectRect.right) : null,' +
     '  selectToIndicatorsGap: indicatorsRect && selectRect ? Math.round(indicatorsRect.left - selectRect.right) : null,' +
+    /*
+     * 业主 2026-09-18 第 19 条：设备在不在线**用绿点/灰点在选择设备时表示**，
+     * 并且删掉了那一句"实时流未接入"。两件都能量：
+     *   - `[data-device-status-dot]` 在、而且它的类是 online/offline 之一；
+     *   - 下拉里每一项前面带 `●`/`○`（原生 option 画不出颜色，见 MonitorView 的注释）；
+     *   - 那句已删除说明的容器一个都不许再有。
+     */
+    '  deviceStatusDot: (() => {' +
+    '    const dot = slot ? slot.querySelector("[data-device-status-dot]") : null;' +
+    '    if (!dot) return null;' +
+    '    return { online: dot.classList.contains("dot--online"), offline: dot.classList.contains("dot--offline") };' +
+    '  })(),' +
+    '  deviceOptionMarks: select' +
+    '    ? Array.prototype.slice.call(select.options).map((o) => (o.textContent || "").trim().charAt(0))' +
+    '    : [],' +
+    '  sonarLiveUnwired: document.querySelectorAll("[data-sonar-live-unwired]").length,' +
     '  streamStrip: document.querySelectorAll(".stream-strip").length,' +
     '  videoWall: document.querySelectorAll(".video-wall, .camera-video-wall").length,' +
     '  alarmEntry: document.querySelectorAll(".camera-alarm-entry").length,' +
@@ -2406,6 +2533,31 @@ async function run() {
       problems.push(
         '设备下拉没有紧挨着「设备数量」那组指示器：间距 ' +
           monitorChrome.selectToIndicatorsGap + 'px'
+      )
+    }
+    /*
+     * 业主 2026-09-18 第 19 条：选设备时用绿点/灰点说在线与否，
+     * 并且那一段"实时流尚未接入"的说明已经删掉。
+     */
+    const dot = monitorChrome.deviceStatusDot
+    if (!dot) {
+      problems.push('设备下拉旁边没有在线状态点（[data-device-status-dot]）—— 第 19 条')
+    } else if (!dot.online && !dot.offline) {
+      problems.push('在线状态点既不是绿点也不是灰点：' + JSON.stringify(dot))
+    }
+    if ((monitorChrome.deviceOptionMarks || []).length === 0) {
+      problems.push('设备下拉里一个选项都没有（这一条只能在有设备时量）')
+    } else if (
+      !(monitorChrome.deviceOptionMarks || []).every((mark) => mark === '●' || mark === '○')
+    ) {
+      problems.push(
+        '设备下拉的选项没有 ●/○ 标记：' + JSON.stringify(monitorChrome.deviceOptionMarks)
+      )
+    }
+    if (monitorChrome.sonarLiveUnwired !== 0) {
+      problems.push(
+        '「实时音频/时频流尚未接入…」那段说明又出现了（' +
+          monitorChrome.sonarLiveUnwired + ' 处）—— 业主第 19 条要求删掉'
       )
     }
   }
@@ -3378,16 +3530,16 @@ async function run() {
     '  setInput(inputs[2], "admin");' +
     '  setInput(inputs[3], "admin123");' +
     /*
-     * 安装信息（第 1 条）：四个框都填上，加完之后要从**库里读回来**逐项相等 ——
+     * 地址信息（第 1 条；2026-09-18 第 10 条删掉基准声压级之后是**三个**框）：
+     * 经纬度与方位角都填上，加完之后要从**库里读回来**逐项相等 ——
      * 业主的硬规矩是"每个写设备的操作必须读回验证"，所以这一段不是可选的。
      */
     '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
     '  out.installInputs = install.length;' +
-    '  if (install.length === 4) {' +
+    '  if (install.length === 3) {' +
     '    setInput(install[0], "31.2304");' +
     '    setInput(install[1], "121.4737");' +
     '    setInput(install[2], "135");' +
-    '    setInput(install[3], "63.5");' +
     '  }' +
     '  await wait(300);' +
     '  const test = findButton(dlg, "测试连接");' +
@@ -3550,19 +3702,22 @@ async function run() {
     if (!/听诊盒子/.test(String(e2Flow.detectedKindText || ''))) {
       problems.push('探活结果里没有说出自动识别出来的机型：' + JSON.stringify(e2Flow.detectedKindText))
     }
-    if (e2Flow.installInputs !== 4) {
-      problems.push('添加设备对话框里的安装信息输入不是四个：' + e2Flow.installInputs)
+    if (e2Flow.installInputs !== 3) {
+      problems.push('添加设备对话框里的地址信息输入不是三个（第 10 条）：' + e2Flow.installInputs)
     }
     const installationReadBack = e2Flow.installationReadBack || null
+    /*
+     * 只比**三个**字段：基准声压级按第 10 条不再由界面录入，所以库里那一位应当仍然是
+     * 「没有值」（`undefined` 会被 `JSON.stringify` 丢掉，于是对象只剩三个键）。
+     */
     const EXPECTED_INSTALLATION = {
       gisLatitude: 31.2304,
       gisLongitude: 121.4737,
-      azimuthDeg: 135,
-      soundLevelDb: 63.5
+      azimuthDeg: 135
     }
     if (JSON.stringify(installationReadBack) !== JSON.stringify(EXPECTED_INSTALLATION)) {
       problems.push(
-        '录入的安装信息从库里读回来不是原值：' + JSON.stringify(installationReadBack) +
+        '录入的地址信息从库里读回来不是原值：' + JSON.stringify(installationReadBack) +
           '（期望 ' + JSON.stringify(EXPECTED_INSTALLATION) + '）'
       )
     }
@@ -3570,19 +3725,23 @@ async function run() {
      * ⑤ 声呐那一支（第 5 条）：这一台是听诊盒子族，`/monitor` 必须是声呐那一屏。
      * 判据是**两边都要**：声呐该有的在、声纹那一支的不在 —— 只说"有参数面板"证明不了
      * 它没有落到声纹那一支上（那一支也会渲染页面）。
+     *
+     * 2026-09-18 第 19 条把那一句"实时流未接入"删掉了，所以这里反过来断言它**不在**。
      */
     const sonar = e2Flow.sonarBranch || {}
-    if (sonar.unwired !== 1) {
-      problems.push('实时监测页没有出现声呐那一支（缺"实时流未接入"那句）：' + JSON.stringify(sonar))
+    if (sonar.unwired !== 0) {
+      problems.push(
+        '实时监测页又出现了「实时流未接入」那句说明（第 19 条要求删掉）：' + JSON.stringify(sonar)
+      )
     }
     if (sonar.syncButton !== 1) {
       problems.push('声呐那一支没有参数与告警同步面板：' + JSON.stringify(sonar))
     }
     if (sonar.installCard !== 1) {
-      problems.push('声呐那一支没有安装点位卡片：' + JSON.stringify(sonar))
+      problems.push('声呐那一支没有地址信息卡片：' + JSON.stringify(sonar))
     }
     if (String(sonar.installPoint || '').indexOf('31.2304') < 0) {
-      problems.push('声呐那一支的安装点位不是录入的那个：' + JSON.stringify(sonar.installPoint))
+      problems.push('声呐那一支的地址点位不是录入的那个：' + JSON.stringify(sonar.installPoint))
     }
     if (sonar.channelTabs !== 0 || sonar.trend !== 0 || sonar.audioBar !== 0) {
       problems.push(
@@ -3686,12 +3845,12 @@ async function run() {
     '  setInput(creds[1], "__SONAR_PORT__");' +
     '  setInput(creds[2], "admin");' +
     '  setInput(creds[3], "admin123");' +
-    // 点位图要有点位才有得画：这一台按业主的流程录入安装信息（第 1 条）。
+    // 点位图要有点位才有得画：这一台按业主的流程录入**地址信息**（第 1 条；
+    // 2026-09-18 第 10 条删掉基准声压级之后只剩经纬度与方位角）。
     '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
     '  setInput(install[0], "31.2304");' +
     '  setInput(install[1], "121.4737");' +
     '  setInput(install[2], "135");' +
-    '  setInput(install[3], "63.5");' +
     '  await wait(300);' +
     '  const test = findButton(dlg, "测试连接");' +
     '  if (!test) return JSON.stringify({ ok: false, reason: "no-test-button" });' +

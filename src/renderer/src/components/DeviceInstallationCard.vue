@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 安装点位只读卡片（业主 2026-09-17 第 1 条）：点位（GIS 经纬度）/ 方位角 / 基准声压级。
+ * 地址信息只读卡片（业主 2026-09-17 第 1 条；2026-09-18 第 7 / 10 条改名并把
+ * **基准声压级删掉**）：点位（GIS 经纬度）/ 方位角。
  *
  * **只读**，用的就是全应用共有的 `.kv` 键值列表（设备详情页与实时检测页各挂一次）。
  * 为什么不做成第二处输入框：录入在两处 —— 「添加设备」对话框与设备管理页的「编辑」对话框
@@ -22,7 +23,7 @@ const props = defineProps<{ installation?: DeviceInstallation }>()
 
 const { t } = useI18n()
 
-/** 四项全空：这张卡片整体说"未录入"，而不是四行"未录入"。 */
+/** 全空：这张卡片整体说"未录入"，而不是每行一个"未录入"。 */
 const empty = computed(() => !hasInstallation(props.installation))
 
 /** 点位那一行的文字：成对才写出坐标，只录一半就如实说。 */
@@ -46,8 +47,9 @@ function degrees(value: number | undefined, unit: string): string {
       <span v-if="empty" class="muted">{{ t('installUi.unset') }}</span>
     </div>
     <!--
-      四项**一直画出来**（空的那几行显示「未录入」）：只画有值的那几行时，"没录方位角"
+      两行**一直画出来**（空的那一行显示「未录入」）：只画有值的那几行时，"没录方位角"
       与"这一版不显示方位角"长得一模一样，而这两件事对声源定位的含义完全不同。
+      （基准声压级那一行按业主 2026-09-18 第 10 条删掉了。）
     -->
     <dl class="kv" data-installation>
       <div class="kv__item">
@@ -60,10 +62,6 @@ function degrees(value: number | undefined, unit: string): string {
           {{ degrees(installation?.azimuthDeg, '°') }}
           <span class="muted">{{ t('installUi.azimuthHint') }}</span>
         </dd>
-      </div>
-      <div class="kv__item">
-        <dt class="kv__label">{{ t('installUi.soundLevel') }}</dt>
-        <dd class="kv__value">{{ degrees(installation?.soundLevelDb, ' dB') }}</dd>
       </div>
     </dl>
   </section>

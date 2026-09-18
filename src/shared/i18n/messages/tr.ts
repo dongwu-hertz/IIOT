@@ -503,9 +503,7 @@ export const tr: MessageSchema = {
     channelSelect: 'Kanal seçimi',
     /** Sonar dalı için aile rozeti. */
     sonarFamilyBadge: 'SN-16 hava sonarı',
-    /** Bu ekranda neden canlı grafik yok. */
-    sonarLiveUnwired:
-      'Canlı ses/tayf görüntüsü akışları henüz bağlanmadı (kılavuz, donanımda doğrulamadığımız WebSocket yolları veriyor); bu yüzden burada canlı grafik yok: aşağıda bu cihazın parametreleri, alarm eşitlemesi ve yerel kayıtlar var.',
+    /* `sonarLiveUnwired`, mal sahibinin 2026-09-18 tarihli 19. maddesiyle kaldırıldı. */
     /** Akış durumu kartı kaldırıldıktan sonra kalan tek satır: hangi yol bozuk. */
     streamFailure: '{name} yolu hata veriyor',
     currentValue: '{channel} güncel değeri',
@@ -1020,17 +1018,17 @@ export const tr: MessageSchema = {
   },
 
   installUi: {
-    section: 'Kurulum bilgisi (isteğe bağlı)',
+    /* Yeniden adlandırıldı ve referans düzey kaldırıldı (mal sahibi 2026-09-18, 7 ve 10). */
+    section: 'Adres bilgisi (isteğe bağlı)',
     sectionHint: 'Yalnızca ses kaynağı konumlandırma cihazları (SN-16 hava sonarı) için; diğer ailelerde boş bırakın. Enlem/boylam ondalık WGS84.',
     latitude: 'Enlem (°)',
     longitude: 'Boylam (°)',
     azimuth: 'Azimut (°)',
     azimuthHint: '0 = kuzey, saat yönünde',
-    soundLevel: 'Referans ses düzeyi (dB)',
-    soundLevelHint: 'Noktanın referans düzeyi, alarm eşiği değil',
     errLatitude: 'Enlem -90 ile 90 arasında olmalı',
     errLongitude: 'Boylam -180 ile 180 arasında olmalı',
     errAzimuth: 'Azimut 0 ile 360 arasında olmalı (360 için 0 yazın)',
+    /* Arayüzde artık gösterilmiyor (10. madde); alan doğrulaması sürüyor (§15.49). */
     errSoundLevel: 'Referans düzey -50 ile 200 dB arasında olmalı',
     point: 'Nokta',
     noPoint: 'Kayıtlı değil',

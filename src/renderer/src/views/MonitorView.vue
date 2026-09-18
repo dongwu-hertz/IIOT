@@ -36,7 +36,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
-import type { Channel, RealtimeFeature } from '@shared/domain/models'
+import type { Channel, Device, RealtimeFeature } from '@shared/domain/models'
 import { CHANNEL_COUNT } from '@shared/domain/models'
 import type { CameraLiveState, CameraLiveStatus } from '@shared/domain/camera-live'
 import {
@@ -105,6 +105,19 @@ const activeChannelIndex = ref(0)
 const sampleRate = ref<number | null>(null)
 
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
+
+/**
+ * 当前选中的那台在不在线（业主 2026-09-18 第 19 条：选设备时用绿点/灰点说这件事）。
+ *
+ * `UNKNOWN` 归到**灰**点：我们只知道"没读到"，而绿点会被读成"它在工作" ——
+ * 那是界面在说一件没被证实的事（与 `channelState()` 拒绝把"没读到"当"已启用"同一条规矩）。
+ */
+const selectedDeviceOnline = computed(() => selectedDevice.value?.status === 'ONLINE')
+
+/** 下拉里每一项前面的那个字符（原生 `<option>` 画不出颜色，颜色由旁边的点负责）。 */
+function deviceStatusDot(status: Device['status']): string {
+  return status === 'ONLINE' ? '●' : '○'
+}
 
 /** Channels reported by the device; falls back to the fixed 0-7 index range. */
 const channels = computed<Channel[]>(() => devices.channelsOf(selectedDeviceId.value))
@@ -1366,6 +1379,13 @@ const sessionLabel = computed(() => {
             与顶栏的设备总数/在线数/告警是同一件事，放在页头卡片里会让它和"状态"混成一块。
           -->
           <Teleport to="#topbar-page-slot">
+            <!--
+              设备下拉 + **在线状态点**（业主 2026-09-18 第 19 条：「设备是否在线直接在选择设备时，
+              通过绿点和灰点表示」）。
+              原生 `<option>` 里画不出颜色，所以在**下拉旁边**给当前选中的那台一个真正的圆点：
+              名字后面跟一个 `●`/`○` 让"哪几台在线"在下拉展开时也能一眼看出来，
+              颜色由旁边那个点负责说清楚（绿=在线、灰=离线/未知）。
+            -->
             <label class="field topbar-device">
               <select
                 v-model="selectedDeviceId"
@@ -1374,9 +1394,16 @@ const sessionLabel = computed(() => {
                 :title="t('monitorUi.deviceLabel')"
               >
                 <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-                  {{ device.name }}（{{ device.ip || t('monitorUi.noAddress') }}）
+                  {{ deviceStatusDot(device.status) }} {{ device.name }}（{{ device.ip || t('monitorUi.noAddress') }}）
                 </option>
               </select>
+              <span
+                class="dot topbar-device__dot"
+                :class="selectedDeviceOnline ? 'dot--online' : 'dot--offline'"
+                data-device-status-dot
+                :title="selectedDeviceOnline ? t('devices.status.online') : t('devices.status.offline')"
+                :aria-hidden="true"
+              ></span>
             </label>
           </Teleport>
 
@@ -1404,9 +1431,12 @@ const sessionLabel = computed(() => {
             <template v-else-if="isSonar">
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
-              <span class="badge" :title="t('monitorUi.sonarLiveUnwired')">
-                {{ t('monitorUi.sonarFamilyBadge') }}
-              </span>
+              <!--
+                这里原来把那一长句（"实时音频/时频流尚未接入…"）挂在 `title` 上，同时页面顶上
+                还有同一条横幅。业主 2026-09-18 第 19 条要求删掉那句话 —— 提示不再解释
+                "这一屏为什么没有实时图"，在线与否由设备下拉旁边的绿点/灰点回答。
+              -->
+              <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
             </template>
             <span v-else :class="cameraBadgeClass">
               {{ cameraStatusLabel }}
@@ -1960,16 +1990,16 @@ const sessionLabel = computed(() => {
         帧格式。宁可少一块，也不画一张假的实时图。
 
         这一屏放的是**这一族真实存在、我们已经实现**的东西，三块都来自既有设计：
-          ① 安装点位（`DeviceInstallationCard`）：业主第 1 条新增的数据，与设备详情页共用；
+          ① 地址信息（`DeviceInstallationCard`）：业主第 1 条新增的数据，与设备详情页共用；
           ② 参数与告警同步（`AuscultationPanel`）：设备详情页那个"听诊盒子"页签的同一份实现；
           ③ 本机录音回放（`MonitorRecordingTimeline`）：同步拉下来的告警录音都在本机库，
              与声纹设备那一支用的是同一条时间轴。
+
+        **那一长句说明按业主 2026-09-18 第 19 条删掉了**（原来在页面顶上，也在机型号徽标的
+        悬停提示里）：设备在不在线由设备下拉旁边的绿点/灰点回答，不再用一句话解释这一屏
+        为什么没有实时图。口径记在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
       -->
       <template v-else-if="isSonar">
-        <p class="alert alert--warning" role="status" data-sonar-live-unwired>
-          {{ t('monitorUi.sonarLiveUnwired') }}
-        </p>
-
         <DeviceInstallationCard :installation="selectedDevice?.installation" />
 
         <AuscultationPanel :device-id="selectedDeviceId" />
@@ -2054,10 +2084,24 @@ const sessionLabel = computed(() => {
   width: 50%;
   min-width: 0;
   margin-left: auto;
+  /* 下拉 + 状态点同一行（点贴在下拉的右边）。 */
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .topbar-device .select {
   width: 100%;
+  min-width: 0;
+}
+
+/*
+ * 当前设备的在线状态点（绿=在线、灰=离线/未知）。它是**文字旁边**的一个真实元素，
+ * 因为原生 `<option>` 里没有办法给一行上色（见模板里的注释）。
+ * `.dot` / `.dot--online` / `.dot--offline` 是全局已有的那一对。
+ */
+.topbar-device__dot {
+  flex: none;
 }
 
 .monitor-head__status {

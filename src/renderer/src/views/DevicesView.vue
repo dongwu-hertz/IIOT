@@ -66,7 +66,6 @@ interface EditInstallationForm {
   gisLatitude: string
   gisLongitude: string
   azimuthDeg: string
-  soundLevelDb: string
 }
 
 const editForm = ref({
@@ -76,8 +75,7 @@ const editForm = ref({
   installation: {
     gisLatitude: '',
     gisLongitude: '',
-    azimuthDeg: '',
-    soundLevelDb: ''
+    azimuthDeg: ''
   } as EditInstallationForm
 })
 const editError = ref('')
@@ -250,9 +248,6 @@ function installationTitle(device: Device): string {
   if (installation.azimuthDeg !== undefined) {
     parts.push(`${t('installUi.azimuth')} ${installation.azimuthDeg}`)
   }
-  if (installation.soundLevelDb !== undefined) {
-    parts.push(`${t('installUi.soundLevel')} ${installation.soundLevelDb}`)
-  }
   return parts.length > 0 ? parts.join(' · ') : t('installUi.noPoint')
 }
 
@@ -312,8 +307,7 @@ function startEdit(device: Device): void {
     installation: {
       gisLatitude: installationInput(installation?.gisLatitude),
       gisLongitude: installationInput(installation?.gisLongitude),
-      azimuthDeg: installationInput(installation?.azimuthDeg),
-      soundLevelDb: installationInput(installation?.soundLevelDb)
+      azimuthDeg: installationInput(installation?.azimuthDeg)
     }
   }
   editError.value = ''
@@ -333,7 +327,7 @@ async function submitEdit(): Promise<void> {
     return
   }
   /*
-   * 安装信息：四个框一起解析，任一项越界就**一个都不写**（与添加设备同一套判据）。
+   * 地址信息：三个框一起解析，任一项越界就**一个都不写**（与添加设备同一套判据）。
    * 清空的项送 `null` 而不是省略：编辑表单里"我把这个框清空了"就是要清掉库里的值，
    * 而省略一个键的语义是"这一项没动"（见 `UpdateDeviceInput.installation`）。
    */
@@ -345,8 +339,7 @@ async function submitEdit(): Promise<void> {
   const installation = {
     gisLatitude: parsed.installation.gisLatitude ?? null,
     gisLongitude: parsed.installation.gisLongitude ?? null,
-    azimuthDeg: parsed.installation.azimuthDeg ?? null,
-    soundLevelDb: parsed.installation.soundLevelDb ?? null
+    azimuthDeg: parsed.installation.azimuthDeg ?? null
   }
   editSaving.value = true
   const updated = await devices.update({
@@ -822,18 +815,6 @@ async function renameChannelName(
               spellcheck="false"
             />
             <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('installUi.soundLevel') }}</span>
-            <input
-              v-model="editForm.installation.soundLevelDb"
-              class="input mono"
-              type="text"
-              inputmode="decimal"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span class="field-hint">{{ t('installUi.soundLevelHint') }}</span>
           </label>
         </div>
       </fieldset>

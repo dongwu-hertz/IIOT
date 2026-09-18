@@ -177,8 +177,9 @@ onMounted(async () => {
         still carried by the window title, the About panel and the footer, so nothing
         became unfindable.
 
-        折叠时 logo 让位给折叠按钮（64px 放不下两个 24px 的东西）：按钮始终在同一个
-        位置，所以"折起来之后怎么展开"不需要找。
+        **折叠按钮不在这一行**（业主 2026-09-18 第 4 条：移到「协议实验室」下方）。
+        折叠之后 logo 从横排的图片变成**圆形**徽标（见 `.sidebar--collapsed .sidebar__logo`）：
+        64px 宽的一列里，一个 32px 的圆比一条 44×24 的长条更好认，也不会把文字旁白挤没。
       -->
       <img
         class="sidebar__logo"
@@ -187,31 +188,6 @@ onMounted(async () => {
         width="44"
         height="24"
       />
-      <button
-        type="button"
-        class="sidebar__toggle"
-        :aria-expanded="!collapsed"
-        :aria-label="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
-        :title="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
-        data-action="sidebar-toggle"
-        @click="toggleCollapsed"
-      >
-        <!-- 展开时是「向左收」，折叠时是「向右展」：同一个按钮，两个方向。 -->
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.4"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path v-if="!collapsed" d="M9.5 3.5 5 8l4.5 4.5" />
-          <path v-else d="M6.5 3.5 11 8l-4.5 4.5" />
-        </svg>
-      </button>
     </div>
 
     <nav class="sidebar__nav" :aria-label="t('app.mainNavigation')">
@@ -239,6 +215,43 @@ onMounted(async () => {
         </svg>
         <span class="nav-item__label">{{ t(item.labelKey) }}</span>
       </RouterLink>
+
+      <!--
+        折叠 / 展开按钮（业主 2026-09-18 第 4 条：「展开收起的按钮应放在协议实验室的下方」）。
+        它原来是品牌行右侧那个图标 —— 那里离导航很远，而且折叠之后 logo 与它同处 64px 里，
+        两个东西都在让位。放在最后一项之后，"把这一列收起来"就在这一列的末尾，
+        位置固定、不用找；折叠状态下它和其他项一样居中（图标仍在，`title` 与
+        `aria-label` 会随状态说"收起/展开"）。
+      -->
+      <button
+        type="button"
+        class="nav-item sidebar__toggle"
+        :aria-expanded="!collapsed"
+        :aria-label="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
+        :title="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
+        data-action="sidebar-toggle"
+        @click="toggleCollapsed"
+      >
+        <!-- 展开时是「向左收」，折叠时是「向右展」：同一个按钮，两个方向。 -->
+        <svg
+          class="nav-item__icon"
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path v-if="!collapsed" d="M9.5 3.5 5 8l4.5 4.5" />
+          <path v-else d="M6.5 3.5 11 8l-4.5 4.5" />
+        </svg>
+        <span class="nav-item__label">
+          {{ collapsed ? t('app.expandSidebar') : t('app.collapseSidebar') }}
+        </span>
+      </button>
     </nav>
 
     <!--
@@ -306,23 +319,20 @@ onMounted(async () => {
 }
 
 /*
- * 折叠按钮：始终在最右端（`margin-left: auto`），折叠之后 logo 隐藏、只剩它居中。
- * 24×24 是图标按钮的最小可用尺寸；`--focus-ring` 由 `.btn` 那套规则负责，这里自己写，
- * 因为它是侧栏自己的按钮（不套 `.btn`，避免与全局按钮尺寸联动）。
+ * 折叠 / 展开按钮（在「协议实验室」下方，见模板里的注释）。
+ *
+ * 它借了 `.nav-item` 那一行的形状（同样的行高、同样的 3px 左边距），所以它看起来
+ * 就是导航列的最后一行；`color` 与 hover 沿用导航项那套，不另外发明一种按钮外观。
+ * 那一行只有 24px 宽的图标按钮，所以自己写尺寸，不套全局 `.btn`。
  */
 .sidebar__toggle {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  width: 100%;
+  border: 0;
+  border-left: 3px solid transparent;
   background: transparent;
   color: var(--color-text-secondary);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -336,18 +346,26 @@ onMounted(async () => {
   box-shadow: var(--focus-ring);
 }
 
-/* 折叠后：logo 让位、图标居中、文字隐藏（`title` 仍在，鼠标悬停看得到名字）。 */
+/* 折叠后：logo 变成**圆形**徽标（业主第 4 条）、图标居中、文字隐藏。 */
 .sidebar--collapsed .sidebar__brand {
   justify-content: center;
   padding: 0;
 }
 
+/*
+ * 收起之后 logo 用一个 32px 的圆承载（`object-fit: contain`，不裁掉笔画）：
+ * 原始素材是 224×120 的长条，直接 `border-radius: 50%` 会把它切成两半；
+ * 圆底 + 圆内的完整 logo 读起来仍然是一个"圆形标识"，而且没有伪造新素材。
+ * 这个判断写在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
+ */
 .sidebar--collapsed .sidebar__logo {
-  display: none;
-}
-
-.sidebar--collapsed .sidebar__toggle {
-  margin-left: 0;
+  width: 32px;
+  height: 32px;
+  max-width: 32px;
+  padding: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-bg-subtle);
 }
 
 .sidebar--collapsed .nav-item {

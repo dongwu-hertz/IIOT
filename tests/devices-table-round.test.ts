@@ -241,18 +241,31 @@ describe('实时检测页：三种机型三支内容', () => {
     )
   })
 
-  it('声呐支路：有那一句"实时流未接入"，内容来自三块既有实现', () => {
+  it('声呐支路：内容来自三块既有实现，那一句"实时流未接入"已经删掉', () => {
     /*
      * 顶栏状态行里也有一个 `v-else-if="isSonar"`（机型徽标），所以取**最后**那一个 ——
      * 页面正文里那一支才是"这一屏显示什么"。
+     *
+     * 业主 2026-09-18 第 19 条把那句说明删掉了（它原来在页面顶上，也挂在机型徽标的
+     * 悬停提示里）：设备在不在线由设备下拉旁边的绿点/灰点回答。所以这一条现在反过来钉：
+     * **那句话不许回来**，三块既有实现照旧。
      */
     const marker = '<template v-else-if="isSonar">'
     const start = monitorViewCode.lastIndexOf(marker)
     assert.ok(start > 0, '找不到声呐支路')
     const end = monitorViewCode.indexOf('</template>', start)
     const sonar = monitorViewCode.slice(start, end)
-    assert.ok(sonar.includes('data-sonar-live-unwired'), '声呐支路没有"实时流未接入"那句话')
-    assert.ok(sonar.includes('DeviceInstallationCard'), '声呐支路没有安装点位卡片')
+    assert.equal(
+      sonar.includes('data-sonar-live-unwired'),
+      false,
+      '那一句"实时流未接入"又回来了（业主第 19 条要求删掉）'
+    )
+    assert.equal(
+      sonar.includes('sonarLiveUnwired'),
+      false,
+      '声呐支路又引用了那条已删除的词条'
+    )
+    assert.ok(sonar.includes('DeviceInstallationCard'), '声呐支路没有地址信息卡片')
     assert.ok(sonar.includes('AuscultationPanel'), '声呐支路没有参数与告警同步面板')
     assert.ok(sonar.includes('MonitorRecordingTimeline'), '声呐支路没有本机录音时间轴')
     // 声呐这一支**不许**出现实时图（没有数据来源的图就是假的）。
@@ -290,16 +303,23 @@ describe('实时检测页：三种机型三支内容', () => {
     )
   })
 
-  it('三种机型的目录文案在四本目录里都有', () => {
-    for (const key of ['monitorUi.sonarFamilyBadge', 'monitorUi.sonarLiveUnwired']) {
-      for (const locale of Object.keys(CATALOGUES)) {
-        const message = messageAt(locale, key)
-        assert.ok(message && message.length > 0, `${locale} 缺 ${key}`)
-      }
+  it('机型徽标仍在四本目录里；那条已删的说明不许回来', () => {
+    for (const locale of Object.keys(CATALOGUES)) {
+      const message = messageAt(locale, 'monitorUi.sonarFamilyBadge')
+      assert.ok(message && message.length > 0, `${locale} 缺 monitorUi.sonarFamilyBadge`)
     }
-    // 「实时流未接入」这句话必须点明**为什么**没有图（手册给的是 WebSocket 路径），
-    // 否则它读起来像"这一版偷懒"。
-    assert.match(String(messageAt('zh-CN', 'monitorUi.sonarLiveUnwired')), /WebSocket/)
+    /*
+     * `monitorUi.sonarLiveUnwired` 按业主 2026-09-18 第 19 条删掉了（四个目录一起删）：
+     * 设备在不在线由设备下拉旁边的绿点/灰点回答，不再用一句话解释"这一屏为什么没有实时图"。
+     * 这一条钉住"删干净了" —— 只要有一本目录还留着它，界面在某一种语言下就会多出那句话。
+     */
+    for (const locale of Object.keys(CATALOGUES)) {
+      assert.equal(
+        messageAt(locale, 'monitorUi.sonarLiveUnwired'),
+        undefined,
+        `${locale} 还留着已删除的 monitorUi.sonarLiveUnwired`
+      )
+    }
   })
 })
 
@@ -367,27 +387,38 @@ describe('添加设备：机型由协议自动识别，不在界面上让人选'
 })
 
 // ---------------------------------------------------------------------------
-// ① 添加/编辑里的四个点位输入
+// ① 添加/编辑里的地址信息输入（业主 2026-09-18 第 7 / 10 条：改名并删掉基准声压级）
 // ---------------------------------------------------------------------------
 
-describe('安装信息：两个录入入口都用同一套判据', () => {
-  it('添加设备对话框有四个输入框，并用共享的 parseInstallation 校验', () => {
-    for (const field of ['gisLatitude', 'gisLongitude', 'azimuthDeg', 'soundLevelDb']) {
+describe('地址信息：两个录入入口都用同一套判据', () => {
+  it('添加设备对话框有三个输入框（经纬度 + 方位角），用共享的 parseInstallation 校验', () => {
+    for (const field of ['gisLatitude', 'gisLongitude', 'azimuthDeg']) {
       assert.ok(
         addDialogTemplate.includes(`form.installation.${field}`),
         `添加设备对话框缺 ${field} 输入`
       )
     }
+    // 基准声压级按第 10 条删掉了：界面上一个输入框都不该再有它。
+    assert.equal(
+      addDialogTemplate.includes('soundLevelDb'),
+      false,
+      '添加设备对话框又出现了基准声压级输入'
+    )
     assert.ok(addDialog.includes('parseInstallation('), '添加设备没有用共享的解析与范围校验')
   })
 
-  it('设备管理页的「编辑」对话框也能改这四项（否则打错一个数字只能删掉重加）', () => {
-    for (const field of ['gisLatitude', 'gisLongitude', 'azimuthDeg', 'soundLevelDb']) {
+  it('设备管理页的「编辑」对话框也能改这三项（否则打错一个数字只能删掉重加）', () => {
+    for (const field of ['gisLatitude', 'gisLongitude', 'azimuthDeg']) {
       assert.ok(
         devicesViewTemplate.includes(`editForm.installation.${field}`),
         `编辑对话框缺 ${field} 输入`
       )
     }
+    assert.equal(
+      devicesViewTemplate.includes('soundLevelDb'),
+      false,
+      '编辑对话框又出现了基准声压级输入'
+    )
     assert.ok(devicesView.includes('parseInstallation('), '编辑对话框没有用共享的解析与范围校验')
     // 清空一个框 = 把库里那一项清掉（不是留旧值、也不是写 0）。
     assert.ok(
