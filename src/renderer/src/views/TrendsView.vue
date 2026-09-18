@@ -31,8 +31,13 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
+import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
-import { TREND_RANGE_OPTIONS, useTrendsStore } from '@renderer/stores/trends'
+import {
+  TREND_METRIC_MAX_SELECTED,
+  TREND_RANGE_OPTIONS,
+  useTrendsStore
+} from '@renderer/stores/trends'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { channelState, channelStateLabelKey, type ChannelState } from '@renderer/lib/channelState'
 import {
@@ -51,6 +56,7 @@ import {
   formatBucketSeconds,
   trendAggregationLabel,
   trendAxisName,
+  trendChannelColor,
   trendMetricLabel,
   trendValueText
 } from '@renderer/lib/trendMetrics'
@@ -85,15 +91,16 @@ const notice = ref('')
  * device switch (where coverage can seed the custom bounds) from firing the same
  * query twice.
  */
-const metricSelection = computed({
-  get: () => trends.metric as string,
-  set: (value: string) => {
-    const option = TREND_METRIC_OPTIONS.find((item) => item.key === value)
-    if (!option) return
-    trends.metric = option.key
-    trends.query()
-  }
-})
+/**
+ * 量可以**多选**（业主 2026-09-18 追加要求：「这些数值的趋势变化的同时显示」）。
+ *
+ * 每个选中的量各画**一张图**，而不是把它们叠进一张图：四个量里只有声压级是 dB，另外三个
+ * 是无量纲比值；共用一根 Y 轴时，一条 62 dB 的线与一条 0.31 的比值线之间的高低关系是
+ * **刻度造出来的**，不是数据说的。并排多图让每一根轴各自有意义（见文件头）。
+ */
+function toggleMetric(targetMetric: TrendMetric): void {
+  trends.toggleMetric(targetMetric)
+}
 
 const aggregationSelection = computed({
   get: () => trends.aggregation as string,
@@ -101,15 +108,6 @@ const aggregationSelection = computed({
     const option = TREND_AGGREGATION_OPTIONS.find((item) => item.key === value)
     if (!option) return
     trends.aggregation = option.key
-    trends.query()
-  }
-})
-
-/** `''` is 全部通道: the store then omits `channelId` from the query entirely. */
-const channelSelection = computed({
-  get: () => (trends.channelId === undefined ? '' : String(trends.channelId)),
-  set: (value: string) => {
-    trends.channelId = value === '' ? undefined : Number(value)
     trends.query()
   }
 })
@@ -142,6 +140,47 @@ const channelOptions = computed<ChannelOption[]>(() => {
   }))
 })
 
+/**
+ * 把通道表灌进 store（它不知道设备有哪些通道）。
+ *
+ * `immediate: true` 是为了"一进这一页就有图"：`selectedDeviceId` 可能是从地址栏来的，
+ * 那时通道表已经在了，但 store 还是空的 —— 只在变化时灌会漏掉第一次。
+ */
+watch(
+  channelOptions,
+  (list) => trends.setChannels(list.map((channel) => channel.index)),
+  { immediate: true }
+)
+
+/**
+ * 图例：一条通道一格，颜色与图上那条线**同一个来源**（`trendChannelColor`），
+ * 点一下切换"画不画它"。
+ *
+ * 值取**主量 × 这条通道**的最后一个非空时间桶：图例上给一个数比只给名字有用得多
+ * （"哪条通道现在高"是看图时的第一个问题）。没有数据时是 `—`，不是 0。
+ */
+interface ChannelLegendEntry extends ChannelOption {
+  color: string
+  visible: boolean
+  value: number | null
+}
+
+const channelLegend = computed<ChannelLegendEntry[]>(() =>
+  channelOptions.value.map((channel) => {
+    const series = trends.seriesFor(trends.metrics[0] ?? trends.metric, channel.index)
+    let latest: number | null = null
+    for (const point of series?.points ?? []) {
+      if (Number.isFinite(point.value)) latest = point.value
+    }
+    return {
+      ...channel,
+      color: trendChannelColor(channel.index),
+      visible: trends.isChannelVisible(channel.index),
+      value: latest
+    }
+  })
+)
+
 const customRangeIncomplete = computed(
   () =>
     trends.range === 'custom' &&
@@ -154,8 +193,17 @@ const deviceHint = computed(() => {
   return `${device.name}（${device.ip || t('trendsUi.noAddress')}）`
 })
 
+/**
+ * 筛选行上那句提示：现在说的是**几条通道在图上**，不是一个下拉框的值。
+ *
+ * 原来的写法是"全部通道 / 通道 N" —— 通道选择变成一排可点亮的通道名之后，
+ * 「全部通道」这句话不再对应任何一个控件，留着它比删掉更糟（读者会去找那个下拉）。
+ */
 const channelHint = computed(() =>
-  trends.channelId === undefined ? t('trendsUi.filterAllChannels') : channelLabel(trends.channelId)
+  t('trendsUi.channelHintVisible', {
+    shown: trends.visibleChannelIds.length,
+    total: trends.channelIds.length
+  })
 )
 
 const rangeText = computed(() => {
@@ -203,31 +251,120 @@ const chartRows = computed<TrendChartRow[]>(() =>
 )
 
 /**
- * ECharts tooltip. `params` is typed `unknown` and narrowed locally: the option
- * object is typed as the loosely-typed `EChartsCoreOption`, and the sample count
- * is read from `chartRows` by index so the series data can stay plain numbers.
+ * 一张图的全部输入：一个量 + 这个设备的每条**可见**通道。
+ *
+ * 时间轴用**所有通道并集**的时间戳（`timestamps`）：各通道的桶边界由主进程按同一个
+ * from/to 与同一个 `bucketSeconds` 选出，正常情况下是一致的；用并集是为了在某个通道
+ * 少几个桶时，其余通道的线**不会整体错位半格**（错位会让两条线看起来差了一个采样周期）。
+ */
+interface TrendChartBundle {
+  metric: TrendMetric
+  /** 时间轴标签（与 `timestamps` 同序）。 */
+  labels: string[]
+  /** 完整时间戳（提示里用）。 */
+  timestamps: number[]
+  /** 每条可见通道一行数据（与 `labels` 同序，缺口是 `null`）。 */
+  lines: { index: number; name: string; color: string; values: (number | null)[] }[]
+  /** 这一张图上有没有任何非空值（没有时画布给一句空态，而不是一根空轴）。 */
+  hasValue: boolean
+  /** 每条可见通道在范围内报了几个时间桶（诊断与提示里用）。 */
+  gapCount: number
+}
+
+function buildBundle(targetMetric: TrendMetric): TrendChartBundle {
+  const seriesList = trends.visibleChannelIds.map((index) => ({
+    index,
+    series: trends.seriesFor(targetMetric, index)
+  }))
+
+  // 时间戳并集，升序。
+  const stampSet = new Set<number>()
+  for (const entry of seriesList) {
+    for (const point of entry.series?.points ?? []) stampSet.add(point.timestamp)
+  }
+  const timestamps = [...stampSet].sort((left, right) => left - right)
+  const labels = timestamps.map((stamp) => formatTrendTick(stamp, spanMs.value))
+
+  const lines = seriesList.map((entry) => {
+    const byStamp = new Map<number, number>()
+    for (const point of entry.series?.points ?? []) {
+      byStamp.set(point.timestamp, Number.isFinite(point.value) ? point.value : NaN)
+    }
+    const channel = channelOptions.value.find((item) => item.index === entry.index)
+    return {
+      index: entry.index,
+      // 图例/提示里的名字用**通道名**（有就用，没有就用通道号），与图例那一行一致。
+      name: channel?.name ? `${channelLabel(entry.index)}（${channel.name}）` : channelLabel(entry.index),
+      color: trendChannelColor(entry.index),
+      values: timestamps.map((stamp) => {
+        const value = byStamp.get(stamp)
+        // 缺口（没报这个桶）保持 null：绝不画成 0。
+        return value === undefined || Number.isNaN(value) ? null : value
+      })
+    }
+  })
+
+  let gapCount = 0
+  for (const line of lines) {
+    for (const value of line.values) if (value === null) gapCount += 1
+  }
+
+  return {
+    metric: targetMetric,
+    labels,
+    timestamps,
+    lines,
+    hasValue: lines.some((line) => line.values.some((value) => value !== null)),
+    gapCount
+  }
+}
+
+/** 每个选中的量一张图（业主追加要求：多个量同时显示）。 */
+const chartBundles = computed<TrendChartBundle[]>(() =>
+  trends.metrics.map((item) => buildBundle(item))
+)
+
+/**
+ * ECharts tooltip。`params` 的类型是 `unknown`，在这里就地收窄：选项对象是宽松类型的
+ * `EChartsCoreOption`，而"这个桶里有几个采样点"从 bundle 里按索引读，序列数据因此可以
+ * 保持成纯数字数组。
+ *
+ * 一个桶里**每条可见通道一行**：这正是"多条通道叠在一根轴上"之后提示要回答的问题
+ * —— 同一个时刻，八条通道各是多少。
  */
 interface TrendTooltipParam {
   dataIndex: number
+  seriesName?: string
 }
 
-function trendTooltip(params: unknown): string {
-  const list = Array.isArray(params) ? (params as TrendTooltipParam[]) : [params as TrendTooltipParam]
-  const first = list[0]
-  if (!first) return ''
-  const row = chartRows.value[first.dataIndex]
-  if (!row) return ''
+function trendTooltipFor(bundle: TrendChartBundle) {
+  return (params: unknown): string => {
+    const list = Array.isArray(params)
+      ? (params as TrendTooltipParam[])
+      : [params as TrendTooltipParam]
+    const first = list[0]
+    if (!first) return ''
+    const stamp = bundle.timestamps[first.dataIndex]
+    if (stamp === undefined) return ''
 
-  const valueText =
-    row.value === null
-      ? t('trendsUi.noDataInBucket', { value: EMPTY_VALUE })
-      : trendValueText(trends.metric, row.value)
-
-  return [
-    `<div style="font-weight:600">${row.fullLabel}</div>`,
-    `${trendMetricLabel(trends.metric)}（${trendAggregationLabel(trends.aggregation)}）：${valueText}`,
-    t('trendsUi.sampleCount', { count: row.sampleCount })
-  ].join('<br/>')
+    const head = `<div style="font-weight:600">${formatDateTime(stamp)}</div>`
+    const title = `${trendMetricLabel(bundle.metric)}（${trendAggregationLabel(trends.aggregation)}）`
+    const rows = bundle.lines
+      .filter((line) => line.values[first.dataIndex] !== undefined)
+      .map((line) => {
+        const value = line.values[first.dataIndex] ?? null
+        const text =
+          value === null
+            ? t('trendsUi.noDataInBucket', { value: EMPTY_VALUE })
+            : trendValueText(bundle.metric, value)
+        // 色块与图上那条线同一个颜色：多通道时提示里也必须一眼对上是哪一条。
+        return (
+          `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;` +
+          `background:${line.color};margin-right:5px"></span>${line.name}：${text}`
+        )
+      })
+    return [head, title, ...rows].join('<br/>')
+  }
 }
 
 /**
@@ -238,24 +375,34 @@ function trendTooltip(params: unknown): string {
 const AXIS_LINE = '#E5E7EB'
 const SPLIT_LINE = '#F1F1F2'
 const TEXT_SECONDARY = '#6B7280'
-const LINE_COLOR = '#FF6A1A'
 
-const chartOption = computed<EChartsCoreOption>(() => {
-  const rows = chartRows.value
-  const meta = TREND_METRIC_META[trends.metric]
-  const axisName = trendAxisName(trends.metric, trends.aggregation)
+/**
+ * 一个量一张图。**每条可见通道一条线**，颜色来自 `trendChannelColor`（与图例同一个来源），
+ * 全部落在**同一根坐标轴**上 —— 这正是业主那句"用不同颜色的折线将多个通道的信号显示在
+ * 同一个坐标轴上"。
+ *
+ * 「不知道通道」时（设备没返回通道表）`visibleChannelIds` 是空的，`bundle.lines` 也就是空的；
+ * 那条情况仍然由 `series` 画一条聚合线（见下面的 `fallbackOption`）。
+ */
+function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
+  const meta = TREND_METRIC_META[bundle.metric]
+  const axisName = trendAxisName(bundle.metric, trends.aggregation)
   const tickFormatter = meta.tickFormatter
+  const pointCount = bundle.labels.length
 
   return {
     // Real measurements, not a dashboard toy: an animated line implies the data
     // is live and makes a bucket boundary impossible to read.
     animation: false,
     grid: { left: 58, right: 18, top: 34, bottom: 30 },
-    tooltip: { trigger: 'axis', formatter: trendTooltip },
+    tooltip: { trigger: 'axis', formatter: trendTooltipFor(bundle) },
+    // ECharts 自带的图例在这里**关掉**：图例是页面上的那一排通道按钮（点一下切换
+    // 显示/隐藏），两处各画一份的话，用户会看到两个"看起来一样但行为不同"的图例。
+    legend: { show: false },
     xAxis: {
       type: 'category',
       boundaryGap: false,
-      data: rows.map((row) => row.label),
+      data: bundle.labels,
       axisLine: { lineStyle: { color: AXIS_LINE } },
       axisTick: { show: false },
       axisLabel: { color: TEXT_SECONDARY, fontSize: 10, hideOverlap: true }
@@ -276,19 +423,90 @@ const chartOption = computed<EChartsCoreOption>(() => {
       },
       splitLine: { lineStyle: { color: SPLIT_LINE } }
     },
+    series: bundle.lines.map((line) => ({
+      name: line.name,
+      type: 'line',
+      // Symbols are only drawn on a series short enough that an isolated
+      // bucket would otherwise be invisible; a 500-point line stays clean.
+      showSymbol: pointCount <= 300,
+      symbolSize: 3,
+      // Gaps stay gaps: never bridge across a bucket the device did not report.
+      connectNulls: false,
+      data: line.values,
+      lineStyle: { width: 1.6, color: line.color },
+      itemStyle: { color: line.color }
+    }))
+  }
+}
+
+/**
+ * 「设备没返回通道表」时那一条线（原来的单序列行为）。
+ *
+ * 保留它是因为那种设备上**没有可叠加的通道**，而"一条聚合线"仍然回答了"这段时间怎么样"。
+ */
+const fallbackOption = computed<EChartsCoreOption>(() => {
+  const rows = chartRows.value
+  const meta = TREND_METRIC_META[trends.metric]
+  const axisName = trendAxisName(trends.metric, trends.aggregation)
+  const tickFormatter = meta.tickFormatter
+
+  return {
+    animation: false,
+    grid: { left: 58, right: 18, top: 34, bottom: 30 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: unknown): string => {
+        const list = Array.isArray(params)
+          ? (params as TrendTooltipParam[])
+          : [params as TrendTooltipParam]
+        const first = list[0]
+        if (!first) return ''
+        const row = rows[first.dataIndex]
+        if (!row) return ''
+        const valueText =
+          row.value === null
+            ? t('trendsUi.noDataInBucket', { value: EMPTY_VALUE })
+            : trendValueText(trends.metric, row.value)
+        return [
+          `<div style="font-weight:600">${row.fullLabel}</div>`,
+          `${trendMetricLabel(trends.metric)}（${trendAggregationLabel(trends.aggregation)}）：${valueText}`,
+          t('trendsUi.sampleCount', { count: row.sampleCount })
+        ].join('<br/>')
+      }
+    },
+    legend: { show: false },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: rows.map((row) => row.label),
+      axisLine: { lineStyle: { color: AXIS_LINE } },
+      axisTick: { show: false },
+      axisLabel: { color: TEXT_SECONDARY, fontSize: 10, hideOverlap: true }
+    },
+    yAxis: {
+      name: axisName,
+      type: 'value',
+      scale: true,
+      nameTextStyle: { color: TEXT_SECONDARY, fontSize: 10, align: 'left' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: TEXT_SECONDARY,
+        fontSize: 10,
+        ...(tickFormatter ? { formatter: tickFormatter } : {})
+      },
+      splitLine: { lineStyle: { color: SPLIT_LINE } }
+    },
     series: [
       {
         name: axisName,
         type: 'line',
-        // Symbols are only drawn on a series short enough that an isolated
-        // bucket would otherwise be invisible; a 500-point line stays clean.
         showSymbol: rows.length <= 300,
         symbolSize: 3,
-        // Gaps stay gaps: never bridge across a bucket the device did not report.
         connectNulls: false,
         data: rows.map((row) => row.value),
-        lineStyle: { width: 1.6, color: LINE_COLOR },
-        itemStyle: { color: LINE_COLOR }
+        lineStyle: { width: 1.6, color: trendChannelColor(0) },
+        itemStyle: { color: trendChannelColor(0) }
       }
     ]
   }
@@ -492,27 +710,89 @@ onUnmounted(() => {
             </select>
           </label>
 
-          <label class="field">
+          <!--
+            通道：**不是一个下拉框，而是一排可以点亮的通道名**（业主 2026-09-18 追加要求：
+            「只是通过点击通道名称实现是显示这个通道还是隐藏这个通道」）。
+            点一下只改"画哪几条线"，不重新查库（数据已经一次全取回来了）。
+            色点与图上那条线同一个颜色来源。
+          -->
+          <div class="field field--channels">
             <span class="field-label">{{ t('trendsUi.filterChannel') }}</span>
-            <select v-model="channelSelection" class="select">
-              <option value="">{{ t('trendsUi.filterAllChannels') }}</option>
-              <option v-for="channel in channelOptions" :key="channel.index" :value="String(channel.index)">
+            <div class="chip-row" data-channel-legend>
+              <button
+                v-for="channel in channelLegend"
+                :key="channel.index"
+                type="button"
+                class="chip chip--selectable channel-chip"
+                :class="{ 'chip--accent': channel.visible, 'channel-chip--off': !channel.visible }"
+                :data-channel-toggle="channel.index"
+                :aria-pressed="channel.visible"
+                :title="
+                  channel.visible ? t('trendsUi.channelHide') : t('trendsUi.channelShow')
+                "
+                @click="trends.toggleChannel(channel.index)"
+              >
+                <span
+                  class="channel-chip__dot"
+                  :style="{ background: channel.color }"
+                  aria-hidden="true"
+                ></span>
                 {{ channelLabel(channel.index) }}
                 <template v-if="channel.name">（{{ channel.name }}）</template>
-                <!-- 未启用的通道照样可以查历史趋势（过去的数据仍在），但要看得出来它现在没开。 -->
-                <template v-if="channel.state !== 'enabled'">（{{ t(channelStateLabelKey(channel.state)) }}）</template>
-              </option>
-            </select>
-          </label>
+                <template v-if="channel.state !== 'enabled'">
+                  （{{ t(channelStateLabelKey(channel.state)) }}）
+                </template>
+                <span class="muted channel-chip__value">
+                  {{ channel.value === null ? '—' : trendValueText(trends.metric, channel.value) }}
+                </span>
+              </button>
+              <button
+                v-if="channelLegend.length > 1"
+                type="button"
+                class="chip chip--selectable"
+                data-channel-show-all
+                @click="trends.showAllChannels()"
+              >
+                {{ t('trendsUi.channelShowAll') }}
+              </button>
+            </div>
+          </div>
 
-          <label class="field">
+          <!--
+            量可以**多选**：选中的量各画一张图（见 `chartBundles` 与文件头）。
+            最后一个量点不掉，满 4 个之后其余的会置灰 —— 两个上限都在 store 里判，
+            这里只把它画出来（第二处判断迟早与第一处不一致）。
+          -->
+          <div class="field field--metrics">
             <span class="field-label">{{ t('trendsUi.filterMetric') }}</span>
-            <select v-model="metricSelection" class="select">
-              <option v-for="option in TREND_METRIC_OPTIONS" :key="option.key" :value="option.key">
+            <div class="chip-row" data-metric-picker>
+              <button
+                v-for="option in TREND_METRIC_OPTIONS"
+                :key="option.key"
+                type="button"
+                class="chip chip--selectable"
+                :class="{ 'chip--accent': trends.isMetricSelected(option.key) }"
+                :data-metric-toggle="option.key"
+                :aria-pressed="trends.isMetricSelected(option.key)"
+                :disabled="
+                  !trends.isMetricSelected(option.key) &&
+                  trends.metrics.length >= TREND_METRIC_MAX_SELECTED
+                "
+                :title="
+                  !trends.isMetricSelected(option.key) &&
+                  trends.metrics.length >= TREND_METRIC_MAX_SELECTED
+                    ? t('trendsUi.metricLimit', { count: TREND_METRIC_MAX_SELECTED })
+                    : undefined
+                "
+                @click="toggleMetric(option.key)"
+              >
                 {{ trendMetricLabel(option.key) }}
-              </option>
-            </select>
-          </label>
+              </button>
+            </div>
+            <span v-if="trends.metrics.length > 1" class="field-hint">
+              {{ t('trendsUi.metricMultiHint', { count: trends.metrics.length }) }}
+            </span>
+          </div>
 
           <label class="field">
             <span class="field-label">{{ t('trendsUi.filterAggregation') }}</span>
@@ -655,7 +935,41 @@ onUnmounted(() => {
           </button>
         </EmptyState>
 
-        <EChart v-else :option="chartOption" height="360px" :placeholder="chartPlaceholder" />
+        <!--
+          一个选中的量一张图（业主追加要求："同时显示"）。每张图里是**所有可见通道**的折线，
+          颜色与图例同一个来源。原来那种"一条聚合线"只在设备没返回通道表时用（`fallbackOption`）。
+        -->
+        <template v-else-if="trends.visibleChannelIds.length > 0">
+          <div
+            v-for="bundle in chartBundles"
+            :key="bundle.metric"
+            class="metric-chart"
+            :data-metric-chart="bundle.metric"
+          >
+            <div class="section-header">
+              <h4 class="section-title">{{ trendMetricLabel(bundle.metric) }}</h4>
+              <span class="muted chart-hint">
+                {{ trendAxisName(bundle.metric, trends.aggregation) }} ·
+                {{ t('trendsUi.channelLines', { count: bundle.lines.length }) }}
+              </span>
+            </div>
+            <!--
+              这一张图上一条非空值都没有时给一句空态，而不是画一根空轴 ——
+              空轴看起来像"图上什么都没有"，而实事是"这个量在这段时间里没有读数"。
+            -->
+            <p v-if="!bundle.hasValue" class="muted" :data-metric-empty="bundle.metric">
+              {{ t('trendsUi.metricNoData') }}
+            </p>
+            <EChart
+              v-else
+              :option="chartOptionFor(bundle)"
+              height="320px"
+              :placeholder="chartPlaceholder"
+            />
+          </div>
+        </template>
+
+        <EChart v-else :option="fallbackOption" height="360px" :placeholder="chartPlaceholder" />
 
         <dl v-if="trends.series" class="kv diagnostics">
           <div class="kv__item">
@@ -681,6 +995,15 @@ onUnmounted(() => {
           <div class="kv__item">
             <dt class="kv__label">{{ t('trendsUi.statRatio') }}</dt>
             <dd class="kv__value">{{ reductionText }}</dd>
+          </div>
+          <!--
+            「发了几条查询」在叠加模式下是一个**必须显示**的数字：一次筛选变更会打出
+            `量 × 通道` 条 IPC（4 个量 × 16 通道 = 64 条）。看不见它的话，页面变慢时
+            没人知道原因在这里。
+          -->
+          <div class="kv__item">
+            <dt class="kv__label">{{ t('trendsUi.statQueries') }}</dt>
+            <dd class="kv__value">{{ trends.queriedCount }}</dd>
           </div>
         </dl>
       </section>
@@ -721,6 +1044,55 @@ onUnmounted(() => {
 
 .aggregation-hint {
   margin-top: 6px;
+}
+
+/*
+ * 通道那一排（可点亮的通道名）。
+ *
+ * 它比一个下拉框宽得多（8 条通道 = 8 个 chip，16 通道更多），所以给一个**上限宽度**并允许
+ * 换行：挤成一行会把「刷新 / 立即落盘」两个按钮推出筛选栏。
+ */
+.field--channels,
+.field--metrics {
+  min-width: 0;
+  flex: 1 1 100%;
+}
+
+.field--channels .chip-row,
+.field--metrics .chip-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/*
+ * 被点掉的通道：整块降到次要色。**留一个色点在外**（点仍然是有颜色的）会让"隐藏"看起来
+ * 像"只是字变淡了"，而图上少了一条线是件明确的事。
+ */
+.channel-chip--off {
+  opacity: 0.55;
+}
+
+.channel-chip__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.channel-chip__value {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+/* 一个量一张图：图之间用空隙分开，不画分隔线（它们本来就是独立的两张图）。 */
+.metric-chart + .metric-chart {
+  margin-top: var(--space-4);
 }
 
 .range-bar {

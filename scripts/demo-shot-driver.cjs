@@ -2589,6 +2589,164 @@ async function run() {
   }
 
   /**
+   * 趋势页的多通道叠加 + 多量并排（业主 2026-09-18 的追加要求）。
+   *
+   * 量得到的与量不到的，都写清楚：
+   *   · **量得到**：通道图例的条数（= 这个设备的通道数；AE08 是 8）、点一下之后
+   *     `aria-pressed` 与"图上还剩几条线"的变化，以及**诊断行的查询条数不变**
+   *     —— 那是"点通道名只改显示、不重新查库"这句话在屏幕上的证据；
+   *   · **这一个 profile 里量不到**：每张图里真实画了几条带数据的 series。
+   *     原因是**这个一次性 profile 没有历史文件**（`trends.coverage.files === 0`，
+   *     趋势历史写在 Parquet 里、不在被复制的那个 SQLite 里），所以图上走的是
+   *     「该设备暂无历史数据」空态。探针会如实报 `historyFiles`，不把它当通过。
+   */
+  const trendChannels = await layout('/trends', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    'const toggles = [...document.querySelectorAll("[data-channel-toggle]")];' +
+    'const metricButtons = [...document.querySelectorAll("[data-metric-toggle]")];' +
+    'const out = {' +
+    '  legendCount: toggles.length,' +
+    '  metricCount: metricButtons.length,' +
+    '  pressedAtStart: toggles.map((b) => b.getAttribute("aria-pressed")),' +
+    '  chartCount: document.querySelectorAll("[data-metric-chart]").length,' +
+    '  historyEmpty: !!document.querySelector(".page .empty-state, .page [data-empty-state]")' +
+    '};' +
+    // 诊断行里的"本次查询条数"。空态时诊断行不渲染，这时给 null（而不是 0）。
+    'const statValue = (pattern) => {' +
+    '  const items = [...document.querySelectorAll(".diagnostics .kv__item")];' +
+    '  const hit = items.find((li) => pattern.test(text(li)));' +
+    '  if (!hit) return null;' +
+    '  const value = hit.querySelector(".kv__value");' +
+    '  return value ? Number(text(value)) : null;' +
+    '};' +
+    'const queryStat = () => statValue(/查询条数|Queries sent/);' +
+    'out.queriesBefore = queryStat();' +
+    /*
+     * **带数据的 series 有几条**：这是"多条通道真的画在同一根轴上"的唯一硬证据。
+     * `[data-metric-empty]` 存在说明那个量在这段时间里一条读数都没有（画的是空态而不是线），
+     * 那时不能把它算成"已验证"。
+     */
+    'out.metricEmpty = [...document.querySelectorAll("[data-metric-empty]")]' +
+    '  .map((el) => el.getAttribute("data-metric-empty"));' +
+    'out.statPoints = statValue(/返回点数|Points/);' +
+    'out.chartHints = [...document.querySelectorAll("[data-metric-chart] .chart-hint")]' +
+    '  .map((el) => text(el));' +
+    // ① 点灭**第二条**通道：只改显示。
+    'if (toggles.length > 1) {' +
+    '  toggles[1].click(); await wait(500);' +
+    '  out.pressedAfterHide = [...document.querySelectorAll("[data-channel-toggle]")]' +
+    '    .map((b) => b.getAttribute("aria-pressed"));' +
+    '  out.queriesAfterHide = queryStat();' +
+    // ② 再点亮它：回到原样（探针必须把自己改过的状态恢复）。
+    '  document.querySelectorAll("[data-channel-toggle]")[1].click(); await wait(500);' +
+    '  out.pressedAfterRestore = [...document.querySelectorAll("[data-channel-toggle]")]' +
+    '    .map((b) => b.getAttribute("aria-pressed"));' +
+    '  out.queriesAfterRestore = queryStat();' +
+    '}' +
+    // ③ 多选一个量：图例/图都应多一份。
+    'if (metricButtons.length > 1) {' +
+    '  metricButtons[1].click(); await wait(1200);' +
+    '  out.selectedMetrics = [...document.querySelectorAll("[data-metric-toggle]")]' +
+    '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
+    '    .map((b) => b.getAttribute("data-metric-toggle"));' +
+    '  out.chartCountAfterSecondMetric = document.querySelectorAll("[data-metric-chart]").length;' +
+    '  metricButtons[1].click(); await wait(1200);' +
+    '  out.selectedMetricsRestored = [...document.querySelectorAll("[data-metric-toggle]")]' +
+    '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
+    '    .map((b) => b.getAttribute("data-metric-toggle"));' +
+    '}' +
+    'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+  log('trend channels: ' + JSON.stringify(trendChannels))
+  if (trendChannels.probeTimeout === true) {
+    problems.push('趋势页的多通道探针超时 —— 这一段没有任何结论')
+  } else if (trendChannels.legendCount === 0) {
+    // 一次性 profile 里没有设备时这一页走空态，如实跳过（与上面 trends chrome 同一条口径）。
+    log('trend channels: skipped（没有设备，通道图例不渲染）')
+  } else {
+    if (trendChannels.legendCount < 2) {
+      problems.push(
+        '通道图例只有 ' + trendChannels.legendCount + ' 条：默认选中的设备是多通道设备，' +
+        '应当每条通道一格（设备：' + JSON.stringify(trendChannels.deviceName) + '）'
+      )
+    }
+    if (trendChannels.metricCount !== 7) {
+      problems.push('量的可选按钮不是 7 个：' + trendChannels.metricCount)
+    }
+    // ① 点灭一条通道：只有它变 false，其余不变。
+    if (trendChannels.pressedAfterHide) {
+      const before = trendChannels.pressedAtStart || []
+      const after = trendChannels.pressedAfterHide
+      const turnedOff = after.filter((value, index) => before[index] === 'true' && value === 'false')
+      if (turnedOff.length !== 1) {
+        problems.push('点一下通道名没有恰好点灭一条：' + JSON.stringify({ before, after }))
+      }
+      if (JSON.stringify(after) === JSON.stringify(before)) {
+        problems.push('点通道名之后 aria-pressed 一个都没变（那一下点了没反应）')
+      }
+      // ② 关键：**查询条数不许变** —— 点通道名只改显示，不重新查库。
+      if (trendChannels.queriesBefore !== null && trendChannels.queriesAfterHide !== null) {
+        if (trendChannels.queriesAfterHide !== trendChannels.queriesBefore) {
+          problems.push(
+            '点一下通道名触发了一次重新查询（诊断行 ' + trendChannels.queriesBefore + ' → ' +
+            trendChannels.queriesAfterHide + '）：它应当只改"画哪几条线"'
+          )
+        }
+      }
+      if (JSON.stringify(trendChannels.pressedAfterRestore) !== JSON.stringify(trendChannels.pressedAtStart)) {
+        problems.push('再点一下没有恢复：' + JSON.stringify(trendChannels.pressedAfterRestore))
+      }
+    }
+    // ③ 多选一个量：选中集合确实多了一个，恢复后回到起点。
+    if (trendChannels.selectedMetrics) {
+      if (trendChannels.selectedMetrics.length !== 2) {
+        problems.push('多选一个量之后选中的不是 2 个：' + JSON.stringify(trendChannels.selectedMetrics))
+      }
+      if (!Array.isArray(trendChannels.selectedMetricsRestored) ||
+          trendChannels.selectedMetricsRestored.length !== 1) {
+        problems.push('取消多选之后没有回到一个量：' + JSON.stringify(trendChannels.selectedMetricsRestored))
+      }
+    }
+    if (trendChannels.chartCount === 0) {
+      log(
+        'trend channels: ⚠️ 这一个 profile 里量不到"每张图里几条 series" —— 趋势历史在 Parquet 里，' +
+        '而 demo 只复制了 SQLite（historyEmpty=' + trendChannels.historyEmpty + '）。图例与交互已量到，' +
+        '**"多条通道真的画在同一根轴上"这一条本机未验证**。'
+      )
+    } else if (!trendChannels.statPoints) {
+      log(
+        'trend channels: ⚠️ 图渲染了，但诊断行没有"返回点数" —— 说明这一档走的是空态，' +
+        '**"多条通道真的画在同一根轴上"仍未验证**。metricEmpty=' +
+        JSON.stringify(trendChannels.metricEmpty)
+      )
+    } else {
+      // 有返回点数才算真的画了线。每张图的提示里写着"N 条通道"，那个数必须等于图例的条数。
+      const hints = trendChannels.chartHints || []
+      for (const hint of hints) {
+        const match = /(\d+)\s*(条通道|channel)/.exec(String(hint))
+        if (!match) {
+          problems.push('图的提示行里没有"N 条通道"：' + JSON.stringify(hint))
+          continue
+        }
+        if (Number(match[1]) !== trendChannels.legendCount) {
+          problems.push(
+            '图里的通道数与图例不一致：' + match[1] + ' vs ' + trendChannels.legendCount +
+            '（两条线少了/多了一条而图例没跟着变）'
+          )
+        }
+      }
+      if ((trendChannels.metricEmpty || []).length > 0) {
+        log(
+          'trend channels: 注意 —— 有 ' + trendChannels.metricEmpty.length +
+          ' 个量在这段时间里没有读数（画的是空态）：' + JSON.stringify(trendChannels.metricEmpty)
+        )
+      }
+    }
+  }
+
+  /**
    * 本地样本库（schema v7）与 AI 标注：**控件真的在**这一层。
    *
    * 一次性 profile 里没有样本行、也没有配置过 AI，所以能验证的是：

@@ -27,6 +27,12 @@ import { i18n } from '@renderer/i18n'
 import { EMPTY_VALUE, formatHz, formatNumber } from '@renderer/lib/format'
 import { formatHzTick } from '@renderer/lib/spectrum'
 
+/**
+ * 通道配色在 `shared/domain/trend.ts`（纯值、无依赖，单测能直接 import）。这里转出去，
+ * 让视图只从一个地方拿"量的展示元数据"。
+ */
+export { TREND_CHANNEL_COLORS, trendChannelColor } from '@shared/domain/trend'
+
 export interface TrendMetricMeta {
   key: TrendMetric
   /** Display order in the metric selector; lower comes first. */
@@ -126,8 +132,7 @@ export const TREND_METRIC_META: Record<TrendMetric, TrendMetricMeta> = {
   }
 }
 
-export interface TrendAggregationMeta {
-  key: TrendAggregation
+export interface TrendAggregationMeta {  key: TrendAggregation
   /** Display order in the aggregation selector; lower comes first. */
   order: number
   labelKey: string
