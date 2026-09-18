@@ -1626,7 +1626,10 @@ CPU**（`Get-Process` 里一个从 9/16 起跑、累计 3600 秒以上 CPU 的 `
   > 没有在真实窗口里量到（前者的读数是 `null`，探针没有把它当成通过）。相机上线后要看
   > `scripts/video-proof-driver.cjs` 那条真机流程。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,103,323 字节**，sha256 `3D8B6E7E6B44A312DEEDFCF683C8C32528FC5DB74972F926549069AFDAA18D3B`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
