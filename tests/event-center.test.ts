@@ -65,6 +65,8 @@ let storage: StorageService
 let alarms: AlarmRepository
 let recordings: RecordingRepository
 let devicesRepo: DeviceRepository
+/** 处置工作流（schema v13）：聚合那一组用例要直接往里写一条状态。 */
+let statuses: EventStatusRepository
 
 before(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'hz-event-center-'))
@@ -73,6 +75,7 @@ before(async () => {
   alarms = new AlarmRepository(db)
   recordings = new RecordingRepository(db)
   devicesRepo = new DeviceRepository(db)
+  statuses = new EventStatusRepository(db)
 })
 
 after(async () => {
@@ -95,6 +98,12 @@ after(async () => {
 beforeEach(() => {
   db.prepare('DELETE FROM recordings').run()
   db.prepare('DELETE FROM alarms').run()
+  /*
+   * 处置状态也要清：聚合那一组用例会往组里写一条状态，留着它会让后面
+   * "这一条还没有状态" 的断言（`status: undefined`）时对时错。
+   */
+  db.prepare('DELETE FROM event_status').run()
+  db.prepare('DELETE FROM event_activity').run()
 })
 
 /** Real, persisted device rows (the FK targets), memoised per tag. */
@@ -934,8 +943,111 @@ describe('DetectLibraryService', () => {
 // 图片证据（规格 §12.1 的 Visual，Phase 4）
 // ---------------------------------------------------------------------------
 
-describe('事件中心的图片证据（详情抽屉 Evidence 页签）', () => {
-  /** 在存储根下写一个**真的**文件：`evidenceImage` 会去磁盘上确认它在不在。 */
+describe('重复触发聚合（规格 §14.1，主进程侧）', () => {
+  /** 往同一台设备写 N 条告警，时刻按分钟递增。 */
+  function seedAlarms(deviceId: string, minutes: number[]): void {
+    for (const minute of minutes) {
+      alarms.insert({
+        deviceId,
+        channelId: 0,
+        timestamp: FIXED_NOW + minute * 60_000,
+        alarmMask: 1
+      })
+    }
+  }
+
+  it('默认（显式给 10 分钟窗口）把连续触发并成一条告警，总数也是告警数', async () => {
+    const deviceId = box('group-1')
+    seedAlarms(deviceId, [0, 2, 5])
+    const { service } = createService()
+    const page = await service.query({ limit: 50, offset: 0, groupWindowMs: 10 * 60_000 })
+    assert.equal(page.items.length, 1, '三条连续触发没有并成一条')
+    assert.equal(page.total, 1, '总数应该是告警数（聚合之后）')
+    const item = page.items[0]
+    assert.ok(item)
+    assert.equal(item.occurrenceCount, 3)
+    assert.equal(item.firstDetectedAt, FIXED_NOW)
+    assert.equal(item.lastDetectedAt, FIXED_NOW + 5 * 60_000)
+    // 代表是最新那一条；组的稳定标识是最早那一条。
+    assert.equal(item.at, FIXED_NOW + 5 * 60_000)
+    assert.notEqual(item.groupId, item.id)
+    assert.equal(item.groupMembers?.length, 3)
+    // 来源计数仍然是**原始事件数**（那一路读到了几条），与告警数不是一回事。
+    assert.equal(page.countsBySource.localAlarm, 3)
+  })
+
+  it('API 的**缺省是不聚合**（窗口由调用方显式给；界面永远会给）', async () => {
+    const deviceId = box('group-1b')
+    seedAlarms(deviceId, [0, 2, 5])
+    const { service } = createService()
+    const page = await service.query({ limit: 50, offset: 0 })
+    assert.equal(page.items.length, 3, '缺省不该悄悄聚合')
+    for (const item of page.items) {
+      assert.equal(item.occurrenceCount, undefined)
+      assert.equal(item.groupId, undefined)
+    }
+  })
+
+  it('`groupWindowMs: 0`（界面上的"不聚合"）时每条自己一行', async () => {
+    const deviceId = box('group-2')
+    seedAlarms(deviceId, [0, 2, 5])
+    const { service } = createService()
+    const page = await service.query({ limit: 50, offset: 0, groupWindowMs: 0 })
+    assert.equal(page.items.length, 3)
+    assert.equal(page.total, 3)
+    assert.equal(page.items[0]?.occurrenceCount, undefined, '不聚合时不该带上组字段')
+  })
+
+  it('超过窗口的两段触发是两条告警（"连续"的边界）', async () => {
+    const deviceId = box('group-3')
+    seedAlarms(deviceId, [0, 3, 40])
+    const { service } = createService()
+    const page = await service.query({ limit: 50, offset: 0, groupWindowMs: 10 * 60_000 })
+    assert.equal(page.total, 2)
+    assert.deepEqual(
+      page.items.map((item) => item.occurrenceCount),
+      [1, 2]
+    )
+  })
+
+  it('不同设备的触发不并（分组键含设备）', async () => {
+    seedAlarms(box('group-4a'), [0, 2])
+    seedAlarms(box('group-4b'), [1])
+    const { service } = createService()
+    const page = await service.query({ limit: 50, offset: 0, groupWindowMs: 10 * 60_000 })
+    assert.equal(page.total, 2)
+  })
+
+  it('处置状态按**组**合并：组内任何一条被处置过，整条告警就算处置过', async () => {
+    const deviceId = box('group-5')
+    seedAlarms(deviceId, [0, 2, 5])
+    const { service } = createService()
+    const first = await service.query({ limit: 50, offset: 0, groupWindowMs: 10 * 60_000 })
+    const item = first.items[0]
+    assert.ok(item)
+    // 只处置**中间**那一条（不是代表、也不是最早那条）。
+    const middle = item.groupMembers?.[1]
+    assert.ok(middle)
+    statuses.setStatus({ entryId: middle.id, status: 'resolved', actor: 'admin', at: FIXED_NOW })
+    const second = await service.query({ limit: 50, offset: 0, groupWindowMs: 10 * 60_000 })
+    assert.equal(second.items[0]?.status, 'resolved')
+  })
+
+  it('窗口被夹到 24 小时上限（"窗口 = 一周"不是聚合，是把数据藏起来）', async () => {
+    const deviceId = box('group-6')
+    // 两条相差 25 小时：即便传一个巨大的窗口，也必须分成两条。
+    seedAlarms(deviceId, [0, 25 * 60])
+    const { service } = createService()
+    const page = await service.query({
+      limit: 50,
+      offset: 0,
+      groupWindowMs: 7 * 24 * 60 * 60 * 1000
+    })
+    assert.equal(page.total, 2)
+  })
+})
+
+describe('事件中心的图片证据（详情抽屉 Evidence 页签）', () => {  /** 在存储根下写一个**真的**文件：`evidenceImage` 会去磁盘上确认它在不在。 */
   async function writeEvidenceFile(relativePath: string, bytes = [0xff, 0xd8, 0xff]): Promise<void> {
     const absolute = path.join(root, relativePath)
     await fs.mkdir(path.dirname(absolute), { recursive: true })

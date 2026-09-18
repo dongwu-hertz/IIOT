@@ -37,6 +37,7 @@ import {
   EVENT_SAVED_VIEWS,
   EVENT_VIEW_MODES,
   EVENT_VIEW_MODE_STORAGE_KEY,
+  GROUP_WINDOW_CHOICES,
   ackFilterToQuery,
   activityRows,
   alertOverviewFields,
@@ -50,6 +51,7 @@ import {
   eventFilterToQuery,
   eventKpis,
   evidenceImageSource,
+  groupWindowMsFor,
   hasEventFilterQuery,
   isEventFilterActive,
   matchEventSearch,
@@ -271,6 +273,9 @@ function buildQuery(): Partial<EventCenterQuery> {
   if (to !== undefined) query.to = to
   const acknowledged = ackFilterToQuery(filters.ack)
   if (acknowledged !== undefined) query.acknowledged = acknowledged
+  // 聚合窗口（规格 §14.1）：0 = 不聚合。**总是带上**（包括 0），
+  // 否则"关掉聚合"会被主进程的缺省值（10 分钟）顶回来。
+  query.groupWindowMs = groupWindowMsFor(filters.groupWindow)
   return query
 }
 
@@ -372,7 +377,9 @@ watch(
     filters.severity,
     filters.from,
     filters.to,
-    filters.ack
+    filters.ack,
+    // 聚合窗口也是**查询参数**（主进程按它并组、并按告警数分页），所以要重新查。
+    filters.groupWindow
   ],
   () => {
     void reload()
@@ -693,6 +700,8 @@ async function onStatusAction(payload: {
   const result = await callApi(() =>
     window.api.eventCenter.changeStatus({
       entryId: current.id,
+      // 聚合告警：一次处置落到组内每一条触发（服务端在同一个事务里写）。
+      ...(current.members.length > 1 ? { entryIds: current.members.map((m) => m.id) } : {}),
       action: payload.action,
       ...(payload.assignee !== undefined ? { assignee: payload.assignee } : {}),
       ...(payload.note !== undefined ? { note: payload.note } : {}),
@@ -718,12 +727,18 @@ async function onStatusAction(payload: {
   await loadActivity(current.id)
 
   const view = unwrap(result)
+  const appliedTo = view?.appliedTo ?? 1
   store.notice =
     payload.action === 'assign'
       ? t('eventsUi.assignDone', { name: payload.assignee ?? '' })
-      : t('eventsUi.statusChangeDone', {
-          status: t(alertStatusLabelKey(view?.status ?? current.status))
-        })
+      : appliedTo > 1
+        ? t('eventsUi.statusChangeDoneMany', {
+            status: t(alertStatusLabelKey(view?.status ?? current.status)),
+            count: appliedTo
+          })
+        : t('eventsUi.statusChangeDone', {
+            status: t(alertStatusLabelKey(view?.status ?? current.status))
+          })
 }
 
 // ---------------------------------------------------------------------------
@@ -835,6 +850,20 @@ async function goToPage(offset: number): Promise<void> {
               {{ t(view.labelKey) }}
             </button>
           </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">{{ t('eventsUi.groupWindowLabel') }}</span>
+          <select
+            v-model="filters.groupWindow"
+            class="select"
+            data-field="group-window"
+            @change="activeSavedViewId = null"
+          >
+            <option v-for="choice in GROUP_WINDOW_CHOICES" :key="choice.id" :value="choice.id">
+              {{ t(choice.labelKey) }}
+            </option>
+          </select>
         </div>
 
         <div class="field">
@@ -994,7 +1023,10 @@ async function goToPage(offset: number): Promise<void> {
                 <template v-else-if="node.kind === 'note'">
                   {{ t('eventsUi.activityNoteLine', { actor: node.actor }) }}：{{ node.note }}
                 </template>
-                <template v-else>
+                <template v-else-if="node.kind === 'occurrence'">
+                  {{ t('eventsUi.timelineOccurrence', { index: node.index }) }}
+                </template>
+                <template v-else-if="node.kind === 'linkage-action'">
                   {{
                     t('eventsUi.detailActionLine', {
                       action: actionLabel(node.action),

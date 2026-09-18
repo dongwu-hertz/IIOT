@@ -723,6 +723,9 @@ node scripts/e2-live-proof.cjs --ip 192.168.110.234 --password 123456
 | **重新开启必须写原因** | §2.2 | 点「重新开启」→ 行内输入框 → 空原因不让提交 | 守卫：`actionNoteEmpty` 提示 + 服务端也会拒绝（单测覆盖） |
 | **处置之后不关抽屉** | §15.1 | 点完动作，抽屉还开着，头部状态与队列行跟着变 | 探针：`drawerStillOpen: true` + 状态文字读回 |
 | **三个新页签：时间线 / 关联 / 处置记录** | §13.1–§13.3 | 抽屉顶部第三、四、五个页签 | 探针：五个页签齐、切得过去、关联有三组且写着作用域、时间线有节点 |
+| **重复触发聚合**（同一设备 + 同一种事件 + 窗口内连续触发并成一条） | §14.1 | 队列里那些带 **×N** 的行；抽屉「概览」里的首次/最后/持续时长/次数 | 探针：聚合窗口四档都在；把窗口切到「不聚合」行数从 **1** 涨到 **50**（证明那个 ×N 是真的）；时间线里 50 个节点（1 次首次 + 49 次后续触发） |
+| **聚合窗口可配置**（不聚合 / 10 分钟 / 30 分钟 / 1 小时） | §14.1「必须可配置」 | 筛选栏里那个「聚合」下拉；选择会跟着地址栏与本机记住 | 守卫：窗口是查询参数、改了会重查、四档取值、跟着 URL 与 localStorage |
+| 一次处置落到**整组**触发的每一条 | §14.1 | 对一条 ×50 的告警点「确认」，回执写「已把 50 次触发的状态改为…」 | 单测：状态与流水各写 N 条、同一个事务；探针：写探针处置的那一条 `appliedTo`（回执文案） |
 
 ### 要你看的（只有眼睛能判）
 
@@ -786,33 +789,24 @@ node scripts/e2-live-proof.cjs --ip 192.168.110.234 --password 123456
 
 ### Z 段这一轮的验证数字
 
-- 单测 **1836 / 0 失败**（Phase 3 的 62 条 + Phase 4 的 34 条 + Phase 5 的 47 条：
-  `tests/event-view.test.ts` 71 条纯函数、`tests/event-workflow.test.ts` 17 条、
-  `tests/event-schema-v13.test.ts` 6 条、`tests/event-center.test.ts` 36 条服务、
-  `tests/event-center-round.test.ts` 52 条源码守卫）；
+- 单测 **1862 / 0 失败**（Phase 1–5 的 1836 条 + Phase 6 前半的 26 条：
+  `tests/event-view.test.ts` 82 条纯函数（含 11 条聚合）、`tests/event-center.test.ts` 42 条
+  服务（含 7 条聚合与上限）、`tests/event-workflow.test.ts` 19 条、`tests/event-center-round.test.ts`
+  52 条源码守卫）；
 - `tsc node` / `vue-tsc` / `tsc tests` **0/0/0**；i18n 缺失键 0、四语言键集一致、孤儿键 0；
   `electron-vite build` exit 0；
-- **GUI 探针 `demo-shot --with-data` 0 problems**：窗口 1440×900、四档几何、设备表、点位图、
-  相机、听诊盒子、空气声呐整条链全绿；事件中心那一段含 Phase 3–5 的全部断言，实测数字：
-  KPI `严重 0 / 高 50 / 未确认 50 / 平均确认耗时 —`、筛选面板 216px、
-  队列 50 行 × 三档行高 56/88/104px、抽屉默认 **400px** 且键盘 ← 后 **416px**、
-  页签恰好五个（概览/证据/时间线/关联/活动）、Overview 11 格含 1 格跨两列、
-  关联三组、时间线有节点、头部动作 `["acknowledge","investigate","mute","assign"]`（主 CTA 是确认）、
-  **写探针**：点主 CTA 后状态读回 `acknowledged`、处置记录读回 `admin 把状态从「待处理」改为「已确认」`、
-  抽屉没被关掉；视口 1440×900 横向溢出 0px；
-- **探针这一轮抓到两个真缺陷**（都不是探针自己的问题）：
-  1. 抽屉算了宽度、写了 localStorage，却没有把宽度绑到元素上（"存了 416、看起来还是 400"，
-     `docs/Ivms4200-UX-REFERENCE.md` §15.42.3）；
-  2. **取消筛选取消不掉**：`stores/eventCenter.ts` 的 `applyQuery` 在旧查询上打补丁，
-     点「清除全部」之后界面写着"没有筛选"、查询却仍按旧等级过滤（页面显示 0 条）——
-     §15.44.5。这是"界面在骗人"的那一类，从 Phase 3 就存在（那时探针只加筛选、从不取消）。
-- 探针自己也修了四处（console 等级认不出、`execJson` 无超时、超时后仍读字段导致报告被带走，
-  以及**根因**：窗口被遮挡时 Chromium 节流 `setTimeout`，探针"挂住 4.5 小时"就是这么来的 ——
-  修法是 `setBackgroundThrottling(false)`）。逐条写在 §15.44.4 / §15.44.6。
+- **GUI 探针 `demo-shot --with-data` 0 problems**（含 Phase 6 的聚合断言）：
+  **你库里那 50 条告警在 10 分钟窗口下并成了 1 条告警**（队列一行、带 ×N），
+  把窗口切到「不聚合」立刻变回 **50 行**，切回 10 分钟又是 1 行；抽屉时间线里 **50 个节点**
+  （1 次首次 + 49 次后续触发）；写探针照旧：点主 CTA → 状态读回 `acknowledged`
+  → 处置记录读回「admin 把状态从「待处理」改为「已确认」」→ 抽屉没被关掉。
+  其余（设备表、点位图、相机、听诊盒子、空气声呐）全绿；
+- 探针在这一轮没有抓到新缺陷，但把**聚合是真的**这件事钉住了（"切到不聚合行数必须变多"）——
+  这一条防的正是"×N 是编的"那种假聚合。
 
 **出包**：`npm run dist:win:offline` →
 `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
-（**127,086,784 字节**，sha256 `9B64350362AF8E54BBC7152D896B99E92D6E4768ED60B5BA3FFF6347BC87413C`）；
+（**127,088,702 字节**，sha256 `EF9ADB1E2D42CA998DC15DF98ADE7E00CC9127055C99ED88D0CF9A1217202E84`）；
 `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 **出包**：`npm run dist:win:offline` →

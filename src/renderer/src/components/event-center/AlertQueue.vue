@@ -133,6 +133,10 @@ function move(delta: number): void {
           </span>
         </span>
         <span class="alert-row__title">{{ eventKindLabel(alert.kind) }}</span>
+        <!-- 聚合（规格 §14.1）：同一组触发的次数。等于 1 时**不画** —— "×1" 是噪声。 -->
+        <span v-if="alert.occurrenceCount > 1" class="chip chip--tiny alert-row__count">
+          {{ t('eventsUi.occurrenceCount', { count: alert.occurrenceCount }) }}
+        </span>
         <span class="alert-row__device">{{ alert.deviceName }}</span>
       </span>
 

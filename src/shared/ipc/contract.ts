@@ -1170,6 +1170,13 @@ import type {
 /** 一次处置请求（`eventCenter.changeStatus` 的入参）。 */
 export interface EventStatusChangeInput {
   entryId: string
+  /**
+   * 一起处置的其它 entry id（聚合告警：一次处置落到组内每一条触发）。
+   *
+   * 界面从 `AlertViewModel.members` 拿到它们；服务端在**同一个事务**里写状态与流水，
+   * 要么都成、要么都不成。
+   */
+  entryIds?: string[]
   /** 界面上的动作；与 `status` 二选一。 */
   action?: EventStatusAction
   /** 直接给目标状态（程序化调用；界面走 `action`）。 */

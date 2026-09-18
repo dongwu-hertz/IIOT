@@ -741,3 +741,86 @@ describe('Phase 4 · 抽屉本体（规格 §11）', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Phase 6：重复触发聚合（规格 §14.1）
+// ---------------------------------------------------------------------------
+
+describe('Phase 6 · 重复触发聚合（规格 §14.1）', () => {
+  it('聚合在**主进程**做，并且按告警数分页（总数与列表必须同一个单位）', () => {
+    const service = read('src/main/services/events/event-center-service.ts')
+    assert.ok(service.includes('groupEvents(pool, groupWindowMs)'), '服务端没有做聚合')
+    assert.ok(service.includes('representativeOf(group)'), '没有取组里的代表那一条')
+    assert.match(
+      stripComments(service),
+      /total:\s*groups\.length/,
+      'total 不是告警数（会与列表里的行数对不上）'
+    )
+    // 窗口没给时**不聚合**：界面永远显式带上窗口，API 的行为不该被一个界面默认值绑住。
+    assert.match(
+      stripComments(service),
+      /function clampGroupWindow\(value: number \| undefined\): number \{[\s\S]{0,200}?return 0/,
+      'API 缺省变成了"聚合"（一个界面默认值的改动会悄悄改掉所有调用方）'
+    )
+    // 窗口有上限：太大就不是聚合，是把数据藏起来。
+    assert.ok(
+      service.includes('EVENT_CENTER_MAX_GROUP_WINDOW_MS'),
+      '聚合窗口没有上限'
+    )
+  })
+
+  it('界面：聚合窗口是查询参数（改了要重查）、四档、跟着 URL 与本机记住', () => {
+    assert.ok(eventView.includes('query.groupWindowMs = groupWindowMsFor(filters.groupWindow)'), '查询没有带上聚合窗口')
+    assert.ok(
+      eventView.includes('filters.groupWindow'),
+      '改了聚合窗口不会重新查询（它没进查询字段的 watch 列表）'
+    )
+    assert.match(
+      stripComments(eventView),
+      /watch\(\s*\(\) => \[[\s\S]{0,400}?filters\.groupWindow[\s\S]{0,200}?void reload\(\)/,
+      '聚合窗口不在"改了要重查"的那一组里'
+    )
+    assert.ok(eventView.includes('data-field="group-window"'), '筛选栏里没有聚合窗口的下拉（探针要它）')
+    assert.ok(eventView.includes('GROUP_WINDOW_CHOICES'), '下拉没有按常量渲染（四档）')
+    assert.match(
+      eventViewDomain,
+      /id: 'off'[\s\S]{0,200}?id: '10m'[\s\S]{0,200}?id: '30m'[\s\S]{0,200}?id: '1h'/,
+      '四档的取值不对'
+    )
+  })
+
+  it('队列行带"×N"，但只在真的聚合了才画（×1 是噪声）', () => {
+    assert.ok(
+      alertQueue.includes("t('eventsUi.occurrenceCount', { count: alert.occurrenceCount })"),
+      '队列没有显示触发次数'
+    )
+    assert.match(
+      alertQueue,
+      /v-if="alert\.occurrenceCount > 1"/,
+      '次数没有条件渲染（每条都挂一个 ×1）'
+    )
+  })
+
+  it('时间线保留原始明细：第 2..N 次触发各占一个节点', () => {
+    assert.ok(eventView.includes("t('eventsUi.timelineOccurrence'"), '时间线里没有"第 N 次触发"')
+    assert.ok(eventViewDomain.includes("kind: 'occurrence'"), '时间线没有 occurrence 节点')
+  })
+
+  it('一次处置落到组内每一条，回执说清改了几条', () => {
+    assert.ok(
+      eventView.includes('current.members.map((m) => m.id)'),
+      '处置没有带上组内其它触发（只处置了代表那一条）'
+    )
+    assert.ok(eventView.includes("t('eventsUi.statusChangeDoneMany'"), '多条处置没有说清改了几条')
+    assert.ok(eventViewDomain.includes('appliedTo: number'), '结果里没有"一起改了几条"')
+  })
+
+  it('状态合并按**组**：组里任何一条被处置过，整条告警就算处置过', () => {
+    const service = read('src/main/services/events/event-center-service.ts')
+    assert.match(
+      stripComments(service),
+      /groupMembers[\s\S]{0,200}?statusMap\(items\.flatMap\(memberIds\)\)/,
+      '状态只按代表那一条查（组内更早的处置会丢）'
+    )
+  })
+})
+

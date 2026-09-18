@@ -2552,7 +2552,19 @@ export const tr: MessageSchema = {
     actionReopenNotePlaceholder: 'Yeniden açma nedeni (zorunlu)',
     actionNoteEmpty: 'Önce bir neden yazın',
     actionConfirm: 'Onayla',
-    actionCancel: 'Vazgeç'
+    actionCancel: 'Vazgeç',
+
+    // --- Phase 6: tekrarlanan tetikleme gruplama (spec §14.1) ---------------
+    groupWindowLabel: 'Gruplama',
+    groupWindow: {
+      off: 'Gruplama yok',
+      m10: '10 dakika içinde',
+      m30: '30 dakika içinde',
+      h1: '1 saat içinde'
+    },
+    occurrenceCount: '×{count}',
+    timelineOccurrence: '{index}. tetikleme',
+    statusChangeDoneMany: '{count} tetiklemenin durumu "{status}" olarak değiştirildi'
 
   }
 }

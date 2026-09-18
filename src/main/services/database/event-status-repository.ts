@@ -51,6 +51,14 @@ interface RawActivityRow {
 
 export interface SetEventStatusInput {
   entryId: string
+  /**
+   * 一起处置的**其它** entry id（聚合组：一条告警底下有 N 次触发）。
+   *
+   * 为什么要一起写：告警是一个处置单位（规格 §14.1），而状态行是按 entry id 存的 ——
+   * 只写代表那一条会让"同一组里的另一次触发"仍然显示未处置，下次它成了最新触发时
+   * 整组的状态就"回退"了。都在**同一个事务**里写，要么都成、要么都不成。
+   */
+  entryIds?: readonly string[]
   /** 目标状态；`undefined` 表示**只改指派人**（`kind: 'assign'`）。 */
   status?: EventStatus
   assignee?: string
@@ -70,9 +78,12 @@ export interface SetEventStatusInput {
 }
 
 export interface SetEventStatusResult {
-  /** 更新之后的当前状态（`assign` 时状态不变）。 */
+  /** 更新之后的当前状态（以 `entryId` 那一条为准）。 */
   row: EventStatusRow
+  /** 这次写入产生的那一条 Activity（`appliedTo` 条时是**第一条**）。 */
   activity: EventActivityView
+  /** 这次一起被处置的条数（1 = 只处置了一条）。 */
+  appliedTo: number
 }
 
 export class EventStatusRepository {
@@ -122,6 +133,11 @@ export class EventStatusRepository {
    */
   setStatus(input: SetEventStatusInput): SetEventStatusResult {
     const entryId = input.entryId.trim()
+    const targets = [
+      ...new Set(
+        [entryId, ...(input.entryIds ?? []).map((id) => id.trim())].filter((id) => id !== '')
+      )
+    ]
     const actor = input.actor.trim() === '' ? 'unknown' : input.actor.trim()
     const note = input.note?.trim() === '' ? undefined : input.note?.trim()
     const assignee = input.assignee?.trim() === '' ? undefined : input.assignee?.trim()
@@ -131,61 +147,70 @@ export class EventStatusRepository {
     const isAssignOnly = input.status === undefined
     const toStatus: EventStatus = isAssignOnly ? fromStatus : (input.status as EventStatus)
 
-    const run = this.db.transaction((): SetEventStatusResult => {
+    const upsertStatus = (id: string): void => {
       if (isAssignOnly) {
         // 只改指派人：状态行不存在时**用调用方给的当前状态**建一行（见 `fromStatus` 的注释：
         // 硬写 'new' 会让"指派"顺手把一条已确认的事件退回「待处理」）。
-        if (!current) {
+        const existing = this.find(id)
+        if (!existing) {
           this.db
             .prepare(
               `INSERT INTO event_status (entry_id, status, assignee, updated_at) VALUES (?, ?, ?, ?)`
             )
-            .run(entryId, input.fromStatus ?? fromStatus, assignee ?? null, at)
+            .run(id, input.fromStatus ?? fromStatus, assignee ?? null, at)
         } else {
           this.db
             .prepare(`UPDATE event_status SET assignee = ?, updated_at = ? WHERE entry_id = ?`)
-            .run(assignee ?? null, at, entryId)
+            .run(assignee ?? null, at, id)
         }
-      } else {
-        this.db
-          .prepare(
-            `INSERT INTO event_status (entry_id, status, assignee, updated_at) VALUES (?, ?, ?, ?)
-             ON CONFLICT(entry_id) DO UPDATE SET
-               status = excluded.status,
-               assignee = COALESCE(excluded.assignee, event_status.assignee),
-               updated_at = excluded.updated_at`
-          )
-          .run(entryId, toStatus, assignee ?? null, at)
-      }
-
-      const kind: EventActivityKind = isAssignOnly ? 'assign' : 'status'
-      const activity: EventActivityView = {
-        id: newEventActivityId(),
-        entryId,
-        at,
-        actor,
-        kind,
-        ...(isAssignOnly ? {} : { fromStatus, toStatus }),
-        ...(isAssignOnly && assignee !== undefined ? { assignee } : {}),
-        ...(note !== undefined ? { note } : {})
+        return
       }
       this.db
         .prepare(
-          `INSERT INTO event_activity (id, entry_id, at, actor, kind, from_status, to_status, assignee, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO event_status (entry_id, status, assignee, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(entry_id) DO UPDATE SET
+             status = excluded.status,
+             assignee = COALESCE(excluded.assignee, event_status.assignee),
+             updated_at = excluded.updated_at`
         )
-        .run(
-          activity.id,
-          activity.entryId,
-          activity.at,
-          activity.actor,
-          activity.kind,
-          activity.fromStatus ?? null,
-          activity.toStatus ?? null,
-          activity.assignee ?? null,
-          activity.note ?? null
-        )
-      return { row: this.requireRow(entryId), activity }
+        .run(id, toStatus, assignee ?? null, at)
+    }
+
+    const run = this.db.transaction((): SetEventStatusResult => {
+      const kind: EventActivityKind = isAssignOnly ? 'assign' : 'status'
+      let first: EventActivityView | undefined
+      for (const id of targets) {
+        upsertStatus(id)
+        const activity: EventActivityView = {
+          id: newEventActivityId(),
+          entryId: id,
+          at,
+          actor,
+          kind,
+          ...(isAssignOnly ? {} : { fromStatus, toStatus }),
+          ...(isAssignOnly && assignee !== undefined ? { assignee } : {}),
+          ...(note !== undefined ? { note } : {})
+        }
+        this.db
+          .prepare(
+            `INSERT INTO event_activity (id, entry_id, at, actor, kind, from_status, to_status, assignee, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            activity.id,
+            activity.entryId,
+            activity.at,
+            activity.actor,
+            activity.kind,
+            activity.fromStatus ?? null,
+            activity.toStatus ?? null,
+            activity.assignee ?? null,
+            activity.note ?? null
+          )
+        if (!first) first = activity
+      }
+      const row = this.requireRow(entryId)
+      return { row, activity: first as EventActivityView, appliedTo: targets.length }
     })
 
     return run()

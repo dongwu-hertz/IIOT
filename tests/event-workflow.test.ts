@@ -336,6 +336,37 @@ describe('EventCenterService.changeStatus：动作 → 状态 + 写库', () => {
     assert.equal(result.status, 'investigating')
   })
 
+  it('一次处置落到**组内每一条**（聚合告警）：状态与流水各写 N 条，且同一个事务', () => {
+    const result = statuses.setStatus({
+      entryId: 'alarm:g1',
+      entryIds: ['alarm:g2', 'alarm:g3'],
+      status: 'investigating',
+      actor: 'admin',
+      at: 7
+    })
+    assert.equal(result.appliedTo, 3)
+    for (const id of ['alarm:g1', 'alarm:g2', 'alarm:g3']) {
+      assert.equal(statuses.find(id)?.status, 'investigating', `${id} 没有被一起处置`)
+      const activity = statuses.activity(id)
+      assert.equal(activity.length, 1, `${id} 的流水不是一条`)
+      assert.equal(activity[0]?.toStatus, 'investigating')
+      assert.equal(activity[0]?.actor, 'admin')
+    }
+  })
+
+  it('组里重复的 id 只写一次（界面可能把代表也放进 members）', () => {
+    const result = statuses.setStatus({
+      entryId: 'alarm:h1',
+      entryIds: ['alarm:h1', 'alarm:h2', 'alarm:h2', '  '],
+      status: 'closed',
+      actor: 'admin',
+      at: 8
+    })
+    assert.equal(result.appliedTo, 2)
+    assert.equal(statuses.activity('alarm:h1').length, 1)
+    assert.equal(statuses.activity('alarm:h2').length, 1)
+  })
+
   it('`activity()` 拒绝空的 entry id（一次查询不该变成"把所有事件的流水都读出来"）', () => {
     const { service } = createService()
     assert.throws(() => service.activity('   '), /缺少事件标识/)

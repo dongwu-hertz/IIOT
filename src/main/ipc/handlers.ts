@@ -2558,6 +2558,9 @@ export function registerIpcHandlers(): void {
       }
       const result = await getServices().eventCenter.changeStatus({
         entryId: String(input.entryId ?? ''),
+        ...(Array.isArray(input.entryIds)
+          ? { entryIds: input.entryIds.filter((id): id is string => typeof id === 'string') }
+          : {}),
         ...(input.action !== undefined ? { action: input.action } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.assignee !== undefined ? { assignee: String(input.assignee) } : {}),

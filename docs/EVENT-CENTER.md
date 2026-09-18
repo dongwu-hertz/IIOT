@@ -26,7 +26,7 @@
 | §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 右侧覆盖层抽屉（滚动分区，无页签、无宽度拖拽、宽度写死 480） | **✅ Phase 4**：400–560 可拖（拖拽 + 键盘 ←→，偏好 localStorage）、默认 400（≥1600 用 440）、不跳页、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、页签条只渲染**已实现**的两个（Timeline/Related/Activity 属 Phase 5） |
 | §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | **✅ Phase 4 做了 Acoustic 一个渲染器**：图片证据（联动抓帧 / 声纹告警的球机抓图）+ 录音录像 + 指标（频谱与测量）+ 检测结果文件；链接按来源选路（`evidenceImageSource`）。DTS/DAS/DGA **不做**（**冲突**：见 3.1）。每一条事件只有**一张**图（见 3.10） |
 | §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | **✅ Phase 5**：三个页签都在（`IMPLEMENTED_DETAIL_TABS` 五个）。Timeline = 首次探测 + 我们的动作 + 联动动作，按时间排；Related = 同设备 / 同类型 / ±10 分钟三组（**只在已加载那一页里找**，作用域印在页面上），点一下切到那一条；Activity = `event_activity` 的流水，新的在前 |
-| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | Phase 6（**冲突**：见 3.3）。Phase 3 的视图模型已带 `occurrenceCount`（恒为 1，界面在 1 时不渲染 ×N） |
+| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | **Phase 6 前半已做**：重复触发聚合（同一设备 + 同一种事件 + 窗口内的连续触发并成一条告警，`occurrenceCount` / `firstDetectedAt` / `lastDetectedAt` / `duration` / 原始成员都在，队列行带 ×N，时间线里每次触发各占一个节点）；**Incident 属后半（待做）**。取舍见 3.15 |
 | §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | Phase 3 已做：点行不跳页、↑/↓ 选中并同步焦点、Esc 关抽屉、行与筛选项都有焦点环 |
 | §16 组件树/Store/ViewModel | EventCenterPage → KPI/Filter/Queue/Drawer … | `EventCenterView.vue` 单文件 + `stores/eventCenter.ts` | Phase 3 拆出 `EventKpiStrip` / `EventFilterPanel` / `AlertQueue` 与纯函数层 `shared/domain/event-view.ts`（`AlertViewModel` 适配器），见第 4 节 |
 | §17 Design Tokens | 一套 `--hz-*` 等 token，禁止组件里硬编码 | 已有 token 体系（组件里不写 hex） | **✅ 取值与清单已对齐**，对照表见 §2；Phase 3 新增 `.severity--<档>` 变量类（一个类给出强调色与软底色） |
@@ -265,6 +265,31 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 一起做**（哪一档旧值算 High、哪一档算 Medium），而不是现在先改一个没人写的 CHECK。
 界面上已经按五级**展示**（§3.6），所以这件事对使用者没有可见影响。
 
+### 3.15 聚合在**主进程**做，分组键只有"设备 + 事件种类 + 时间窗口"（Phase 6）
+
+规格 §14.1 要"同一设备 / 同一事件类型 / 指定时间窗口内的连续触发"并成一条 Alert，并说
+"聚合依据必须可配置：assetId / eventType / detectionRegion / ruleId / timeWindow"。
+我们**有的**只有 deviceId、eventType（事件种类）与时间窗口；asset / detectionRegion / ruleId
+这三样在我们的数据里不存在（没有资产层、声学设备不报检测区域、联动规则还没有标识）。
+所以"可配置"落在**时间窗口**上（界面四档：不聚合 / 10 分钟 / 30 分钟 / 1 小时），
+分组键写死在 `eventGroupKey()` 一处。
+
+三个实现上的判断：
+
+1. **聚合在服务端、在分页之前**。告警是这一页所有数字的单位（KPI、筛选面板的计数、
+   分页总数）—— 在渲染层并组会让 `total` 是"原始事件数"而列表是"告警数"，两个数字对不上。
+2. **组的稳定标识 = 组内最早那一条的 entry id**，而**代表（返回给界面的那一条）是最新的**。
+   `id` 会随着新触发往后滚，所以处置状态与（将来的）Incident 关联都挂在 `groupId` 上；
+   而证据（抓帧、录像、指标）用最新那条的。
+3. **API 的缺省是不聚合**（`groupWindowMs` 不给就不并）。界面每一查询都显式带上用户选的那一档
+   （默认 10 分钟）—— 把"界面默认"写进 API 缺省里，以后改一次界面默认值就会悄悄改掉所有
+   调用方（含测试与将来的脚本）。
+
+处置一条聚合告警 = **处置组内每一条触发**（状态与 Activity 在同一个事务里各写 N 条），
+回执说清改了几条；状态合并也按组（组内任何一条被处置过，整条告警就算处置过）。
+
+**窗口的上限是 24 小时**：窗口太大就不是聚合，是把数据藏起来。
+
 ---
 
 ## 4. 进度与下一步（按规格 §18.1 的六个阶段）
@@ -276,7 +301,7 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 | Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | **✅ 本轮**：<br>· 纯函数层 `src/shared/domain/event-view.ts`（`AlertViewModel` 适配器、`eventKpis`、`eventFilterCounts`、筛选/URL/存取的容错解析）+ `tests/event-view.test.ts`（40 条）<br>· `EventKpiStrip.vue`（四格、可点、作用域印在下面）<br>· `EventFilterPanel.vue`（等级/来源/确认状态/设备四组带计数、216px）<br>· `AlertQueue.vue`（三档行高、3px 严重度色条、↑/↓ 选中并同步焦点、整行是 button、等级文字每一档都印）<br>· `EventCenterView.vue`：表格 → 队列、搜索 + 时间 + 六个内置视图 + 视图模式、URL/localStorage 记忆、Esc 关抽屉、来源读况改为**只在失败/截断时**出现、关键字不再触发重新查询<br>· `main.css`：`.severity--<五档>`（一个类给出强调色 + 软底色）、`.alert-row`、`.chip--tiny` 提升为全局<br>· 探针：`scripts/demo-shot-driver.cjs` 增加事件中心一段（KPI 四格与作用域、平均确认耗时是「—」、面板 216px 与四组、六个视图、三档行高、点行开抽屉 + Esc 关、点 KPI「严重」后地址栏/面板/localStorage 三处都对、四条版面关系），并修掉三处**探针自己**的缺陷（见 `docs/Ivms4200-UX-REFERENCE.md` §15.41.6） |
 | Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | **✅ 本轮**：<br>· 纯函数层新增：`AlertViewModel` 的 `firstDetectedAt` / `lastDetectedAt` / `durationMs`、抽屉宽度常量与容错（400–560）、`alertOverviewFields()`（§11.4 的字段表）、`evidenceImageSource()`（图从哪来）<br>· 新组件 `EventDetailDrawer.vue`：拖拽 + 键盘改宽度（偏好 localStorage）、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、40px 页签条 + 2px 橙色下划线、头部等级/标题/设备链接/首次探测时间/主 CTA<br>· `EventCenterView.vue`：Overview 2 列属性网格 + Evidence（图片 / 录音录像 / 指标 / 结果文件），旧的内联抽屉拆干净<br>· **新 IPC** `eventCenter.evidenceImage` / `closeEvidenceImage`（只读；四道关：路径来源 `recordingId` 优先 → 存储根越界保护 → 文件在不在 → 是不是图片）<br>· `main.css`：新增 `--color-scrim`（模态与抽屉共用一个遮罩值，顺手修掉 `AppModal` 里写死的 rgba）<br>· 探针：抽屉默认宽度 400、抓手 400–560、页签只有两个、Overview ≥8 格且有一格跨两列、切页签真的切过去、Evidence 有图或有说明、焦点进入抽屉、键盘 ← 改宽度并**写回 localStorage** |
 | Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | **✅ 本轮**：<br>· **schema v13**（`event_status` + `event_activity`，CHECK 钉住七个状态与三种记录）+ 迁移测试（老库升级一行不少、幂等、CHECK 真的在管）<br>· `EventStatusRepository`：状态与流水**同一个事务**、写完读回、按事件分组计数、分块查询；`assign` 不会把状态退回 `new`<br>· 领域：`AlertStatus` 七个取值、`ALERT_STATUS_TRANSITIONS` + `canTransitionStatus`、`statusActionsFor`、`activityRows` / `alertTimeline` / `relatedGroups` + 单测<br>· IPC：`eventCenter.changeStatus`（**写，要管理员**，`actor` 来自会话）+ `eventCenter.activity`（只读）<br>· **界面**：抽屉头部按状态给动作（主 CTA 恰好一个；没有确认接口的来源不出现「确认」）、指派选账户、重新开启必须填原因（行内表单）、处置后**重查且不关抽屉**，以及 Timeline / Related / Activity 三个页签<br>· 探针：只读那一批里加"五个页签切得过去、关联三组、时间线有节点、头部有主 CTA"；**写探针**（排在最末尾）点一次主 CTA，然后 `eventCenter.query` 读回状态、`eventCenter.activity` 读回流水，并断言抽屉没被关掉 |
-| Phase 6 | 重复触发聚合 + 人工 Incident | 待做（需要聚合键与 Incident 表；`AlertViewModel.occurrenceCount` 已经带着，界面在它等于 1 时不渲染 ×N） |
+| Phase 6 | 重复触发聚合 + 人工 Incident | **前半已做**：<br>· 领域：`groupEvents()`（同一设备 + 同一种事件 + **连续**触发并组；窗口 0 = 不聚合）、`representativeOf()`（代表取最新那条、组的稳定标识取最早那条）、`GROUP_WINDOW_CHOICES` 四档 + 单测<br>· 主进程：聚合在**分页之前**（`total` = 告警数）、窗口上限 24 小时、状态按**组**合并、一次处置落到组内每一条（同一个事务 + `appliedTo`）<br>· 界面：筛选栏的聚合窗口下拉（四档、跟着 URL 与本机记住、改了会重查）、队列行 ×N、时间线里第 2..N 次触发各占一个节点（保留原始明细）<br>· 探针：聚合窗口四档、切到"不聚合"行数从 1 涨到 50（**证明那个 ×N 不是编的**）、恢复现场<br>· **待做（后半）**：人工 Create Incident 与手动关联 Alert |
 
 **每一阶段的交付口径**（与仓库既有规矩一致）：四语言文案 + 单测/源码守卫 + 探针断言 +
 文档记录 + 重新打包；写库/写设备一律**写完读回**；规格没说的取值一律在文档里标明是我们的设计。

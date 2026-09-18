@@ -286,6 +286,40 @@ export interface EventCenterEntry {
   status?: EventStatus
   /** 指派给的账户名（规格 §2.2 的 Reassigned 落在这一列；没有就是没人负责）。 */
   assignee?: string
+  /**
+   * 重复触发聚合（规格 §14.1）。
+   *
+   * 主进程把"同一台设备 + 同一种事件 + 时间窗口内的连续触发"并成**一条告警**之后，
+   * 返回的是这个组里**最新**的那一条（它的证据、指标、录像是最新的），并用下面这几个
+   * 字段说明它代表一整组：
+   *
+   *   - `groupId`：组的稳定标识 = 组内**最早**那一条的 id。它与 `id` 不同是刻意的：
+   *     `id` 随着新触发往后滚，而 `groupId` 不变 —— 处置状态与 Incident 关联都挂在
+   *     `groupId` 上，否则"新来一条触发"就会把它们甩掉。
+   *   - `occurrenceCount` / `firstDetectedAt` / `lastDetectedAt`：规格 §14.1 要的那三项。
+   *   - `groupMemberIds`：组内全部原始事件的 id（早 → 晚），时间线里"展开原始明细"用它。
+   *
+   * **不聚合时一个都不填**（不是填 1 / 填自己）：这样"没有聚合"与"聚合后只有一条"
+   * 在类型上就分得开。
+   */
+  groupId?: string
+  occurrenceCount?: number
+  firstDetectedAt?: number
+  lastDetectedAt?: number
+  /**
+   * 组内全部原始事件的**摘要**（早 → 晚）：id + 时刻。
+   *
+   * 只要这两样就够：时间线要的是"第几次触发发生在什么时候"，而"展开原始明细"点进去看的
+   * 是那一条自己的证据 —— 那一条会通过筛选/查询单独取到。把整条事件都塞进来会让一页的
+   * 数据量变成 50 × 组大小。
+   */
+  groupMembers?: EventGroupMember[]
+}
+
+/** 聚合组里一条原始事件的摘要。 */
+export interface EventGroupMember {
+  id: string
+  at: number
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +485,22 @@ export interface EventCenterQuery {
   severity?: EventSeverity
   limit: number
   offset: number
+  /**
+   * 重复触发聚合的窗口（毫秒，规格 §14.1）。
+   *
+   * `0` = **不聚合**（每条触发一行）；缺省时主进程用 10 分钟。上限由主进程夹住 ——
+   * 一个巨大的窗口会把一整天的触发并成一条，"聚合"就变成了"藏数据"。
+   */
+  groupWindowMs?: number
 }
+
+/**
+ * 聚合窗口的上限（24 小时）。
+ *
+ * 为什么要有上限：窗口是界面给的，而"窗口 = 一周"会让整周的触发变成一行 ——
+ * 那不是聚合，那是把数据藏起来。24 小时是"一天之内的连续触发"这个直觉的上界。
+ */
+export const EVENT_CENTER_MAX_GROUP_WINDOW_MS = 24 * 60 * 60 * 1000
 
 /**
  * 一路来源在一次查询里的读况。

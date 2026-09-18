@@ -20,6 +20,7 @@
 
 import type {
   EventCenterEntry,
+  EventGroupMember,
   EventKind,
   EventSeverity,
   EventSourceKind,
@@ -319,6 +320,13 @@ export interface EventStatusChangeResult {
   activity: EventActivityView
   /** 工作流之前的那个状态（界面据此显示"从 X 变成 Y"）。 */
   fromStatus: AlertStatus
+  /**
+   * 一起被处置的条数（1 = 只处置了一条）。
+   *
+   * 聚合告警一次处置要落到组内每一条触发上，界面据此说「已更新 N 条」——
+   * 只处置了代表那一条而界面说"整组已确认"是骗人的。
+   */
+  appliedTo: number
 }
 
 // ---------------------------------------------------------------------------
@@ -439,16 +447,21 @@ export interface AlertViewModel {
   /**
    * 首次 / 最后一次探测到（规格 §16.2 的 `firstDetectedAt` / `lastDetectedAt`）。
    *
-   * 聚合（Phase 6）之前两者都等于 `at`：一条事件只有一个时刻。Phase 6 把同一次触发的
-   * 连续上报并起来时，只改适配器里的这两个数，界面与抽屉不必动。
+   * 聚合（Phase 6）之后它们是**整组**的起止时刻；没有聚合时都等于 `at`。
    */
   firstDetectedAt: number
   lastDetectedAt: number
   /**
-   * 持续时长（ms）。聚合之前是 **0**（一条瞬时事件没有时长），
-   * 抽屉据此显示「—」而不是「0 秒」。
+   * 持续时长（ms）。只有一条触发时是 **0**，抽屉据此显示「—」
+   * （一条瞬时事件没有时长）。
    */
   durationMs: number
+  /**
+   * 组内全部原始事件的摘要（早 → 晚）；没有聚合时就是这一条自己。
+   *
+   * 时间线里"展开原始明细"与"处置一条告警要落到组内每一条"都用它。
+   */
+  members: EventGroupMember[]
   entry: EventCenterEntry
 }
 
@@ -458,8 +471,14 @@ function isStatusLocked(source: EventSourceKind): boolean {
 }
 
 export function toAlertViewModel(entry: EventCenterEntry): AlertViewModel {
+  const occurrenceCount = entry.occurrenceCount ?? 1
+  const firstDetectedAt = entry.firstDetectedAt ?? entry.at
+  const lastDetectedAt = entry.lastDetectedAt ?? entry.at
+  const members = entry.groupMembers ?? [{ id: entry.id, at: entry.at }]
   return {
-    id: entry.id,
+    // 有聚合组时用**组的稳定标识**：id 会随着新触发往后滚，而处置状态与 Incident 关联
+    // 挂在组上（见 `EventCenterEntry.groupId` 的注释）。
+    id: entry.groupId ?? entry.id,
     severity: alertSeverityOf(entry.severity),
     severityUnknown: isSeverityUnknown(entry.severity),
     severityRaw: entry.severity,
@@ -476,10 +495,11 @@ export function toAlertViewModel(entry: EventCenterEntry): AlertViewModel {
     hasRecording: entry.recordingId !== undefined,
     hasFrame: entry.frameRelativePath !== undefined,
     evidenceFileCount: entry.detect?.files.length ?? 0,
-    occurrenceCount: 1,
-    firstDetectedAt: entry.at,
-    lastDetectedAt: entry.at,
-    durationMs: 0,
+    occurrenceCount,
+    firstDetectedAt,
+    lastDetectedAt,
+    durationMs: occurrenceCount > 1 ? Math.max(0, lastDetectedAt - firstDetectedAt) : 0,
+    members,
     entry
   }
 }
@@ -584,6 +604,14 @@ export interface EventQueueFilter {
   from: string
   to: string
   ack: AckFilter
+  /**
+   * 重复触发聚合的窗口（规格 §14.1 的"可配置"）。
+   *
+   * 放在筛选状态里是为了跟着 URL / localStorage 一起记住；但它**不算"筛选"**
+   * （`isEventFilterActive` 忽略它）：它不缩小结果集，只是把连续触发并成一行，
+   * 让「清除全部」因为聚合窗口而亮着是说不通的。
+   */
+  groupWindow: GroupWindowId
 }
 
 export const EMPTY_EVENT_FILTER: EventQueueFilter = {
@@ -593,7 +621,8 @@ export const EMPTY_EVENT_FILTER: EventQueueFilter = {
   severity: '',
   from: '',
   to: '',
-  ack: 'all'
+  ack: 'all',
+  groupWindow: '10m'
 }
 
 export function emptyEventFilter(): EventQueueFilter {
@@ -802,7 +831,8 @@ export function serializeEventFilter(filter: EventQueueFilter): string {
     severity: filter.severity,
     from: filter.from,
     to: filter.to,
-    ack: filter.ack
+    ack: filter.ack,
+    groupWindow: filter.groupWindow
   })
 }
 
@@ -847,6 +877,7 @@ export function parseEventFilter(raw: unknown): EventQueueFilter {
   filter.to = asString(record.to)
   const ack = asString(record.ack)
   filter.ack = ack === 'acknowledged' || ack === 'unacknowledged' ? ack : 'all'
+  filter.groupWindow = isGroupWindowId(record.groupWindow) ? record.groupWindow : '10m'
   return filter
 }
 
@@ -860,6 +891,7 @@ export function eventFilterToQuery(filter: EventQueueFilter): Record<string, str
   if (filter.from !== '') query.from = filter.from
   if (filter.to !== '') query.to = filter.to
   if (filter.ack !== 'all') query.ack = filter.ack
+  if (filter.groupWindow !== '10m') query.group = filter.groupWindow
   return query
 }
 
@@ -871,7 +903,8 @@ export const EVENT_FILTER_QUERY_KEYS: readonly string[] = [
   'severity',
   'from',
   'to',
-  'ack'
+  'ack',
+  'group'
 ]
 
 /**
@@ -901,8 +934,148 @@ export function eventFilterFromQuery(query: Record<string, unknown> | null | und
     severity: query.severity,
     from: query.from,
     to: query.to,
-    ack: query.ack
+    ack: query.ack,
+    groupWindow: query.group
   })
+}
+
+// ---------------------------------------------------------------------------
+// 重复触发聚合（规格 §14.1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 聚合窗口：**同一台设备 + 同一种事件**，前后两次触发在窗口之内就算"连续触发"。
+ *
+ * 规格要求"聚合依据必须可配置：assetId / eventType / detectionRegion / ruleId / timeWindow"。
+ * 我们有的只有 **deviceId + eventType**（事件种类）与**时间窗口** —— 没有 asset 这一层、
+ * 没有 detectionRegion（声学设备不报检测区域）、没有 ruleId（联动规则还没有标识）。
+ * 所以"可配置"落在**时间窗口**上（界面里给四档），分组键写死成 deviceId + kind，
+ * 并用 `eventGroupKey()` 一处定义。
+ */
+export const DEFAULT_GROUP_WINDOW_MS = 10 * 60 * 1000
+
+export type GroupWindowId = 'off' | '10m' | '30m' | '1h'
+
+export interface GroupWindowChoice {
+  id: GroupWindowId
+  labelKey: string
+  ms: number
+}
+
+/**
+ * 界面上可选的聚合窗口。`off` 是**关闭聚合**（每条触发一行）—— 规格的默认是聚合，
+ * 但"关掉"必须存在：查一条具体触发时聚合反而是障碍。
+ */
+export const GROUP_WINDOW_CHOICES: readonly GroupWindowChoice[] = [
+  { id: 'off', labelKey: 'eventsUi.groupWindow.off', ms: 0 },
+  { id: '10m', labelKey: 'eventsUi.groupWindow.m10', ms: 10 * 60 * 1000 },
+  { id: '30m', labelKey: 'eventsUi.groupWindow.m30', ms: 30 * 60 * 1000 },
+  { id: '1h', labelKey: 'eventsUi.groupWindow.h1', ms: 60 * 60 * 1000 }
+]
+
+export function isGroupWindowId(value: unknown): value is GroupWindowId {
+  return typeof value === 'string' && GROUP_WINDOW_CHOICES.some((choice) => choice.id === value)
+}
+
+/** 窗口取值 → 毫秒（认不出来时给默认的那一档）。 */
+export function groupWindowMsFor(id: GroupWindowId): number {
+  return GROUP_WINDOW_CHOICES.find((choice) => choice.id === id)?.ms ?? DEFAULT_GROUP_WINDOW_MS
+}
+
+/** 毫秒 → 界面上的那一档（主进程回给界面的值要能显示回去）。 */
+export function groupWindowIdFor(ms: number | undefined): GroupWindowId {
+  if (ms === undefined || !Number.isFinite(ms)) return '10m'
+  const exact = GROUP_WINDOW_CHOICES.find((choice) => choice.ms === ms)
+  if (exact) return exact.id
+  return ms <= 0 ? 'off' : '10m'
+}
+
+/**
+ * 分组键：**同一台设备 + 同一种事件**。
+ *
+ * 为什么不是"同一台设备"就够：一台设备上"检测完成"与"设备自报告警"是两件事，
+ * 并成一行会让人看不出发生了什么（`kind` 的注释里写了这类区别的由来）。
+ */
+export function eventGroupKey(entry: { deviceId: string; kind: EventKind }): string {
+  return `${entry.deviceId}|${entry.kind}`
+}
+
+export interface EventGroup {
+  /** 稳定标识：组内**最早**那一条的 entry id。 */
+  id: string
+  /** 组内的原始事件（**早 → 晚**）。 */
+  members: EventCenterEntry[]
+  firstDetectedAt: number
+  lastDetectedAt: number
+  /** `lastDetectedAt - firstDetectedAt`（只有一条时是 0）。 */
+  durationMs: number
+  occurrenceCount: number
+}
+
+/**
+ * 把一堆事件并成"重复触发"的组（纯函数，时间语义只在这里）。
+ *
+ * 规则（照规格 §14.1 的"同一设备 / 同一事件类型 / 指定时间窗口内的**连续**触发"）：
+ *   1. 先按时间**升序**排；
+ *   2. 同一分组键（设备 + 种类）上，**与组内最后一条**的间隔 ≤ 窗口 就并入，
+ *      否则另起一组 —— 这实现的是"连续"：中间断了窗口就是两次独立的触发，
+ *      而不是"窗口内的第一条一直在拉人进来"（那样一次长时间的抖动会被并成一个巨大的组）。
+ *   3. 组内按时间升序，`id` 取**最早**那一条的 id（稳定：后来的触发不会改它）。
+ *
+ * `windowMs <= 0` 时**每条自己一组**（界面上的"不聚合"），于是调用方不必分两条路。
+ */
+export function groupEvents(
+  entries: readonly EventCenterEntry[],
+  windowMs: number = DEFAULT_GROUP_WINDOW_MS
+): EventGroup[] {
+  const sorted = [...entries].sort((left, right) => left.at - right.at)
+  const open = new Map<string, EventGroup>()
+  const groups: EventGroup[] = []
+
+  for (const entry of sorted) {
+    const key = eventGroupKey(entry)
+    const current = open.get(key)
+    if (current && windowMs > 0 && entry.at - current.lastDetectedAt <= windowMs) {
+      current.members.push(entry)
+      current.lastDetectedAt = entry.at
+      current.durationMs = current.lastDetectedAt - current.firstDetectedAt
+      current.occurrenceCount = current.members.length
+      continue
+    }
+    const group: EventGroup = {
+      id: entry.id,
+      members: [entry],
+      firstDetectedAt: entry.at,
+      lastDetectedAt: entry.at,
+      durationMs: 0,
+      occurrenceCount: 1
+    }
+    open.set(key, group)
+    groups.push(group)
+  }
+
+  // 显示顺序：最近有活动的组在前（与事件列表本身的顺序一致）。
+  return groups.sort((left, right) => right.lastDetectedAt - left.lastDetectedAt)
+}
+
+/**
+ * 把一组并成**返回给界面的那一条**：组里最新的一条（证据、指标、录像都是它的），
+ * 并挂上组的说明字段。
+ *
+ * 为什么返回"最新"而不是"最早"：抽屉里要展示的证据（抓帧、录像、指标）是**最近一次**
+ * 触发产生的，把最早那条当代表会让操作员看到一张十分钟前的图，却以为是最新的。
+ */
+export function representativeOf(group: EventGroup): EventCenterEntry {
+  const newest = group.members[group.members.length - 1] ?? group.members[0]
+  if (!newest) throw new Error('空的聚合组')
+  return {
+    ...newest,
+    groupId: group.id,
+    occurrenceCount: group.occurrenceCount,
+    firstDetectedAt: group.firstDetectedAt,
+    lastDetectedAt: group.lastDetectedAt,
+    groupMembers: group.members.map((member) => ({ id: member.id, at: member.at }))
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1174,8 @@ export function activityRows(activities: readonly EventActivityView[]): Activity
  */
 export type TimelineNode =
   | { kind: 'detected'; at: number; approximate: boolean }
+  /** 聚合组里"第 N 次触发"（第一次由 `detected` 表示，这里只列后面的）。 */
+  | { kind: 'occurrence'; at: number; index: number }
   | { kind: 'status'; at: number; actor: string; from: AlertStatus; to: AlertStatus; note?: string }
   | { kind: 'assign'; at: number; actor: string; assignee: string; note?: string }
   | { kind: 'note'; at: number; actor: string; note: string }
@@ -1009,6 +1184,9 @@ export type TimelineNode =
 /**
  * 一条事件的完整时间线（**早的在前**：时间线是从上往下读的）。
  *
+ * 聚合之后**仍保留原始明细**（规格 §14.1 明说）：`detected` 是首次触发，后面每次触发各占
+ * 一个 `occurrence` 节点 —— 展开的原始事件就长在时间线上，而不是另开一个页面。
+ *
  * 联动动作由调用方传进来（它挂在 `entry.linkageActions` 上，不属于 Activity 表）。
  */
 export function alertTimeline(
@@ -1016,8 +1194,12 @@ export function alertTimeline(
   activities: readonly EventActivityView[],
   linkageActions: readonly { at: number; action: string; status: string; reason?: string }[] = []
 ): TimelineNode[] {
+  const occurrences: TimelineNode[] = alert.members
+    .slice(1)
+    .map((member, index) => ({ kind: 'occurrence' as const, at: member.at, index: index + 2 }))
   const nodes: TimelineNode[] = [
     { kind: 'detected', at: alert.firstDetectedAt, approximate: alert.atApproximate },
+    ...occurrences,
     ...activityRows(activities),
     ...linkageActions.map((record) => ({
       kind: 'linkage-action' as const,

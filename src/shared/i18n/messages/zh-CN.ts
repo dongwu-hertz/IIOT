@@ -2817,7 +2817,19 @@ export const zhCN = {
     actionReopenNotePlaceholder: '重新开启的原因（必填）',
     actionNoteEmpty: '请先填写原因',
     actionConfirm: '确定',
-    actionCancel: '取消'
+    actionCancel: '取消',
+
+    // --- Phase 6：重复触发聚合（规格 §14.1）---------------------------------
+    groupWindowLabel: '聚合',
+    groupWindow: {
+      off: '不聚合',
+      m10: '10 分钟内',
+      m30: '30 分钟内',
+      h1: '1 小时内'
+    },
+    occurrenceCount: '×{count}',
+    timelineOccurrence: '第 {index} 次触发',
+    statusChangeDoneMany: '已把 {count} 次触发的状态改为「{status}」'
 
   }
 }

@@ -2581,7 +2581,19 @@ export const en: MessageSchema = {
     actionReopenNotePlaceholder: 'Reason for reopening (required)',
     actionNoteEmpty: 'Please enter a reason first',
     actionConfirm: 'Confirm',
-    actionCancel: 'Cancel'
+    actionCancel: 'Cancel',
+
+    // --- Phase 6: repeated-trigger aggregation (spec §14.1) -----------------
+    groupWindowLabel: 'Grouping',
+    groupWindow: {
+      off: 'No grouping',
+      m10: 'Within 10 minutes',
+      m30: 'Within 30 minutes',
+      h1: 'Within 1 hour'
+    },
+    occurrenceCount: '×{count}',
+    timelineOccurrence: 'Trigger {index}',
+    statusChangeDoneMany: 'Status of {count} triggers changed to "{status}"'
 
   }
 }

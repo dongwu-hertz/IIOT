@@ -2814,6 +2814,33 @@ async function run() {
     '  await sleep(400);' +
     '  drawerClosedByEsc = !document.querySelector(".drawer");' +
     '}' +
+    /*
+     * 重复触发聚合（规格 §14.1）：聚合窗口的下拉在不在、切到「不聚合」之后行数会不会变多。
+     *
+     * 判据故意做成"不聚合的行数 ≥ 聚合的行数"，并且**只在真的出现了 ×N 时才要求严格大于**：
+     * 操作员库里的告警如果本来就间隔很久，聚合前后行数一样是正常的，那不该报成缺陷。
+     */
+    'window.__eventsProbeStep = "aggregation";' +
+    'const agg = {};' +
+    'const rowsGrouped = document.querySelectorAll(".alert-row").length;' +
+    'agg.rowsGrouped = rowsGrouped;' +
+    'agg.countChips = document.querySelectorAll(".alert-row__count").length;' +
+    'const groupSelect = document.querySelector(".page [data-field=group-window]");' +
+    'agg.hasSelect = !!groupSelect;' +
+    'agg.options = groupSelect ? [...groupSelect.options].map((option) => option.value) : [];' +
+    'if (groupSelect) {' +
+    '  groupSelect.value = "off";' +
+    '  groupSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '}' +
+    'for (let i = 0; i < 60 && document.querySelectorAll(".alert-row").length <= rowsGrouped; i += 1) await sleep(500);' +
+    'agg.rowsUngrouped = document.querySelectorAll(".alert-row").length;' +
+    // 恢复成默认那一档：只读探针要还原现场（后面还有别的断言在看这一页）。
+    'if (groupSelect) {' +
+    '  groupSelect.value = "10m";' +
+    '  groupSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '}' +
+    'for (let i = 0; i < 60 && document.querySelectorAll(".alert-row").length !== rowsGrouped; i += 1) await sleep(500);' +
+    'agg.rowsRestored = document.querySelectorAll(".alert-row").length;' +
     // KPI → 筛选：点「严重」那一格（这一条查询只读声纹 SQLite，不会去连相机）。
     'window.__eventsProbeStep = "kpi";' +
     'const criticalTile = tiles[0];' +
@@ -2868,7 +2895,7 @@ async function run() {
     '  diag, tileLabels, tileValues, scope, hasSearchBox: !!searchBox, panelWidth, groups, optionCount,' +
     '  panelScope, savedLabels, modeLabels, oldTable: !!oldTable, summary, rowCounts, heights,' +
     '  drawerOpened, drawerClosedByEsc, drawerInfo, hashAfterKpi, pressedAfterKpi, activeOptions, storedFilter,' +
-    '  cleared, rowsAfterClear, storedFilterAfterClear,' +
+    '  cleared, rowsAfterClear, storedFilterAfterClear, aggregation: agg,' +
     '  viewport, overflowX,' +
     '  panelRight: panelRect ? Math.round(panelRect.right) : null,' +
     '  queueLeft: queueRect ? Math.round(queueRect.left) : null,' +
@@ -3054,6 +3081,32 @@ async function run() {
       )
     }
     // 只读探针要把现场还原（否则后面那条写探针会继承一个"筛到 0 条"的状态）。
+    // 重复触发聚合（规格 §14.1）：下拉在、四档、切到"不聚合"行数不变少。
+    const aggregation = eventsCenter.aggregation || {}
+    if (aggregation.hasSelect !== true) {
+      problems.push('筛选栏里没有聚合窗口的下拉（规格 §14.1 要求可配置）')
+    }
+    if (JSON.stringify(aggregation.options) !== JSON.stringify(['off', '10m', '30m', '1h'])) {
+      problems.push('聚合窗口不是四档：' + JSON.stringify(aggregation.options))
+    }
+    if (!(aggregation.rowsUngrouped >= aggregation.rowsGrouped)) {
+      problems.push(
+        '关掉聚合之后行数反而少了（聚合不是"并组"？）：' +
+          JSON.stringify(aggregation)
+      )
+    }
+    if (aggregation.countChips > 0 && !(aggregation.rowsUngrouped > aggregation.rowsGrouped)) {
+      problems.push(
+        '队列里画了 ×N，而关掉聚合之后行数没变（说明那个 ×N 是编的）：' +
+          JSON.stringify(aggregation)
+      )
+    }
+    if (aggregation.rowsRestored !== aggregation.rowsGrouped) {
+      log(
+        'events center : 聚合窗口恢复之后行数是 ' + aggregation.rowsRestored +
+          '（切走前是 ' + aggregation.rowsGrouped + '）—— 只读探针没还原现场'
+      )
+    }
     if (eventsCenter.cleared !== true) {
       problems.push('事件中心那一段没有把筛选清回去（下一条探针会继承它）')
     } else if (!(eventsCenter.rowsAfterClear > 0)) {

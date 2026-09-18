@@ -59,6 +59,8 @@ import type {
 import {
   allowedStatusTargets,
   canTransitionStatus,
+  groupEvents,
+  representativeOf,
   statusForAction
 } from '@shared/domain/event-view'
 import type {
@@ -68,6 +70,7 @@ import type {
 } from '@shared/domain/event-view'
 import {
   EVENT_CENTER_DEFAULT_LIMIT,
+  EVENT_CENTER_MAX_GROUP_WINDOW_MS,
   EVENT_CENTER_MAX_LIMIT,
   EVENT_SOURCE_KINDS,
   deriveEventSeverity,
@@ -137,6 +140,7 @@ export interface EventCenterStatusStore {
   activity(entryId: string, limit?: number): EventActivityView[]
   setStatus(input: {
     entryId: string
+    entryIds?: readonly string[]
     status?: EventStatus
     assignee?: string
     fromStatus?: EventStatus
@@ -146,6 +150,8 @@ export interface EventCenterStatusStore {
   }): {
     row: { entryId: string; status: EventStatus; assignee?: string; updatedAt: number }
     activity: EventActivityView
+    /** 一起被处置的条数（聚合组会大于 1）。 */
+    appliedTo: number
   }
 }
 
@@ -280,6 +286,7 @@ export class EventCenterService {
     const limit = clampLimit(input.limit)
     const offset = clampOffset(input.offset)
     const perSourceCap = eventCenterPerSourceCap(limit, offset)
+    const groupWindowMs = clampGroupWindow(input.groupWindowMs)
 
     const requested = new Set<EventSourceKind>(
       input.sources && input.sources.length > 0
@@ -321,6 +328,17 @@ export class EventCenterService {
 
     pool.sort(compareEntriesDesc)
 
+    /*
+     * 重复触发聚合（规格 §14.1）：**在分页之前**把候选池并成告警。
+     *
+     * 为什么在服务端而不是渲染层：告警是这一页所有数字的单位（KPI、筛选面板的计数、
+     * 分页总数）—— 在渲染层并组会让 `total` 变成"原始事件数"，而列表里是"告警数"，
+     * 两个数字对不上，翻页也会翻到半截的组。`groupWindowMs: 0` 时每条自己一组，
+     * 于是下面这条路不需要分支。
+     */
+    const groups = groupEvents(pool, groupWindowMs)
+    const pageGroups = groups.slice(offset, offset + limit)
+
     const countsBySource = emptyCounts()
     for (const entry of pool) countsBySource[entry.source] += 1
 
@@ -334,11 +352,17 @@ export class EventCenterService {
       })
     }
 
-    this.mergeStatuses(pool)
+    const items =
+      groupWindowMs > 0
+        ? pageGroups.map((group) => representativeOf(group))
+        : // 不聚合：原样返回这一页的原始事件（**一个组字段都不填**）。
+          pool.slice(offset, offset + limit)
+    this.mergeStatuses(items)
 
     return {
-      items: pool.slice(offset, offset + limit),
-      total: pool.length,
+      items,
+      // 总数是**告警数**（聚合之后），与列表里的一行一一对应。
+      total: groups.length,
       countsBySource,
       truncated,
       sources: statuses
@@ -354,9 +378,14 @@ export class EventCenterService {
    */
   private mergeStatuses(items: readonly EventCenterEntry[]): void {
     if (items.length === 0) return
+    /** 组内**全部**原始事件的 id：一条告警的处置状态挂在组上，不挂在代表那一条上。 */
+    const memberIds = (item: EventCenterEntry): string[] =>
+      item.groupMembers && item.groupMembers.length > 0
+        ? item.groupMembers.map((member) => member.id)
+        : [item.id]
     let stored: ReturnType<EventCenterStatusStore['statusMap']>
     try {
-      stored = this.options.statuses.statusMap(items.map((item) => item.id))
+      stored = this.options.statuses.statusMap(items.flatMap(memberIds))
     } catch (error) {
       // 工作流表读失败**不该让整页空白**：处置状态是附加信息，事件本身仍然要显示出来。
       // 失败如实记一条 warn，界面看到的是"没有状态"（与没人动过一样）—— 这是这一处
@@ -367,10 +396,19 @@ export class EventCenterService {
       return
     }
     for (const item of items) {
-      const row = stored.get(item.id)
-      if (!row) continue
-      item.status = row.status
-      if (row.assignee !== undefined) item.assignee = row.assignee
+      /*
+       * 组里"最新的一次处置"决定整组的状态：组内任何一条被处置过，那一组就算处置过。
+       * 只看代表（最新那条触发）会漏掉"这条组在更早的触发上已经被确认过"。
+       */
+      let best: { status: EventStatus; assignee?: string; updatedAt: number } | undefined
+      for (const id of memberIds(item)) {
+        const row = stored.get(id)
+        if (!row) continue
+        if (!best || row.updatedAt >= best.updatedAt) best = row
+      }
+      if (!best) continue
+      item.status = best.status
+      if (best.assignee !== undefined) item.assignee = best.assignee
     }
   }
 
@@ -398,6 +436,8 @@ export class EventCenterService {
    */
   async changeStatus(input: {
     entryId: string
+    /** 一起处置的其它 entry id（聚合组：一次处置落到组内每一条触发）。 */
+    entryIds?: readonly string[]
     action?: EventStatusAction
     status?: EventStatus
     assignee?: string
@@ -408,10 +448,18 @@ export class EventCenterService {
   }): Promise<EventStatusChangeResult> {
     const entryId = typeof input.entryId === 'string' ? input.entryId.trim() : ''
     if (entryId === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少事件标识')
-    const source = eventSourceFromEntryId(entryId)
-    if (source === undefined) {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, `认不出这条事件来自哪一路：${entryId}`)
+    const targets = [
+      entryId,
+      ...(input.entryIds ?? []).map((id) => (typeof id === 'string' ? id.trim() : ''))
+    ].filter((id, index, all) => id !== '' && all.indexOf(id) === index)
+    for (const id of targets) {
+      if (eventSourceFromEntryId(id) === undefined) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `认不出这条事件来自哪一路：${id}`)
+      }
     }
+    const source = eventSourceFromEntryId(entryId) as EventSourceKind
+    /** 只用来做"这一路来源有没有确认接口"的判断（组内各条的来源可以不同）。 */
+    void source
 
     const current = this.options.statuses.statusMap([entryId]).get(entryId)
     const from: EventStatus = current?.status ?? 'new'
@@ -433,20 +481,24 @@ export class EventCenterService {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, '指派必须给出账户名')
     }
 
-    // 确认这一个动作要同时落到来源侧（见上面第 3 条）。
+    // 确认这一个动作要同时落到来源侧（见上面第 3 条）。**组内每一条都要**：一次告警
+    // 底下的 N 次触发如果只有代表那一条被来源侧确认，界面与来源就会各说各话。
     if (!isAssign && target === 'acknowledged' && input.action === 'acknowledge') {
-      const acknowledged = await this.acknowledge([entryId])
-      const perSource = acknowledged.perSource.find((item) => item.source === source)
-      if (perSource?.unsupported === true) {
-        throw new AppError(
-          ErrorCodes.VALIDATION_ERROR,
-          '这一路来源没有确认接口，因此不能把它标成已确认'
-        )
+      const acknowledged = await this.acknowledge(targets)
+      for (const id of targets) {
+        const idSource = eventSourceFromEntryId(id) as EventSourceKind
+        const perSource = acknowledged.perSource.find((item) => item.source === idSource)
+        if (perSource?.unsupported === true) {
+          throw new AppError(
+            ErrorCodes.VALIDATION_ERROR,
+            '这一路来源没有确认接口，因此不能把它标成已确认'
+          )
+        }
+        if (perSource?.error !== undefined) {
+          throw new AppError(ErrorCodes.NETWORK_ERROR, `来源侧确认失败：${perSource.error}`)
+        }
       }
-      if (perSource?.error !== undefined) {
-        throw new AppError(ErrorCodes.NETWORK_ERROR, `来源侧确认失败：${perSource.error}`)
-      }
-      if (perSource === undefined || perSource.acknowledged === 0) {
+      if (acknowledged.acknowledged === 0) {
         throw new AppError(ErrorCodes.VALIDATION_ERROR, '来源侧没有确认这一条（标识可能已经失效）')
       }
     }
@@ -460,6 +512,7 @@ export class EventCenterService {
 
     const written = this.options.statuses.setStatus({
       entryId,
+      ...(targets.length > 1 ? { entryIds: targets } : {}),
       ...(isAssign ? {} : { status: target }),
       ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
       // 指派时把"界面看到的当前状态"带下去：状态行不存在时用它建行，
@@ -472,6 +525,7 @@ export class EventCenterService {
 
     appLog().info('事件中心：处置状态变更', {
       entryId,
+      entries: written.appliedTo,
       action: input.action ?? 'set',
       from,
       to: written.row.status,
@@ -483,6 +537,7 @@ export class EventCenterService {
       entryId,
       status: written.row.status,
       fromStatus: from,
+      appliedTo: written.appliedTo,
       ...(written.row.assignee === undefined ? {} : { assignee: written.row.assignee }),
       activity: written.activity
     }
@@ -938,6 +993,22 @@ function clampLimit(value: number): number {
 function clampOffset(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0
   return Math.trunc(value)
+}
+
+/**
+ * 聚合窗口（规格 §14.1）：上限 24 小时、`0` 表示不聚合。
+ *
+ * **缺省是不聚合**（不是 10 分钟）：窗口是**调用方**的选择，界面每一查询都会显式带上它
+ * （用户看到的那一档，默认 10 分钟）。把"界面默认 10 分钟"写进 API 缺省里，会让以后改一次
+ * 界面默认值就悄悄改掉所有其它调用方（含测试与将来的脚本）的行为 —— 那种耦合不值得。
+ *
+ * 夹上限的理由写在 `EVENT_CENTER_MAX_GROUP_WINDOW_MS` 的注释里：窗口太大就不是聚合，
+ * 而是把数据藏起来。
+ */
+function clampGroupWindow(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 0
+  if (value <= 0) return 0
+  return Math.min(Math.trunc(value), EVENT_CENTER_MAX_GROUP_WINDOW_MS)
 }
 
 function describeError(error: unknown): string {

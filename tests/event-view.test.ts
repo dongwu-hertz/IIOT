@@ -26,8 +26,10 @@ import {
   DETAIL_DRAWER_MIN,
   DETAIL_DRAWER_WIDE_VIEWPORT,
   DRAWER_WIDTH_STORAGE_KEY,
+  DEFAULT_GROUP_WINDOW_MS,
   EMPTY_EVENT_FILTER,
   EVENT_DETAIL_TABS,
+  GROUP_WINDOW_CHOICES,
   EVENT_SAVED_VIEWS,
   EVENT_SEVERITY_FILTERS,
   EVENT_VIEW_MODES,
@@ -55,6 +57,9 @@ import {
   eventFilterToQuery,
   eventKpis,
   evidenceImageSource,
+  groupEvents,
+  groupWindowIdFor,
+  groupWindowMsFor,
   hasEventFilterQuery,
   isEventDetailTab,
   isEventFilterActive,
@@ -65,6 +70,7 @@ import {
   parseEventViewMode,
   querySeverityFor,
   relatedGroups,
+  representativeOf,
   savedViewFromMs,
   serializeEventFilter,
   severityFilterFor,
@@ -397,7 +403,8 @@ describe('存取与容错（localStorage / URL）', () => {
     severity: 'high',
     from: '2026-09-17T08:00',
     to: '2026-09-17T18:00',
-    ack: 'unacknowledged'
+    ack: 'unacknowledged',
+    groupWindow: '30m'
   }
 
   it('序列化 → 反序列化是往返一致的', () => {
@@ -443,6 +450,7 @@ describe('存取与容错（localStorage / URL）', () => {
       'ack',
       'device',
       'from',
+      'group',
       'search',
       'severity',
       'source',
@@ -702,6 +710,160 @@ describe('Evidence 的图片从哪来（规格 §12.1）', () => {
         view({ source: 'linkage', kind: 'linkageAlarm', frameRelativePath: '   ' })
       ),
       null
+    )
+  })
+})
+
+describe('重复触发聚合（规格 §14.1）', () => {
+  const at = (minutes: number): number => 1_700_000_000_000 + minutes * 60_000
+
+  /** 同一台设备、同一种事件的连续触发。 */
+  const trigger = (minutes: number, overrides: Partial<EventCenterEntry> = {}): EventCenterEntry =>
+    entry({
+      id: `alarm:${minutes}`,
+      deviceId: 'dev-1',
+      kind: 'localAlarm',
+      at: at(minutes),
+      ...overrides
+    })
+
+  it('窗口之内算"连续触发"：并成一组，首次/最后/时长/次数都对', () => {
+    const groups = groupEvents([trigger(0), trigger(3), trigger(9)], 10 * 60_000)
+    assert.equal(groups.length, 1)
+    const group = groups[0]
+    assert.ok(group)
+    assert.equal(group.occurrenceCount, 3)
+    assert.equal(group.firstDetectedAt, at(0))
+    assert.equal(group.lastDetectedAt, at(9))
+    assert.equal(group.durationMs, 9 * 60_000)
+    // 组的稳定标识 = **最早**那一条（后来的触发不会改它）。
+    assert.equal(group.id, 'alarm:0')
+    assert.deepEqual(
+      group.members.map((member) => member.at),
+      [at(0), at(3), at(9)]
+    )
+  })
+
+  it('中间断了窗口就是两次独立触发（"连续"而不是"窗口内第一条一直拉人"）', () => {
+    // 0、9 在窗口内；25 与 9 差 16 分钟 > 10 分钟 → 另起一组（尽管 25 与 0 差 25 分钟）。
+    const groups = groupEvents([trigger(0), trigger(9), trigger(25)], 10 * 60_000)
+    assert.equal(groups.length, 2)
+    // 显示顺序：最近有活动的组在前。
+    assert.deepEqual(
+      groups.map((group) => group.occurrenceCount),
+      [1, 2]
+    )
+    assert.equal(groups[0]?.id, 'alarm:25')
+    assert.equal(groups[1]?.id, 'alarm:0')
+  })
+
+  it('分组键是"设备 + 事件种类"：设备不同或种类不同都不并', () => {
+    const otherDevice = groupEvents([trigger(0), trigger(1, { deviceId: 'dev-2' })], 10 * 60_000)
+    assert.equal(otherDevice.length, 2)
+    const otherKind = groupEvents(
+      [trigger(0), trigger(1, { source: 'deviceDetect', kind: 'deviceDetect' })],
+      10 * 60_000
+    )
+    assert.equal(otherKind.length, 2)
+  })
+
+  it('窗口为 0（界面上的"不聚合"）时每条自己一组', () => {
+    const groups = groupEvents([trigger(0), trigger(1)], 0)
+    assert.equal(groups.length, 2)
+    for (const group of groups) {
+      assert.equal(group.occurrenceCount, 1)
+      assert.equal(group.durationMs, 0)
+    }
+  })
+
+  it('代表那一条是**最新**的触发（证据/指标/录像是它的），并挂上组的说明', () => {
+    const group = groupEvents([trigger(0), trigger(5)], 10 * 60_000)[0]
+    assert.ok(group)
+    const representative = representativeOf(group)
+    // 代表是最新那条（它的 id 会随新触发往后滚），组的稳定标识仍然是"最早那条"。
+    assert.equal(representative.id, 'alarm:5')
+    assert.equal(representative.groupId, 'alarm:0')
+    assert.equal(representative.occurrenceCount, 2)
+    assert.equal(representative.firstDetectedAt, at(0))
+    assert.equal(representative.lastDetectedAt, at(5))
+    assert.deepEqual(representative.groupMembers, [
+      { id: 'alarm:0', at: at(0) },
+      { id: 'alarm:5', at: at(5) }
+    ])
+  })
+
+  it('不聚合时**一个组字段都不填**（"没聚合"与"聚合后只有一条"分得开）', () => {
+    const single = representativeOf(groupEvents([trigger(0)], 10 * 60_000)[0] as never)
+    assert.equal(single.occurrenceCount, 1)
+    assert.equal(single.groupId, 'alarm:0')
+    // 但走"不聚合"这条路时（window=0）主进程不会调 `representativeOf`，每一条原样返回 ——
+    // 类型上"没有 groupId"就是那个状态。
+    assert.equal(entry().groupId, undefined)
+  })
+
+  it('视图模型把组的信息带出来，并且**停用旧的成员字段**', () => {
+    const group = groupEvents([trigger(0), trigger(4)], 10 * 60_000)[0]
+    assert.ok(group)
+    const view = toAlertViewModel(representativeOf(group))
+    assert.equal(view.id, 'alarm:0', '视图模型的 id 应该是组的稳定标识')
+    assert.equal(view.occurrenceCount, 2)
+    assert.equal(view.firstDetectedAt, at(0))
+    assert.equal(view.lastDetectedAt, at(4))
+    assert.equal(view.durationMs, 4 * 60_000)
+    assert.deepEqual(
+      view.members.map((member) => member.id),
+      ['alarm:0', 'alarm:4']
+    )
+    // `entry` 仍然是最新那一条（抽屉里的证据是它的）。
+    assert.equal(view.entry.id, 'alarm:4')
+  })
+
+  it('没有聚合时视图模型的 members 就是它自己，duration 是 0（界面显示「—」）', () => {
+    const view = toAlertViewModel(entry({ id: 'alarm:solo' }))
+    assert.equal(view.occurrenceCount, 1)
+    assert.deepEqual(view.members, [{ id: 'alarm:solo', at: view.at }])
+    assert.equal(view.durationMs, 0)
+  })
+
+  it('窗口档位：四档、往返一致、坏值退回默认', () => {
+    assert.deepEqual(
+      GROUP_WINDOW_CHOICES.map((choice) => choice.id),
+      ['off', '10m', '30m', '1h']
+    )
+    for (const choice of GROUP_WINDOW_CHOICES) {
+      assert.equal(groupWindowMsFor(choice.id), choice.ms)
+      assert.equal(groupWindowIdFor(choice.ms), choice.id)
+    }
+    assert.equal(groupWindowMsFor('nonsense' as never), DEFAULT_GROUP_WINDOW_MS)
+    assert.equal(groupWindowIdFor(undefined), '10m')
+    assert.equal(groupWindowIdFor(-1), 'off')
+    assert.equal(groupWindowIdFor(12345), '10m')
+  })
+
+  it('聚合窗口跟着筛选一起存取（URL 与 localStorage），但**不算"筛选条件"**', () => {
+    const withWindow: EventQueueFilter = { ...EMPTY_EVENT_FILTER, groupWindow: '1h' }
+    assert.equal(eventFilterToQuery(withWindow).group, '1h')
+    assert.deepEqual(eventFilterFromQuery({ group: '1h' }).groupWindow, '1h')
+    assert.deepEqual(parseEventFilter(serializeEventFilter(withWindow)), withWindow)
+    assert.deepEqual(parseEventFilter({ groupWindow: 'nope' }).groupWindow, '10m')
+    // 它不缩小结果集，只是把连续触发并成一行 —— 因此不算"有筛选"。
+    assert.equal(isEventFilterActive(withWindow), false)
+    assert.equal(eventFilterToQuery(EMPTY_EVENT_FILTER).group, undefined)
+  })
+
+  it('时间线里保留原始明细：第 2..N 次触发各占一个节点（规格 §14.1）', () => {
+    const group = groupEvents([trigger(0), trigger(4), trigger(8)], 10 * 60_000)[0]
+    assert.ok(group)
+    const view = toAlertViewModel(representativeOf(group))
+    const nodes = alertTimeline(view, [])
+    const kinds = nodes.map((node) => node.kind)
+    assert.deepEqual(kinds, ['detected', 'occurrence', 'occurrence'])
+    const indexes = nodes.filter((node) => node.kind === 'occurrence').map((node) => node.index)
+    assert.deepEqual(indexes, [2, 3])
+    // 只有一条触发时没有 occurrence 节点（"第 1 次"就是首次探测那一个）。
+    assert.deepEqual(
+      alertTimeline(toAlertViewModel(entry()), []).map((node) => node.kind),
+      ['detected']
     )
   })
 })

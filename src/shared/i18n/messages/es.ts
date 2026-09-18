@@ -2551,7 +2551,19 @@ export const es: MessageSchema = {
     actionReopenNotePlaceholder: 'Motivo de la reapertura (obligatorio)',
     actionNoteEmpty: 'Escribe primero un motivo',
     actionConfirm: 'Confirmar',
-    actionCancel: 'Cancelar'
+    actionCancel: 'Cancelar',
+
+    // --- Fase 6: agrupación de disparos repetidos (spec §14.1) --------------
+    groupWindowLabel: 'Agrupación',
+    groupWindow: {
+      off: 'Sin agrupar',
+      m10: 'En 10 minutos',
+      m30: 'En 30 minutos',
+      h1: 'En 1 hora'
+    },
+    occurrenceCount: '×{count}',
+    timelineOccurrence: 'Disparo {index}',
+    statusChangeDoneMany: 'Estado de {count} disparos cambiado a «{status}»'
 
   }
 }
