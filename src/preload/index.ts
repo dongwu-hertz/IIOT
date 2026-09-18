@@ -29,6 +29,9 @@ import type {
   EventDetectDownloadInput,
   EventDownloadProgress,
   EventEvidenceImageInput,
+  EventIncidentCreateInput,
+  EventIncidentLinkInput,
+  EventIncidentUnlinkInput,
   EventStatusChangeInput,
   Fa371DetectFeedbackPreview,
   Fa371EnergyPreview,
@@ -470,7 +473,18 @@ const api: RendererApi = {
     changeStatus: (input: EventStatusChangeInput) =>
       ipcRenderer.invoke(IpcChannels.EVENT_CENTER_CHANGE_STATUS, input),
     activity: (entryId: string, limit?: number) =>
-      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_ACTIVITY, entryId, limit)
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_ACTIVITY, entryId, limit),
+    // Incident（规格 §14.2 的 V1）：人工创建 + 手动关联 + 解除。
+    createIncident: (input: EventIncidentCreateInput) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_INCIDENT_CREATE, input),
+    linkAlerts: (input: EventIncidentLinkInput) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_INCIDENT_LINK, input),
+    unlinkAlert: (input: EventIncidentUnlinkInput) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_INCIDENT_UNLINK, input),
+    incidentsForAlert: (entryId: string) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_INCIDENTS_FOR_ALERT, entryId),
+    listIncidents: (limit?: number) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_INCIDENT_LIST, limit)
   }
 }
 

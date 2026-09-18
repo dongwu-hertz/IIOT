@@ -26,7 +26,7 @@
 | §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 右侧覆盖层抽屉（滚动分区，无页签、无宽度拖拽、宽度写死 480） | **✅ Phase 4**：400–560 可拖（拖拽 + 键盘 ←→，偏好 localStorage）、默认 400（≥1600 用 440）、不跳页、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、页签条只渲染**已实现**的两个（Timeline/Related/Activity 属 Phase 5） |
 | §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | **✅ Phase 4 做了 Acoustic 一个渲染器**：图片证据（联动抓帧 / 声纹告警的球机抓图）+ 录音录像 + 指标（频谱与测量）+ 检测结果文件；链接按来源选路（`evidenceImageSource`）。DTS/DAS/DGA **不做**（**冲突**：见 3.1）。每一条事件只有**一张**图（见 3.10） |
 | §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | **✅ Phase 5**：三个页签都在（`IMPLEMENTED_DETAIL_TABS` 五个）。Timeline = 首次探测 + 我们的动作 + 联动动作，按时间排；Related = 同设备 / 同类型 / ±10 分钟三组（**只在已加载那一页里找**，作用域印在页面上），点一下切到那一条；Activity = `event_activity` 的流水，新的在前 |
-| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | **Phase 6 前半已做**：重复触发聚合（同一设备 + 同一种事件 + 窗口内的连续触发并成一条告警，`occurrenceCount` / `firstDetectedAt` / `lastDetectedAt` / `duration` / 原始成员都在，队列行带 ×N，时间线里每次触发各占一个节点）；**Incident 属后半（待做）**。取舍见 3.15 |
+| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | **✅ Phase 6 两半都做完**：前半 = 重复触发聚合（同一设备 + 同一种事件 + 窗口内的连续触发并成一条告警，`occurrenceCount` / `firstDetectedAt` / `lastDetectedAt` / `duration` / 原始成员都在，队列行带 ×N，时间线里每次触发各占一个节点，取舍见 3.15）；后半 = 人工 Create Incident + 手动关联（schema v14，抽屉「关联」页签的建议卡 / 创建 / 关联到已有 / 解除，取舍见 3.3 / 3.16 / 3.17） |
 | §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | Phase 3 已做：点行不跳页、↑/↓ 选中并同步焦点、Esc 关抽屉、行与筛选项都有焦点环 |
 | §16 组件树/Store/ViewModel | EventCenterPage → KPI/Filter/Queue/Drawer … | `EventCenterView.vue` 单文件 + `stores/eventCenter.ts` | Phase 3 拆出 `EventKpiStrip` / `EventFilterPanel` / `AlertQueue` 与纯函数层 `shared/domain/event-view.ts`（`AlertViewModel` 适配器），见第 4 节 |
 | §17 Design Tokens | 一套 `--hz-*` 等 token，禁止组件里硬编码 | 已有 token 体系（组件里不写 hex） | **✅ 取值与清单已对齐**，对照表见 §2；Phase 3 新增 `.severity--<档>` 变量类（一个类给出强调色与软底色） |
@@ -111,6 +111,23 @@ Evidence 的**容器**按规格做成"按 `sensorType` 选渲染器"的形状，
 只有**声学一族**（声纹设备 / 相机 / 听诊盒子 / 声呐）。做法按规格自己给的优先级：
 V1 只做**人工 Create Incident + 手动关联告警**（P2），不做规则型自动关联与 AI 建议（V2/V3），
 且 Incident 的成员只来自我们**有的**那三种来源。
+
+**Phase 6 后半已按 V1 落地**（schema v14 = `incidents` + `incident_alerts`）：抽屉「关联」页签里
+列出现有的关联（可解除）、够阈值时给一张**建议卡**（规格 §13.2 的 "Potential Related Incident"），
+创建/关联走同一个对话框。两处判据是**我们自己定的**，规格没给数：
+
+- **建议卡的阈值 = 同一条相关性链上至少 2 条告警**（含当前这条，`INCIDENT_SUGGESTION_MIN_ALERTS`）。
+  规格 §13.2 只说"当相关性达到阈值时"，**阈值本身手册未说明**；取 2 的理由：一条孤立告警没有
+  可建议的内容，而"同设备上还有第二条"已经是一次值得记下来的事实；取更大的值会让这条入口在
+  只有两三台设备的现场永远不出现。
+- **建议的标题 = 设备名 + 「异常情况」**（规格 §14.2 的例子 `Transformer T03 abnormal condition`
+  就是这个形状）。它只是**初值**，对话框里可以整句改掉 —— 规格 §13.2 明说"不自动替用户
+  关闭/合并"，所以建议卡里只有一句话 + 一个按钮，没有任何自动动作。
+
+**关联的标识空间与状态/Activity 完全一样**（`EventCenterEntry.id`：`alarm:` / `linkage:` /
+`detect:` 前缀）：一条事件的状态、流水、所属 Incident 可以用同一把钥匙对齐。
+一条 Alert **可以同时属于多个 Incident**（人工关联不做成"只能有一个"）：两个现实问题重叠在
+同一条告警上是常见的，硬拦会把操作员逼去编一个假标题。
 
 ### 3.4 mock 数据 demo —— 不放进产品，只在探针里
 
@@ -290,6 +307,25 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 
 **窗口的上限是 24 小时**：窗口太大就不是聚合，是把数据藏起来。
 
+### 3.16 Incident **没有**生命周期 —— 我们不造规格没写的东西（Phase 6 后半）
+
+规格 §2.1 用一句话定义 Incident（"一个现实世界问题，可关联多个 Alert / 多个设备 / 多种传感器"），
+但**没有**给它状态、严重度、负责人或关闭条件 —— §2.2 的状态机是给 **Alert** 的。
+所以 `incidents` 表里只有：标题、可选备注、创建人、创建/更新时间，加上关联表
+`incident_alerts (incident_id, entry_id, linked_at, linked_by)`。
+
+造一个"Open → Investigating → Closed"的 Incident 生命周期会让界面长出一套业主验收时
+无从对照的概念（而且它会与 Alert 的状态机打架：一条 Alert 已 Resolved，它的 Incident 还是 Open
+该显示什么？）。将来规格给了再迁移 —— 那时要**连同"旧的 Incident 怎么映射"一起做**。
+
+### 3.17 KPI 条上**不加** `Incidents 5` 那一格（Phase 6 后半）
+
+规格 §8.2 的 KPI 例子里有第五格 `Incidents 5`，并要求"所有 KPI 可点击，点击后转换成对应 Filter"。
+我们不加它，理由是规格自己给的：**同一段末尾写着"不要使用'总告警数量 12,586'作为主要 KPI；
+优先展示待处理性指标"**。按 §3.16，我们的 Incident 只有人工创建、没有关闭/解决，所以
+"Incident 总数"是一个**只增不减**的数字 —— 它正是那一段点名反对的那类指标。等规格给出
+Incident 的生命周期（有"未关闭"这个概念）再加这一格，那时它才是一个"待处理性"指标。
+
 ---
 
 ## 4. 进度与下一步（按规格 §18.1 的六个阶段）
@@ -301,7 +337,7 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 | Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | **✅ 本轮**：<br>· 纯函数层 `src/shared/domain/event-view.ts`（`AlertViewModel` 适配器、`eventKpis`、`eventFilterCounts`、筛选/URL/存取的容错解析）+ `tests/event-view.test.ts`（40 条）<br>· `EventKpiStrip.vue`（四格、可点、作用域印在下面）<br>· `EventFilterPanel.vue`（等级/来源/确认状态/设备四组带计数、216px）<br>· `AlertQueue.vue`（三档行高、3px 严重度色条、↑/↓ 选中并同步焦点、整行是 button、等级文字每一档都印）<br>· `EventCenterView.vue`：表格 → 队列、搜索 + 时间 + 六个内置视图 + 视图模式、URL/localStorage 记忆、Esc 关抽屉、来源读况改为**只在失败/截断时**出现、关键字不再触发重新查询<br>· `main.css`：`.severity--<五档>`（一个类给出强调色 + 软底色）、`.alert-row`、`.chip--tiny` 提升为全局<br>· 探针：`scripts/demo-shot-driver.cjs` 增加事件中心一段（KPI 四格与作用域、平均确认耗时是「—」、面板 216px 与四组、六个视图、三档行高、点行开抽屉 + Esc 关、点 KPI「严重」后地址栏/面板/localStorage 三处都对、四条版面关系），并修掉三处**探针自己**的缺陷（见 `docs/Ivms4200-UX-REFERENCE.md` §15.41.6） |
 | Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | **✅ 本轮**：<br>· 纯函数层新增：`AlertViewModel` 的 `firstDetectedAt` / `lastDetectedAt` / `durationMs`、抽屉宽度常量与容错（400–560）、`alertOverviewFields()`（§11.4 的字段表）、`evidenceImageSource()`（图从哪来）<br>· 新组件 `EventDetailDrawer.vue`：拖拽 + 键盘改宽度（偏好 localStorage）、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、40px 页签条 + 2px 橙色下划线、头部等级/标题/设备链接/首次探测时间/主 CTA<br>· `EventCenterView.vue`：Overview 2 列属性网格 + Evidence（图片 / 录音录像 / 指标 / 结果文件），旧的内联抽屉拆干净<br>· **新 IPC** `eventCenter.evidenceImage` / `closeEvidenceImage`（只读；四道关：路径来源 `recordingId` 优先 → 存储根越界保护 → 文件在不在 → 是不是图片）<br>· `main.css`：新增 `--color-scrim`（模态与抽屉共用一个遮罩值，顺手修掉 `AppModal` 里写死的 rgba）<br>· 探针：抽屉默认宽度 400、抓手 400–560、页签只有两个、Overview ≥8 格且有一格跨两列、切页签真的切过去、Evidence 有图或有说明、焦点进入抽屉、键盘 ← 改宽度并**写回 localStorage** |
 | Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | **✅ 本轮**：<br>· **schema v13**（`event_status` + `event_activity`，CHECK 钉住七个状态与三种记录）+ 迁移测试（老库升级一行不少、幂等、CHECK 真的在管）<br>· `EventStatusRepository`：状态与流水**同一个事务**、写完读回、按事件分组计数、分块查询；`assign` 不会把状态退回 `new`<br>· 领域：`AlertStatus` 七个取值、`ALERT_STATUS_TRANSITIONS` + `canTransitionStatus`、`statusActionsFor`、`activityRows` / `alertTimeline` / `relatedGroups` + 单测<br>· IPC：`eventCenter.changeStatus`（**写，要管理员**，`actor` 来自会话）+ `eventCenter.activity`（只读）<br>· **界面**：抽屉头部按状态给动作（主 CTA 恰好一个；没有确认接口的来源不出现「确认」）、指派选账户、重新开启必须填原因（行内表单）、处置后**重查且不关抽屉**，以及 Timeline / Related / Activity 三个页签<br>· 探针：只读那一批里加"五个页签切得过去、关联三组、时间线有节点、头部有主 CTA"；**写探针**（排在最末尾）点一次主 CTA，然后 `eventCenter.query` 读回状态、`eventCenter.activity` 读回流水，并断言抽屉没被关掉 |
-| Phase 6 | 重复触发聚合 + 人工 Incident | **前半已做**：<br>· 领域：`groupEvents()`（同一设备 + 同一种事件 + **连续**触发并组；窗口 0 = 不聚合）、`representativeOf()`（代表取最新那条、组的稳定标识取最早那条）、`GROUP_WINDOW_CHOICES` 四档 + 单测<br>· 主进程：聚合在**分页之前**（`total` = 告警数）、窗口上限 24 小时、状态按**组**合并、一次处置落到组内每一条（同一个事务 + `appliedTo`）<br>· 界面：筛选栏的聚合窗口下拉（四档、跟着 URL 与本机记住、改了会重查）、队列行 ×N、时间线里第 2..N 次触发各占一个节点（保留原始明细）<br>· 探针：聚合窗口四档、切到"不聚合"行数从 1 涨到 50（**证明那个 ×N 不是编的**）、恢复现场<br>· **待做（后半）**：人工 Create Incident 与手动关联 Alert |
+| Phase 6 | 重复触发聚合 + 人工 Incident | **✅ 两半都做完**：<br>**前半（聚合）**：<br>· 领域：`groupEvents()`（同一设备 + 同一种事件 + **连续**触发并组；窗口 0 = 不聚合）、`representativeOf()`（代表取最新那条、组的稳定标识取最早那条）、`GROUP_WINDOW_CHOICES` 四档 + 单测<br>· 主进程：聚合在**分页之前**（`total` = 告警数）、窗口上限 24 小时、状态按**组**合并、一次处置落到组内每一条（同一个事务 + `appliedTo`）<br>· 界面：筛选栏的聚合窗口下拉（四档、跟着 URL 与本机记住、改了会重查）、队列行 ×N、时间线里第 2..N 次触发各占一个节点（保留原始明细）<br>· 探针：聚合窗口四档、切到"不聚合"行数从 1 涨到 50（**证明那个 ×N 不是编的**）、恢复现场<br>**后半（Incident，规格 §14.2 的 V1）**：<br>· **schema v14**（`incidents` + `incident_alerts`：主键 `(incident_id, entry_id)` 保证幂等、`ON DELETE CASCADE`、按 `entry_id` 建索引）+ 迁移测试（v13 库升级一行不少、幂等、外键与主键真的在管）<br>· 领域 `src/shared/domain/incident.ts`：`validateIncidentDraft()`（标题必填 + 长度上限，对话框与主进程**共用一处**）、`incidentSuggestion()`（阈值常量 + 只认 same-device 那一组）、`IncidentView` / `sortIncidentsDesc()` + 单测<br>· `IncidentRepository`：创建 + 关联在**一个事务**里、关联幂等（`INSERT OR IGNORE`）、写完读回、一次 `GROUP BY` 取关联条数<br>· 服务：`createIncident` / `linkAlerts` / `unlinkAlert` / `incidentsForEntry` / `listIncidents`（**只建关联、不碰 Alert 状态** —— 规格 §13.2 的"不自动关闭/合并"）<br>· IPC：三条写通道（**要管理员**）+ 两条读通道（`viewEvents`），五条都登记进 `PERMISSION_OPERATIONS.viewEvents`<br>· 界面：抽屉「关联」页签里新增 Incident 那一段（已关联列表 + 建议卡 + 两个按钮）、`IncidentCreateDialog.vue`（新建 / 关联到已有两种走向、候选默认全勾可去掉、本地校验用共享判据、回执就地显示）<br>· 探针：写探针先**把聚合关掉**（同设备多条告警各自成行）→ 找一台出现两次以上的设备 → 打开抽屉 → 关联页签里**必须有建议卡** → 建一个 → `incidentsForAlert` 读回（标题 / 创建人 / 关联条数）→ 面板里列出那一行 → 点「解除关联」→ 再读回 0 条；跑完恢复聚合窗口 |
 
 **每一阶段的交付口径**（与仓库既有规矩一致）：四语言文案 + 单测/源码守卫 + 探针断言 +
 文档记录 + 重新打包；写库/写设备一律**写完读回**；规格没说的取值一律在文档里标明是我们的设计。
@@ -348,4 +384,19 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 - **删除来源行之后的状态残留**：`event_status` 按 entry id 存，声纹告警行被删（保留策略）
   之后那一行状态会变成孤儿。它不影响任何界面（事件已经不出现了），但库里会攒下这些行 ——
   需要一条清理规则时，这一条是输入。
+
+**Phase 6 后半（Incident）的已知未验证**（跑通 ≠ 全都验过）：
+- **真库升级到 v14 还没有发生过**：迁移测试在临时库上跑（v13 → v14、幂等、外键/主键/CASCADE）。
+  操作员那台库第一次用新包启动时会升到 v14（纯新增两张表）。
+- **同名/重复 Incident 没有约束**：两个人可以建两个标题一样的 Incident，界面上并排出现两条
+  一模一样的建议。没有去重规则（那是产品决定：合并两条 Incident 该保留哪一条？）。
+- **删除 Incident 没有入口**：表上写了 `ON DELETE CASCADE`，但界面上没有"删除"（规格 V1 没有
+  这个动作）。解除关联是有的。
+- **`incident_alerts` 会一直长**：与 `event_activity` 同一条 —— 没有保留策略。
+- **多个 Incident 同时在面板里时的排版**没有逐语言看过（探针里只有一条关联）。
+- **关联条数只统计"链接条数"**，不展开到聚合组的成员：一条 ×50 的聚合告警算 **1** 条关联。
+  这是刻意的（关联的是"告警"，不是"50 次触发"），但界面上的 `N 条关联告警` 与队列里的 ×N
+  读起来可能让人以为两处说的是同一个数。
+- **"关联到已有"的选择器没有量过很多条时的表现**：`listIncidents` 上限 100，界面上是一个原生
+  `<select>`（一百条会很长的下拉）。
 

@@ -23,6 +23,7 @@ import {
 } from './database/device-repository'
 import { AlarmRepository, RecordingRepository } from './database/alarm-repository'
 import { EventStatusRepository } from './database/event-status-repository'
+import { IncidentRepository } from './database/incident-repository'
 import { SampleRepository } from './database/sample-repository'
 import { SampleLibraryService } from './sample/sample-library-service'
 import { SampleLabelService } from './sample/sample-label-service'
@@ -278,6 +279,8 @@ export async function initServices(): Promise<AppServices> {
   const recordingRepo = new RecordingRepository(db)
   /** 处置工作流（状态 + Activity，schema v13）：事件中心自己的两张表。 */
   const eventStatusRepo = new EventStatusRepository(db)
+  /** Incident 与它的关联（schema v14）：人工创建 + 手动关联，规格 §14.2 的 V1。 */
+  const incidentRepo = new IncidentRepository(db)
   /**
    * 本地异常声纹样本库（schema v7）。
    *
@@ -689,7 +692,9 @@ export async function initServices(): Promise<AppServices> {
     images: videoFiles,
     storage,
     // 处置工作流（schema v13）：状态与 Activity 在我们自己的表里，与三路来源解耦。
-    statuses: eventStatusRepo
+    statuses: eventStatusRepo,
+    // Incident（schema v14）：同样是**我们自己的**关联记录，按同一套 entry id 存。
+    incidents: incidentRepo
   })
 
   // ---- Startup tasks ------------------------------------------------------

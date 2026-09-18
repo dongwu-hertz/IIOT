@@ -2826,6 +2826,47 @@ export const zhCN = {
     relatedEmpty: '没有找到相关的其它事件。',
     relatedOpen: '查看这一条',
 
+    /*
+     * --- Phase 6 后半（规格 §13.2 的建议卡 + §14.2 的 V1）---------------------
+     *
+     * 「Incident」这个词**不翻译**：规格全篇用的是它（§2.1 把它与 Event / Alert 并列定义），
+     * 中文里没有一个既准确又不会与"告警""事件"混淆的词 —— 翻成"事件"会和我们自己的
+     * 「事件」撞车，翻成"故障单"则加了规格没有的含义。
+     */
+    incidentTitle: 'Incident 关联',
+    incidentNone: '这一条还没有关联任何 Incident。',
+    incidentAlertCount: '{count} 条关联告警',
+    incidentUnlink: '解除关联',
+    incidentSuggestionLabel: '可能相关的 Incident',
+    incidentSuggestionCount: '{count} 条相关告警',
+    incidentSuggestedTitle: '{device} 异常情况',
+    incidentCreate: '创建 Incident',
+    incidentLinkExisting: '关联到已有 Incident',
+    incidentCreated: '已创建「{title}」，关联了 {count} 条告警',
+    incidentLinked: '已关联 {linked} 条（另有 {already} 条本来就在里面）',
+    incidentUnlinked: '已解除与「{title}」的关联',
+    incidentFailed: '这个操作没有成功。',
+    incidentDialogTitle: 'Incident',
+    incidentModeLabel: '怎么做',
+    incidentModeCreate: '新建 Incident',
+    incidentModeLink: '关联到已有',
+    incidentFieldTitle: '标题',
+    incidentTitlePlaceholder: '例如：1 号风机异常情况',
+    incidentTitleHint: '最多 {max} 字',
+    incidentFieldNote: '备注（可选）',
+    incidentFieldExisting: '选择 Incident',
+    incidentCandidates: '一并关联这些告警（{count} 条）',
+    incidentNoCandidates: '没有可一并关联的告警 —— 只创建 Incident 本身。',
+    incidentNoExisting: '还没有已建的 Incident',
+    incidentSubmitCreate: '创建并关联',
+    incidentSubmitLink: '关联',
+    incidentSubmitting: '正在写入…',
+    incidentReasonTitleRequired: '标题不能为空',
+    incidentReasonTitleTooLong: '标题太长（上限 {max} 字）',
+    incidentReasonNoteTooLong: '备注太长（上限 {max} 字）',
+    incidentReasonNoExisting: '先选一个 Incident',
+    incidentReasonNoAlerts: '至少要选一条告警',
+
     timelineTitle: '时间线',
     timelineDetected: '首次探测到',
 

@@ -23,7 +23,8 @@ import type {
   EventDetectDownloadResult,
   EventDownloadProgress,
   EventSourceKind,
-  EventSourceStatus
+  EventSourceStatus,
+  IncidentView
 } from '@shared/ipc/contract'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 
@@ -213,6 +214,112 @@ export const useEventCenterStore = defineStore('eventCenter', () => {
     notice.value = ''
   }
 
+  // -------------------------------------------------------------------------
+  // Incident（规格 §14.2 的 V1：人工创建 + 手动关联）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 当前**打开的那一条** Alert 属于哪些 Incident（详情抽屉的「关联」页签）。
+   *
+   * 每个事件单独读一次（打开抽屉时），不挂在队列行上：队列一页 50 行，逐行去问
+   * "它属于哪些 Incident"就是 50 次往返，而这个信息只在抽屉里有读者。
+   */
+  const linkedIncidents = ref<IncidentView[]>([])
+  /** 库里已有的 Incident（「关联到已有」的选择器用）。懒加载：打开对话框时才读。 */
+  const incidentOptions = ref<IncidentView[]>([])
+  const incidentBusy = ref(false)
+  /** 上一次写操作的结果回执（界面说"新建成功 / 已关联 N 条"）；`null` = 还没写。 */
+  const incidentNotice = ref('')
+
+  async function loadIncidentsFor(entryId: string): Promise<void> {
+    const id = typeof entryId === 'string' ? entryId.trim() : ''
+    if (id === '') {
+      linkedIncidents.value = []
+      return
+    }
+    const result = await callApi(() => window.api.eventCenter.incidentsForAlert(id))
+    if (!result.success) {
+      // 读失败**不改动**已有的那几条：一次读失败不该让界面上的列表消失。
+      error.value = resultMessage(result)
+      return
+    }
+    linkedIncidents.value = unwrap(result) ?? []
+  }
+
+  /** 读一次已有的 Incident 列表（给"关联到已有"用）。 */
+  async function loadIncidentOptions(): Promise<void> {
+    const result = await callApi(() => window.api.eventCenter.listIncidents(100))
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return
+    }
+    incidentOptions.value = unwrap(result) ?? []
+  }
+
+  /**
+   * 建一个 Incident（规格 §14.2 的 `[Create Incident]`）。
+   *
+   * 成功之后**重读**这一条 Alert 的关联列表（而不是把返回值塞进数组）：同一条 Alert 可能
+   * 同时属于两个 Incident，返回值只知道刚建的那一个。
+   */
+  async function createIncident(input: {
+    title: string
+    note?: string
+    entryIds: string[]
+  }): Promise<{ incident: IncidentView; linked: number } | undefined> {
+    incidentBusy.value = true
+    const result = await callApi(() =>
+      window.api.eventCenter.createIncident({
+        title: input.title,
+        ...(input.note === undefined || input.note.trim() === '' ? {} : { note: input.note }),
+        entryIds: input.entryIds
+      })
+    )
+    incidentBusy.value = false
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return undefined
+    }
+    const payload = unwrap(result)
+    incidentNotice.value = ''
+    incidentOptions.value = []
+    if (!payload) return undefined
+    return { incident: payload.incident, linked: payload.linked }
+  }
+
+  async function linkAlerts(input: {
+    incidentId: string
+    entryIds: string[]
+  }): Promise<{ linked: number; alreadyLinked: number } | undefined> {
+    incidentBusy.value = true
+    const result = await callApi(() => window.api.eventCenter.linkAlerts(input))
+    incidentBusy.value = false
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return undefined
+    }
+    const payload = unwrap(result)
+    return { linked: payload?.linked ?? 0, alreadyLinked: payload?.alreadyLinked ?? 0 }
+  }
+
+  async function unlinkAlert(input: {
+    incidentId: string
+    entryId: string
+  }): Promise<boolean> {
+    incidentBusy.value = true
+    const result = await callApi(() => window.api.eventCenter.unlinkAlert(input))
+    incidentBusy.value = false
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return false
+    }
+    return true
+  }
+
+  function clearIncidentNotice(): void {
+    incidentNotice.value = ''
+  }
+
   return {
     // state
     items,
@@ -227,6 +334,10 @@ export const useEventCenterStore = defineStore('eventCenter', () => {
     ackBusy,
     lastAcknowledge,
     downloads,
+    linkedIncidents,
+    incidentOptions,
+    incidentBusy,
+    incidentNotice,
     // getters
     page,
     hasMore,
@@ -242,6 +353,12 @@ export const useEventCenterStore = defineStore('eventCenter', () => {
     handleProgress,
     clearDownload,
     clearError,
-    clearNotice
+    clearNotice,
+    loadIncidentsFor,
+    loadIncidentOptions,
+    createIncident,
+    linkAlerts,
+    unlinkAlert,
+    clearIncidentNotice
   }
 })

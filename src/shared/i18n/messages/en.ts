@@ -2582,6 +2582,45 @@ export const en: MessageSchema = {
     relatedEmpty: 'No related events were found.',
     relatedOpen: 'Open this one',
 
+    /*
+     * --- Phase 6 second half (spec §13.2 suggestion card + §14.2 V1) ----------
+     * "Incident" stays untranslated: the spec defines it alongside Event and Alert
+     * (§2.1), and no English synonym is both accurate and unambiguous here.
+     */
+    incidentTitle: 'Incidents',
+    incidentNone: 'This alert is not linked to any incident yet.',
+    incidentAlertCount: '{count} linked alert(s)',
+    incidentUnlink: 'Unlink',
+    incidentSuggestionLabel: 'Potential related incident',
+    incidentSuggestionCount: '{count} correlated alert(s)',
+    incidentSuggestedTitle: '{device} abnormal condition',
+    incidentCreate: 'Create incident',
+    incidentLinkExisting: 'Link to an existing incident',
+    incidentCreated: 'Created "{title}" and linked {count} alert(s)',
+    incidentLinked: 'Linked {linked} (another {already} were already in it)',
+    incidentUnlinked: 'Unlinked from "{title}"',
+    incidentFailed: 'That action did not succeed.',
+    incidentDialogTitle: 'Incident',
+    incidentModeLabel: 'What to do',
+    incidentModeCreate: 'New incident',
+    incidentModeLink: 'Link to existing',
+    incidentFieldTitle: 'Title',
+    incidentTitlePlaceholder: 'e.g. Fan 1 abnormal condition',
+    incidentTitleHint: 'Up to {max} characters',
+    incidentFieldNote: 'Note (optional)',
+    incidentFieldExisting: 'Choose an incident',
+    incidentCandidates: 'Link these alerts too ({count})',
+    incidentNoCandidates: 'No alert to link — this only creates the incident itself.',
+    incidentNoExisting: 'No incident exists yet',
+    incidentSubmitCreate: 'Create and link',
+    incidentSubmitLink: 'Link',
+    incidentSubmitting: 'Saving…',
+    incidentReasonTitleRequired: 'A title is required',
+    incidentReasonTitleTooLong: 'The title is too long (up to {max} characters)',
+    incidentReasonNoteTooLong: 'The note is too long (up to {max} characters)',
+    incidentReasonNoExisting: 'Choose an incident first',
+    incidentReasonNoAlerts: 'Select at least one alert',
+
     timelineTitle: 'Timeline',
     timelineDetected: 'First detected',
 

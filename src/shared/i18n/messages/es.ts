@@ -2552,6 +2552,45 @@ export const es: MessageSchema = {
     relatedEmpty: 'No se encontraron otros eventos relacionados.',
     relatedOpen: 'Abrir este',
 
+    /*
+     * --- Segunda mitad de la fase 6 (tarjeta de sugerencia §13.2 + §14.2 V1) ---
+     * "Incident" no se traduce: la especificación lo define junto a Event y Alert
+     * (§2.1) y ningún sinónimo en español es igual de preciso y sin ambigüedad.
+     */
+    incidentTitle: 'Incidentes',
+    incidentNone: 'Esta alerta todavía no está vinculada a ningún incidente.',
+    incidentAlertCount: '{count} alerta(s) vinculada(s)',
+    incidentUnlink: 'Desvincular',
+    incidentSuggestionLabel: 'Posible incidente relacionado',
+    incidentSuggestionCount: '{count} alerta(s) correlacionada(s)',
+    incidentSuggestedTitle: '{device} condición anómala',
+    incidentCreate: 'Crear incidente',
+    incidentLinkExisting: 'Vincular a un incidente existente',
+    incidentCreated: 'Se creó «{title}» y se vincularon {count} alerta(s)',
+    incidentLinked: 'Se vincularon {linked} (otras {already} ya estaban dentro)',
+    incidentUnlinked: 'Se desvinculó de «{title}»',
+    incidentFailed: 'Esa acción no se completó.',
+    incidentDialogTitle: 'Incidente',
+    incidentModeLabel: 'Qué hacer',
+    incidentModeCreate: 'Incidente nuevo',
+    incidentModeLink: 'Vincular a uno existente',
+    incidentFieldTitle: 'Título',
+    incidentTitlePlaceholder: 'p. ej. Condición anómala del ventilador 1',
+    incidentTitleHint: 'Hasta {max} caracteres',
+    incidentFieldNote: 'Nota (opcional)',
+    incidentFieldExisting: 'Elegir un incidente',
+    incidentCandidates: 'Vincular también estas alertas ({count})',
+    incidentNoCandidates: 'No hay alertas que vincular: solo se crea el incidente.',
+    incidentNoExisting: 'Todavía no existe ningún incidente',
+    incidentSubmitCreate: 'Crear y vincular',
+    incidentSubmitLink: 'Vincular',
+    incidentSubmitting: 'Guardando…',
+    incidentReasonTitleRequired: 'El título es obligatorio',
+    incidentReasonTitleTooLong: 'El título es demasiado largo (hasta {max} caracteres)',
+    incidentReasonNoteTooLong: 'La nota es demasiado larga (hasta {max} caracteres)',
+    incidentReasonNoExisting: 'Elija primero un incidente',
+    incidentReasonNoAlerts: 'Seleccione al menos una alerta',
+
     timelineTitle: 'Cronología',
     timelineDetected: 'Primera detección',
 

@@ -824,3 +824,145 @@ describe('Phase 6 · 重复触发聚合（规格 §14.1）', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Phase 6 后半：Incident（规格 §13.2 的建议卡 + §14.2 的 V1）
+// ---------------------------------------------------------------------------
+
+describe('Phase 6 后半 · Incident：人工创建 + 手动关联（规格 §14.2）', () => {
+  const eventView = read('src/renderer/src/views/EventCenterView.vue')
+  const dialog = read('src/renderer/src/components/event-center/IncidentCreateDialog.vue')
+  const store = read('src/renderer/src/stores/eventCenter.ts')
+  const service = read('src/main/services/events/event-center-service.ts')
+  const handlers = read('src/main/ipc/handlers.ts')
+  const repo = read('src/main/services/database/incident-repository.ts')
+  const schema = read('src/main/services/database/schema.ts')
+  const domain = read('src/shared/domain/incident.ts')
+
+  it('抽屉的「关联」页签里有 Incident 那一段，而且建议卡是**建议**、不是既成事实', () => {
+    assert.ok(eventView.includes('data-panel="incident"'), '抽屉里没有 Incident 那一段')
+    assert.ok(
+      eventView.includes('data-incident-suggestion') && eventView.includes('incidentSuggested'),
+      '没有"潜在关联 Incident"那张建议卡'
+    )
+    // 规格 §13.2：建议卡只是建议 —— 卡片里只有一句话 + 两个按钮，没有"自动合并"。
+    assert.ok(!/autoMerge|自动合并/.test(stripComments(eventView)), '出现了自动合并的写法')
+  })
+
+  it('两个入口（创建 / 关联到已有）都打开同一个对话框，候选默认全勾但可以去掉', () => {
+    const triggers = eventView.match(/data-action="incident-(create|open)"/g) ?? []
+    assert.equal(triggers.length, 2, `两个入口都要在（实际 ${triggers.length}）`)
+    assert.equal(
+      (eventView.match(/@click="openIncidentDialog"/g) ?? []).length,
+      2,
+      '两个入口必须走同一个打开函数'
+    )
+    assert.ok(
+      dialog.includes(':checked="entryIds.includes(item.id)"'),
+      '候选清单没有做成可逐条勾选'
+    )
+    assert.match(
+      stripComments(dialog),
+      /entryIds\.value = props\.candidates\.map\(\(item\) => item\.id\)/,
+      '候选默认没有全勾（建议卡的意义就是"默认带上这几条"）'
+    )
+  })
+
+  it('对话框里**没有** Incident 的状态 / 严重度 / 负责人 —— 规格没给 Incident 生命周期', () => {
+    const code = stripComments(dialog)
+    for (const forbidden of ['incidentStatus', 'priority', 'assignee', 'dueDate']) {
+      assert.ok(!code.includes(forbidden), `对话框里出现了规格没定义的字段：${forbidden}`)
+    }
+    // 领域层同样：只有标题 / 备注 / 创建人 / 时间 + 关联。
+    assert.ok(!/status\s*:/.test(stripComments(domain)), '领域里给 Incident 造了一个状态字段')
+  })
+
+  it('标题校验只有一处（对话框与主进程共用 `validateIncidentDraft`）', () => {
+    assert.ok(dialog.includes('validateIncidentDraft'), '对话框没有用共享的草稿校验')
+    assert.ok(service.includes('validateIncidentDraft'), '主进程没有用共享的草稿校验')
+    assert.ok(domain.includes('export function validateIncidentDraft'), '共享校验不见了')
+  })
+
+  it('三条写操作都要求管理员；两条读沿用 viewEvents', () => {
+    for (const channel of [
+      'EVENT_CENTER_INCIDENT_CREATE',
+      'EVENT_CENTER_INCIDENT_LINK',
+      'EVENT_CENTER_INCIDENT_UNLINK'
+    ]) {
+      const start = handlers.indexOf(`IpcChannels.${channel}`)
+      assert.ok(start > 0, `handlers 里没有 ${channel}`)
+      const block = handlers.slice(start, start + 700)
+      assert.ok(block.includes('requireAdministrator()'), `${channel} 没有要求管理员`)
+      assert.ok(block.includes("requirePermission('viewEvents')"), `${channel} 没有登记权限`)
+    }
+    const auth = read('src/shared/domain/auth.ts')
+    assert.match(
+      auth,
+      /viewEvents: \[[\s\S]*?'event-center:incidents-for-alert'[\s\S]*?'event-center:incident-list'[\s\S]*?\]/
+    )
+  })
+
+  it('写操作不碰 Alert 的状态（规格 §13.2：不自动替用户关闭/合并）', () => {
+    const code = stripComments(service)
+    const start = code.indexOf('async createIncident(')
+    assert.ok(start > 0, '找不到 createIncident')
+    const block = code.slice(start, code.indexOf('\n  async linkAlerts('))
+    for (const forbidden of ['changeStatus', 'setStatus', 'statuses.setStatus']) {
+      assert.ok(!block.includes(forbidden), `建 Incident 顺手动了 Alert 的状态：${forbidden}`)
+    }
+    // 关联本身在**一个事务**里建（仓储层）。
+    assert.ok(repo.includes('this.db.transaction'), '创建与关联没有放在一个事务里')
+    assert.ok(repo.includes('INSERT OR IGNORE INTO incident_alerts'), '关联不是幂等的')
+  })
+
+  it('schema v14 建两张表，并按 entry_id 建索引', () => {
+    const code = stripComments(schema)
+    assert.ok(code.includes('CREATE TABLE IF NOT EXISTS incidents'), '没有 incidents 表')
+    assert.ok(code.includes('CREATE TABLE IF NOT EXISTS incident_alerts'), '没有 incident_alerts 表')
+    assert.ok(
+      code.includes('idx_incident_alerts_entry'),
+      'incident_alerts 上没有按事件查的索引'
+    )
+    assert.match(code, /ON DELETE CASCADE/, '关联没有跟着 Incident 一起删')
+  })
+
+  it('四条 IPC 都在 store 里各有一处调用，且**没有**乐观更新（写完重读）', () => {
+    for (const method of [
+      'createIncident',
+      'linkAlerts',
+      'unlinkAlert',
+      'incidentsForAlert',
+      'listIncidents'
+    ]) {
+      assert.ok(
+        store.includes(`window.api.eventCenter.${method}`),
+        `store 里没有调用 eventCenter.${method}`
+      )
+    }
+    // 建完**重读**这一条 Alert 的关联列表：返回值只知道刚建的那一个。
+    assert.ok(
+      eventView.includes('await store.loadIncidentsFor(current.id)'),
+      '写完没有重读关联列表'
+    )
+  })
+
+  it('四语言的 Incident 词条都在，且两处 {max} 上限说的是同一个常量', () => {
+    for (const [locale, catalogue] of [
+      ['zh-CN', read('src/shared/i18n/messages/zh-CN.ts')],
+      ['en', read('src/shared/i18n/messages/en.ts')],
+      ['es', read('src/shared/i18n/messages/es.ts')],
+      ['tr', read('src/shared/i18n/messages/tr.ts')]
+    ] as const) {
+      for (const key of ['incidentCreate:', 'incidentDialogTitle:', 'incidentReasonTitleRequired:']) {
+        assert.ok(catalogue.includes(key), `${locale} 缺 ${key}`)
+      }
+    }
+    // 对话框里的提示用常量，而不是写死的数字（写死就会与领域上限分叉）。
+    assert.ok(
+      dialog.includes("t('eventsUi.incidentTitleHint', { max: titleLimit })"),
+      '标题上限提示没有用常量'
+    )
+    assert.ok(dialog.includes('INCIDENT_TITLE_MAX_LENGTH'), '对话框没有引用领域上限')
+  })
+})
+
+

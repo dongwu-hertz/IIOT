@@ -30,6 +30,7 @@ import { openDatabase } from '../src/main/services/database/schema'
 import { AlarmRepository, RecordingRepository } from '../src/main/services/database/alarm-repository'
 import { DeviceRepository } from '../src/main/services/database/device-repository'
 import { EventStatusRepository } from '../src/main/services/database/event-status-repository'
+import { IncidentRepository } from '../src/main/services/database/incident-repository'
 import { StorageService } from '../src/main/services/storage/storage-service'
 import { DetectLibraryService } from '../src/main/services/device/fa371/detect-library-service'
 import {
@@ -53,6 +54,7 @@ import type {
   EventDetectLogView
 } from '../src/shared/domain/event-center'
 import type { PendingAlarmRecord, PendingAlarmSnapshot } from '../src/shared/domain/alarm-linkage'
+import { INCIDENT_NOTE_MAX_LENGTH, INCIDENT_TITLE_MAX_LENGTH } from '../src/shared/domain/incident'
 import type { Fa371DownloadedFile } from '../src/main/services/device/fa371/dto'
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,8 @@ let recordings: RecordingRepository
 let devicesRepo: DeviceRepository
 /** 处置工作流（schema v13）：聚合那一组用例要直接往里写一条状态。 */
 let statuses: EventStatusRepository
+/** Incident 与它的关联（schema v14）：人工创建 + 手动关联那一组要直接读库核对。 */
+let incidents: IncidentRepository
 
 before(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'hz-event-center-'))
@@ -76,6 +80,7 @@ before(async () => {
   recordings = new RecordingRepository(db)
   devicesRepo = new DeviceRepository(db)
   statuses = new EventStatusRepository(db)
+  incidents = new IncidentRepository(db)
 })
 
 after(async () => {
@@ -104,6 +109,12 @@ beforeEach(() => {
    */
   db.prepare('DELETE FROM event_status').run()
   db.prepare('DELETE FROM event_activity').run()
+  /*
+   * Incident 也要清（schema v14）：`incident_alerts` 先删 —— 它对 `incidents` 有外键，
+   * 反过来删会被 SQLite 拒绝（这本身说明外键真的在管）。
+   */
+  db.prepare('DELETE FROM incident_alerts').run()
+  db.prepare('DELETE FROM incidents').run()
 })
 
 /** Real, persisted device rows (the FK targets), memoised per tag. */
@@ -295,6 +306,7 @@ function createService(options: {
     images: createImageFake(imageState),
     storage,
     statuses: new EventStatusRepository(db),
+    incidents,
     now: () => FIXED_NOW,
     ...(options.detectLogLimit !== undefined ? { detectLogLimit: options.detectLogLimit } : {})
   })
@@ -692,7 +704,8 @@ describe('EventCenterService.acknowledge', () => {
       },
       images: createImageFake({ calls: [], closed: 0 }),
       storage,
-      statuses: new EventStatusRepository(db)
+      statuses: new EventStatusRepository(db),
+      incidents
     })
 
     const result = await broken.acknowledge([
@@ -1160,3 +1173,191 @@ describe('事件中心的图片证据（详情抽屉 Evidence 页签）', () => 
     assert.equal(image.closed, 0, '失败的取图把已经在显示的那张图关掉了')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Incident（规格 §14.2 的 V1：人工创建 + 手动关联）
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组的重点不在"能建出来"，而在三件规格明确要求或明确禁止的事：
+ *   - §14.2 的 V1 是**人工**创建 + **手动**关联：没有第二条自动路径；
+ *   - §13.2 的"不自动替用户关闭/合并"：建 Incident **不碰任何 Alert 的状态**；
+ *   - 幂等：同一个关联点两次不该产生两条链接（主键 + INSERT OR IGNORE）。
+ */
+describe('Incident：人工创建 + 手动关联（规格 §14.2 V1）', () => {
+  const ACTOR = 'admin'
+
+  it('建一个并一并关联几条：写完读回，条数与标题都对得上（标题两端空格会去掉）', async () => {
+    const { service } = createService()
+    const boxId = box('inc-create')
+    const first = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    const second = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 2_000, alarmMask: 2 })
+    const entryIds = [localAlarmEntryId(first.id), localAlarmEntryId(second.id)]
+
+    const result = await service.createIncident({
+      title: '  1 号风机异常情况  ',
+      note: '  现场看了一眼  ',
+      entryIds,
+      actor: ACTOR
+    })
+
+    assert.equal(result.incident.title, '1 号风机异常情况')
+    assert.equal(result.incident.note, '现场看了一眼')
+    assert.equal(result.incident.createdBy, ACTOR)
+    assert.equal(result.linked, 2)
+    assert.equal(result.incident.alertCount, 2)
+    assert.equal(incidents.count(), 1, '库里应当恰好一行')
+
+    // 读回：两条 Alert 都指向这**一个** Incident，条数也是 2。
+    for (const entryId of entryIds) {
+      const linked = service.incidentsForEntry(entryId)
+      assert.equal(linked.length, 1)
+      assert.equal(linked[0]?.id, result.incident.id)
+      assert.equal(linked[0]?.alertCount, 2)
+    }
+  })
+
+  it('标题必填、有长度上限；备注也有上限（拒绝时带上原因键，界面据此提示）', async () => {
+    const { service } = createService()
+    const rejects = async (input: { title: unknown; note?: unknown }, reason: string) => {
+      await assert.rejects(
+        () => service.createIncident({ ...input, actor: ACTOR }),
+        (error: unknown) => {
+          const app = error as AppError
+          assert.equal(app.code, ErrorCodes.VALIDATION_ERROR)
+          assert.equal(app.detail, reason)
+          return true
+        }
+      )
+    }
+    await rejects({ title: '   ' }, 'title-required')
+    await rejects({ title: 'x'.repeat(INCIDENT_TITLE_MAX_LENGTH + 1) }, 'title-too-long')
+    await rejects(
+      { title: '正常标题', note: 'y'.repeat(INCIDENT_NOTE_MAX_LENGTH + 1) },
+      'note-too-long'
+    )
+    assert.equal(incidents.count(), 0, '被拒绝的草稿不该留下任何行')
+  })
+
+  it('认不出前缀的 entry id 一律拒绝（不许写下一条永远对不上的关联）', async () => {
+    const { service } = createService()
+    await assert.rejects(
+      () => service.createIncident({ title: '正常标题', entryIds: ['dev_123'], actor: ACTOR }),
+      /认不出这条事件来自哪一路/
+    )
+    assert.equal(incidents.count(), 0)
+  })
+
+  it('先建一个空的 Incident 是合法的（稍后再挂告警）', async () => {
+    const { service } = createService()
+    const created = await service.createIncident({ title: '只有标题', actor: ACTOR })
+    assert.equal(created.linked, 0)
+    assert.equal(created.incident.alertCount, 0)
+    assert.deepEqual(
+      service.listIncidents().map((item) => item.id),
+      [created.incident.id]
+    )
+  })
+
+  it('手动关联是幂等的：第二次点只算 alreadyLinked，不产生第二条链接', async () => {
+    const { service } = createService()
+    const boxId = box('inc-link')
+    const inserted = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    const entryId = localAlarmEntryId(inserted.id)
+    const created = await service.createIncident({ title: 'A', actor: ACTOR })
+
+    const first = await service.linkAlerts({
+      incidentId: created.incident.id,
+      entryIds: [entryId],
+      actor: ACTOR
+    })
+    assert.equal(first.linked, 1)
+    assert.equal(first.alreadyLinked, 0)
+    assert.equal(first.incident.alertCount, 1)
+
+    const second = await service.linkAlerts({
+      incidentId: created.incident.id,
+      entryIds: [entryId],
+      actor: ACTOR
+    })
+    assert.equal(second.linked, 0)
+    assert.equal(second.alreadyLinked, 1)
+    assert.equal(second.incident.alertCount, 1, '重复关联把条数算成 2 了')
+    assert.equal(incidents.links(created.incident.id).length, 1)
+  })
+
+  it('关联到一个不存在的 Incident 如实拒绝（不静默成功）', async () => {
+    const { service } = createService()
+    const boxId = box('inc-missing')
+    const inserted = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    await assert.rejects(
+      () =>
+        service.linkAlerts({
+          incidentId: 'inc_不存在',
+          entryIds: [localAlarmEntryId(inserted.id)],
+          actor: ACTOR
+        }),
+      /不存在/
+    )
+  })
+
+  it('至少要选一条告警才叫"关联"', async () => {
+    const { service } = createService()
+    const created = await service.createIncident({ title: 'A', actor: ACTOR })
+    await assert.rejects(
+      () => service.linkAlerts({ incidentId: created.incident.id, entryIds: [], actor: ACTOR }),
+      /至少要选一条告警/
+    )
+  })
+
+  it('解除关联：真的删掉返回 true；没关联过返回 false（不是错误）', async () => {
+    const { service } = createService()
+    const boxId = box('inc-unlink')
+    const inserted = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    const entryId = localAlarmEntryId(inserted.id)
+    const created = await service.createIncident({
+      title: 'A',
+      entryIds: [entryId],
+      actor: ACTOR
+    })
+
+    assert.deepEqual(await service.unlinkAlert({ incidentId: created.incident.id, entryId }), {
+      removed: true
+    })
+    assert.deepEqual(service.incidentsForEntry(entryId), [])
+    assert.deepEqual(await service.unlinkAlert({ incidentId: created.incident.id, entryId }), {
+      removed: false
+    })
+    // Incident 本身留着（解除关联不是删事件），条数回到 0。
+    assert.equal(service.listIncidents()[0]?.alertCount, 0)
+  })
+
+  it('建 Incident 不碰任何 Alert 的状态，也不写处置流水（规格 §13.2：不自动关闭/合并）', async () => {
+    const { service } = createService()
+    const boxId = box('inc-status')
+    const inserted = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    const entryId = localAlarmEntryId(inserted.id)
+
+    await service.createIncident({ title: 'A', entryIds: [entryId], actor: ACTOR })
+
+    assert.equal(statuses.find(entryId), undefined, '建 Incident 顺手写了一条状态行')
+    assert.equal(service.activity(entryId).length, 0, '建 Incident 顺手写了一条 Activity')
+  })
+
+  it('一个 Alert 可以同时属于两个 Incident（人工关联没有被做成"只能有一个"）', async () => {
+    const { service } = createService()
+    const boxId = box('inc-two')
+    const inserted = alarms.insert({ deviceId: boxId, channelId: 0, timestamp: 1_000, alarmMask: 1 })
+    const entryId = localAlarmEntryId(inserted.id)
+    const first = await service.createIncident({ title: 'A', entryIds: [entryId], actor: ACTOR })
+    const second = await service.createIncident({ title: 'B', entryIds: [entryId], actor: ACTOR })
+
+    const linked = service.incidentsForEntry(entryId)
+    assert.equal(linked.length, 2)
+    assert.deepEqual(
+      linked.map((item) => item.id).sort(),
+      [first.incident.id, second.incident.id].sort()
+    )
+  })
+})
+

@@ -74,11 +74,19 @@ import type {
   EventViewMode
 } from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
+import {
+  incidentSuggestion,
+  incidentSuggestedTitleParams,
+  sortIncidentsDesc
+} from '@shared/domain/incident'
+import type { IncidentView } from '@shared/domain/incident'
 import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
 import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
 import EventFilterPanel from '@renderer/components/event-center/EventFilterPanel.vue'
 import EventKpiStrip from '@renderer/components/event-center/EventKpiStrip.vue'
+import IncidentCreateDialog from '@renderer/components/event-center/IncidentCreateDialog.vue'
+import type { IncidentCandidate } from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 import {
   alarmTypeLabel,
@@ -165,6 +173,122 @@ const playerRecordingId = ref<string | null>(null)
 const videoUrl = ref('')
 const videoError = ref('')
 const videoBusy = ref(false)
+
+// ---------------------------------------------------------------------------
+// Incident（规格 §14.2 的 V1：人工创建 + 手动关联）
+// ---------------------------------------------------------------------------
+
+/**
+ * 创建/关联对话框是否打开，以及对话框里的失败原文。
+ *
+ * 失败**留在对话框里**（而不是推到页面顶部的那条 error）：它是"你刚点的那一下"的结果，
+ * 与 `onStatusAction` 的失败同一条规矩 —— 就地说明，别让人去别处找。
+ */
+const incidentOpen = ref(false)
+const incidentError = ref('')
+
+/** 这一条 Alert 的建议（够阈值才有）。判据只有 `incidentSuggestion()` 一处。 */
+const incidentSuggested = computed(() =>
+  detail.value ? incidentSuggestion({ id: detail.value.id }, related.value) : undefined
+)
+
+/** 已关联的 Incident（新的在前）。读失败时保留上一次的列表，不清空。 */
+const linkedIncidents = computed<IncidentView[]>(() =>
+  sortIncidentsDesc(store.linkedIncidents)
+)
+
+/**
+ * 对话框里的候选告警：建议卡那几条（含当前这条）；没有建议时就是当前这一条。
+ *
+ * 文案与「关联」页签里的 chip 用同一个格式（时间 · 种类），操作员在对话框里认得出是哪一条。
+ */
+const incidentCandidates = computed<IncidentCandidate[]>(() => {
+  const current = detail.value
+  if (!current) return []
+  const ids = incidentSuggested.value?.entryIds ?? [current.id]
+  return ids.map((id) => {
+    const target = allAlerts.value.find((item) => item.id === id)
+    return {
+      id,
+      label: target ? `${formatDateTime(target.at)} · ${eventKindLabel(target.kind)}` : id
+    }
+  })
+})
+
+/** 建议标题：设备名 + 一句"异常情况"（规格 §14.2 的例子就是这个形状），可改。 */
+const incidentSuggestedTitle = computed(() =>
+  detail.value
+    ? t('eventsUi.incidentSuggestedTitle', incidentSuggestedTitleParams(detail.value.deviceName))
+    : ''
+)
+
+/** 打开对话框（顺带把"已有 Incident"读一次给选择器）。 */
+async function openIncidentDialog(): Promise<void> {
+  incidentError.value = ''
+  incidentOpen.value = true
+  await store.loadIncidentOptions()
+}
+
+/**
+ * 提交"新建"：写 + **读回**（重读这一条 Alert 的关联列表，而不是把返回值塞进数组 ——
+ * 同一条 Alert 可能同时属于两个 Incident，返回值只知道刚建的那一个）。
+ */
+async function onCreateIncident(payload: {
+  title: string
+  note?: string
+  entryIds: string[]
+}): Promise<void> {
+  const current = detail.value
+  if (!current) return
+  incidentError.value = ''
+  const created = await store.createIncident(payload)
+  if (!created) {
+    incidentError.value = store.error || t('eventsUi.incidentFailed')
+    store.clearError()
+    return
+  }
+  await store.loadIncidentsFor(current.id)
+  store.incidentNotice = t('eventsUi.incidentCreated', {
+    title: created.incident.title,
+    count: created.linked
+  })
+  incidentOpen.value = false
+}
+
+/** 提交"关联到已有"：幂等，回执把"新关联几条 / 本来就有几条"分开说。 */
+async function onLinkIncident(payload: {
+  incidentId: string
+  entryIds: string[]
+}): Promise<void> {
+  const current = detail.value
+  if (!current) return
+  incidentError.value = ''
+  const result = await store.linkAlerts(payload)
+  if (!result) {
+    incidentError.value = store.error || t('eventsUi.incidentFailed')
+    store.clearError()
+    return
+  }
+  await store.loadIncidentsFor(current.id)
+  store.incidentNotice = t('eventsUi.incidentLinked', {
+    linked: result.linked,
+    already: result.alreadyLinked
+  })
+  incidentOpen.value = false
+}
+
+/** 解除一条关联（关联错了、或者这条不该在这个事件里）。 */
+async function onUnlinkIncident(incident: IncidentView): Promise<void> {
+  const current = detail.value
+  if (!current) return
+  const ok = await store.unlinkAlert({ incidentId: incident.id, entryId: current.id })
+  if (!ok) {
+    store.error = store.error || t('eventsUi.incidentFailed')
+    return
+  }
+  await store.loadIncidentsFor(current.id)
+  store.incidentNotice = t('eventsUi.incidentUnlinked', { title: incident.title })
+}
 
 // ---------------------------------------------------------------------------
 // 抽屉的宽度与页签（规格 §11.1 / §11.3）
@@ -419,12 +543,20 @@ function openDetail(alert: AlertViewModel): void {
   closeEvidenceImage()
   void loadEvidenceImage()
   void loadActivity(alert.id)
+  // Incident 关联跟着换事件读一次（换条之后晚到的结果由 store 覆盖，见 loadIncidentsFor）。
+  void store.loadIncidentsFor(alert.id)
 }
 
 function closeDetail(): void {
   detail.value = null
   activities.value = []
   playerRecordingId.value = null
+  /*
+   * 关掉抽屉时**不清** `linkedIncidents`：它属于"刚看的那一条"，而下次打开会立刻重读。
+   * 清空反而会让下一次打开的头一两帧出现"没有关联"的假空态。
+   */
+  incidentOpen.value = false
+  incidentError.value = ''
   // 先清地址再卸载 `<video>`：元素会释放回环连接（与 RecordingsView 同一顺序）。
   videoUrl.value = ''
   videoError.value = ''
@@ -1043,7 +1175,82 @@ async function goToPage(offset: number): Promise<void> {
 
       <!-- Related（规格 §13.2）：三组相关性，点击切到那一条。 -->
       <template #related>
-        <section class="drawer__section drawer__section--first">
+        <!--
+          Incident（规格 §13.2 的"Potential Related Incident" + §14.2 的 V1）：
+          已关联的列出来（可解除），够阈值时给一张**建议卡**（不自动合并）。
+        -->
+        <section class="drawer__section drawer__section--first" data-panel="incident">
+          <h4 class="drawer__section-title">{{ t('eventsUi.incidentTitle') }}</h4>
+
+          <ul v-if="linkedIncidents.length > 0" class="incident-list" data-incident-linked>
+            <li v-for="item in linkedIncidents" :key="item.id" class="incident-row">
+              <div class="incident-row__head">
+                <span class="incident-row__title">{{ item.title }}</span>
+                <span class="muted">
+                  {{ t('eventsUi.incidentAlertCount', { count: item.alertCount }) }}
+                </span>
+              </div>
+              <div class="incident-row__meta muted">
+                {{ formatDateTime(item.createdAt) }} · {{ item.createdBy }}
+              </div>
+              <button
+                type="button"
+                class="btn btn--sm"
+                :disabled="store.incidentBusy"
+                data-action="incident-unlink"
+                @click="onUnlinkIncident(item)"
+              >
+                {{ t('eventsUi.incidentUnlink') }}
+              </button>
+            </li>
+          </ul>
+          <p v-else class="muted" data-incident-none>{{ t('eventsUi.incidentNone') }}</p>
+
+          <!--
+            建议卡：规格 §13.2 的原话是"当相关性达到阈值时显示 Potential Related Incident
+            建议卡，但不自动替用户关闭/合并" —— 所以这里只有一句建议 + 一个按钮。
+          -->
+          <div v-if="incidentSuggested" class="incident-suggest" data-incident-suggestion>
+            <span class="field-label">{{ t('eventsUi.incidentSuggestionLabel') }}</span>
+            <p class="incident-suggest__title">{{ incidentSuggestedTitle }}</p>
+            <p class="muted">
+              {{ t('eventsUi.incidentSuggestionCount', { count: incidentSuggested.alertCount }) }}
+            </p>
+          </div>
+
+          <div class="chip-row incident-actions">
+            <button
+              type="button"
+              class="btn btn--sm btn--primary"
+              :disabled="store.incidentBusy"
+              data-action="incident-create"
+              @click="openIncidentDialog"
+            >
+              {{ t('eventsUi.incidentCreate') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="store.incidentBusy"
+              data-action="incident-open"
+              @click="openIncidentDialog"
+            >
+              {{ t('eventsUi.incidentLinkExisting') }}
+            </button>
+          </div>
+
+          <!-- 写操作的回执就地显示（成功的那一下的结果不属于"页面顶部的错误"）。 -->
+          <p
+            v-if="store.incidentNotice"
+            class="alert alert--success"
+            role="status"
+            data-incident-notice
+          >
+            {{ store.incidentNotice }}
+          </p>
+        </section>
+
+        <section class="drawer__section">
           <h4 class="drawer__section-title">{{ t('eventsUi.relatedTitle') }}</h4>
           <p class="muted related__scope">
             {{ t('eventsUi.relatedScope', { loaded: allAlerts.length }) }}
@@ -1391,6 +1598,23 @@ async function goToPage(offset: number): Promise<void> {
         </section>
       </template>
     </EventDetailDrawer>
+
+    <!--
+      Incident 创建/关联对话框（规格 §16.1 的 `IncidentCreateDialog`）。
+      挂在页面级（不是抽屉里）：抽屉可以关，而"把这几条并成一个事件"这个念头的上下文
+      是**这一条告警**，对话框自己带着候选清单。
+    -->
+    <IncidentCreateDialog
+      :open="incidentOpen"
+      :suggested-title="incidentSuggestedTitle"
+      :candidates="incidentCandidates"
+      :existing="store.incidentOptions"
+      :busy="store.incidentBusy"
+      :error="incidentError"
+      @create="onCreateIncident"
+      @link="onLinkIncident"
+      @close="incidentOpen = false"
+    />
   </div>
 </template>
 
@@ -1490,6 +1714,72 @@ async function goToPage(offset: number): Promise<void> {
 .related__scope {
   margin: 0 0 var(--space-2);
   font-size: var(--font-size-meta);
+}
+
+/* --- Incident（规格 §13.2 的建议卡 + §14.2 的 V1） -------------------------- */
+
+.incident-list {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.incident-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.incident-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.incident-row__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.incident-row__meta {
+  font-size: var(--font-size-meta);
+}
+
+.incident-row .btn {
+  align-self: flex-start;
+}
+
+/*
+ * 建议卡：一眼能看出它是**建议**而不是已经存在的东西 —— 虚线边框 + 弱底色，
+ * 与上面那些"真的有这一条"的行区分开。
+ */
+.incident-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+}
+
+.incident-suggest__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.incident-actions {
+  margin-bottom: var(--space-2);
 }
 
 .related__group {

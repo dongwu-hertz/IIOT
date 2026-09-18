@@ -2553,6 +2553,45 @@ export const tr: MessageSchema = {
     relatedEmpty: 'İlgili başka olay bulunamadı.',
     relatedOpen: 'Bunu aç',
 
+    /*
+     * --- 6. aşamanın ikinci yarısı (§13.2 öneri kartı + §14.2 V1) -------------
+     * "Incident" çevrilmez: şartname onu Event ve Alert ile birlikte tanımlıyor
+     * (§2.1) ve Türkçede hem doğru hem de belirsizlik yaratmayan bir karşılık yok.
+     */
+    incidentTitle: 'Incident kayıtları',
+    incidentNone: 'Bu alarm henüz bir incident kaydına bağlı değil.',
+    incidentAlertCount: '{count} bağlı alarm',
+    incidentUnlink: 'Bağlantıyı kaldır',
+    incidentSuggestionLabel: 'Olası ilgili incident',
+    incidentSuggestionCount: '{count} ilişkili alarm',
+    incidentSuggestedTitle: '{device} anormal durum',
+    incidentCreate: 'Incident oluştur',
+    incidentLinkExisting: 'Var olan incidente bağla',
+    incidentCreated: '«{title}» oluşturuldu ve {count} alarm bağlandı',
+    incidentLinked: '{linked} alarm bağlandı (bunlardan {already} tanesi zaten içindeydi)',
+    incidentUnlinked: '«{title}» ile bağlantı kaldırıldı',
+    incidentFailed: 'Bu işlem tamamlanmadı.',
+    incidentDialogTitle: 'Incident',
+    incidentModeLabel: 'Ne yapılacak',
+    incidentModeCreate: 'Yeni incident',
+    incidentModeLink: 'Var olana bağla',
+    incidentFieldTitle: 'Başlık',
+    incidentTitlePlaceholder: 'örn. 1 numaralı fan anormal durum',
+    incidentTitleHint: 'En fazla {max} karakter',
+    incidentFieldNote: 'Not (isteğe bağlı)',
+    incidentFieldExisting: 'Incident seç',
+    incidentCandidates: 'Bu alarmları da bağla ({count})',
+    incidentNoCandidates: 'Bağlanacak alarm yok — yalnızca incident kaydı oluşturulur.',
+    incidentNoExisting: 'Henüz oluşturulmuş incident yok',
+    incidentSubmitCreate: 'Oluştur ve bağla',
+    incidentSubmitLink: 'Bağla',
+    incidentSubmitting: 'Kaydediliyor…',
+    incidentReasonTitleRequired: 'Başlık zorunlu',
+    incidentReasonTitleTooLong: 'Başlık çok uzun (en fazla {max} karakter)',
+    incidentReasonNoteTooLong: 'Not çok uzun (en fazla {max} karakter)',
+    incidentReasonNoExisting: 'Önce bir incident seçin',
+    incidentReasonNoAlerts: 'En az bir alarm seçin',
+
     timelineTitle: 'Zaman çizelgesi',
     timelineDetected: 'İlk algılama',
 

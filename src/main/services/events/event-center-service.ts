@@ -69,6 +69,13 @@ import type {
   EventStatusChangeResult
 } from '@shared/domain/event-view'
 import {
+  INCIDENT_NOTE_MAX_LENGTH,
+  INCIDENT_TITLE_MAX_LENGTH,
+  type IncidentLinkView,
+  type IncidentView,
+  validateIncidentDraft
+} from '@shared/domain/incident'
+import {
   EVENT_CENTER_DEFAULT_LIMIT,
   EVENT_CENTER_MAX_GROUP_WINDOW_MS,
   EVENT_CENTER_MAX_LIMIT,
@@ -155,6 +162,46 @@ export interface EventCenterStatusStore {
   }
 }
 
+/**
+ * Incident 仓储能力（`IncidentRepository` 结构上满足它，规格 §14.2 的 V1）。
+ *
+ * 与 `EventCenterStatusStore` 同一套做法：接口写窄 —— 服务只需要"建一个 / 挂几条 /
+ * 摘一条 / 问一条 Alert 属于哪些"，测试里给内存假实现就够。
+ */
+export interface EventCenterIncidentStore {
+  /** 建一个 Incident 并**一并**关联这几条 Alert（一个事务）。 */
+  create(input: {
+    title: string
+    note?: string
+    createdBy: string
+    at: number
+    entryIds?: readonly string[]
+  }): { row: EventIncidentRecord; linked: number }
+  /** 往一个已存在的 Incident 上挂几条（幂等）。Incident 不存在时抛。 */
+  link(input: {
+    incidentId: string
+    entryIds: readonly string[]
+    actor: string
+    at: number
+  }): { incidentId: string; linked: number; alreadyLinked: number }
+  unlink(input: { incidentId: string; entryId: string }): boolean
+  find(id: string): EventIncidentRecord | undefined
+  list(limit?: number): EventIncidentRecord[]
+  forEntry(entryId: string): EventIncidentRecord[]
+  links(incidentId: string): IncidentLinkView[]
+  alertCounts(incidentIds: readonly string[]): Map<string, number>
+}
+
+/** 一条 Incident 的库行（只列服务用得上的字段）。 */
+export interface EventIncidentRecord {
+  id: string
+  title: string
+  note?: string
+  createdAt: number
+  createdBy: string
+  updatedAt: number
+}
+
 export interface EventCenterServiceOptions {
   listDevices(): EventCenterDeviceRef[]
   detectLibrary: EventCenterDetectLibrary
@@ -167,6 +214,8 @@ export interface EventCenterServiceOptions {
   storage: EventCenterStorageResolver
   /** 处置工作流（状态 + Activity，schema v13）。 */
   statuses: EventCenterStatusStore
+  /** Incident 与它的关联（schema v14，规格 §14.2 的 V1）。 */
+  incidents: EventCenterIncidentStore
   /**
    * 一台相机最多取回多少条检测日志。
    *
@@ -417,6 +466,166 @@ export class EventCenterService {
     const id = entryId.trim()
     if (id === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少事件标识')
     return this.options.statuses.activity(id, limit)
+  }
+
+  // -------------------------------------------------------------------------
+  // Incident（规格 §14.2 的 V1：人工创建 + 手动关联）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 这一条 Alert 属于哪些 Incident（新的在前，带关联条数）。
+   *
+   * 同步：它只是两次索引查询（`forEntry` + 一次 `GROUP BY`），没有设备/网络参与 ——
+   * 详情抽屉打开的瞬间就要有内容。
+   */
+  incidentsForEntry(entryId: string): IncidentView[] {
+    const id = typeof entryId === 'string' ? entryId.trim() : ''
+    if (id === '') return []
+    const rows = this.options.incidents.forEntry(id)
+    const counts = this.options.incidents.alertCounts(rows.map((row) => row.id))
+    return rows.map((row) => toIncidentView(row, counts.get(row.id) ?? 0))
+  }
+
+  /**
+   * 库里已有的 Incident（给"手动关联到已有"的列表用），新的在前。
+   *
+   * 与 `incidentsForEntry` 分开两个方法而不是一个带参数的方法：一个回答"这一条属于谁"，
+   * 一个回答"现在有哪些" —— 界面上是两件事（前者是详情，后者是选择器）。
+   */
+  listIncidents(limit = 100): IncidentView[] {
+    const rows = this.options.incidents.list(limit)
+    const counts = this.options.incidents.alertCounts(rows.map((row) => row.id))
+    return rows.map((row) => toIncidentView(row, counts.get(row.id) ?? 0))
+  }
+
+  /**
+   * 人工建一个 Incident，并把这几条 Alert 一起挂上去（规格 §14.2 的 `[Create Incident]`）。
+   *
+   * 三件事在这里定死：
+   *   1. **标题是必填、有长度上限**，判据只有 `validateIncidentDraft()` 一处（对话框与这里
+   *      共用），不合法就 `VALIDATION_ERROR` 拒绝并给出原因键；
+   *   2. **entry id 必须认得出是哪一路来的**（与 `changeStatus` 同一条校验）：库里存的是
+   *      `alarm:` / `linkage:` / `detect:` 前缀的标识，写进去一个别的东西等于造一条永远
+   *      对不上的关联；
+   *   3. **写完读回**：返回的 `incident` 是仓储重新读出来的那一行，`linked` 是这次真正
+   *      新增的条数（界面用它写回执）。
+   *
+   * 规格 §13.2 明说"不自动替用户关闭/合并"：这里**只**建关联，不碰任何 Alert 的状态。
+   */
+  async createIncident(input: {
+    title: unknown
+    note?: unknown
+    entryIds?: readonly string[]
+    actor: string
+  }): Promise<{ incident: IncidentView; linked: number }> {
+    const draft = validateIncidentDraft({ title: input.title, note: input.note })
+    if (!draft.ok) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        incidentDraftMessage(draft.reason),
+        draft.reason
+      )
+    }
+    const entryIds = this.normaliseEntryIds(input.entryIds ?? [])
+    const created = this.options.incidents.create({
+      title: draft.draft.title,
+      ...(draft.draft.note === undefined ? {} : { note: draft.draft.note }),
+      createdBy: input.actor,
+      at: this.now(),
+      entryIds
+    })
+    deviceLog().info('事件中心：人工创建了一个 Incident', {
+      incidentId: created.row.id,
+      linked: created.linked,
+      actor: input.actor,
+      title: draft.draft.title
+    })
+    return {
+      incident: toIncidentView(created.row, created.linked),
+      linked: created.linked
+    }
+  }
+
+  /**
+   * 手动把一批 Alert 关联到**已有**的 Incident（规格 §14.2 的"手动关联 Alert"）。
+   *
+   * 幂等：已经关联过的算 `alreadyLinked`，不是错误 —— 界面上"关联"和"已关联"是同一个
+   * 按钮的两种状态，点两次不该报错。
+   */
+  async linkAlerts(input: {
+    incidentId: string
+    entryIds: readonly string[]
+    actor: string
+  }): Promise<{ incident: IncidentView; linked: number; alreadyLinked: number }> {
+    const incidentId = typeof input.incidentId === 'string' ? input.incidentId.trim() : ''
+    if (incidentId === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少 Incident 标识')
+    const entryIds = this.normaliseEntryIds(input.entryIds)
+    if (entryIds.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '至少要选一条告警')
+    }
+    let result: { incidentId: string; linked: number; alreadyLinked: number }
+    try {
+      result = this.options.incidents.link({
+        incidentId,
+        entryIds,
+        actor: input.actor,
+        at: this.now()
+      })
+    } catch (error) {
+      // 仓储只在这一种情况下抛：Incident 不存在。那是界面拿着一个过期的 id 在做事
+      // （另一个窗口删掉了？），如实说"不在了"，而不是静默成功。
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        error instanceof Error ? error.message : 'Incident 不存在'
+      )
+    }
+    const row = this.options.incidents.find(incidentId)
+    if (!row) throw new AppError(ErrorCodes.VALIDATION_ERROR, `Incident 不存在：${incidentId}`)
+    const counts = this.options.incidents.alertCounts([incidentId])
+    deviceLog().info('事件中心：手动关联了一批告警', {
+      incidentId,
+      linked: result.linked,
+      alreadyLinked: result.alreadyLinked,
+      actor: input.actor
+    })
+    return {
+      incident: toIncidentView(row, counts.get(incidentId) ?? 0),
+      linked: result.linked,
+      alreadyLinked: result.alreadyLinked
+    }
+  }
+
+  /** 摘掉一条关联（关联错了、或者这条不该在这个事件里）。 */
+  async unlinkAlert(input: {
+    incidentId: string
+    entryId: string
+  }): Promise<{ removed: boolean }> {
+    const incidentId = typeof input.incidentId === 'string' ? input.incidentId.trim() : ''
+    const entryId = typeof input.entryId === 'string' ? input.entryId.trim() : ''
+    if (incidentId === '' || entryId === '') {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少 Incident 标识或事件标识')
+    }
+    return { removed: this.options.incidents.unlink({ incidentId, entryId }) }
+  }
+
+  /** 一个 Incident 关联的那些 entry id（界面用它把"关联了哪几条"说清楚）。 */
+  incidentEntryIds(incidentId: string): string[] {
+    const id = typeof incidentId === 'string' ? incidentId.trim() : ''
+    if (id === '') return []
+    return this.options.incidents.links(id).map((link) => link.entryId)
+  }
+
+  /** 去重 + 丢弃空串 + 校验前缀（认不出哪一路的 id 一律拒绝，见 `createIncident`）。 */
+  private normaliseEntryIds(ids: readonly string[]): string[] {
+    const unique = [
+      ...new Set(ids.map((id) => (typeof id === 'string' ? id.trim() : '')).filter((id) => id !== ''))
+    ]
+    for (const id of unique) {
+      if (eventSourceFromEntryId(id) === undefined) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `认不出这条事件来自哪一路：${id}`)
+      }
+    }
+    return unique
   }
 
   /**
@@ -1014,3 +1223,33 @@ function clampGroupWindow(value: number | undefined): number {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+/** 一条 Incident 的库行 → 界面模型（`alertCount` 由调用方从一次 `GROUP BY` 里拿）。 */
+function toIncidentView(row: EventIncidentRecord, alertCount: number): IncidentView {
+  return {
+    id: row.id,
+    title: row.title,
+    ...(row.note === undefined ? {} : { note: row.note }),
+    createdAt: row.createdAt,
+    createdBy: row.createdBy,
+    alertCount: Math.max(0, alertCount)
+  }
+}
+
+/**
+ * 草稿不合法的**主进程诊断文字**（中文）。
+ *
+ * 界面显示的是目录键（`reason`）翻出来的话，这一段只是给日志与协议实验室看的 ——
+ * 主进程不渲染 UI，所以它这里的字符串不参与四语言。
+ */
+function incidentDraftMessage(reason: 'title-required' | 'title-too-long' | 'note-too-long'): string {
+  switch (reason) {
+    case 'title-required':
+      return 'Incident 必须有标题'
+    case 'title-too-long':
+      return `Incident 标题过长（上限 ${INCIDENT_TITLE_MAX_LENGTH} 字）`
+    default:
+      return `Incident 备注过长（上限 ${INCIDENT_NOTE_MAX_LENGTH} 字）`
+  }
+}
+

@@ -3892,7 +3892,37 @@ async function run() {
     'location.hash = "#/events";' +
     'await sleep(1200);' +
     'for (let i = 0; i < 60 && !document.querySelector(".alert-row"); i += 1) await sleep(500);' +
-    'const row = document.querySelector(".alert-row");' +
+    /*
+     * 把聚合窗口切到「不聚合」：同设备的多条告警各自成行，**建议卡**（§13.2 的
+     * "同设备上还有别的告警"）才有机会出现。聚合开着的时候，一台设备的多条触发本来就是
+     * 一行（×N），相关性那一组里当然没有别人。
+     *
+     * 记下原值，跑完恢复：这一段是写探针，但它改的这个偏好（localStorage + 地址栏）
+     * 属于"顺手改的界面状态"，没有理由留给后面。
+     */
+    'const groupSelect = document.querySelector("[data-field=group-window]");' +
+    'out.groupWindowBefore = groupSelect ? groupSelect.value : null;' +
+    'if (groupSelect) {' +
+    '  groupSelect.value = "off";' +
+    '  groupSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(3000);' +
+    '}' +
+    /*
+     * 挑一条**同一台设备上还有别的告警**的行：建议卡的判据就是这个。页面上一条都没有
+     * （每台设备只有一条）时退回第一行，并把"没量到建议卡"如实记进报告 ——
+     * 那是"没量到"，不是"量到不合格"。
+     */
+    'const allRows = Array.prototype.slice.call(document.querySelectorAll(".alert-row"));' +
+    'const deviceNames = allRows.map((r) => {' +
+    '  const el = r.querySelector(".alert-row__device");' +
+    '  return el ? (el.textContent || "").trim() : "";' +
+    '});' +
+    'const counts = {};' +
+    'for (const name of deviceNames) if (name) counts[name] = (counts[name] || 0) + 1;' +
+    'const repeated = Object.keys(counts).find((name) => counts[name] >= 2) || null;' +
+    'out.queueRows = allRows.length;' +
+    'out.repeatedDevice = repeated;' +
+    'const row = repeated ? allRows[deviceNames.indexOf(repeated)] : allRows[0];' +
     'if (!row) {' +
     /*
      * 空队列时**直接问一次主进程**：这样能分开两种完全不同的故障 ——
@@ -3953,6 +3983,61 @@ async function run() {
     'if (activityTab) { activityTab.click(); await sleep(600); }' +
     'out.activityRows = document.querySelectorAll(".drawer [data-panel=activity] .activity__row").length;' +
     'out.activityText = text(document.querySelector(".drawer [data-panel=activity] .activity__row"));' +
+    /*
+     * ④ Incident（规格 §14.2 的 V1）：人工建一个 → 读回 → 从界面解除关联 → 再读回。
+     *
+     * 四步都要走**真实界面**：切到「关联」页签 → 点 [创建 Incident] → 在对话框里改标题 →
+     * 点提交；然后直接用 `eventCenter.incidentsForAlert` 读回（"写完读回"是业主的硬规矩，
+     * 界面上的那一行只能证明"画出来了"，证明不了"库里真的有"）。
+     */
+    'const relatedTab = document.querySelector(".drawer [data-tab=related]");' +
+    'if (relatedTab) { relatedTab.click(); await sleep(600); }' +
+    'out.incidentPanelPresent = !!document.querySelector(".drawer [data-panel=incident]");' +
+    'out.incidentSuggestion = !!document.querySelector(".drawer [data-incident-suggestion]");' +
+    'const linkedBefore = await window.api.eventCenter.incidentsForAlert(out.entryId);' +
+    'out.incidentsBefore = linkedBefore && linkedBefore.success ? linkedBefore.data.length : -1;' +
+    'const createBtn = document.querySelector(".drawer [data-action=incident-create]");' +
+    'if (createBtn) {' +
+    '  createBtn.click();' +
+    '  await sleep(700);' +
+    '  const dialog = document.querySelector(".overlay [role=dialog]");' +
+    '  out.incidentDialogOpen = !!dialog;' +
+    '  const titleInput = document.querySelector("[data-field=incident-title]");' +
+    '  const candidates = document.querySelectorAll("[data-field=incident-candidate]");' +
+    '  const checked = document.querySelectorAll("[data-field=incident-candidate]:checked");' +
+    '  out.incidentCandidates = candidates.length;' +
+    '  out.incidentCandidatesChecked = checked.length;' +
+    '  out.incidentSuggestedTitle = titleInput ? titleInput.value : null;' +
+    '  if (titleInput) {' +
+    '    titleInput.value = "探针：T03 异常情况";' +
+    '    titleInput.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  }' +
+    '  const submit = document.querySelector("[data-action=incident-submit]");' +
+    '  if (submit) { submit.click(); await sleep(2000); }' +
+    '  out.incidentDialogClosedAfterSubmit = !document.querySelector(".overlay [role=dialog]");' +
+    '}' +
+    'const linkedAfter = await window.api.eventCenter.incidentsForAlert(out.entryId);' +
+    'const afterList = linkedAfter && linkedAfter.success ? linkedAfter.data : [];' +
+    'out.incidentsAfter = afterList.length;' +
+    'out.incidentTitleInDb = afterList.length > 0 ? afterList[0].title : null;' +
+    'out.incidentCreatedBy = afterList.length > 0 ? afterList[0].createdBy : null;' +
+    'out.incidentAlertCount = afterList.length > 0 ? afterList[0].alertCount : null;' +
+    'out.incidentRowsInPanel = document.querySelectorAll(".drawer [data-incident-linked] .incident-row").length;' +
+    'out.incidentNoticeText = text(document.querySelector(".drawer [data-incident-notice]"));' +
+    // 解除关联：点那一行上的按钮，再读回一次（库里那一行必须真的没了）。
+    'const unlinkBtn = document.querySelector(".drawer [data-action=incident-unlink]");' +
+    'out.incidentUnlinkButton = !!unlinkBtn;' +
+    'if (unlinkBtn) { unlinkBtn.click(); await sleep(1800); }' +
+    'const linkedFinal = await window.api.eventCenter.incidentsForAlert(out.entryId);' +
+    'out.incidentsFinal = linkedFinal && linkedFinal.success ? linkedFinal.data.length : -1;' +
+    'out.incidentRowsAfterUnlink = document.querySelectorAll(".drawer [data-incident-linked] .incident-row").length;' +
+    // 恢复聚合窗口（见上面：这一段顺手改过它）。
+    'const restoreSelect = document.querySelector("[data-field=group-window]");' +
+    'if (restoreSelect && out.groupWindowBefore !== null) {' +
+    '  restoreSelect.value = out.groupWindowBefore;' +
+    '  restoreSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(800);' +
+    '}' +
     'out.ok = true;' +
     'return JSON.stringify(out);' +
     '})()', 120_000)
@@ -3982,6 +4067,82 @@ async function run() {
     }
     if (!(eventsHandling.activityRows >= 1)) {
       problems.push('界面上的处置记录页签里没有那一行：' + JSON.stringify(eventsHandling))
+    }
+    // ④ Incident（规格 §14.2 的 V1）：面板在、建议卡在、建得出来、库里读得到、解除得掉。
+    if (!eventsHandling.incidentPanelPresent) {
+      problems.push('抽屉的「关联」页签里没有 Incident 那一段：' + JSON.stringify(eventsHandling))
+    }
+    /*
+     * 建议卡（规格 §13.2）：同设备上还有别的告警时必须出现。探针为此先把聚合关掉，
+     * 让同设备的多条告警各自成行；页面上确实找不到"同设备两条"时如实记"没量到"。
+     */
+    if (eventsHandling.repeatedDevice && !eventsHandling.incidentSuggestion) {
+      problems.push(
+        '同一台设备（' + eventsHandling.repeatedDevice + '）在队列里有 2 条以上告警，' +
+          '却没有出现「可能相关的 Incident」建议卡：' + JSON.stringify(eventsHandling)
+      )
+    }
+    if (!eventsHandling.repeatedDevice) {
+      log(
+        '（建议卡没量到：这一页 ' + eventsHandling.queueRows +
+          ' 行里没有两台以上同设备的告警 —— 不是缺陷，是这一次的数据形状）'
+      )
+    }
+    if (!eventsHandling.incidentDialogOpen) {
+      problems.push('点 [创建 Incident] 没有打开对话框：' + JSON.stringify(eventsHandling))
+    }
+    if (!(eventsHandling.incidentCandidates >= 1)) {
+      problems.push(
+        '对话框里的候选告警一条都没有（当前这条至少要在里面）：' +
+          JSON.stringify(eventsHandling.incidentCandidates)
+      )
+    }
+    if (!(eventsHandling.incidentCandidatesChecked >= 1)) {
+      problems.push('候选告警默认没有勾上（建议卡的本意就是"默认带上这几条"）')
+    }
+    if (!eventsHandling.incidentSuggestedTitle) {
+      problems.push('对话框的标题没有预填建议（设备名 + 异常情况）')
+    }
+    if (eventsHandling.incidentsBefore !== 0) {
+      problems.push(
+        '写探针开始前这一条就已经有 Incident 了（起点不干净）：' + eventsHandling.incidentsBefore
+      )
+    }
+    if (!(eventsHandling.incidentsAfter >= 1)) {
+      problems.push(
+        '建完之后 `incidentsForAlert` 读回 0 条 —— 界面上创建了、库里没有：' +
+          JSON.stringify(eventsHandling)
+      )
+    }
+    if (eventsHandling.incidentTitleInDb !== '探针：T03 异常情况') {
+      problems.push('库里那一条的标题不是探针写进去的：' + JSON.stringify(eventsHandling.incidentTitleInDb))
+    }
+    if (eventsHandling.incidentCreatedBy !== 'admin') {
+      problems.push('Incident 的创建人不是当前会话（admin）：' + JSON.stringify(eventsHandling.incidentCreatedBy))
+    }
+    if (!(eventsHandling.incidentAlertCount >= 1)) {
+      problems.push('Incident 的关联条数是 0（一条告警都没挂上）：' + JSON.stringify(eventsHandling))
+    }
+    if (!(eventsHandling.incidentRowsInPanel >= 1)) {
+      problems.push('建完之后抽屉「关联」页签里没有列出那个 Incident：' + JSON.stringify(eventsHandling))
+    }
+    if (!eventsHandling.incidentNoticeText) {
+      problems.push('建完之后界面没有回执（写完了却什么都没说）')
+    }
+    if (!eventsHandling.incidentUnlinkButton) {
+      problems.push('已关联的 Incident 那一行上没有「解除关联」按钮')
+    }
+    if (eventsHandling.incidentsFinal !== 0) {
+      problems.push(
+        '解除关联之后库里还有 ' + eventsHandling.incidentsFinal + ' 条 —— 解除没落库：' +
+          JSON.stringify(eventsHandling)
+      )
+    }
+    if (eventsHandling.incidentRowsAfterUnlink !== 0) {
+      problems.push('解除关联之后界面上仍然列着那个 Incident')
+    }
+    if (!eventsHandling.incidentDialogClosedAfterSubmit) {
+      problems.push('提交之后对话框没有关掉')
     }
   }
   /**

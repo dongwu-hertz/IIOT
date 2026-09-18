@@ -24,6 +24,7 @@ import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 import { openDatabase } from '../src/main/services/database/schema'
 import { EventStatusRepository } from '../src/main/services/database/event-status-repository'
+import { IncidentRepository } from '../src/main/services/database/incident-repository'
 import { EventCenterService } from '../src/main/services/events/event-center-service'
 import {
   deviceDetectEntryId,
@@ -34,10 +35,13 @@ import { ALERT_STATUS_TRANSITIONS, canTransitionStatus } from '../src/shared/dom
 
 let db: SqliteDatabase
 let statuses: EventStatusRepository
+/** Incident 仓储（schema v14）：这一份测的是处置动作，所以它只是服务的一个必需依赖。 */
+let incidents: IncidentRepository
 
 beforeEach(() => {
   db = openDatabase({ file: ':memory:' })
   statuses = new EventStatusRepository(db)
+  incidents = new IncidentRepository(db)
 })
 
 describe('EventStatusRepository：状态与流水在同一个事务里', () => {
@@ -216,6 +220,7 @@ function createService(linkageIds: readonly string[] = []): ServiceFixture {
     },
     storage: { resolve: (storedPath) => storedPath },
     statuses,
+    incidents,
     now: () => 1_700_000_000_000
   })
   return { service, statuses }

@@ -82,11 +82,18 @@ function countRows(db: InstanceType<typeof Database>, table: string): number {
 
 describe('schema v13：处置工作流两张表', () => {
   it('版本号与迁移表是一起的（改了其中一处就会在这里报）', () => {
-    assert.equal(SCHEMA_VERSION, 13)
+    /*
+     * 这一条**不写死版本号**：v13 之后每加一条迁移（v14 是 Incident）都会走到这里，
+     * 而 v13 自己的位置在迁移表里是固定的。写死 13 会让下一条迁移一来就把这条测试打红，
+     * 而它真正要守的是"版本号 = 迁移表最后一条的版本"。
+     */
+    const v13 = MIGRATIONS.find((migration) => migration.version === 13)
+    assert.ok(v13, '迁移表里没有 v13')
+    assert.equal(v13.name, 'event-status-and-activity')
     const last = MIGRATIONS[MIGRATIONS.length - 1]
     assert.ok(last)
-    assert.equal(last.version, 13)
-    assert.equal(last.name, 'event-status-and-activity')
+    assert.equal(SCHEMA_VERSION, last.version)
+    assert.equal(last.version, Math.max(...MIGRATIONS.map((migration) => migration.version)))
   })
 
   it('升级现场的 v12 库：老数据一行不少，同时多出两张空表', () => {
@@ -96,7 +103,7 @@ describe('schema v13：处置工作流两张表', () => {
 
     runMigrations(db)
 
-    assert.equal(db.pragma('user_version', { simple: true }), 13)
+    assert.equal(db.pragma('user_version', { simple: true }), SCHEMA_VERSION)
     assert.equal(countRows(db, 'alarms'), 1, '升级把既有告警弄丢了')
     for (const table of ['event_status', 'event_activity']) {
       const row = db
@@ -114,7 +121,7 @@ describe('schema v13：处置工作流两张表', () => {
     const db = openV12()
     runMigrations(db)
     runMigrations(db)
-    assert.equal(db.pragma('user_version', { simple: true }), 13)
+    assert.equal(db.pragma('user_version', { simple: true }), SCHEMA_VERSION)
     db.close()
   })
 

@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 export interface Migration {
   version: number
@@ -827,6 +827,57 @@ export const MIGRATIONS: readonly Migration[] = [
         );
 
         CREATE INDEX IF NOT EXISTS idx_event_activity_entry ON event_activity (entry_id, at);
+      `)
+    }
+  },
+  {
+    version: 14,
+    name: 'incidents-and-links',
+    up: (db) => {
+      /**
+       * Incident（规格 §2.1 / §13.2 / §14.2）：一个现实世界的问题，关联**多条** Alert。
+       *
+       * WHY THE TITLE IS THE ONLY USER-AUTHORED FIELD
+       * 规格 §14.2 的 V1 只要求「人工 Create Incident + 手动关联 Alert」——它**没有**给
+       * Incident 定义状态机、严重度、负责人或关闭条件（§2.2 的状态机是给 Alert 的）。
+       * 所以我们**不造**那套生命周期：表里只有标题、可选备注、创建人与时间。将来规格
+       * 给了再迁移（这是 `docs/EVENT-CENTER.md` §3.16 记下的取舍）。
+       *
+       * WHY LINKS ARE THEIR OWN TABLE KEYED BY `EventCenterEntry.id`
+       * 一条 Alert 在库里是三个来源之一（声纹告警 `alarms`、本机联动、设备上的检测日志），
+       * 而"它属于哪个 Incident"是**我们自己的关联**，与状态/Activity 同一套标识空间
+       * （`alarm:` / `linkage:` / `detect:` 前缀）。所以 `incident_alerts.entry_id` 与
+       * `event_status.entry_id` 是同一个 key：一条事件的状态、流水、所属 Incident 可以
+       * 用一次查询对齐。这也是**手动关联**（V1）唯一说得通的存法。
+       *
+       * 主键 `(incident_id, entry_id)`：同一条 Alert 不会被同一个 Incident 收两次
+       * （界面上的"关联"按钮点两次不该产生两条链接）。
+       *
+       * 外键 `ON DELETE CASCADE`：删掉一个 Incident 时它的链接必须一起走。这一轮还没有
+       * 删除 Incident 的入口，但允许悬空链接的表迟早会在某次删除里留下垃圾。
+       *
+       * `idx_incident_alerts_entry`：详情页问的是"**这一条** Alert 属于哪些 Incident"，
+       * 没有它每次都要全表扫链接表。
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS incidents (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          note TEXT,
+          created_at INTEGER NOT NULL,
+          created_by TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS incident_alerts (
+          incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+          entry_id TEXT NOT NULL,
+          linked_at INTEGER NOT NULL,
+          linked_by TEXT NOT NULL,
+          PRIMARY KEY (incident_id, entry_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_incident_alerts_entry ON incident_alerts (entry_id);
       `)
     }
   }

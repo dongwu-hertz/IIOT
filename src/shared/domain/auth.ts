@@ -385,7 +385,15 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
     // Phase 5：处置（改状态/指派，写库 + 写 Activity）与读处置流水。
     // 写的那一条在 handlers 里**另外**要求管理员（与 acknowledge 一致）。
     'event-center:change-status',
-    'event-center:activity'
+    'event-center:activity',
+    // Phase 6 后半（规格 §14.2 的 V1）：Incident 的两条读 + 三条写。
+    // 读的两条（这条 Alert 属于谁 / 现在有哪些）与 `query` 同级；写的那三条
+    // （建/关联/解除，写 incidents 与 incident_alerts）在 handlers 里另外要求管理员。
+    'event-center:incidents-for-alert',
+    'event-center:incident-list',
+    'event-center:incident-create',
+    'event-center:incident-link',
+    'event-center:incident-unlink'
   ]
 }
 

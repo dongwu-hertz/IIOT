@@ -590,7 +590,23 @@ export const IpcChannels = {
    */
   EVENT_CENTER_CHANGE_STATUS: 'event-center:change-status',
   /** 读一条事件的处置流水（规格 §13.3）。只读。 */
-  EVENT_CENTER_ACTIVITY: 'event-center:activity'
+  EVENT_CENTER_ACTIVITY: 'event-center:activity',
+  /**
+   * Incident（规格 §14.2 的 V1）。四条通道分读写两类：
+   *   - `EVENT_CENTER_INCIDENTS_FOR_ALERT` / `EVENT_CENTER_INCIDENT_LIST` 只读（沿用
+   *     `viewEvents`）；
+   *   - 建/关联/解除**都是写**（写 `incidents` / `incident_alerts`），要管理员 ——
+   *     与 `EVENT_CENTER_CHANGE_STATUS` 同一条规则。
+   *
+   * 为什么不合成一条"incident 操作"通道再带一个 action 字段：这三件事的**入参形状彼此
+   * 不同**（一个要标题、一个要 incidentId + entryIds、一个要 incidentId + entryId），
+   * 合成一条就只能靠一个联合类型去分支，权限也没法单独收紧。
+   */
+  EVENT_CENTER_INCIDENT_CREATE: 'event-center:incident-create',
+  EVENT_CENTER_INCIDENT_LINK: 'event-center:incident-link',
+  EVENT_CENTER_INCIDENT_UNLINK: 'event-center:incident-unlink',
+  EVENT_CENTER_INCIDENTS_FOR_ALERT: 'event-center:incidents-for-alert',
+  EVENT_CENTER_INCIDENT_LIST: 'event-center:incident-list'
 } as const
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]
@@ -1166,6 +1182,49 @@ import type {
   EventStatusAction,
   EventStatusChangeResult
 } from '../domain/event-view'
+
+/**
+ * Incident 的类型（规格 §14.2 的 V1：人工创建 + 手动关联）。
+ *
+ * 同一套做法：领域（`domain/incident.ts`，纯函数、有单测）定义视图模型与判据，
+ * 这里只把名字带到 IPC 边界上。
+ */
+export type { IncidentView, IncidentLinkView } from '../domain/incident'
+
+import type { IncidentView } from '../domain/incident'
+
+/** 建一个 Incident 的入参（`[Create Incident]`）。 */
+export interface EventIncidentCreateInput {
+  title: string
+  note?: string
+  /**
+   * 一并关联的 entry id。
+   *
+   * 界面把「潜在关联 Incident」建议卡里那几条**预勾选**后带过来（规格 §13.2 的建议只是
+   * 初值：操作员可以先去掉几条，也可以一条都不带 —— 先建事件、稍后再挂也是合法用法）。
+   */
+  entryIds?: string[]
+}
+
+/** 手动把一批 Alert 关联到已有 Incident 的入参。 */
+export interface EventIncidentLinkInput {
+  incidentId: string
+  entryIds: string[]
+}
+
+/** 解除一条关联的入参。 */
+export interface EventIncidentUnlinkInput {
+  incidentId: string
+  entryId: string
+}
+
+/** 建/关联的结果：读出库里的那一条 + 这次真正新增的关联条数（回执要用）。 */
+export interface EventIncidentWriteResult {
+  incident: IncidentView
+  linked: number
+  /** 只有 `linkAlerts` 才有：本来就已经关联过的条数（幂等命中，不是错误）。 */
+  alreadyLinked?: number
+}
 
 /** 一次处置请求（`eventCenter.changeStatus` 的入参）。 */
 export interface EventStatusChangeInput {
@@ -2479,6 +2538,25 @@ export interface RendererApi {
      * 一条事件的处置流水（新的在前）。只读。
      */
     activity(entryId: string, limit?: number): Promise<DeviceResult<EventActivityView[]>>
+    /**
+     * 人工建一个 Incident 并（可选）一并关联这几条 Alert（规格 §14.2 的 V1）。
+     *
+     * 只建关联、**不碰任何 Alert 的状态**：规格 §13.2 明说"不自动替用户关闭/合并"。
+     * ADMINISTRATOR REQUIRED。
+     */
+    createIncident(
+      input: EventIncidentCreateInput
+    ): Promise<DeviceResult<EventIncidentWriteResult>>
+    /** 手动把一批 Alert 关联到已有 Incident（幂等）。ADMINISTRATOR REQUIRED。 */
+    linkAlerts(input: EventIncidentLinkInput): Promise<DeviceResult<EventIncidentWriteResult>>
+    /** 解除一条关联。ADMINISTRATOR REQUIRED。 */
+    unlinkAlert(
+      input: EventIncidentUnlinkInput
+    ): Promise<DeviceResult<{ removed: boolean }>>
+    /** 这一条 Alert 属于哪些 Incident（新的在前，带关联条数）。只读。 */
+    incidentsForAlert(entryId: string): Promise<DeviceResult<IncidentView[]>>
+    /** 库里已有的 Incident（给"关联到已有"的选择器用），新的在前。只读。 */
+    listIncidents(limit?: number): Promise<DeviceResult<IncidentView[]>>
   }
 }
 

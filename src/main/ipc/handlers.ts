@@ -35,6 +35,9 @@ import type {
   EventCenterQuery,
   EventDetectDownloadInput,
   EventEvidenceImageInput,
+  EventIncidentCreateInput,
+  EventIncidentLinkInput,
+  EventIncidentUnlinkInput,
   EventStatusChangeInput,
   Fa371MonitorState,
   Fa371RunModeValue,
@@ -2577,6 +2580,85 @@ export function registerIpcHandlers(): void {
       requirePermission('viewEvents')
       return getServices().eventCenter.activity(
         String(entryId ?? ''),
+        typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined
+      )
+    })
+  )
+
+  /**
+   * Incident（规格 §14.2 的 V1）：人工创建 + 手动关联。
+   *
+   * 两条读沿用 `viewEvents`（与 `query` 同级）；三条写**另外**要求管理员 —— 与
+   * `EVENT_CENTER_CHANGE_STATUS` 完全同一条规则（它们写本机库，且"谁把这几条告警并成
+   * 一个事件"在事后是要追责的）。
+   *
+   * 创建人/关联人一律取**会话**（`actor()`），不接受请求里自带一个名字 ——
+   * 与 Activity 同一条推理：那一列的价值就在"谁做的"。
+   */
+  ipcMain.handle(
+    IpcChannels.EVENT_CENTER_INCIDENT_CREATE,
+    (_event, input: EventIncidentCreateInput) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('viewEvents')
+        if (input === null || typeof input !== 'object') {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少 Incident 参数')
+        }
+        return getServices().eventCenter.createIncident({
+          title: input.title,
+          ...(input.note !== undefined ? { note: input.note } : {}),
+          ...(Array.isArray(input.entryIds)
+            ? { entryIds: input.entryIds.filter((id): id is string => typeof id === 'string') }
+            : {}),
+          actor: actor()
+        })
+      })
+  )
+
+  ipcMain.handle(IpcChannels.EVENT_CENTER_INCIDENT_LINK, (_event, input: EventIncidentLinkInput) =>
+    toResult(async () => {
+      requireAdministrator()
+      requirePermission('viewEvents')
+      if (input === null || typeof input !== 'object') {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少关联参数')
+      }
+      return getServices().eventCenter.linkAlerts({
+        incidentId: String(input.incidentId ?? ''),
+        entryIds: Array.isArray(input.entryIds)
+          ? input.entryIds.filter((id): id is string => typeof id === 'string')
+          : [],
+        actor: actor()
+      })
+    })
+  )
+
+  ipcMain.handle(
+    IpcChannels.EVENT_CENTER_INCIDENT_UNLINK,
+    (_event, input: EventIncidentUnlinkInput) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('viewEvents')
+        if (input === null || typeof input !== 'object') {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少解除关联参数')
+        }
+        return getServices().eventCenter.unlinkAlert({
+          incidentId: String(input.incidentId ?? ''),
+          entryId: String(input.entryId ?? '')
+        })
+      })
+  )
+
+  ipcMain.handle(IpcChannels.EVENT_CENTER_INCIDENTS_FOR_ALERT, (_event, entryId: unknown) =>
+    toResult(async () => {
+      requirePermission('viewEvents')
+      return getServices().eventCenter.incidentsForEntry(String(entryId ?? ''))
+    })
+  )
+
+  ipcMain.handle(IpcChannels.EVENT_CENTER_INCIDENT_LIST, (_event, limit: unknown) =>
+    toResult(async () => {
+      requirePermission('viewEvents')
+      return getServices().eventCenter.listIncidents(
         typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined
       )
     })
