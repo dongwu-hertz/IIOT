@@ -3244,6 +3244,24 @@ async function run() {
     '      if (!t) return null; return t.scrollWidth - t.clientWidth; })(),' +
     '    viewportWidth: window.innerWidth,' +
     /*
+     * 第 22 条：**视频窗口下方的通用播放器式控制条**，以及"页面里不再有播放信息"。
+     *
+     * 位置上量两件事：控制条的**顶边在画面底边之下**（"下方"的可测定义），以及
+     * 六个动作真的在同一个控制条里。原生 `controls` 只能从源码看，这里量的是
+     * "页面上有几条控制条"的等价物：`<video>` 自己有没有 `controls` 属性。
+     */
+    '    controlBar: (function(){ const b = document.querySelector("[data-camera-controlbar]");' +
+    '      return b ? { top: Math.round(b.getBoundingClientRect().top),' +
+    '        actions: [...b.querySelectorAll("[data-action]")].map((n) => n.getAttribute("data-action")) } : null; })(),' +
+    '    stageBottom: (function(){ const s = document.querySelector(".camera-live__stage");' +
+    '      return s ? Math.round(s.getBoundingClientRect().bottom) : null; })(),' +
+    '    videoHasNativeControls: (function(){ const v = document.querySelector(".camera-live__video");' +
+    '      return v ? v.hasAttribute("controls") : null; })(),' +
+    '    playbackInfoOnPage: [...document.querySelectorAll(".camera-live .kv__label")]' +
+    '      .filter((n) => /播放信息|Playback info|Información de reproducción|Oynatma bilgisi/.test(n.textContent || "")).length,' +
+    '    volumeSlider: (function(){ const el = document.querySelector("[data-action=camera-volume]");' +
+    '      return el ? { value: Number(el.value), disabled: !!el.disabled } : null; })(),' +
+    /*
      * ⑤ 16:9 视频窗口：量的是**窗口本身**的宽高比，不是视频源的比例。
      * 判据用 16/9 = 1.7778，允许 ±0.05（边框、圆角与 devicePixelRatio 的取整）。
      */
@@ -3327,6 +3345,46 @@ async function run() {
     if (monitorCamera.pairOverflow === null || monitorCamera.pairOverflow > 1) {
       problems.push('声纹图 / 频谱图那一行横向溢出：' + monitorCamera.pairOverflow +
         '（窗口 ' + monitorCamera.viewportWidth + 'px）')
+    }
+    /*
+     * 第 22 条：控制条在**画面下方**，六个动作都在里面，原生 controls 关掉，
+     * 页面上不再有那块「播放信息」。
+     */
+    if (!monitorCamera.controlBar) {
+      problems.push('找不到相机播放器式控制条（[data-camera-controlbar]）')
+    } else {
+      const bar = monitorCamera.controlBar
+      if (monitorCamera.stageBottom === null || bar.top < monitorCamera.stageBottom) {
+        problems.push(
+          '控制条不在画面下方：控制条 top=' + bar.top + '，画面 bottom=' + monitorCamera.stageBottom
+        )
+      }
+      const wanted = [
+        'camera-pause',
+        'camera-power',
+        'camera-record',
+        'camera-snapshot',
+        'camera-playback',
+        'camera-alarm-config',
+        'camera-volume',
+        'camera-flip-horizontal',
+        'camera-flip-vertical',
+        'camera-flip-quarter'
+      ]
+      const missing = wanted.filter((action) => !bar.actions.includes(action))
+      if (missing.length > 0) {
+        problems.push('控制条里缺少这些控件：' + JSON.stringify(missing) +
+          '（实际 ' + JSON.stringify(bar.actions) + '）')
+      }
+    }
+    if (monitorCamera.videoHasNativeControls === true) {
+      problems.push('`<video>` 打开了原生 controls：页面上会有两条功能不一样的控制条')
+    }
+    if (monitorCamera.playbackInfoOnPage > 0) {
+      problems.push('页面上还有「播放信息」那一行（第 22 条要求删掉）')
+    }
+    if (!monitorCamera.volumeSlider) {
+      problems.push('控制条里没有音量滑杆')
     }
     /*
      * ⑤ 16:9 视频窗口：窗口本身的宽高比必须是 16:9（1.7778 ± 0.05）。

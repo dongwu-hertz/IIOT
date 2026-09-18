@@ -1726,10 +1726,21 @@ export const es: MessageSchema = {
     errorHint: 'El flujo de vídeo se interrumpió. Puede reintentar para volver a abrirlo.',
     limitExceededHint:
       'Este equipo ha alcanzado su límite de directos simultáneos (ajustable en «Configuración del sistema → Vídeo en directo»). Detenga otra vista en reproducción y pulse «Iniciar vídeo».',
+    pausePicture: 'Pausar imagen',
+    playPicture: 'Reanudar imagen',
+    lookSnapshot: 'Ver (captura)',
+    lookPlayback: 'Reproducción',
+    volume: 'Volumen',
+    volumeMuted: 'Silenciado',
+    volumeValue: 'Volumen {percent}%',
+    volumeNoPicture: 'El volumen necesita imagen',
+    flipGroup: 'Voltear imagen',
+    flipHorizontal: 'Voltear horizontal',
+    flipVertical: 'Voltear vertical',
+    flipQuarter: 'Girar 90°',
     dataForwarded: '{count} bytes transferidos',
     modeRemux: 'Solo remultiplexado (sin recodificar)',
     modeTranscode: 'Recodificado (modo de compatibilidad)',
-    playbackInfo: 'Reproducción',
     attemptInfo: 'Candidato de dirección {index}: {id}'
   },
 

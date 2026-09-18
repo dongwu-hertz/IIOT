@@ -1731,10 +1731,21 @@ export const tr: MessageSchema = {
     errorHint: 'Görüntü akışı kesildi. Yeniden deneyerek açabilirsiniz.',
     limitExceededHint:
       'Bu makine eşzamanlı canlı yayın sınırına ulaştı («Sistem ayarları → Canlı görüntü» bölümünden ayarlanır). Önce çalışan başka bir görüntüyü durdurun, sonra «Görüntüyü başlat» düğmesine basın.',
+    pausePicture: 'Görüntüyü duraklat',
+    playPicture: 'Görüntüyü oynat',
+    lookSnapshot: 'Görüntüle (kare)',
+    lookPlayback: 'Oynatma',
+    volume: 'Ses',
+    volumeMuted: 'Sessiz',
+    volumeValue: 'Ses {percent}%',
+    volumeNoPicture: 'Ses için önce görüntü gerekir',
+    flipGroup: 'Görüntü çevirme',
+    flipHorizontal: 'Yatay çevir',
+    flipVertical: 'Dikey çevir',
+    flipQuarter: '90° döndür',
     dataForwarded: '{count} bayt aktarıldı',
     modeRemux: 'Yalnızca yeniden paketleme (yeniden kodlama yok)',
     modeTranscode: 'Yeniden kodlama (uyumluluk kipi)',
-    playbackInfo: 'Oynatma',
     attemptInfo: 'Adres adayı {index}: {id}'
   },
 

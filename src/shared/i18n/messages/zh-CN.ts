@@ -1926,10 +1926,21 @@ export const zhCN = {
     errorHint: '视频流已中断，可以点击重试重新打开。',
     limitExceededHint:
       '本机同时直播的路数已达上限（可在「系统设置 → 实时视频」调整）。请先停止其他正在播放的画面，再点击「开始视频」。',
+    pausePicture: '暂停画面',
+    playPicture: '播放画面',
+    lookSnapshot: '查看（抓图）',
+    lookPlayback: '回放',
+    volume: '音量',
+    volumeMuted: '已静音',
+    volumeValue: '音量 {percent}%',
+    volumeNoPicture: '还没有画面时不能调音量',
+    flipGroup: '画面翻转',
+    flipHorizontal: '左右翻转',
+    flipVertical: '上下翻转',
+    flipQuarter: '旋转 90°',
     dataForwarded: '已转发 {count} 字节',
     modeRemux: '直接转封装（不重新编码）',
     modeTranscode: '重新编码（兼容模式）',
-    playbackInfo: '播放信息',
     attemptInfo: '第 {index} 个地址候选：{id}'
   },
 

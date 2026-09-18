@@ -1743,10 +1743,21 @@ export const en: MessageSchema = {
     errorHint: 'The video stream stopped. Retry to reopen it.',
     limitExceededHint:
       'This machine has reached its concurrent live limit (adjust it under “System settings → Live video”). Stop another running view first, then press “Start video”.',
+    pausePicture: 'Pause picture',
+    playPicture: 'Play picture',
+    lookSnapshot: 'View (snapshot)',
+    lookPlayback: 'Playback',
+    volume: 'Volume',
+    volumeMuted: 'Muted',
+    volumeValue: 'Volume {percent}%',
+    volumeNoPicture: 'Volume needs a picture first',
+    flipGroup: 'Picture flip',
+    flipHorizontal: 'Flip horizontally',
+    flipVertical: 'Flip vertically',
+    flipQuarter: 'Rotate 90°',
     dataForwarded: '{count} bytes forwarded',
     modeRemux: 'Re-mux only (no re-encode)',
     modeTranscode: 'Re-encode (compatibility mode)',
-    playbackInfo: 'Playback',
     attemptInfo: 'Address candidate {index}: {id}'
   },
 

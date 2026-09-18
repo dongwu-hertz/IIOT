@@ -75,6 +75,15 @@ import {
   spectrumRangeLabel
 } from '@renderer/lib/spectrum'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
+import {
+  CAMERA_DEFAULT_VOLUME,
+  CAMERA_FLIP_NONE,
+  cameraFlipTransform,
+  loadCameraVolume,
+  sanitiseCameraVolume,
+  saveCameraVolume,
+  type CameraFlip
+} from '@renderer/lib/cameraLivePrefs'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import MetricCard from '@renderer/components/MetricCard.vue'
 import EChart from '@renderer/components/EChart.vue'
@@ -810,6 +819,8 @@ async function stopCameraLive(): Promise<void> {
     video.load()
   }
   cameraLive.value = null
+  // 停流之后"暂停画面"这个状态不再有意义：下一次起播必须是活的画面。
+  picturePaused.value = false
   const id = selectedDeviceId.value
   if (!id) return
   await callApi(() => window.api.cameraLive.stop(id))
@@ -837,6 +848,8 @@ function onVideoProblem(): void {
  */
 function onVideoReady(): void {
   void refreshCameraState()
+  // 一有画面就把记住的音量写上去（元素是这一刻才存在的，之前写不了）。
+  applyAudioOutput()
 }
 
 /** Start/stop for the panel's single button. */
@@ -844,6 +857,92 @@ async function toggleCameraLive(): Promise<void> {
   if (cameraActive.value) await stopCameraLive()
   else await startCameraLive()
 }
+
+// ---------------------------------------------------------------------------
+// 第 21 条：画面冻结、音量记忆、翻转
+// ---------------------------------------------------------------------------
+
+/**
+ * 「暂停画面」不是「暂停设备」。
+ *
+ * 这一路是主进程用 ffmpeg 转封装出来的**实时**流：渲染层没有、也不该有"暂停设备推流"这件事
+ * （ffmpeg 与 RTSP 会话都在主进程，暂停它等于停流，那就不是暂停而是停止了）。所以这个按钮
+ * 做的是 `video.pause()` —— **冻住眼前这一帧**，再按一下从实时位置继续。
+ * 名字里带「画面」两个字就是为了不让它读成"设备停了"（与 §15.13 那条口径一致：
+ * 界面不能替设备说一句它没做过的事）。
+ */
+const picturePaused = ref(false)
+
+function togglePicturePause(): void {
+  const video = videoEl.value
+  if (!video) return
+  if (picturePaused.value) {
+    picturePaused.value = false
+    void video.play().catch(() => {
+      // 播放被拒（自动播放策略）：把状态放回"暂停"，按钮与画面才不会互相矛盾。
+      picturePaused.value = true
+    })
+  } else {
+    video.pause()
+    picturePaused.value = true
+  }
+}
+
+/**
+ * 音量（第 21 条「音量可调并**记住**」）。
+ *
+ * 三条判断，每一条都有理由：
+ *   1. **默认静音起播**：第 21 条要求"选中即自动播放"，而浏览器的自动播放策略不允许
+ *      带声音自动播 —— 所以自动起播那一次必须是 muted，音量滑杆是**用户手势**，
+ *      拖动它才算"他要求出声"。`audioUnlocked` 就是这件事的状态；
+ *   2. **记住的是音量值，不是"要不要出声"**：下次进来仍然静音起播（策略不变），
+ *      但滑杆位置与一拖动之后的响度都是上次那个数；
+ *   3. **写到元素属性上**：`<video>` 读的是元素自己的 `volume` / `muted`，
+ *      改了响应式变量而不写元素，界面上滑杆动了而声音没变。
+ */
+const liveVolume = ref(CAMERA_DEFAULT_VOLUME)
+const audioUnlocked = ref(false)
+
+const liveVolumePercent = computed(() => Math.round(liveVolume.value * 100))
+
+const liveVolumeLabel = computed(() =>
+  !cameraActive.value
+    ? t('cameraLiveUi.volumeNoPicture')
+    : liveVolume.value === 0
+      ? t('cameraLiveUi.volumeMuted')
+      : t('cameraLiveUi.volumeValue', { percent: liveVolumePercent.value })
+)
+
+function applyAudioOutput(): void {
+  const video = videoEl.value
+  if (!video) return
+  // 顺序有意义：先写 volume 再解除 muted —— 反过来的话，解除静音的那一瞬间会以旧音量
+  // 响一下（滑杆在 0 时那一瞬间是满音量）。
+  video.volume = sanitiseCameraVolume(liveVolume.value)
+  video.muted = !audioUnlocked.value || video.volume === 0
+}
+
+function onLiveVolumeInput(event: Event): void {
+  const value = (event.target as HTMLInputElement | null)?.value
+  liveVolume.value = sanitiseCameraVolume(value)
+  // 拖动滑杆 = 用户手势：这一下之后才允许出声。
+  audioUnlocked.value = true
+  applyAudioOutput()
+  saveCameraVolume(selectedDeviceId.value, liveVolume.value)
+}
+
+/** 画面翻转（第 21 条）：左右 / 上下 / 90°，三个独立开关。 */
+const flip = ref<CameraFlip>({ ...CAMERA_FLIP_NONE })
+
+function toggleFlip(axis: keyof CameraFlip): void {
+  flip.value = { ...flip.value, [axis]: !flip.value[axis] }
+}
+
+const videoTransform = computed(() => cameraFlipTransform(flip.value))
+
+const flipActive = computed(
+  () => flip.value.horizontal || flip.value.vertical || flip.value.quarter
+)
 
 // ---------------------------------------------------------------------------
 // Camera NVR interactions: context menu, manual recording, snapshot, full screen
@@ -1204,6 +1303,10 @@ onMounted(async () => {
       // 主进程才是录像状态的权威：刷新页面后录制指示器必须能自己恢复，
       // 而不是显示成「没在录」。
       await refreshRecordingState()
+      // 第 21 条：音量**记住**（每台设备一份）；这一路画面还没拿到用户手势，
+      // 所以起播是静音的，出声要由滑杆那一次手势决定。
+      liveVolume.value = loadCameraVolume(selectedDeviceId.value)
+      audioUnlocked.value = false
       await autoPlayCameraIfWorking()
     } else if (isVoiceprint.value) {
       await startSession()
@@ -1258,8 +1361,15 @@ watch(selectedDeviceId, async (id) => {
     // 而一个没有界面的录像等于一个看不见的 ffmpeg。
     await finaliseRecordingIfAny()
     await stopCameraLive()
+    // 音量是**每台设备各记一份**的（同一间机房里两台相机的拾音电平可以差很多）。
+    liveVolume.value = loadCameraVolume(id)
+    // 新的一路画面：还没拿到用户手势，出声这件事要重新由滑杆决定。
+    audioUnlocked.value = false
     await refreshCameraState()
     await refreshRecordingState()
+    // 第 21 条：**选中即自动播放**。挂在换设备这条路径上，与挂载那条走同一个
+    // `autoPlayCameraIfWorking()` —— 两条入口读的是同一份判定，不会一个自动一个不自动。
+    await autoPlayCameraIfWorking()
   } else if (isSonar.value) {
     /*
      * 切到声呐：**把声纹设备那一套全部收干净**，然后什么都不开。
@@ -1511,55 +1621,14 @@ const sessionLabel = computed(() => {
       <section v-if="isCamera" class="card camera-live">
         <div class="section-header">
           <h3 class="section-title">{{ t('cameraLiveUi.title') }}</h3>
-          <span :class="cameraBadgeClass">{{ cameraStatusLabel }}</span>
-        </div>
-
-        <div class="btn-row">
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--primary': !cameraActive }"
-            :disabled="cameraBusy"
-            @click="toggleCameraLive"
-          >
-            {{
-              cameraActive
-                ? t('cameraLiveUi.stop')
-                : cameraStatus === 'error'
-                  ? t('cameraLiveUi.retry')
-                  : t('cameraLiveUi.start')
-            }}
-          </button>
           <!--
-            * 手动录像 / 抓图：可用性与右键菜单**同源**（同一个纯函数），
-            * 不可用时按钮禁用并把原因写在旁边，绝不静默失败。
+            播放信息（已转发字节数 / 正在用哪个地址候选）**从页面上删掉了**（第 21 条），
+            但它没有丢：它就是这枚状态徽标的悬停说明。删的是"页面上永久占一行的一段诊断"，
+            不是这条诊断本身 —— 出问题时它仍是第一条线索。
           -->
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--danger': recording }"
-            :disabled="nvrBusy || !(recording || readiness.ready)"
-            :title="recording || readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
-            @click="toggleManualRecording"
-          >
-            {{
-              recording
-                ? t('cameraNvrUi.menuStopRecording')
-                : t('cameraNvrUi.menuStartRecording')
-            }}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            :disabled="nvrBusy || !readiness.ready"
-            :title="readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
-            @click="takeSnapshot"
-          >
-            {{ t('cameraNvrUi.menuSnapshot') }}
-          </button>
-          <button type="button" class="btn btn--sm" @click="alarmDialogOpen = true">
-            {{ t('cameraNvrUi.menuAlarmConfig') }}
-          </button>
+          <span :class="cameraBadgeClass" :title="cameraMeta || undefined" data-camera-status>
+            {{ cameraStatusLabel }}
+          </span>
         </div>
 
         <!--
@@ -1577,10 +1646,14 @@ const sessionLabel = computed(() => {
             ref="videoEl"
             class="camera-live__video"
             :src="cameraLiveUrl"
+            :style="{ transform: videoTransform }"
+            :class="{
+              'camera-live__video--paused': picturePaused,
+              'camera-live__video--flipped': flipActive
+            }"
             autoplay
             muted
             playsinline
-            controls
             @error="onVideoProblem"
             @ended="onVideoProblem"
             @loadeddata="onVideoReady"
@@ -1619,20 +1692,149 @@ const sessionLabel = computed(() => {
           {{ cameraMessage }}
         </p>
 
-        <dl class="kv">
+        <!--
+          视频窗口下方的**通用播放器式控制条**（业主 2026-09-18 第 10 批第 22 条）：
+          暂停 / 播放 · 录制 · 查看（抓图）· 回放 · 告警配置，外加音量与三个翻转开关。
+
+          两件事与原来不同：
+            · 动作**不再画在画面上方**（原来那排按钮在视频上面）；控制条在画面**下方**，
+              与任何播放器的位置一致；
+            · **原生 `controls` 关掉了**：它自带一条控制条，而业主要的那几个动作它一个都
+              没有（录制、抓图、回放、告警配置）—— 两条控制条并排只会互相抢注意力。
+
+          每一项的可用性都读**同一个 `readiness`**（右键菜单用的也是它），所以"菜单亮着但
+          按钮灰着"这种漂移在结构上不可能发生；不可用时把原因写在 `title` 里。
+        -->
+        <div class="camera-controls" data-camera-controlbar>
+          <button
+            type="button"
+            class="btn btn--sm"
+            :disabled="!cameraActive"
+            :title="cameraActive ? '' : t('cameraLiveUi.volumeNoPicture')"
+            data-action="camera-pause"
+            @click="togglePicturePause"
+          >
+            {{ picturePaused ? t('cameraLiveUi.playPicture') : t('cameraLiveUi.pausePicture') }}
+          </button>
+
+          <button
+            type="button"
+            class="btn btn--sm"
+            :class="{ 'btn--primary': !cameraActive }"
+            :disabled="cameraBusy"
+            data-action="camera-power"
+            @click="toggleCameraLive"
+          >
+            {{
+              cameraActive
+                ? t('cameraLiveUi.stop')
+                : cameraStatus === 'error'
+                  ? t('cameraLiveUi.retry')
+                  : t('cameraLiveUi.start')
+            }}
+          </button>
+
+          <button
+            type="button"
+            class="btn btn--sm"
+            :class="{ 'btn--danger': recording }"
+            :disabled="nvrBusy || !(recording || readiness.ready)"
+            :title="recording || readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
+            data-action="camera-record"
+            @click="toggleManualRecording"
+          >
+            {{
+              recording
+                ? t('cameraNvrUi.menuStopRecording')
+                : t('cameraNvrUi.menuStartRecording')
+            }}
+          </button>
+
+          <button
+            type="button"
+            class="btn btn--sm"
+            :disabled="nvrBusy || !readiness.ready"
+            :title="readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
+            data-action="camera-snapshot"
+            @click="takeSnapshot"
+          >
+            {{ t('cameraLiveUi.lookSnapshot') }}
+          </button>
+
+          <button
+            type="button"
+            class="btn btn--sm"
+            data-action="camera-playback"
+            @click="playbackOpen = true"
+          >
+            {{ t('cameraLiveUi.lookPlayback') }}
+          </button>
+
+          <button
+            type="button"
+            class="btn btn--sm"
+            data-action="camera-alarm-config"
+            @click="alarmDialogOpen = true"
+          >
+            {{ t('cameraNvrUi.menuAlarmConfig') }}
+          </button>
+
           <!--
-            「RTSP 地址」与「直接转封装」两条按产品要求删掉了：
-              - RTSP 地址是本机回环服务的内部地址（`rtsp://127.0.0.1:<port>/…`），操作员
-                拿它没有可做的事，而它长得像"设备的地址"、容易被当成设备真实地址抄走；
-                右键菜单里"复制 RTSP 地址"那条入口仍然在，需要它的时候拿得到；
-              - 「直接转封装」说的是本机用哪种方式把 H.264 交给 `<video>`，那是实现细节。
-            留下的是「播放信息」（已转发字节数 / 正在用哪个地址候选），失败时它才是线索。
+            音量（第 21 条「音量可调并**记住**」）。没有画面时禁用并把原因说清楚 ——
+            一个按下去什么都不会发生的音量滑杆比没有它更糟（与画面墙同一条口径）。
           -->
-          <div v-if="cameraMeta" class="kv__item">
-            <dt class="kv__label">{{ t('cameraLiveUi.playbackInfo') }}</dt>
-            <dd class="kv__value">{{ cameraMeta }}</dd>
+          <label class="camera-controls__volume">
+            <span class="muted">{{ t('cameraLiveUi.volume') }}</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              class="camera-controls__slider"
+              data-action="camera-volume"
+              :value="liveVolumePercent"
+              :disabled="!cameraActive"
+              :aria-label="liveVolumeLabel"
+              :title="liveVolumeLabel"
+              @input="onLiveVolumeInput"
+            />
+            <span class="muted camera-controls__percent">{{ liveVolumePercent }}%</span>
+          </label>
+
+          <!-- 翻转：左右 / 上下 / 90°，三个独立开关（第 21 条）。 -->
+          <div class="camera-controls__flip" role="group" :aria-label="t('cameraLiveUi.flipGroup')">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--primary': flip.horizontal }"
+              :aria-pressed="flip.horizontal"
+              data-action="camera-flip-horizontal"
+              @click="toggleFlip('horizontal')"
+            >
+              {{ t('cameraLiveUi.flipHorizontal') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--primary': flip.vertical }"
+              :aria-pressed="flip.vertical"
+              data-action="camera-flip-vertical"
+              @click="toggleFlip('vertical')"
+            >
+              {{ t('cameraLiveUi.flipVertical') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--primary': flip.quarter }"
+              :aria-pressed="flip.quarter"
+              data-action="camera-flip-quarter"
+              @click="toggleFlip('quarter')"
+            >
+              {{ t('cameraLiveUi.flipQuarter') }}
+            </button>
           </div>
-        </dl>
+        </div>
       </section>
 
       <!-- ------------------------------------------------------------------
@@ -2452,6 +2654,62 @@ const sessionLabel = computed(() => {
   height: 100%;
   object-fit: contain;
   background: #000;
+  /*
+   * 翻转/旋转（第 21 条）走 `transform`，所以这几条不能少：
+   *   · `transform-origin: center` 是默认值，写出来是为了说明转的是画面中心；
+   *   · 过渡 120ms：翻转是"一眼看懂发生了什么"的动作，瞬变会让人以为画面闪了一下；
+   *   · `will-change` 不加 —— 一个常驻的合成层为一台离线相机白占显存。
+   */
+  transform-origin: center center;
+  transition: transform 0.12s ease;
+}
+
+/* 暂停（画面冻结）时给一个明确的视觉信号：静止的画面与"卡住的流"必须看得出来。 */
+.camera-live__video--paused {
+  filter: saturate(0.65) brightness(0.92);
+}
+
+/*
+ * 控制条（第 22 条）：**画面下方**，与任何播放器的位置一致。
+ *
+ * 一行放不下时换行（`flex-wrap`）：这一条里从 6 个动作到 12 个控件都有，
+ * 挤在一行会把音量滑杆压到几像素宽。
+ */
+.camera-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.camera-controls__volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.camera-controls__slider {
+  width: 140px;
+}
+
+.camera-controls__slider:disabled {
+  opacity: 0.5;
+}
+
+.camera-controls__percent {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-controls__flip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* 全屏时铺满：窗口比例这时由屏幕决定（`<video>` 仍然 contain，不拉伸）。 */
