@@ -1475,7 +1475,10 @@ CPU**（`Get-Process` 里一个从 9/16 起跑、累计 3600 秒以上 CPU 的 `
   > 该删的那个留着。孤儿检查把它报成"缺失键"才发现的。两个键现在各归其位，守卫里也加了
   > "`alarmsUi.filterAllChannels` 必须还在"这一条。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,101,214 字节**，sha256 `8995EA9C9AD4CFF9FA0437B858B95FB450C9317329FAA0525A8DCC4EC9A6A0B1`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
