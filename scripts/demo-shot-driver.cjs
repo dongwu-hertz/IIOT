@@ -1041,7 +1041,22 @@ async function run() {
     '  footerMaxInternalGapPx: rects.length > 1 ? Math.round(maxGap) : 0,' +
     '  footerChildCount: rects.length,' +
     '  footerLinkText: link ? (link.textContent || "").trim() : null,' +
-    '  footerLinkTag: link ? link.tagName.toLowerCase() : null' +
+    '  footerLinkTag: link ? link.tagName.toLowerCase() : null,' +
+    /*
+     * 第 1 条（业主 2026-09-18 第 10 批：「每次打开总览界面默认开启视频流」）。
+     *
+     * ⚠️ **这一段量不到那条要求本身**：这条要求的效果是"每次进总览都会去起一次流"，
+     * 而探针里那台相机是**离线**的 —— `decideCameraAutoPlay()` 会在 `offline` 这一步
+     * 就 skip（那是刻意的：连不上就不去占相机的一条 RTSP 连接），所以起流请求根本不会发出。
+     * 这里量的是**能被量到的那一半**：画面墙在、格子有确定的状态词，而不是一个空白页或
+     * 一个永远转圈的黑框。要验证"每进一次就起一次"，看主进程日志里
+     * `Camera live view requested` 的行数（相机上线后跑两次总览，行数应当 +2）。
+     */
+    '  wallPresent: !!document.querySelector(".camera-wall"),' +
+    '  wallCells: document.querySelectorAll(".camera-wall__cell").length,' +
+    '  wallStatusTexts: Array.prototype.slice.call(document.querySelectorAll(".camera-wall__cell"))' +
+    '    .map((c) => (c.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 40))' +
+    '    .filter((t) => t !== "")' +
     '});' +
     '})()')
 
@@ -1055,6 +1070,25 @@ async function run() {
   }
   if (overview.footerBottomGap !== null && overview.footerBottomGap > 2) {
     problems.push('页脚没有贴在窗口底部，下方还空 ' + overview.footerBottomGap + 'px')
+  }
+  /*
+   * 第 1 条能被量到的那一半（见探针里那段注释）：总览页必须有画面墙，而且空白格之外
+   * 每一格都要有**确定的状态词** —— 一个永远转圈的黑框与"视频未启动"在截图上是两件事，
+   * 而后者才是这台离线相机的实情。
+   */
+  log('overview wall : ' + JSON.stringify({
+    present: overview.wallPresent,
+    cells: overview.wallCells,
+    statuses: overview.wallStatusTexts
+  }))
+  if (!overview.wallPresent) {
+    problems.push('总览页没有实时视频墙（第 1 条要的是"打开总览界面默认开启视频流"）')
+  }
+  if (overview.wallCells <= 0) {
+    problems.push('总览页的画面墙一个格子都没有')
+  }
+  if ((overview.wallStatusTexts || []).length === 0) {
+    problems.push('画面墙上没有任何状态词：空格之外至少要有"未开始/RTSP 未启用"这类确定的事实')
   }
 
   /**

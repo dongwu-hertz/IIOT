@@ -537,8 +537,63 @@ describe('CameraVideoWall template', () => {
     )
   })
 
-  it('重新评估是事件驱动的：一个 watch 盯住输入签名，没有轮询', () => {
-    // 输入的四个来源（设备列表、设备状态、activeDeviceId、设置）压成一个 computed
+  /**
+   * 第 1 条（业主 2026-09-18 第 10 批）：「每次打开总览界面默认开启视频流」。
+   *
+   * 原来落不了地的原因很具体：`already-attempted` 那一位活在模块作用域里、清空时机是
+   * **一次应用启动**，所以第一次进总览起播过之后，再进总览永远是"本次已经试过了"。
+   * 改法是把清空时机挪到**进页面**：`resetAutoPlayAttempts()` 只清"试过了吗"，
+   * **不动** "操作员按过停止"那一位。
+   *
+   * 为什么这一条只能靠源码守卫：那两个集合是模块私有的运行时状态（不在 store 里，
+   * 它们必须活在"一次进程"这一层，见 store 里的注释），单测 import 不到它们的内容；
+   * 而**它们各自的语义**（清哪个、不清哪个）正是这一条要求的全部。
+   */
+  it('每次进入总览/监测页都重新允许一次自动起播，但「手动停止」不许被清掉', () => {
+    const store = readFileSync(
+      path.resolve(__dirname, '..', '..', 'src', 'renderer', 'src', 'stores', 'cameraLive.ts'),
+      'utf8'
+    )
+    const start = store.indexOf('export function resetAutoPlayAttempts(')
+    assert.ok(start >= 0, 'store 里没有 resetAutoPlayAttempts()')
+    const body = store.slice(start, store.indexOf('\n}', start))
+    assert.match(body, /autoPlayAttempted\.clear\(\)/, '它没有清"这一轮试过了吗"')
+    assert.equal(
+      /manualStopped/.test(body),
+      false,
+      '它把「操作员按过停止」也清了：换一次页面就会把用户明确关掉的画面放回来'
+    )
+    // 与「模拟一次新启动」那个函数必须区分开：那个是清全部（测试与重新登录用）。
+    const fullReset = store.slice(store.indexOf('export function resetAutoPlayGuards('))
+    assert.match(
+      fullReset.slice(0, fullReset.indexOf('\n}')),
+      /manualStopped\.clear\(\)/,
+      'resetAutoPlayGuards() 不再是"清全部"：它和进页面那一次会变成同一个东西'
+    )
+
+    // 两页都要在**挂载时**清一次，而且要在自动起播那一次调用**之前**。
+    for (const [label, file, marker] of [
+      ['总览的画面墙', 'CameraVideoWall.vue', 'await requestAutoPlay()'],
+      ['实时监测的相机', 'MonitorView.vue', 'await autoPlayCameraIfWorking()']
+    ] as const) {
+      const page = readFileSync(
+        path.resolve(__dirname, '..', '..', 'src', 'renderer', 'src', label.includes('总览') ? 'components' : 'views', file),
+        'utf8'
+      )
+      const mounted = page.indexOf('onMounted(async () => {')
+      assert.ok(mounted >= 0, `${file} 里找不到 onMounted`)
+      const mountedBody = page.slice(mounted, page.indexOf('\n})', mounted))
+      const resetAt = mountedBody.indexOf('resetAutoPlayAttempts()')
+      const playAt = mountedBody.indexOf(marker)
+      assert.ok(resetAt >= 0, `${label} 挂载时没有重新允许自动起播（第 1 条落不了地）`)
+      assert.ok(
+        playAt >= 0 && resetAt < playAt,
+        `${label} 的清空排在自动起播之后：那一次仍然是"本次已经试过了"`
+      )
+    }
+  })
+
+  it('重新评估是事件驱动的：一个 watch 盯住输入签名，没有轮询', () => {    // 输入的四个来源（设备列表、设备状态、activeDeviceId、设置）压成一个 computed
     // 签名，签名变了才重新评估。用 computed 而不是定时器：只有真的变了才通知。
     assert.match(source, /const autoPlaySignal = computed\(/)
     assert.match(source, /watch\(autoPlaySignal,/)

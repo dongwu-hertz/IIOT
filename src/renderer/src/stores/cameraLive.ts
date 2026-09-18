@@ -75,6 +75,26 @@ export function resetAutoPlayGuards(): void {
   starting.clear()
 }
 
+/**
+ * 只清「这一轮试过了吗」，**保留**「操作员不要它」。
+ *
+ * WHY THIS EXISTS（业主 2026-09-18 第 10 批第 1 条「每次打开总览界面默认开启视频流」）
+ * `autoPlayAttempted` 的用途是**在一次页面停留里只尝试一次**，绝不进入重试循环。
+ * 但它原来活在模块作用域里、清空时机是"一次应用启动"，于是"每次打开总览界面"这条要求
+ * 落不了地：第一次进总览起播过之后，再进总览就永远是"本次已经试过了"，画面停着不动。
+ *
+ * 所以进入**看得见实时画面的那两页**（总览的画面墙、实时监测的相机）时清一次这一位：
+ *   - 每次进页面 → 判定重新走一遍 → 「默认开启」成立；
+ *   - 一次停留里仍然只有一次尝试（失败不会自转重试）；
+ *   - **`manualStopped` 绝不清**：操作员按过「停止视频」的东西，不该因为他换了一次页面
+ *     就自己回来。这是与 `resetAutoPlayGuards()` 的全部区别，也是这一位必须单独存在的原因。
+ *   - 已知不可用的相机会被 `rtspAvailability` 记住（那一位在 store 里、按进程活着），
+ *     所以"每次进页面"不会变成"每次去撞一次已经知道关着的 RTSP"。
+ */
+export function resetAutoPlayAttempts(): void {
+  autoPlayAttempted.clear()
+}
+
 /** 主进程这台相机当前的会话状态；没有会话时是 `'idle'`。 */
 export interface CameraLiveSessionSnapshot {
   status: CameraLiveStatus

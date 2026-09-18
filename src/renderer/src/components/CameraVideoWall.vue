@@ -84,7 +84,7 @@ import {
 } from '@renderer/lib/cameraWall'
 import { formatBytes, formatDuration } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
-import { useCameraLiveStore } from '@renderer/stores/cameraLive'
+import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useCameraWallStore } from '@renderer/stores/liveWall'
 import { useSettingsStore } from '@renderer/stores/settings'
@@ -1312,7 +1312,17 @@ onMounted(async () => {
   // 录像状态的权威同样在主进程：不读一次，刷新页面后「正在录像」的红色指示器
   // 就会消失，而 ffmpeg 还在写盘 —— 那是界面在说假话。
   await refreshRecordingStates()
-  // 最后才是本次应用启动的那一次自动起播：它要用到上面读到的设备列表与设置。
+  /*
+   * **每次打开总览界面都重新允许一次自动起播**（业主 2026-09-18 第 10 批第 1 条）。
+   *
+   * `already-attempted` 那一位原来的清空时机是"一次应用启动"，于是这条要求落不了地：
+   * 第一次进总览起播过之后，再进总览就永远是"本次已经试过了"，画面停着不动。
+   * `resetAutoPlayAttempts()` **只清"试过了吗"**，「操作员按过停止」那一位保留 ——
+   * 他明确不要的东西不该因为换了一次页面就自己回来（见那个函数的注释）。
+   * 已知不可用的相机会被 `rtspAvailability` 记住，所以这不会变成反复去撞关着的 RTSP。
+   */
+  resetAutoPlayAttempts()
+  // 最后才是本次进页面的那一次自动起播：它要用到上面读到的设备列表与设置。
   await requestAutoPlay()
 })
 

@@ -47,7 +47,7 @@ import {
   type CameraNvrMenuItem
 } from '@shared/domain/camera-nvr'
 import { useDevicesStore } from '@renderer/stores/devices'
-import { useCameraLiveStore } from '@renderer/stores/cameraLive'
+import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { ALL_STREAM_KINDS, useMonitorStore } from '@renderer/stores/monitor'
 import { streamKindLabel } from '@renderer/lib/labels'
@@ -1290,6 +1290,13 @@ async function finaliseRecordingIfAny(): Promise<void> {
 onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
   if (devices.devices.length === 0) await devices.load()
+  /*
+   * 每次进入这一页都重新允许一次自动起播（与总览页同一个口径，见
+   * `resetAutoPlayAttempts()` 的注释）：第 21 条要的是"选中即自动播放"，
+   * 而"一次进程一次尝试"会让第二次进入这一页时画面停着不动。
+   * 「操作员按过停止」那一位**保留** —— 他明确不要的东西不因为换页面就回来。
+   */
+  resetAutoPlayAttempts()
   syncFromRoute()
   if (selectedDeviceId.value) {
     // 通道表要先到手，初始通道才能避开被明确关闭的那几路。
