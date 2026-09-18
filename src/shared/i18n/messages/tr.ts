@@ -85,8 +85,12 @@ export const tr: MessageSchema = {
       monitor: 'Canlı izleme',
       trends: 'Eğilimler',
       alarms: 'Alarmlar',
-      /** Cihaz haritası (8. parti): kayıtlı WGS84 noktaları ve alarm görüntüleri. */
-      map: 'Cihaz haritası',
+      /**
+       * Harita bilgileri (GIS). «Cihaz haritası» adından değiştirildi ve doğrudan Genel bakış'ın
+       * altına taşındı (10. parti, 12. madde: sayfa artık bir GIS servisi ya da kat planı da
+       * taşıdığı için «cihaz haritası» adı onu anlatmıyor).
+       */
+      map: 'Harita bilgileri (GIS)',
       events: 'Olay ve alarm merkezi',
       recordings: 'Kayıtlar',
       samples: 'Örnek kitaplığı',
@@ -1063,7 +1067,7 @@ export const tr: MessageSchema = {
 
   /** Çevrimdışı cihaz haritası (8. parti). Arka plan yalnızca kayıtlı WGS84 noktalarından çizilir. */
   mapUi: {
-    mapTitle: 'Cihaz haritası',
+    canvasLabel: 'Cihaz konumları',
     counts: '{total} cihazdan {withPoint} tanesi haritada',
     noPoints: 'Henüz hiçbir cihazın noktası kayıtlı değil. Cihazlar → Düzenle → Kurulum bilgisi altında enlem/boylam girin; cihaz burada görünür.',
     selectHint: 'Bir işaretçiye tıklayıp cihazı görün: konum, alarmlar ve görüntüler.',

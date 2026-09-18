@@ -784,11 +784,22 @@ async function run() {
     '    radius: s.borderTopLeftRadius, background: s.backgroundColor' +
     '  };' +
     '};' +
+    /*
+     * 侧栏的**顺序**（业主 2026-09-18 第 10 批第 12 条：「地图信息（GIS）」移到设备管理上方、
+     * 总览下方）。判据用路径而不是文字：路径与语言无关，而且这正是路由与侧栏两份清单
+     * 必须一致的那一件事。
+     *
+     * `href` 带 hash（路由是 hash 模式，`#/map`），所以这里**去掉那个 `#`** —— 第一次跑
+     * 就是因为拿着 `#/` 去比 `/` 而误报了两条"问题"（界面其实是对的）。
+     */
+    'const navPathOf = (a) => ((a.getAttribute("href") || "").replace(/^#/, "") || "/");' +
     'const out = {' +
     '  found: true,' +
     '  inNav: !!(nav && nav.contains(toggle)),' +
     '  afterLastNavItem: !!(last && (last.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0),' +
     '  lastNavLabel: last ? (last.textContent || "").trim() : "",' +
+    '  navPaths: items.map(navPathOf),' +
+    '  navLabels: items.map((a) => (a.textContent || "").trim()),' +
     '  expandedWidth: widthOf(),' +
     '  expandedLogo: styleOf(logo()),' +
     '  expandedLabel: toggle.getAttribute("aria-label"),' +
@@ -855,6 +866,28 @@ async function run() {
         problems.push('展开与收起时 logo 的圆角一样 —— 圆形那条规则没有按折叠状态切换')
       }
     }
+    /*
+     * 第 12 条：导航顺序必须是「总览 → 地图信息（GIS） → 设备管理 → …」。
+     *
+     * 拿**路径**比而不是文字：路径与语言无关，而且"两份清单顺序一致"这件事正是要守的。
+     * 只断言前三项而不是整串：后面的项没被这一条要求动过，钉死整串会让以后任何一次
+     * 新增页面都要改这条断言（那时它会变成噪声）。
+     */
+    const navPaths = sidebarToggle.navPaths || []
+    const wantHead = ['/', '/map', '/devices']
+    if (navPaths.slice(0, wantHead.length).join(',') !== wantHead.join(',')) {
+      problems.push(
+        '侧栏前三项不是"总览 → 地图信息（GIS） → 设备管理"（第 12 条）：' +
+        JSON.stringify(navPaths.slice(0, 4)) + ' 标签 ' +
+        JSON.stringify((sidebarToggle.navLabels || []).slice(0, 4))
+      )
+    }
+    // 地图那一项的标签必须真的带 GIS（业主第 12 条给的名字）。
+    const mapIndex = navPaths.indexOf('/map')
+    const mapLabel = mapIndex >= 0 ? (sidebarToggle.navLabels || [])[mapIndex] : ''
+    if (!/GIS/.test(String(mapLabel))) {
+      problems.push('侧栏里地图那一项的名字里没有 GIS：「' + mapLabel + '」（第 12 条要求「地图信息（GIS）」）')
+    }
   }
 
   const list = ONLY ? ROUTES.filter((r) => r[1] === ONLY) : ROUTES
@@ -906,10 +939,43 @@ async function run() {
    * 事件中心、听诊盒子三条探针全是"超时"—— 报告里 12 条问题**没有一条是内容断言**。
    * 放宽默认值不会掩盖真缺陷（真挂住时仍会报超时），但能少报一堆假失败。
    */
+  /**
+   * 页面**渲染好了**没有：`.app-content` 里出现了这一页的根节点（`.page`）。
+   *
+   * 这是 2026-09-18 加的一道等待。原来这里只有一句 `await sleep(1200)`，而实测这台机器上
+   * **有一个不是本项目的 node 进程常驻吃 CPU**（任务管理器里一个跑了两天的 `node`，
+   * 累计 CPU 3600 秒以上）。那种负载下 1200ms 经常不够：同一批探针里
+   * 「实时监测的设备下拉没有被投到顶栏那一格里」「量不到趋势卡片」「设备表里找不到可双击的
+   * IP 按钮」全是**同一次运行**里的三条 —— 而它们各自在别的运行里都通过。
+   *
+   * 判据刻意选"根节点出现了"而不是"文字出现了"：一句加载中的文字也会让 `textContent`
+   * 非空，那等于什么都没等。等待有上限（`LAYOUT_SETTLE_MAX_MS`），到点就照常往下走 ——
+   * 于是"页面根本没渲染"仍然会被那条内容断言抓住，而不是把整次运行挂在这里。
+   */
+  const LAYOUT_SETTLE_MAX_MS = 20_000
+  const LAYOUT_SETTLE_STEP_MS = 250
+
+  const waitForPageRoot = async () => {
+    const deadline = Date.now() + LAYOUT_SETTLE_MAX_MS
+    for (;;) {
+      const present = await win.webContents.executeJavaScript(
+        '!!document.querySelector(".app-content .page, .app-content .login, .app-content [data-route-root]")'
+      )
+      if (present === true) return true
+      if (Date.now() >= deadline) return false
+      await sleep(LAYOUT_SETTLE_STEP_MS)
+    }
+  }
+
   const layout = async (route, script, timeoutMs = 60_000) => {
     await win.webContents.executeJavaScript(
       'location.hash = ' + JSON.stringify('#' + route) + '; true'
     )
+    const rooted = await waitForPageRoot()
+    if (!rooted) {
+      log('layout ' + route.padEnd(9) + ': NO PAGE ROOT after ' + LAYOUT_SETTLE_MAX_MS + 'ms')
+    }
+    // 根节点出现之后还要再等一次重排：Vue 的 Teleport 内容与图表都在挂载之后才落位。
     await sleep(1200)
     const raw = await Promise.race([
       win.webContents.executeJavaScript(script),

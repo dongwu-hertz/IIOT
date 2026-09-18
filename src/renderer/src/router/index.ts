@@ -34,6 +34,18 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'app.nav.overview', nav: true }
   },
   {
+    /**
+     * 地图信息（GIS）。
+     *
+     * 业主 2026-09-18 第 10 批第 12 条把它改名为「地图信息（GIS）」并挪到设备管理之前
+     * （总览下方）。路由路径仍然是 `/map`：路径是给书签与探针用的稳定标识，改名的是**标签**。
+     */
+    path: '/map',
+    name: 'map',
+    component: () => import('@renderer/views/DeviceMapView.vue'),
+    meta: { titleKey: 'app.nav.map', nav: true }
+  },
+  {
     path: '/devices',
     name: 'devices',
     component: () => import('@renderer/views/DevicesView.vue'),
@@ -45,12 +57,6 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@renderer/views/DeviceDetailView.vue'),
     props: true,
     meta: { titleKey: 'app.nav.deviceDetail' }
-  },
-  {
-    path: '/map',
-    name: 'map',
-    component: () => import('@renderer/views/DeviceMapView.vue'),
-    meta: { titleKey: 'app.nav.map', nav: true }
   },
   {
     path: '/monitor',

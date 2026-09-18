@@ -77,8 +77,12 @@ export const es: MessageSchema = {
       monitor: 'Monitorización en vivo',
       trends: 'Tendencias',
       alarms: 'Alarmas',
-      /** Mapa de dispositivos (lote 8): puntos WGS84 registrados y capturas de alarma. */
-      map: 'Mapa de dispositivos',
+      /**
+       * Información de mapas (GIS). Renombrado desde «Mapa de dispositivos» y movido justo
+       * debajo de Resumen (lote 10, punto 12: la página también lleva un servicio GIS o un
+       * plano, así que «mapa de dispositivos» ya no la describe).
+       */
+      map: 'Información de mapas (GIS)',
       events: 'Centro de eventos y alarmas',
       recordings: 'Grabaciones',
       samples: 'Biblioteca de muestras',
@@ -1058,7 +1062,7 @@ export const es: MessageSchema = {
 
   /** Mapa de dispositivos sin conexión (lote 8). El fondo se dibuja solo con los puntos WGS84 grabados. */
   mapUi: {
-    mapTitle: 'Mapa de dispositivos',
+    canvasLabel: 'Posiciones de los equipos',
     counts: '{withPoint} de {total} equipos en el mapa',
     noPoints: 'Ningún equipo tiene punto registrado. Rellene latitud/longitud en Equipos → Editar → Información de instalación y el equipo aparecerá aquí.',
     selectHint: 'Pulse un marcador para ver ese equipo: posición, alarmas y capturas.',

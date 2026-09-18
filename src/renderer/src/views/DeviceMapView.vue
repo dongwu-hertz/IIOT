@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
- * **点位图**（业主 2026-09-17 第 8 批第 2 条）：设备按录入的 WGS84 点位落在一张平面图上，
- * 点一台声呐就能看到它的告警与那次告警的**球机抓图**。
+ * **地图信息（GIS）**（原「点位图」，业主 2026-09-17 第 8 批建的页；2026-09-18 第 10 批
+ * 第 12 条把它改名为「地图信息（GIS）」并挪到设备管理之前）：设备按录入的 WGS84 点位落在
+ * 一张平面图上，点一台声呐就能看到它的告警与那次告警的**球机抓图**。
  *
  * ---------------------------------------------------------------------------
  * 三件必须说清楚的事
@@ -199,7 +200,11 @@ onUnmounted(() => {
     <div v-else class="map-layout">
       <section class="card map-panel">
         <div class="section-header">
-          <h3 class="section-title">{{ t('mapUi.mapTitle') }}</h3>
+          <!--
+            面板标题用**页面名**（`app.nav.map`）而不是第二个键：第 12 条把这一页改名成
+            「地图信息（GIS）」之后，同一句名字出现在顶栏、侧栏与这里，只能有一个来源。
+          -->
+          <h3 class="section-title">{{ t('app.nav.map') }}</h3>
           <span class="muted" data-map-counts>
             {{
               t('mapUi.counts', {
@@ -224,7 +229,7 @@ onUnmounted(() => {
           class="map-canvas"
           :viewBox="`0 0 ${CANVAS.width} ${CANVAS.height}`"
           role="img"
-          :aria-label="t('mapUi.mapTitle')"
+          :aria-label="t('mapUi.canvasLabel')"
           data-map-canvas
         >
           <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" />

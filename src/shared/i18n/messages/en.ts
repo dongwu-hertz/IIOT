@@ -76,8 +76,12 @@ export const en: MessageSchema = {
       monitor: 'Live monitoring',
       trends: 'Trends',
       alarms: 'Alarms',
-      /** Device map (batch 8): recorded WGS84 points, and a sonar's alarm snapshots. */
-      map: 'Device map',
+      /**
+       * Map information (GIS). Renamed from "Device map" and moved to sit directly under
+       * Overview (owner batch 10, item 12: the page also carries a GIS service or floor plan,
+       * so "device map" no longer covers it).
+       */
+      map: 'Map information (GIS)',
       /**
        * Event & alarm centre. Unlike `/alarms` (acoustic-box rows only) this page
        * merges three sources newest-first: camera detection logs, local alarm
@@ -1075,7 +1079,7 @@ export const en: MessageSchema = {
 
   /** Offline device map (batch 8). The basemap is drawn from recorded WGS84 points only. */
   mapUi: {
-    mapTitle: 'Device map',
+    canvasLabel: 'Device positions',
     counts: '{withPoint} of {total} devices on the map',
     noPoints: 'No device has a recorded point yet. Fill in latitude/longitude under Devices → Edit → Installation info and the device appears here.',
     selectHint: 'Click a marker to see that device: position, alarms and snapshots.',

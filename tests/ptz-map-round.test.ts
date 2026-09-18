@@ -220,29 +220,63 @@ describe('点位图：不联网、点声呐看抓图', () => {
     )
   })
 
-  it('路由与侧栏都有它（`/map`，导航里在设备管理之后）', () => {
+  it('路由与侧栏都有它（`/map`；导航里在**设备管理之前、总览之后**）', () => {
     assert.ok(/path: '\/map'/.test(router), '路由里没有 /map')
     assert.ok(/titleKey: 'app\.nav\.map'/.test(router), '/map 没有标题键')
     // 侧栏那一条是多行写法，所以按 `path:` 找（`indexOf("{ path: …")` 会漏）。
+    // 顺序是业主 2026-09-18 第 10 批第 12 条给的：「移到设备管理上方、总览下方」。
     const navIndex = sidebar.indexOf("path: '/map'")
     const devicesIndex = sidebar.indexOf("path: '/devices'")
-    const monitorIndex = sidebar.indexOf("path: '/monitor'")
-    assert.ok(navIndex > 0, '侧栏里没有点位图入口')
+    const overviewIndex = sidebar.indexOf("path: '/'")
+    assert.ok(navIndex > 0, '侧栏里没有地图信息入口')
     assert.ok(
-      devicesIndex < navIndex && navIndex < monitorIndex,
-      '侧栏顺序不是"设备管理 → 点位图 → 实时监测"'
+      overviewIndex < navIndex && navIndex < devicesIndex,
+      '侧栏顺序不是"总览 → 地图信息（GIS） → 设备管理"'
     )
+    // 路由表也按同一条顺序排（`/devices/:id` 不能插在两者之间，否则读代码的人会以为顺序反了）。
+    const routeOverview = router.indexOf("path: '/'")
+    const routeMap = router.indexOf("path: '/map'")
+    const routeDevices = router.indexOf("path: '/devices'")
+    assert.ok(
+      routeOverview < routeMap && routeMap < routeDevices,
+      '路由表里的 /map 不在 / 与 /devices 之间'
+    )
+  })
+
+  it('页面名只有一处：面板标题用 `app.nav.map`，画布的无障碍名另说', () => {
+    // 第 12 条改了名字之后，同一句名字出现在顶栏/侧栏/面板标题三处 —— 只能有一个来源。
+    assert.ok(
+      mapTemplate.includes("t('app.nav.map')"),
+      '面板标题没有复用页面名（app.nav.map）'
+    )
+    assert.equal(
+      /mapUi\.mapTitle/.test(mapView),
+      false,
+      '视图里还引用着已被换掉的 mapUi.mapTitle'
+    )
+    // 画布的无障碍名说的是**画的是什么**，不是页面叫什么。
+    assert.ok(mapTemplate.includes("t('mapUi.canvasLabel')"), '画布没有无障碍名')
   })
 
   it('离开这一页会关掉抓图端点（不让端口挂到 TTL 到点）', () => {
     assert.ok(/onUnmounted\(\(\) => \{\s*void closeSnapshots\(\)/.test(mapView), '离开页面没有关端点')
   })
 
-  it('四种语言的点位图文案齐全', () => {
+  it('四种语言的地图文案齐全，而且名字是业主给的那一个', () => {
     for (const locale of Object.keys(CATALOGUES)) {
-      for (const key of ['app.nav.map', 'mapUi.mapTitle', 'mapUi.noPoints', 'mapUi.snapshotNotCaptured']) {
+      for (const key of ['app.nav.map', 'mapUi.canvasLabel', 'mapUi.noPoints', 'mapUi.snapshotNotCaptured']) {
         assert.ok(messageAt(locale, key), `${locale} 缺 ${key}`)
       }
+    }
+    // 第 12 条：名字从「点位图」改成「地图信息（GIS）」。中文这一条逐字带上 GIS。
+    assert.match(String(messageAt('zh-CN', 'app.nav.map')), /地图信息（GIS）/, '中文名不是第 12 条给的那一个')
+    // 四本目录里都得是"地图 + GIS"的说法，不能只有中文改了。
+    for (const locale of ['en', 'es', 'tr']) {
+      assert.match(
+        String(messageAt(locale, 'app.nav.map')),
+        /GIS/,
+        `${locale} 的名字里没有 GIS`
+      )
     }
     // 点位图不能把"没有点位"写成"地图加载失败"：那不是网络问题。
     assert.equal(/加载失败|loading failed/i.test(String(messageAt('zh-CN', 'mapUi.noPoints'))), false)
