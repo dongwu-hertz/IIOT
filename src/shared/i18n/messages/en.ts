@@ -89,6 +89,9 @@ export const en: MessageSchema = {
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Device management software',
+    /** Sidebar collapse toggle (event centre spec §3.2). */
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
     nav: {
       overview: 'Overview',
       devices: 'Devices',

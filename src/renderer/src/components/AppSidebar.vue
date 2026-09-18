@@ -19,8 +19,11 @@
  *     application-level preferences.
  *   - the version + contact links -> the new page footer (`AppFooter.vue`), which
  *     also carries the copyright line.
+ *
+ * 2026-09-17（事件中心规格 §3.2/§3.3）：侧栏可折叠（232 / 64），偏好记在 localStorage；
+ * 选中项改成"3px 橙色竖条 + 轻橙背景"。
  */
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useDevicesStore } from '@renderer/stores/devices'
@@ -112,6 +115,38 @@ const devices = useDevicesStore()
 const { t } = useI18n()
 
 /**
+ * 侧栏折叠（规格 §3.2：232px / 64px；§3.3：**偏好本地保存**）。
+ *
+ * 为什么记在 localStorage 而不是数据库设置里：它是**这台机器上这个人的界面偏好**，
+ * 与"软件怎么工作"无关（同一个 profile 换个人用，界面偏好本来就该跟着走）。
+ * 仓库里已有同样的先例：频道墙的折叠状态（`stores/channelWall.ts` 的
+ * `CHANNEL_WALL_COLLAPSED_STORAGE_KEY`）。
+ *
+ * 读不到/写不了（隐私模式、配额满、被策略禁掉）时**静默降级为展开**：一个界面偏好丢了
+ * 不该让侧栏打不开，所以两个方向都不抛。
+ */
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'hertzinno.sidebar.collapsed'
+
+function readStoredCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const collapsed = ref(readStoredCollapsed())
+
+function toggleCollapsed(): void {
+  collapsed.value = !collapsed.value
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed.value ? '1' : '0')
+  } catch {
+    // 偏好存不下不影响这一次折叠本身（当前会话内仍然是对的）。
+  }
+}
+
+/**
  * `/devices/:id` must keep the 设备管理 entry highlighted, so an exact path
  * comparison is not enough — hence the prefix rule (still exact for the root).
  */
@@ -131,7 +166,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'sidebar--collapsed': collapsed }">
     <div class="sidebar__brand">
       <!--
         The official brand asset, imported so the bundler fingerprints and emits
@@ -141,6 +176,9 @@ onMounted(async () => {
         over "设备管理软件") was removed by product request; the application's name is
         still carried by the window title, the About panel and the footer, so nothing
         became unfindable.
+
+        折叠时 logo 让位给折叠按钮（64px 放不下两个 24px 的东西）：按钮始终在同一个
+        位置，所以"折起来之后怎么展开"不需要找。
       -->
       <img
         class="sidebar__logo"
@@ -149,6 +187,31 @@ onMounted(async () => {
         width="44"
         height="24"
       />
+      <button
+        type="button"
+        class="sidebar__toggle"
+        :aria-expanded="!collapsed"
+        :aria-label="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
+        :title="collapsed ? t('app.expandSidebar') : t('app.collapseSidebar')"
+        data-action="sidebar-toggle"
+        @click="toggleCollapsed"
+      >
+        <!-- 展开时是「向左收」，折叠时是「向右展」：同一个按钮，两个方向。 -->
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path v-if="!collapsed" d="M9.5 3.5 5 8l4.5 4.5" />
+          <path v-else d="M6.5 3.5 11 8l-4.5 4.5" />
+        </svg>
+      </button>
     </div>
 
     <nav class="sidebar__nav" :aria-label="t('app.mainNavigation')">
@@ -158,6 +221,7 @@ onMounted(async () => {
         :to="item.path"
         class="nav-item"
         :class="{ 'nav-item--active': isActive(item) }"
+        :title="collapsed ? t(item.labelKey) : undefined"
       >
         <svg
           class="nav-item__icon"
@@ -201,6 +265,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/*
+ * 侧栏（规格 §3.2）：展开 232px、折叠 64px，宽度做 180–220ms 的过渡
+ * （`--sidebar-transition`）。折叠只改宽度与几处可见性，**不动 DOM 顺序** ——
+ * 菜单项、图标、链接与展开时是同一批节点，所以 Tab 顺序与读屏结果不受折叠影响。
+ */
 .sidebar {
   width: var(--sidebar-width);
   flex: none;
@@ -208,6 +277,12 @@ onMounted(async () => {
   flex-direction: column;
   background: var(--color-bg-subtle);
   border-right: 1px solid var(--color-border);
+  transition: width var(--sidebar-transition);
+  overflow: hidden;
+}
+
+.sidebar--collapsed {
+  width: var(--sidebar-collapsed);
 }
 
 .sidebar__brand {
@@ -230,6 +305,60 @@ onMounted(async () => {
   flex: none;
 }
 
+/*
+ * 折叠按钮：始终在最右端（`margin-left: auto`），折叠之后 logo 隐藏、只剩它居中。
+ * 24×24 是图标按钮的最小可用尺寸；`--focus-ring` 由 `.btn` 那套规则负责，这里自己写，
+ * 因为它是侧栏自己的按钮（不套 `.btn`，避免与全局按钮尺寸联动）。
+ */
+.sidebar__toggle {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.sidebar__toggle:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text);
+}
+
+.sidebar__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 折叠后：logo 让位、图标居中、文字隐藏（`title` 仍在，鼠标悬停看得到名字）。 */
+.sidebar--collapsed .sidebar__brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar--collapsed .sidebar__logo {
+  display: none;
+}
+
+.sidebar--collapsed .sidebar__toggle {
+  margin-left: 0;
+}
+
+.sidebar--collapsed .nav-item {
+  justify-content: center;
+  padding: 7px 0;
+}
+
+.sidebar--collapsed .nav-item__label {
+  display: none;
+}
+
 .sidebar__nav {
   flex: 1;
   overflow-y: auto;
@@ -243,16 +372,20 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 9px;
+  /* 行高 40px 是规格 §3.2 给的（`--nav-row-height`），比原来的 33px 宽松：一行一个动作。 */
+  min-height: var(--nav-row-height);
   padding: 7px 10px;
   border-radius: var(--radius-sm);
   color: var(--color-text);
-  font-size: 12.5px;
-  border-left: 2px solid transparent;
+  font-size: var(--font-size-small);
+  font-weight: 500;
+  /* 选中指示是**左侧 3px 竖条**（规格 §3.3），所以默认也占 3px 宽，选中时不会跳一格。 */
+  border-left: 3px solid transparent;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
 .nav-item:hover {
-  background: rgba(23, 23, 23, 0.04);
+  background: var(--color-bg-hover);
 }
 
 .nav-item__icon {
@@ -260,10 +393,14 @@ onMounted(async () => {
   color: var(--color-text-secondary);
 }
 
+/*
+ * 选中项（规格 §3.3）：3px 橙色竖条 + `#FFF5ED` 轻背景 + `#E65300` 文本。
+ * **不把整块填成高饱和橙** —— 那是规格明确禁止的做法（§3.3 末句）。
+ */
 .nav-item--active {
-  background: var(--color-accent-soft);
+  background: var(--color-accent-light);
   border-left-color: var(--color-accent);
-  color: var(--color-accent-hover);
+  color: var(--color-accent-strong);
   font-weight: 600;
 }
 
@@ -277,5 +414,15 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* 折叠后账户名与角色标签收起来，只留头像（64px 里放不下两行文字）。 */
+.sidebar--collapsed .sidebar__footer {
+  padding: 10px 0;
+  align-items: center;
+}
+
+.sidebar--collapsed :deep(.user__text) {
+  display: none;
 }
 </style>

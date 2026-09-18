@@ -749,13 +749,16 @@ async function run() {
    *
    * 超时之后返回一个**带 `probeTimeout` 标记的对象**，调用方照常走它的断言路径
    * （缺字段就是缺字段），于是"哪一条探针卡住了"会出现在 problems 里。
+   *
+   * 超时可以按调用点放宽（第三参数）：**浏览器里真的点完一整条链**的那种探针
+   * （加设备 → 进详情 → 保存 → 去点位图 → 同步 → 取抓图）光是显式 `wait` 就有 15 秒以上，
+   * 30 秒在机器忙的时候会误报超时 —— 而"误报超时"与"真的挂住"在报告里长得一样。
    */
-  const layout = async (route, script) => {
+  const layout = async (route, script, timeoutMs = 30_000) => {
     await win.webContents.executeJavaScript(
       'location.hash = ' + JSON.stringify('#' + route) + '; true'
     )
     await sleep(1200)
-    const timeoutMs = 30_000
     const raw = await Promise.race([
       win.webContents.executeJavaScript(script),
       sleep(timeoutMs).then(() => null)
@@ -3051,7 +3054,7 @@ async function run() {
     '})()')
     .replace(/__SONAR_PORT__/g, String(mockSonar.port))
 
-  const sonarFlow = await layout('/devices', sonarScript)
+  const sonarFlow = await layout('/devices', sonarScript, 120_000)
   log('air sonar flow : ' + JSON.stringify(sonarFlow))
 
   if (!sonarFlow.ok) {

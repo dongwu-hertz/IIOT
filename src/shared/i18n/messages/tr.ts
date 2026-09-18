@@ -98,6 +98,9 @@ export const tr: MessageSchema = {
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Cihaz yönetim yazılımı',
+    /** Kenar çubuğunu daraltma düğmesi (olay merkezi şartnamesi §3.2). */
+    collapseSidebar: 'Kenar çubuğunu daralt',
+    expandSidebar: 'Kenar çubuğunu genişlet',
     nav: {
       overview: 'Genel bakış',
       devices: 'Cihazlar',

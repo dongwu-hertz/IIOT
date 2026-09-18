@@ -3460,6 +3460,72 @@ sha256 `C4756ABDA4FFE12329940D9C6CE125ED6B6AC32BC6B841EE824CDC3A3CFB12F3`）；
    （3 张 jpg，真的解码出来了）。
 4. **抓图数目与质量**：手册说最多 3 张、1 秒一张；我们按名字 `1.jpg`…`3.jpg` 收，
    少于 3 张是正常的（重启后可能只剩一部分），但**没有**在真机上见过任何一张。
+
+---
+
+### 15.40 事件中心规格改造（业主 2026-09-17 第 9 批）：Phase 1–2
+
+业主给了一份新规格：`HERTZINNO_Event_Alarm_Center_UX_UI_Spec_V1.0.docx`（抽出文本在
+`docs/reference/event-alarm-center-spec-v1.txt`，用 `scripts/docx-to-text.cjs` 生成）。
+它要把"告警记录列表"升级成一个**处置工作台**：Filter + Alert Queue + Detail Drawer 三栏，
+KPI 条、状态机（New→Acknowledged→Investigating→Resolved→Closed）、
+按 sensorType 切换的 Evidence、Timeline/Related/Activity、重复触发聚合与 Incident。
+
+**逐节对照表（要求 → 现状 → 做到哪一步 → 冲突与做法）写在 `docs/EVENT-CENTER.md`**，
+这里只记这一轮动了什么、为什么这么分阶段。
+
+#### 15.40.1 Token：**取值对齐、名字不改**
+
+规格 §17 把 token 列成 `--hz-*` / `--bg-*` / `--severity-*` 一套名字。我们**没有改名**：
+这个仓库从第一版起就是"只有 `main.css` 写颜色"，改名会动几十个文件而没有任何可见收益。
+做的是两件事 —— **取值对齐**（主色三档、页面底色 `#F7F8FA`、文字三级、边框两档、
+输入/按钮圆角 6px、卡片 8px、控件高度 28/36、严重度五级）与**补齐缺的**
+（`--color-severity-*` 十项、`--color-bg-page/-hover`、`--color-accent-light/-strong`、
+`--sidebar-collapsed`、`--filter-panel`、`--detail-panel*`、`--event-row-*`、`--focus-ring`、
+九档字号）。对照表在 `docs/EVENT-CENTER.md` §2。
+
+字号那一档要说实话：**token 加好了，但既有组件里还有 100 多处写死的 `font-size`**。
+一次性全局换字号会把每一页的行高与换行都动一遍（而这一轮并不改那些页面），
+所以规则是"新做/重做的界面一律用 token（源码守卫钉住），旧组件在各自被重做时换过来"。
+
+#### 15.40.2 侧栏可折叠（232 / 64）
+
+规格 §3.2/§3.3 给了两个宽度、180–220ms 的过渡、折叠后的 Tooltip，以及选中项的样式
+（3px 橙色竖条 + `#FFF5ED` 轻背景 + `#E65300` 文字，**明确不许整块填成高饱和橙**）。
+都按规格做了，另外三处是我们自己的决定：
+
+1. **折叠只改宽度与可见性，不换 DOM**：菜单项还是同一批节点，所以 Tab 顺序与读屏结果
+   不随折叠改变；文字只是 `display: none`，`title` 与 `aria-expanded` 都留着。
+2. **偏好记在 localStorage**（键 `hertzinno.sidebar.collapsed`），读写**各自兜底**：
+   隐私模式/配额满时静默降级为展开 —— 一个界面偏好丢了不该让侧栏打不开。
+   仓库里已有同样的先例（频道墙的折叠状态）。
+3. **折叠时 logo 让位给折叠按钮**：64px 放不下两个 24px 的东西，而按钮留在同一个位置
+   才不需要找"怎么展开"。
+
+规格还要求"折叠后 Tooltip 里带**未处理数量**"：我们侧栏目前没有计数角标
+（那个数字在顶栏的告警图标上）。这一条**没做**，原因与去处写在 `docs/EVENT-CENTER.md`
+（会在 Phase 3 引入 KPI/队列时一并给侧栏接上同一个计数源，避免两处各查一次）。
+
+#### 15.40.3 这一轮的验证
+
+`tsc node` / `vue-tsc` / `tsc tests` **0/0/0**；测试 **1693 / 0 失败**（新增 10 条：
+Phase 1 token 6 条 + Phase 2 侧栏 4 条，见 `tests/event-center-round.test.ts`）；
+i18n 缺失键 0、四语言键集一致（新增 `app.collapseSidebar` / `app.expandSidebar`）；
+`electron-vite build` exit 0；GUI 探针 `demo-shot --with-data` **0 problems**
+（窗口 1440×900、四档几何、设备表、点位图、空气声呐整条链全绿）；
+重新打包后 `verify-packaged` **25 通过 / 0 失败**。
+
+顺带修好一处**探针自己的缺陷**：`layout()` 的 30 秒超时对"在浏览器里点完一整条链"的
+空气声呐探针太紧（显式等待就有 15 秒以上），忙的时候会误报超时 ——
+现在超时可按调用点放宽（那一条给 120 秒），并把理由写在注释里。
+这条与 15.39.4 里"探针挂住一个小时"是同一类问题的两个面：**探针自己的时间假设**也要能被质疑。
+
+#### 15.40.4 这一轮**没做**的
+
+规格 Phase 3–6 全部没做：KPI 条、左侧筛选面板、告警队列三种视图模式、详情抽屉与五个页签、
+状态机与指派/Activity、重复触发聚合与 Incident。事件中心这一轮**一个字都没改**。
+另外三处冲突（DTS/DAS/DGA 渲染器、页内大标题、mock 数据 demo）在 `docs/EVENT-CENTER.md` §3
+逐条写明，其中两条需要业主一句话（见 `docs/UI-VERIFY.md` Z 段末）。
 5. **点位图的坐标精度**：`gisLatitude/gisLongitude` 是**人工录入**的，软件不做任何坐标
    校验（只校验范围），所以图上的相对位置**恰好等于**录入值的相对位置 —— 录错了图就错了，
    这一点在界面上没有提示（要不要加"定位到地图/坐标系"的提示是下一步的事）。

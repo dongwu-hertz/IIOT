@@ -90,6 +90,9 @@ export const es: MessageSchema = {
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Software de gestión de equipos',
+    /** Botón para contraer la barra lateral (especificación §3.2). */
+    collapseSidebar: 'Contraer barra lateral',
+    expandSidebar: 'Expandir barra lateral',
     nav: {
       overview: 'Resumen',
       devices: 'Equipos',

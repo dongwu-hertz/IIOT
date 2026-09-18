@@ -1,0 +1,950 @@
+# HERTZINNO_Event_Alarm_Center_UX_UI_Spec_V1.0.docx
+# Extracted from the .docx (word/document.xml) — text only; images and layout are lost.
+# Regenerate with: node scripts/docx-to-text.cjs <input.docx> <output.txt>
+# Tables are TAB-separated rows, one row per line.
+
+HERTZINNO
+Event & Alarm Center
+UX / UI Design & Implementation Specification
+事件与告警管理中心 UX/UI 设计与开发规格
+设计目标
+把“告警记录列表”升级为一个可执行的工业事件工作台：发现异常 → 判断证据 → 关联上下文 → 分派处置 → 关闭问题。UI 参考 Guance Event Management 的信息架构，但面向 HERTZINNO 工业设备场景重新设计。
+
+Document Version
+V1.0
+
+Date
+2026-09-17
+
+Primary Platform
+Desktop Web / Electron, 1440×900 baseline
+
+Recommended Stack
+Vue 3 + TypeScript + componentized design system
+
+Reference
+https://www.guance.com/zh-hant/product/event-management
+
+For Product / UX / Front-end Agent Implementation
+
+目录
+01   项目目标与设计原则
+02   核心业务概念与状态模型
+03   信息架构与导航
+04   全局布局与尺寸规范
+05   字体与排版体系
+06   颜色与语义色体系
+07   间距、圆角、边框与阴影
+08   Event & Alarm Center 核心页面
+09   筛选与搜索
+10   Alert Queue 告警队列
+11   Event Detail Drawer 详情抽屉
+12   Evidence 检测证据设计
+13   Timeline / Related / Activity
+14   事件聚合与 Incident 关联
+15   交互、响应式与可用性
+16   组件清单与 Vue 前端结构
+17   Design Tokens
+18   Agent 实施步骤与验收标准
+Agent 使用方式
+优先按“第 18 章实施步骤”开发；所有视觉值以 Design Tokens 为唯一来源。不要在组件内部硬编码颜色、间距和圆角。
+
+01  项目目标与设计原则
+1.1 目标
+将事件中心从“记录查询页面”转变为“处置工作台（Operational Workspace）”。
+让用户在一个页面内完成：筛选、识别严重度、查看证据、确认、分派、调查、关联、关闭。
+形成跨产品统一体验：Acoustic / Thermal / DAS / DTS / DGA / Pipeline / Transformer 共用同一套事件模型和组件。
+支持后续 AI：事件分类、置信度、重复告警聚合、跨传感器事件关联、Incident 建议。
+1.2 设计原则
+原则
+要求
+
+Evidence First
+工业用户首先要知道“为什么系统认为这里有问题”。证据比装饰更重要。
+
+Action Oriented
+每一条告警必须有明确下一步：Acknowledge / Assign / Investigate / Resolve。
+
+Calm by Default
+页面保持白/灰主视觉；严重度只用于局部语义提示，避免满屏红黄。
+
+Progressive Disclosure
+列表只显示判断所需信息；深层字段放 Detail Drawer / Tabs。
+
+One System, Many Sensors
+不同检测产品在 Evidence 内容上变化，但导航、状态、筛选、处置流程统一。
+
+禁止做法
+不要把所有检测结果都直接称为 Alarm；不要把重复触发显示成数十条独立告警；不要把告警详情做成必须离开列表的全页跳转；不要用大量高饱和色或大面积红色背景。
+
+02  核心业务概念与状态模型
+2.1 Event / Alert / Incident
+对象
+定义
+示例
+
+Event
+设备、算法或用户行为产生的原始事件。并不一定需要处置。
+声学定位结果、AI 分类、温升、设备离线、参数修改
+
+Alert
+Event 命中告警规则后生成的“需要关注/处置”的对象。
+Methane Leak HIGH；DTS hotspot MEDIUM
+
+Incident
+一个现实世界问题，可关联多个 Alert / 多个设备 / 多种传感器。
+Transformer T03 abnormal condition，关联 Acoustic + Thermal + DGA
+
+2.2 Alert 状态机
+New  →  Acknowledged  →  Investigating  →  Resolved  →  Closed
+  ↘       ↘              ↘
+   Muted   Reassigned      Reopened → Investigating
+
+Muted 是通知/显示策略，不等于 Resolved。静默期间事件仍然记录。
+Reopened 用于已解决事件再次满足触发条件，需记录重新开启原因。
+状态变更必须进入 Activity，并记录时间、操作者、前后状态。
+2.3 Severity
+等级
+用途
+语义色
+
+Critical
+立即处理，可能造成安全/生产重大风险
+#B42318
+
+High
+高优先级，需要快速确认和调查
+#F04438
+
+Medium
+需要计划性调查
+#F79009
+
+Low
+低风险提醒
+#2E90FA
+
+Info
+仅记录/观察
+#667085
+
+03  信息架构与导航
+3.1 一级导航按“用户任务”组织
+Overview
+Monitor
+  Devices
+  Assets
+Events
+  Event Overview
+  Active Alerts
+  All Events
+  Incidents
+Analysis
+Reports
+Configuration
+
+原则：一级导航不要按产品型号组织。产品维度（Acoustic / Thermal / Fiber / DGA）应出现在 Analysis、Filters、Asset Type 或二级页面中。
+3.2 左侧导航尺寸
+项目
+Expanded
+Collapsed
+说明
+
+Sidebar width
+232 px
+64 px
+折叠时仅保留图标和状态提示
+
+Menu row
+40 px
+40 px
+图标容器 40×40
+
+Icon
+20×20 px
+20×20 px
+保持同一图标风格
+
+Group gap
+20–24 px
+—
+组之间留空，不用粗分割线
+
+Animation
+180–220 ms
+180–220 ms
+cubic-bezier(0.4,0,0.2,1)
+
+3.3 选中与折叠行为
+选中项：左侧 3 px Orange indicator + #FFF5ED 轻背景 + #E65300 文本。
+不要把整个菜单项填充为高饱和橙色。
+折叠后 Hover 显示右侧 Tooltip，内容包含菜单名称及未处理数量。
+折叠状态建议保存在本地设置（localStorage / user preference）。
+04  全局布局与尺寸规范
+4.1 Desktop Baseline
+区域
+尺寸
+
+Design baseline
+1440 × 900 px
+
+Top header
+56 px
+
+Sidebar
+232 px / 64 px collapsed
+
+Main content padding
+24 px；≥1600 px 可使用 32 px
+
+Filter panel
+216 px，可折叠为 0
+
+Detail drawer
+400 px；≥1600 px 440 px；可拖动至 560 px
+
+4.2 核心页面骨架
+┌─────────────┬──────────────────────────────┬──────────────────────┐
+│ FILTER      │ ALERT QUEUE                  │ EVENT DETAIL         │
+│ 216 px      │ flex                         │ 400 px               │
+│ collapsible │ primary working area         │ resizable drawer     │
+└─────────────┴──────────────────────────────┴──────────────────────┘
+
+详情打开后不离开当前告警队列。用户关闭/处理当前告警后，应能直接选择下一条，不发生页面重载。
+05  字体与排版体系
+5.1 UI Font Stack
+font-family: Inter, "Noto Sans SC", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+font-variant-numeric: tabular-nums;
+
+建议 English / Numbers 使用 Inter；中文使用 Noto Sans SC。Montserrat 保留给官网营销页面，不建议作为高密度工业软件主字体。
+5.2 Type Scale
+用途
+Size
+Line height
+Weight
+
+Page Title
+24 px
+32 px
+600
+
+Section Title
+18 px
+26 px
+600
+
+Panel Title
+16 px
+24 px
+600
+
+Card Title
+15 px
+22 px
+600
+
+Main UI Text
+14 px
+20 px
+400
+
+UI Medium
+14 px
+20 px
+500
+
+Small
+13 px
+18 px
+400
+
+Metadata
+12 px
+18 px
+400
+
+Label
+11 px
+16 px
+500
+
+KPI
+24–28 px
+32 px
+600
+
+系统字体权重只使用 400 / 500 / 600；原则上不使用 700。
+最低字号 11 px，仅用于 Label；正文/操作文字不低于 12–13 px。
+06  颜色与语义色体系
+6.1 Brand & Neutral
+Token
+Hex
+用途
+
+Primary Orange
+#FF6A1A
+主 CTA、品牌焦点、Active tab indicator
+
+Primary Hover
+#EA5A0B
+Hover
+
+Primary Active
+#CC4B00
+Pressed
+
+Primary Light
+#FFF4EC
+轻选中背景
+
+Page BG
+#F7F8FA
+页面背景
+
+Panel
+#FFFFFF
+面板
+
+Text Primary
+#101828
+标题/正文
+
+Text Secondary
+#475467
+次级内容
+
+Text Tertiary
+#667085
+元数据
+
+Disabled
+#98A2B3
+占位/禁用
+
+Border
+#E4E7EC
+默认边框
+
+Border Strong
+#D0D5DD
+输入框/强调边框
+
+6.2 Severity
+Severity
+Text / Icon
+Background
+使用规则
+
+Critical
+#B42318
+#FEF3F2
+Badge / dot / 3 px left indicator
+
+High
+#F04438
+#FFF4F2
+同上
+
+Medium
+#F79009
+#FFFAEB
+同上
+
+Low
+#2E90FA
+#EFF8FF
+同上
+
+Info
+#667085
+#F2F4F7
+同上
+
+颜色使用规则
+Severity 不能大面积铺满 Alert Row。默认使用：3 px 左侧竖条 + Badge / dot；列表背景保持白色。Selected Row 使用 #FFF8F3，而不是 #FF6A1A。
+
+07  间距、圆角、边框与阴影
+7.1 4 px Spacing Grid
+4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48 / 64 px
+
+场景
+推荐值
+
+Page padding
+24 px；大屏 32 px
+
+Panel padding
+16 px；大型 Panel 20–24 px
+
+Section gap
+20–24 px
+
+Title → subtitle
+8 px
+
+KPI → filters
+20 px
+
+Filter → content
+16 px
+
+Alert row padding
+12 px vertical / 16 px horizontal
+
+7.2 Radius / Border / Shadow
+Component
+Radius
+Shadow
+
+Input / Button / Chip
+6 px
+none
+
+Card / Panel
+8 px
+none
+
+Modal
+10 px
+0 12px 32px rgba(16,24,40,.12)
+
+Dropdown
+6–8 px
+0 4px 12px rgba(16,24,40,.08)
+
+Drawer
+0 px
+0 12px 32px rgba(16,24,40,.08) optional
+
+普通 Panel 以 1 px #E4E7EC 边框为主，不依赖阴影。
+避免 Card inside Card 的层层嵌套；优先使用 Divider 和 Section heading。
+08  Event & Alarm Center 核心页面
+8.1 页面 Header
+Event & Alarm Center                         Last 24 Hours ▼   Auto Refresh ⟳
+Monitor, investigate and resolve events across connected assets.
+
+Page title: 24/32/600；Subtitle: 13/20/400 #667085。
+右侧只放 Time Range / Auto Refresh / More；避免堆叠多个主要操作。
+8.2 KPI Strip
+Critical  3   |   High  12   |   Unacknowledged  17   |   Incidents  5   |   Avg Ack  4m32s
+
+整条 KPI 容器高度 76–84 px，1 px border，8 px radius，无明显 shadow。
+所有 KPI 可点击，点击后转换成对应 Filter，不跳转新页面。
+不要使用“总告警数量 12,586”作为主要 KPI；优先展示待处理性指标。
+8.3 页面 Wireframe
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Event & Alarm Center                           Last 24 Hours   ⟳          │
+│ Critical 3 | High 12 | Unack 17 | Incidents 5 | Avg Ack 4m32s             │
+│ Search...   Site▼ Type▼ Severity▼ Status▼ Owner▼  + Filter   Sort▼ View  │
+├───────────────┬───────────────────────────────┬────────────────────────────┤
+│ FILTER        │ ALERT QUEUE                   │ EVENT DETAIL               │
+│ Severity      │ ▌ HIGH  Methane Leak     2m   │ HIGH · Methane Leak        │
+│ Event Type    │   Valve Station #03           │ [Acknowledge] [Assign▼]    │
+│ Product       │   32 ppm·m · AI 96% · ×3     │ Overview Evidence Timeline │
+│ Site          │ ───────────────────────────── │ Related Activity           │
+│ Owner         │ ▌ MEDIUM Partial Discharge    │ [Acoustic Image]           │
+└───────────────┴───────────────────────────────┴────────────────────────────┘
+
+09  筛选与搜索
+9.1 Filter Bar
+元素
+规范
+
+Search
+260–320 px；placeholder: Search events, assets or devices
+
+Dropdown filters
+Site / Asset / Type / Severity / Status / Owner
+
+Input height
+36 px
+
+Chip height
+28 px
+
+Filter panel width
+216 px
+
+激活筛选后显示 Chip：Severity: Critical ×；背景 #F2F4F7，不使用橙色背景。
+筛选与 URL query / local state 同步，便于刷新后恢复。
+支持 Saved Views：My Active Alerts / Critical / Methane / Transformer / Pipeline / Unassigned。
+9.2 左侧 Filter Panel
+▼ Severity
+   Critical                 3
+   High                    12
+   Medium                  28
+
+▶ Device Type
+▶ Location
+▶ Product
+▶ Owner
+
+Filter Category 标题 13/18/600；Option 13 px；Row 30–32 px。
+不要默认展开所有 Filter Group；允许用户折叠。
+10  Alert Queue 告警队列
+10.1 默认 Row
+▌ HIGH                                                  2 min ago
+  Methane Leak Detected
+  Valve Station #03  ·  HA3LX-0048
+  32 ppm·m   •   AI 96%   •   3 occurrences
+
+属性
+规范
+
+Row height
+88–104 px
+
+Padding
+12 px V / 16 px H
+
+Severity indicator
+3 px left line
+
+Event title
+14 px / 600
+
+Asset
+13 px / 500
+
+Metadata
+12 px / #667085
+
+Hover
+#F9FAFB
+
+Selected
+#FFF8F3 + #FFD7BF border
+
+10.2 View Modes
+模式
+用途
+
+Compact
+值班快速扫视：Severity + Event + Asset + Time
+
+Standard
+默认：增加关键测量值、AI confidence、occurrences
+
+Evidence
+增加 thumbnail / mini spectrum / thermal preview，适合调查
+
+用户切换 View Mode 后保留偏好。
+Row 中只放判断所需的 3–5 个关键指标，不展示完整设备参数。
+11  Event Detail Drawer 详情抽屉
+11.1 Drawer 尺寸与行为
+项目
+规范
+
+Default width
+400 px
+
+Large screen
+440 px
+
+Resizable
+400–560 px
+
+Open mode
+点击 Alert Row 原位展开，不发生 route full-page switch
+
+Keyboard
+Esc 关闭；↑/↓ 或 J/K 可选择上一条/下一条（可选）
+
+11.2 Header & Actions
+HIGH                                         ⋯   ×
+Methane Leak Detected
+Valve Station #03 · HA3LX-0048
+First detected 2 min ago
+
+[Acknowledge]   [Assign ▼]   [⋯]
+
+Primary CTA 只允许一个。New 状态下通常为 Acknowledge；Acknowledged 后可变为 Start Investigation。
+危险操作（Delete / Force Close）默认白底红字，仅确认 Dialog 使用红色确认按钮。
+11.3 Tabs
+Overview   Evidence   Timeline   Related   Activity
+
+Tab 高度 40 px，13/500；Active text #101828 + 2 px #FF6A1A bottom indicator。
+不要使用整块橙色 Tab。
+11.4 Overview 字段布局
+Severity              Status
+HIGH                  New
+
+First detected         Duration
+14:32:18              02:41
+
+AI Confidence          Occurrences
+96.2%                  3
+
+Label 11 px #98A2B3 / 500；Value 13 px #344054 / 500。
+优先 2-column property grid；长字段自动跨 2 列。
+12  Evidence 检测证据设计
+Evidence 是 HERTZINNO 与传统 IT Event Management 最大的差异点。用户在这里回答：系统为什么认为这里发生了问题？
+12.1 Acoustic / Methane / PD
+Evidence
+推荐展示
+
+Visual
+Acoustic image / visible image / thermal image
+
+Audio
+Play / pause / duration / optional download permission
+
+Spectrum
+主频、频段、峰值；支持查看大图
+
+PRPD
+PD 类事件显示 PRPD；50/60/16.7 Hz 与检测频段
+
+AI
+Classification + confidence + model version (advanced)
+
+Direction
+Azimuth / Elevation
+
+Measurement
+SPL / concentration / leak estimate / temperature
+
+12.2 DTS
+Location        1,428 m
+Temperature     82.4 °C
+Baseline        51.7 °C
+ΔT              +30.7 °C
+Rate of Rise    4.2 °C/min
+[Temperature Trend / Distance Profile]
+
+12.3 DAS
+Location        KM 12.46
+Event           Excavation
+Confidence      91%
+Duration        18 s
+[Time–Frequency / Distance–Time Evidence]
+
+12.4 DGA
+H2       680 ppm ↑
+C2H2      18 ppm ↑
+CH4       230 ppm
+AI Diagnosis: Possible thermal/electrical fault
+[Gas Trend]
+
+Evidence Component 规则
+不同产品使用不同 Evidence renderer，但容器、标题、metadata、放大/回放行为统一。Agent 应通过 eventType / sensorType 选择对应 Evidence component，而不是复制多个 Detail 页面。
+
+13  Timeline / Related / Activity
+13.1 Timeline
+● 14:32:03  AI → Methane Leak · Confidence 82%
+│
+● 14:32:18  Concentration > threshold · 32 ppm·m
+│
+● 14:32:18  Alert triggered · HIGH
+│
+● 14:32:19  Notification sent · Control Room
+│
+○ 14:35:21  Acknowledged by David
+
+Timeline node 8 px；line 1 px #E4E7EC；不要使用大圆点或大色块。
+系统动作和人工动作可用图标区分，但颜色保持克制。
+13.2 Related
+分组
+示例
+
+Same asset
+6 events
+
+Same device
+3 events
+
+Same event type
+28 events
+
+Nearby assets
+4 events
+
+Time window
+7 events within ±10 min
+
+当相关性达到阈值时显示“Potential Related Incident”建议卡，但不自动替用户关闭/合并。
+13.3 Activity
+14:35  David acknowledged
+14:36  Assigned to Mike
+14:38  Mike: “Field inspection requested.”
+14:51  Severity changed HIGH → MEDIUM
+15:17  Resolved · Loose valve packing replaced
+
+14  事件聚合与 Incident 关联
+14.1 重复触发聚合
+同一设备 / 同一事件类型 / 指定时间窗口内的连续触发，默认聚合为一个 Alert 对象。
+Methane Leak · Valve V104
+First detected   14:01
+Last detected    14:10
+Duration         9m 18s
+Occurrences      10
+Concentration    18 → 32 ppm·m ↑
+
+聚合依据必须可配置：assetId / eventType / detectionRegion / ruleId / timeWindow。
+聚合后仍保留原始 Event 明细，可在 Timeline / Raw Events 中展开。
+14.2 Incident Correlation
+Transformer T03
+14:21  Acoustic PD
+14:27  Temperature Rise
+14:35  H2 Increase
+
+Potential Related Incident
+Transformer T03 abnormal condition
+3 correlated alerts
+[Create Incident]
+
+V1 先支持人工 Create Incident + 手动关联 Alert。
+V2 增加规则型关联：same asset + time window + cross-sensor rules。
+V3 再增加 AI recommendation；必须展示关联理由与 confidence。
+15  交互、响应式与可用性
+15.1 Interaction Rules
+动作
+行为
+
+Select alert
+打开右侧 Drawer；保持当前滚动位置
+
+Acknowledge
+立即更新状态；写入 Activity；不关闭 Drawer
+
+Assign
+Popover 选择用户/组；成功后保留 Drawer
+
+Resolve
+要求 Resolution reason / optional note
+
+Click KPI
+转成筛选条件，不跳页
+
+Click asset/device
+新路由或新侧边详情，避免覆盖当前事件状态
+
+15.2 Responsive
+Viewport
+规则
+
+≥1600 px
+Sidebar 232 / Filter 216 / Drawer 440；Content padding 32
+
+1280–1599 px
+默认规格；Drawer 400
+
+1024–1279 px
+Sidebar 默认折叠；Filter 以 overlay / toggle 打开；Drawer 360–400
+
+<1024 px
+不作为工业桌面主目标；允许降级为两层布局
+
+15.3 Accessibility / Quality
+所有颜色状态同时使用文字/图标，不依赖颜色单独表达 Severity。
+Keyboard focus 必须清晰；focus ring 建议 2 px rgba(255,106,26,.35)。
+按钮、列表行、Filter 具备可访问名称；Tooltip 不能承载唯一关键信息。
+时间统一支持用户时区，并在详情中允许查看绝对时间。
+16  组件清单与 Vue 前端结构
+16.1 推荐组件树
+EventCenterPage
+├─ PageHeader
+├─ EventKpiStrip
+├─ EventFilterBar
+├─ EventWorkspace
+│  ├─ EventFilterPanel
+│  ├─ AlertQueue
+│  │  └─ AlertRow
+│  └─ EventDetailDrawer
+│     ├─ EventDetailHeader
+│     ├─ EventDetailTabs
+│     ├─ EventOverviewTab
+│     ├─ EventEvidenceTab
+│     │  ├─ AcousticEvidence
+│     │  ├─ DtsEvidence
+│     │  ├─ DasEvidence
+│     │  └─ DgaEvidence
+│     ├─ EventTimelineTab
+│     ├─ EventRelatedTab
+│     └─ EventActivityTab
+└─ IncidentCreateDialog
+
+16.2 State / Store 建议
+Store
+内容
+
+eventFilters
+search / timeRange / severity / status / site / asset / type / owner
+
+eventSelection
+selectedAlertId / drawerOpen / drawerWidth
+
+eventViewPrefs
+queueMode / sidebarCollapsed / filterPanelOpen / savedViewId
+
+eventData
+alerts / events / incidents / loading / pagination
+
+推荐 Pinia；筛选条件可同步 URL query，视觉偏好保存在 localStorage。
+组件不得直接依赖特定产品 API 字段；先通过 adapter 映射为统一 Event ViewModel。
+16.3 建议 ViewModel
+type AlertViewModel = {
+  id: string
+  title: string
+  eventType: string
+  sensorType: 'acoustic' | 'dts' | 'das' | 'dga' | 'thermal' | 'other'
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+  status: 'new' | 'acknowledged' | 'investigating' | 'resolved' | 'closed'
+  asset?: { id: string; name: string }
+  device?: { id: string; name: string }
+  firstDetectedAt: string
+  lastDetectedAt: string
+  occurrenceCount: number
+  assignee?: string
+  metrics: Array<{ key: string; value: string; trend?: 'up' | 'down' | 'flat' }>
+  evidenceSummary?: EvidenceSummary
+}
+
+17  Design Tokens
+/* Brand */
+--hz-primary: #FF6A1A;
+--hz-primary-hover: #EA5A0B;
+--hz-primary-active: #CC4B00;
+--hz-primary-light: #FFF4EC;
+
+/* Background */
+--bg-page: #F7F8FA;
+--bg-panel: #FFFFFF;
+--bg-hover: #F9FAFB;
+
+/* Text */
+--text-primary: #101828;
+--text-secondary: #475467;
+--text-tertiary: #667085;
+--text-disabled: #98A2B3;
+
+/* Border */
+--border-default: #E4E7EC;
+--border-strong: #D0D5DD;
+
+/* Severity */
+--severity-critical: #B42318;
+--severity-high: #F04438;
+--severity-medium: #F79009;
+--severity-low: #2E90FA;
+--status-success: #12B76A;
+
+/* Radius */
+--radius-input: 6px;
+--radius-button: 6px;
+--radius-card: 8px;
+--radius-modal: 10px;
+
+/* Spacing */
+--space-1: 4px;
+--space-2: 8px;
+--space-3: 12px;
+--space-4: 16px;
+--space-5: 20px;
+--space-6: 24px;
+--space-8: 32px;
+--space-10: 40px;
+--space-12: 48px;
+
+/* Layout */
+--sidebar-expanded: 232px;
+--sidebar-collapsed: 64px;
+--header-height: 56px;
+--filter-panel: 216px;
+--detail-panel: 400px;
+
+17.2 Component Tokens 建议
+--control-height-sm: 28px;
+--control-height-md: 36px;
+--nav-row-height: 40px;
+--event-row-min-height: 88px;
+--event-row-padding-x: 16px;
+--event-row-padding-y: 12px;
+--focus-ring: 0 0 0 2px rgba(255,106,26,.35);
+
+18  Agent 实施步骤与验收标准
+18.1 实施阶段
+阶段
+交付内容
+完成条件
+
+Phase 1
+Design Tokens + Base Components
+颜色/字号/spacing/radius 不硬编码；Button/Input/Badge/Panel 可复用
+
+Phase 2
+Sidebar + Header + Event Center skeleton
+232/64 折叠；1440 基准布局稳定
+
+Phase 3
+KPI + Filter Bar + Filter Panel + Alert Queue
+筛选与选择状态工作；Compact/Standard view
+
+Phase 4
+Detail Drawer + Overview + Evidence
+400–560 resize；不同 sensorType renderer
+
+Phase 5
+Timeline + Related + Activity + Actions
+状态变更记录完整；Assign/Ack/Resolve 流程闭环
+
+Phase 6
+Incident + aggregation
+重复告警聚合；人工 Create Incident；关联 Alert
+
+18.2 必须通过的 UI 验收
+☐  1440×900 下无横向溢出；Sidebar expanded + Filter + Drawer 同时开启仍可正常操作。
+☐  Sidebar 在 232 px / 64 px 两种状态切换，动画 180–220 ms，折叠后 Tooltip 正常。
+☐  所有主要颜色、间距、字号、圆角来自 Design Tokens；禁止散落 magic numbers。
+☐  Alert Row 严重度不使用整行大面积红/橙色；Selected Row 使用轻橙背景。
+☐  点击 Alert 不跳转全页，直接打开 Drawer；关闭后列表滚动位置保持。
+☐  Acknowledge / Assign / Investigating / Resolve / Close 状态变化实时反映并记录 Activity。
+☐  Evidence 根据 sensorType 切换组件；Acoustic / DTS / DAS / DGA 至少各有一个 demo renderer。
+☐  重复 Event 可以在 UI 中显示 occurrenceCount、firstDetectedAt、lastDetectedAt、duration。
+☐  KPI 点击可转换为 Filter；Saved View 可恢复主要筛选和视图模式。
+☐  文本、图标和 Badge 在 100% 系统缩放下清晰，不存在 <11 px 关键文本。
+18.3 Definition of Done
+完成标准
+Agent 不应只交付静态页面。至少需要完成：真实可交互的筛选、列表选中、Drawer、状态变更、Evidence renderer、响应式 Sidebar、Design Tokens，以及 mock data 驱动的完整事件处置流程。
+
+附录 A  页面文案建议
+位置
+建议英文文案
+
+Page Title
+Event & Alarm Center
+
+Subtitle
+Monitor, investigate and resolve events across connected assets.
+
+Search
+Search events, assets or devices
+
+Empty Active Alerts
+No active alerts. All monitored assets are currently within configured thresholds.
+
+No Evidence
+No evidence is available for this event.
+
+Resolve Dialog
+Add a resolution reason before resolving this alert.
+
+附录 B  开发优先级
+Priority
+内容
+
+P0
+Design Tokens / Sidebar / Alert Queue / Detail Drawer / Overview / Ack & Assign
+
+P1
+Evidence / Timeline / Saved Views / Resolve / Activity
+
+P2
+Related / Incident / aggregation rules / keyboard shortcuts
+
+P3
+AI correlation recommendations / advanced evidence comparison
+
+最终方向
+HERTZINNO Event & Alarm Center 的产品表达应从 “Alarm List” 升级为 “Event + Asset + Evidence + AI + Action”。这套 Design System 后续应复用到 Devices、Assets、Analysis、Reports 等模块。
+

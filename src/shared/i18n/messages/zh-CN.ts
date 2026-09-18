@@ -120,6 +120,9 @@ export const zhCN = {
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: '设备管理软件',
+    /** 侧栏折叠按钮（事件中心规格 §3.2）。 */
+    collapseSidebar: '收起侧栏',
+    expandSidebar: '展开侧栏',
     nav: {
       overview: '总览',
       devices: '设备管理',

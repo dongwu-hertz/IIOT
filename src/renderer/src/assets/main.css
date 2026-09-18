@@ -10,23 +10,63 @@
  */
 
 :root {
+  /*
+   * ---------------------------------------------------------------------------
+   * 取值来源：业主 2026-09-17《Event & Alarm Center UX/UI Spec V1.0》§6/§7/§17
+   * ---------------------------------------------------------------------------
+   * 那份规格把 Design Tokens 列成 `--hz-*` / `--bg-*` / `--severity-*` 等名字。我们的
+   * 仓库从第一版起就已经是"只有这里写颜色"（组件里不出现 hex），所以**没有改名**，
+   * 只做了两件事：① 把取值对齐规格；② 把规格里有、我们没有的补上（severity 五级、
+   * 页面底色、控件高度、焦点环、事件中心的三栏宽度、事件行度量）。
+   * 对照表写在 `docs/EVENT-CENTER.md`（§17 → 我们的 token）。
+   *
+   * 字体：规格建议 Inter / Noto Sans SC。**离线软件不能下载网络字体**（渲染层 CSP
+   * `connect-src 'none'`），所以这两个名字只作为"本机装了就用"的首选写进栈里，
+   * 后面仍然是我们一直在用的系统字体回退。这一条也记在 `docs/EVENT-CENTER.md`。
+   */
+
   /* --- Surfaces & text ---------------------------------------------------- */
   --color-bg: #ffffff;
   --color-bg-subtle: #fafafa;
   --color-bg-muted: #f4f4f5;
-  --color-text: #171717;
-  --color-text-secondary: #6b7280;
-  --color-border: #e5e7eb;
-  --color-border-strong: #d4d4d8;
+  /** 页面底色（规格 §6.1 `--bg-page`）：页面是浅灰、面板是白 —— 面板靠对比浮起来，不靠阴影。 */
+  --color-bg-page: #f7f8fa;
+  /** 列表行 hover（规格 §6.1 `--bg-hover`）。 */
+  --color-bg-hover: #f9fafb;
+  --color-text: #101828;
+  --color-text-secondary: #475467;
+  /** 元数据（规格 §6.1 `--text-tertiary`）；比次级再淡一档，11–12px 用它。 */
+  --color-text-tertiary: #667085;
+  /** 占位/禁用（规格 §6.1 `--text-disabled`）。 */
+  --color-text-disabled: #98a2b3;
+  --color-border: #e4e7ec;
+  --color-border-strong: #d0d5dd;
 
   /* --- Brand accent ------------------------------------------------------- */
   --color-accent: #ff6a1a;
-  --color-accent-hover: #ea5c10;
+  --color-accent-hover: #ea5a0b;
+  /** 按下（规格 §6.1 `--hz-primary-active`）。 */
+  --color-accent-active: #cc4b00;
   --color-accent-soft: rgba(255, 106, 26, 0.1);
+  /**
+   * 选中态文字色（规格 §3.3：选中菜单项文字 `#E65300`）。
+   *
+   * 为什么不是 `--color-accent`（#FF6A1A）：橙底上的橙字看不清；规格给的这一档
+   * 比主色深，配 `--color-accent-light` 背景的对比度才够（§15.3 要求不靠颜色单独表意，
+   * 所以选中项同时还有 3px 竖条 + 加粗）。
+   */
+  --color-accent-strong: #e65300;
+  /**
+   * 轻选中背景（规格 §6.1 `--hz-primary-light`）。
+   *
+   * 比 `--color-accent-soft`（10% 透明橙）更实：选中行/选中菜单项用它，配 3px 橙色竖条，
+   * 而不是把整块填成高饱和橙（规格 §3.3/§6.2 都明确禁止后者）。
+   */
+  --color-accent-light: #fff4ec;
   --color-accent-border: rgba(255, 106, 26, 0.32);
 
   /* --- Semantic colours (status, alerts) ---------------------------------- */
-  --color-success: #15803d;
+  --color-success: #12b76a;
   --color-success-soft: #f0fdf4;
   --color-success-border: #bbf7d0;
   --color-warning: #b45309;
@@ -35,28 +75,84 @@
   --color-danger: #b91c1c;
   --color-danger-soft: #fef2f2;
   --color-danger-border: #fecaca;
-  --color-neutral: #6b7280;
+  --color-neutral: #667085;
   --color-neutral-soft: #f4f4f5;
   --color-neutral-border: #e5e7eb;
 
+  /* --- Severity（规格 §2.3 / §6.2）：五级，文字色 + 背景色成对 ------------------ */
+  --color-severity-critical: #b42318;
+  --color-severity-critical-soft: #fef3f2;
+  --color-severity-high: #f04438;
+  --color-severity-high-soft: #fff4f2;
+  --color-severity-medium: #f79009;
+  --color-severity-medium-soft: #fffaeb;
+  --color-severity-low: #2e90fa;
+  --color-severity-low-soft: #eff8ff;
+  --color-severity-info: #667085;
+  --color-severity-info-soft: #f2f4f7;
+
   /* --- Geometry ----------------------------------------------------------- */
-  --radius-sm: 8px;
+  /** 输入框 / 按钮 / Chip 的圆角（规格 §7.2：6px）。 */
+  --radius-sm: 6px;
   --radius-md: 10px;
+  /** 卡片 / 面板圆角（规格 §7.2：8px）。 */
+  --radius-card: 8px;
   --radius-lg: 12px;
   --radius-pill: 999px;
 
   /* --- Shadows: minimal, very subtle -------------------------------------- */
-  --shadow-sm: 0 1px 2px rgba(23, 23, 23, 0.04);
-  --shadow-md: 0 2px 10px rgba(23, 23, 23, 0.06);
-  --shadow-lg: 0 12px 32px rgba(23, 23, 23, 0.12);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
 
   /* --- Typography (Chinese fallbacks are mandatory) ----------------------- */
-  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-sans: Inter, 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei',
+    'PingFang SC', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft YaHei', monospace;
 
   /* --- Layout ------------------------------------------------------------- */
-  --sidebar-width: 216px;
+  --sidebar-width: 232px;
+  /** 折叠后的侧栏（规格 §3.2）。 */
+  --sidebar-collapsed: 64px;
+  /** 侧栏折叠动画（规格 §3.2：180–220ms）。 */
+  --sidebar-transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
   --topbar-height: 56px;
+  /** 事件中心左侧筛选面板（规格 §4.1）。 */
+  --filter-panel: 216px;
+  /** 事件中心详情抽屉（规格 §4.1；大屏 440、可拖到 560）。 */
+  --detail-panel: 400px;
+  --detail-panel-wide: 440px;
+  --detail-panel-max: 560px;
+
+  /* --- Controls（规格 §17.2） --------------------------------------------- */
+  --control-height-sm: 28px;
+  --control-height-md: 36px;
+  --nav-row-height: 40px;
+  /** 事件行（规格 §10.1：88–104px，取 88 作为最小值）。 */
+  --event-row-min-height: 88px;
+  --event-row-padding-x: 16px;
+  --event-row-padding-y: 12px;
+  /** 焦点环（规格 §15.3）：只在键盘聚焦时出现，不用颜色单独表达状态。 */
+  --focus-ring: 0 0 0 2px rgba(255, 106, 26, 0.35);
+
+  /* --- Type scale（规格 §5.2） -------------------------------------------- */
+  /*
+   * 规格的排版体系。**新增的界面（事件中心、侧栏、后续各页）直接用这些 token**；
+   * 既有组件里那些写死的 `font-size: 12.5px` 会在各自被重做时逐个换过来 ——
+   * 一次性全局改字号会把每一页的行高与换行都动一遍，而其中大部分页面这一轮并不改。
+   * 规格的验收项"关键文本不小于 11px"我们现在就满足（最小 11px 只用于 Label）。
+   */
+  --font-size-page-title: 24px;
+  --font-size-section: 18px;
+  --font-size-panel: 16px;
+  --font-size-card: 15px;
+  --font-size-body: 14px;
+  --font-size-small: 13px;
+  --font-size-meta: 12px;
+  --font-size-label: 11px;
+  --line-height-body: 20px;
+  --line-height-title: 32px;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -152,6 +248,15 @@ table {
   min-height: 0;
   overflow: auto;
   /*
+   * 页面底色（规格 §6.1 `--bg-page`）：**页面浅灰、面板纯白**。
+   *
+   * 为什么不是阴影：规格 §7.2 要求"普通 Panel 以 1px 边框为主，不依赖阴影"，
+   * 而面板能"浮起来"靠的就是与页面底色的这一点对比（#F7F8FA vs #FFFFFF）。
+   * 这也是为什么它必须在 `.app-content` 上，而不是 `.page` 上 —— 侧栏与顶栏之外
+   * 的整块内容区共用同一个底色。
+   */
+  background: var(--color-bg-page);
+  /*
    * 这一条内边距就是内容与左、上边缘之间的**唯一**距离来源（产品要求：全屏之后
    * 右侧内容靠左，而且无论窗口多大都和左边、上边保持固定的距离）。它是固定像素值，
    * 所以任何窗口尺寸下量到的左边距、上边距都是同一个数。
@@ -209,7 +314,9 @@ table {
 }
 
 .section-title {
-  font-size: 14px;
+  /* Panel Title（规格 §5.2：16/24/600）。原为 14px —— 卡片标题与正文同号时层次靠
+   * 字重撑，规格给的是差一档字号。 */
+  font-size: var(--font-size-panel);
   font-weight: 600;
 }
 
@@ -228,7 +335,9 @@ table {
 .card {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  /* 卡片圆角 8px（规格 §7.2：Card/Panel 8px）。阴影保留我们原有的极轻一档 ——
+   * 规格那句"不依赖阴影"说的是**不要靠阴影做层次**，我们本来也没有第二档。 */
+  border-radius: var(--radius-card);
   padding: var(--space-4);
   box-shadow: var(--shadow-sm);
 }
@@ -276,7 +385,14 @@ table {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
+  /*
+   * 高度取 `--control-height-sm`（28px）而不是规格 §17.2 的 md（36px）：
+   * 36px 是**表单控件**（输入框/下拉）的高度，而这套界面里按钮几乎都出现在
+   * 工具条/行尾/卡片头这类密集位置（一屏几十个）。28px 是规格自己给"小控件"的那一档，
+   * 与 `.chip`（28px，规格 §9.1）同高，两者并排时基线才对得齐。
+   * 表单里的主按钮（`.btn--primary` 在对话框页脚）不受影响：它本来就比工具条按钮大。
+   */
+  height: var(--control-height-sm);
   padding: 0 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -290,13 +406,17 @@ table {
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--color-bg-muted);
+  background: var(--color-bg-hover);
   border-color: var(--color-border-strong);
 }
 
+/*
+ * 焦点环（规格 §15.3）：`0 0 0 2px rgba(255,106,26,.35)`，只在键盘聚焦时出现。
+ * 用 box-shadow 而不是 outline：outline 在圆角按钮上会有方角。
+ */
 .btn:focus-visible {
-  outline: 2px solid var(--color-accent-border);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .btn:disabled {
@@ -335,7 +455,8 @@ table {
 }
 
 .btn--sm {
-  height: 26px;
+  /* 与 `.chip` 同高（规格 §9.1：Chip 28px）—— 小按钮与 chip 并排时对得齐。 */
+  height: var(--control-height-sm);
   padding: 0 9px;
   font-size: 12px;
 }
@@ -397,7 +518,8 @@ table {
 .input,
 .select,
 .textarea {
-  height: 30px;
+  /* 表单控件 36px（规格 §9.1「Input height 36 px」+ §17.2 `--control-height-md`）。 */
+  height: var(--control-height-md);
   width: 100%;
   padding: 0 9px;
   border: 1px solid var(--color-border);

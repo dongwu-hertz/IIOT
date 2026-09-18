@@ -6,6 +6,8 @@
 - 想核对界面/功能：`docs/UI-VERIFY.md`（人工核对清单 + 未验证清单 + 明天真机怎么跑）
 - 想知道某个设计**为什么**这样：`docs/Ivms4200-UX-REFERENCE.md`（按 §15.x 分段，逐条写出处）
 - 想知道协议细节与实测发现：`docs/PROTOCOL-FINDINGS.md`、`docs/FA371-*.md`、`docs/reference/`
+- **事件中心改造（业主 2026-09-17 新规格）做到哪一步**：`docs/EVENT-CENTER.md`
+  （规格逐节对照：要求 → 现状 → 我们的做法；Phase 1–2 已完成，Phase 3–6 待做）
 
 ---
 
@@ -17,12 +19,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 版本 / 产物 | `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`，**127,062,445 B**，sha256 `C4756ABDA4FFE12329940D9C6CE125ED6B6AC32BC6B841EE824CDC3A3CFB12F3`（未签名 → SmartScreen 提示） |
+| 版本 / 产物 | `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`，**127,065,780 B**，sha256 `E61BF6AA2DFF74C01FB661ADEAFB4FA45B799EC374B52CC9D4FB713492139E07`（未签名 → SmartScreen 提示） |
 | 技术栈 | Electron 38.8.6 · Vue 3.5.42 · vue-router 4.6.4 · Pinia 3.0.4 · vue-i18n 11.2.1 · TypeScript 5.9.3 · electron-vite 5.0.0 · better-sqlite3 13.0.3（SQLite 3.53.4）· DuckDB 1.4.4 + parquet（趋势）· echarts 6.1.0 · 内置 GPLv3 ffmpeg |
 | 业务库 | SQLite，**schema v12**（12 条迁移，见第 5 节） |
 | IPC | `src/shared/ipc/contract.ts` 里 **171** 个通道；主进程逐一登记权限 |
 | 界面语言 | **四本目录必须同步**：`zh-CN` / `en` / `es` / `tr` |
-| 单测基线 | **1683 / 0 失败**（`npm test`） |
+| 单测基线 | **1693 / 0 失败**（`npm test`） |
 
 ---
 
