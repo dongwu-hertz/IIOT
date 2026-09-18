@@ -1738,7 +1738,10 @@ IP 地址 / **未确认告警**（有就说条数，没有就明说没有 "没�
   > 给那台相机补一个点位之后就能量到（`docs/UI-VERIFY.md` 的核对流程里本来就有补录这一步）。
   > 另外：只读那一段探针**如实报了 skipped**（图上没有标记），没有把"没量到"当成通过。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,104,994 字节**，sha256 `398D85F1CCF31A166824EE8C17090FFC9063464D786AA547C94315EA5E4D68B9`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
