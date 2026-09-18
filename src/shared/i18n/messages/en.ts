@@ -2403,13 +2403,6 @@ export const en: MessageSchema = {
     ackUnacknowledged: 'Unacknowledged',
     ackAcknowledged: 'Acknowledged',
 
-    columnTime: 'Time',
-    columnDevice: 'Device',
-    columnSource: 'Source',
-    columnKind: 'Event',
-    columnSeverity: 'Level',
-    columnStatus: 'Status',
-
     approximateBadge: 'Approximate time',
     approximateHint:
       'The camera interface never declares its timestamp unit, so device time is read as seconds here and the converted value is approximate.',
@@ -2468,7 +2461,61 @@ export const en: MessageSchema = {
     detailLocalAlarmChannel: 'Channel',
     detailLocalAlarmTypes: 'Alarm types',
 
-    downloadDone: 'Downloaded {name} ({size})'
+    downloadDone: 'Downloaded {name} ({size})',
+
+    // --- Phase 3: KPI strip / filters / alert queue (spec §8–§10) -----------
+    // All five spec levels have a name: `medium` / `low` cannot be produced yet (see
+    // VISIBLE_ALERT_SEVERITIES), but AlertSeverity is a complete type — a missing name
+    // would render a bare key the day Phase 5 stores five levels.
+    alertSeverity: {
+      critical: 'Critical',
+      high: 'High',
+      medium: 'Medium',
+      low: 'Low',
+      info: 'Info'
+    },
+    alertStatus: {
+      new: 'New',
+      acknowledged: 'Acknowledged',
+      investigating: 'Investigating',
+      resolved: 'Resolved',
+      closed: 'Closed'
+    },
+    severityUnknown: 'Severity unknown',
+
+    kpiUnacknowledged: 'Unacknowledged',
+    kpiAvgAck: 'Avg. acknowledge',
+    kpiScope: 'KPI and counts cover the {loaded} loaded of {total} results',
+
+    viewMode: {
+      compact: 'Compact',
+      standard: 'Standard',
+      evidence: 'Evidence'
+    },
+
+    searchPlaceholder: 'Search device, event, metric',
+    searchScope: 'Search covers the {loaded} loaded rows only',
+
+    savedViewTitle: 'Views',
+    savedView: {
+      all: 'All',
+      critical: 'Critical',
+      high: 'High',
+      unacknowledged: 'Unacknowledged',
+      last24h: 'Last 24 hours',
+      last7d: 'Last 7 days'
+    },
+
+    filterPanelTitle: 'Filters',
+    filterPanelToggle: 'Filter panel',
+    panelCount: '{count}',
+    panelScope: 'Counts cover the {loaded} loaded rows',
+    clearFilters: 'Clear all',
+
+    evidenceRecording: 'Recording',
+    evidenceFrame: 'Frame',
+    evidenceFiles: '{count} files',
+    metricMore: '+{count} more'
 
   }
 }

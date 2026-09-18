@@ -2377,13 +2377,6 @@ export const tr: MessageSchema = {
     ackUnacknowledged: 'Onaylanmamış',
     ackAcknowledged: 'Onaylanmış',
 
-    columnTime: 'Zaman',
-    columnDevice: 'Cihaz',
-    columnSource: 'Kaynak',
-    columnKind: 'Olay',
-    columnSeverity: 'Düzey',
-    columnStatus: 'Durum',
-
     approximateBadge: 'Yaklaşık zaman',
     approximateHint:
       'Kamera arayüzü zaman damgası birimini hiç bildirmez; burada cihaz saati saniye olarak yorumlanır ve dönüştürülen değer yaklaşıktır.',
@@ -2442,7 +2435,60 @@ export const tr: MessageSchema = {
     detailLocalAlarmChannel: 'Kanal',
     detailLocalAlarmTypes: 'Alarm türleri',
 
-    downloadDone: '{name} indirildi ({size})'
+    downloadDone: '{name} indirildi ({size})',
+
+    // --- Phase 3: KPI strip / filters / alert queue (spec §8–§10) -----------
+    // All five spec levels have a name (see VISIBLE_ALERT_SEVERITIES for why
+    // medium/low are not rendered yet).
+    alertSeverity: {
+      critical: 'Kritik',
+      high: 'Yüksek',
+      medium: 'Orta',
+      low: 'Düşük',
+      info: 'Bilgi'
+    },
+    alertStatus: {
+      new: 'Yeni',
+      acknowledged: 'Onaylandı',
+      investigating: 'İnceleniyor',
+      resolved: 'Çözüldü',
+      closed: 'Kapatıldı'
+    },
+    severityUnknown: 'Önem düzeyi bilinmiyor',
+
+    kpiUnacknowledged: 'Onaylanmadı',
+    kpiAvgAck: 'Ortalama onay',
+    kpiScope: 'KPI ve sayımlar, {total} sonuçtan yüklenen {loaded} satırı kapsar',
+
+    viewMode: {
+      compact: 'Kompakt',
+      standard: 'Standart',
+      evidence: 'Kanıt'
+    },
+
+    searchPlaceholder: 'Cihaz, olay veya ölçüm ara',
+    searchScope: 'Arama yalnızca yüklenen {loaded} satırı kapsar',
+
+    savedViewTitle: 'Görünümler',
+    savedView: {
+      all: 'Tümü',
+      critical: 'Kritik',
+      high: 'Yüksek',
+      unacknowledged: 'Onaylanmadı',
+      last24h: 'Son 24 saat',
+      last7d: 'Son 7 gün'
+    },
+
+    filterPanelTitle: 'Filtreler',
+    filterPanelToggle: 'Filtre paneli',
+    panelCount: '{count}',
+    panelScope: 'Sayımlar yüklenen {loaded} satırı kapsar',
+    clearFilters: 'Tümünü temizle',
+
+    evidenceRecording: 'Kayıt',
+    evidenceFrame: 'Kare',
+    evidenceFiles: '{count} dosya',
+    metricMore: '+{count} daha'
 
   }
 }

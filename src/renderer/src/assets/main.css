@@ -162,6 +162,88 @@
 }
 
 /* --------------------------------------------------------------------------
+   严重度五级（规格 §2.3 / §17）
+   --------------------------------------------------------------------------
+   一个类同时给出两个自定义属性：`--severity-accent`（文字、左侧色条）与
+   `--severity-soft`（底色）。组件只消费变量，于是"哪一档是什么颜色"在整个应用里
+   只写一次 —— 事件中心的 KPI 条、队列行、证据块都挂这一个类，改颜色不必去五个
+   组件里找。
+
+   为什么不做成 `.badge--severity-*`：那几个类在各页的 `<style>` 里各写了一份
+   （`AlarmsView.vue` / `EventCenterView.vue`），取值还是 Phase 1 之前的。新界面
+   统一用这一套，旧页面在各自被重做时再换过来。 */
+
+.severity--critical {
+  --severity-accent: var(--color-severity-critical);
+  --severity-soft: var(--color-severity-critical-soft);
+}
+
+.severity--high {
+  --severity-accent: var(--color-severity-high);
+  --severity-soft: var(--color-severity-high-soft);
+}
+
+.severity--medium {
+  --severity-accent: var(--color-severity-medium);
+  --severity-soft: var(--color-severity-medium-soft);
+}
+
+.severity--low {
+  --severity-accent: var(--color-severity-low);
+  --severity-soft: var(--color-severity-low-soft);
+}
+
+.severity--info {
+  --severity-accent: var(--color-severity-info);
+  --severity-soft: var(--color-severity-info-soft);
+}
+
+/* 「等级未知」不是一档颜色：它必须看起来与"已知等级"不同（规格 §2.3 的五档里没有它）。 */
+.severity--unknown {
+  --severity-accent: var(--color-text-disabled);
+  --severity-soft: var(--color-bg-hover);
+}
+
+/* --------------------------------------------------------------------------
+   告警队列行（规格 §10）
+   --------------------------------------------------------------------------
+   左侧 3px 色条（颜色来自上面的 `.severity--*`）+ 三档行高。行高由组件通过
+   `--event-row-mode-height` 覆盖，默认取 Standard 的最小值（88px）。
+
+   行本身是个 `<button>`：整行可点、可 Tab、可用 ↑/↓ 走 —— 用 `div` 加点击事件
+   就只能用鼠标。所以这里把按钮的默认外观清掉，只留状态色。 */
+
+.alert-row {
+  display: block;
+  width: 100%;
+  min-height: var(--event-row-mode-height, var(--event-row-min-height));
+  padding: var(--event-row-padding-y) var(--event-row-padding-x);
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-left: 3px solid var(--severity-accent, transparent);
+  border-radius: 0;
+  background: var(--color-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alert-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.alert-row--active {
+  background: var(--color-accent-light);
+  border-left-color: var(--color-accent);
+}
+
+.alert-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* --------------------------------------------------------------------------
    Reset
    -------------------------------------------------------------------------- */
 
@@ -703,6 +785,12 @@ table {
   border-color: var(--color-accent-border);
   background: var(--color-accent-soft);
   color: var(--color-accent-hover);
+}
+
+/* 更小的 chip：列表行里挂指标/证据用（一行里可能要放五六个）。 */
+.chip--tiny {
+  padding: 1px 5px;
+  font-size: 10.5px;
 }
 
 /* --------------------------------------------------------------------------

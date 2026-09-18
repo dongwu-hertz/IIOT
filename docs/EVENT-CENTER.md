@@ -12,24 +12,24 @@
 
 | 规格 | 要求 | 我们的现状 | 这一轮 |
 |---|---|---|---|
-| §2.2 状态机 | New → Acknowledged → Investigating → Resolved → Closed（+ Muted / Reassigned / Reopened） | 只有 `alarms.acknowledged`（二值）+ 备注 + 等级 | Phase 5（要加列/表：状态、指派人、Activity 流） |
-| §2.3 严重度 | 五级 Critical/High/Medium/Low/Info + 指定色 | 四级 `info/warning/critical/unknown`（DB CHECK 钉死） | **Phase 1 已加颜色的 token**；值域改五级属 Phase 5（要迁移 v13 + 旧数据映射） |
-| §3.2/§3.3 侧栏 | 232 / 64 可折叠、180–220ms、3px 橙色选中竖条、偏好本地保存 | 固定 216px、2px 竖条、无折叠 | **✅ 本轮做完**（偏好存 localStorage） |
-| §4.1 布局 | 1440×900 基准；内容内边距 24（≥1600 用 32）；Filter 216 / Drawer 400–560 | 无这三栏；内容内边距 24 | Phase 3/4（token 已就位：`--filter-panel` / `--detail-panel*`） |
-| §5 字体排版 | Inter / Noto Sans SC；11–24px 的九档字号 | 系统字体栈；字号在各组件里写死 | **token 已加**（§2 对照表）；逐组件迁移见第 4 节 |
+| §2.2 状态机 | New → Acknowledged → Investigating → Resolved → Closed（+ Muted / Reassigned / Reopened） | 只有 `alarms.acknowledged`（二值）+ 备注 + 等级 | Phase 5（要加列/表：状态、指派人、Activity 流）。Phase 3 已把状态**类型**与标签做出来（`AlertStatus` / `eventsUi.alertStatus.*`），界面只会显示 New / Acknowledged 两个 —— 其余三个没有数据来源，所以不渲染 |
+| §2.3 严重度 | 五级 Critical/High/Medium/Low/Info + 指定色 | 四级 `info/warning/critical/unknown`（DB CHECK 钉死） | **Phase 1 加了颜色 token；Phase 3 加了展示层适配器**（`toAlertViewModel`，我们的 `warning` → 界面「高」，`unknown` → 「等级未知」而不是装成 Info，见 3.6）。值域改五级仍属 Phase 5（迁移 v13 + 旧数据映射） |
+| §3.2/§3.3 侧栏 | 232 / 64 可折叠、180–220ms、3px 橙色选中竖条、偏好本地保存 | 固定 216px、2px 竖条、无折叠 | **✅ Phase 2 做完**（偏好存 localStorage） |
+| §4.1 布局 | 1440×900 基准；内容内边距 24（≥1600 用 32）；Filter 216 / Drawer 400–560 | 三栏中的 Filter 栏 | **Filter 216 已做（Phase 3）**；Drawer 400–560 属 Phase 4（token 已就位） |
+| §5 字体排版 | Inter / Noto Sans SC；11–24px 的九档字号 | 系统字体栈；字号在各组件里写死 | **token 已加**（§2 对照表）；Phase 3 的三个新组件全部用 token |
 | §6 颜色 | 品牌/中性/严重度全套 hex | 自有 token（值略有差异） | **✅ 取值已对齐**（含新增严重度五级、页面底色、hover、tertiary/disabled、accent-active/light/strong） |
 | §7 间距/圆角/阴影 | 4px 网格（我们已有）；输入/按钮 6px、卡片 8px、Modal 10px；面板靠 1px 边框 | 4px 网格已有；输入/按钮 8px、卡片 12px | **✅ 已改**（`.btn`/`.input`/`.chip` 6px、`.card` 8px、按钮 28px、输入框 36px） |
-| §8.1 页头 | 标题 24/32/600 + 副标题 + 右侧只有时间范围/自动刷新 | 顶栏已有页面名；页内无标题（产品曾要求删） | Phase 3（**冲突**：见 3.2） |
-| §8.2 KPI 条 | 五个可点 KPI（点后转筛选，不跳页） | 顶栏三个指示器（设备数/在线/未确认告警） | Phase 3 |
-| §9 筛选 | 搜索 260–320px、六个下拉、Chippy 激活态、Saved Views、URL 同步 | 筛选栏（设备/等级/时间等）+ 分面计数 | Phase 3（Saved Views 与 URL 同步是新东西） |
-| §10 告警队列 | 88–104px 行、3px 左竖条、三种视图模式（Compact/Standard/Evidence）、偏好保留 | 表格行（`.table`）+ 详情在抽屉里但整页是"列表页" | Phase 3（表格 → 队列行） |
-| §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 有右侧详情面板（滚动分区，无页签、无宽度拖拽） | Phase 4 |
+| §8.1 页头 | 标题 24/32/600 + 副标题 + 右侧只有时间范围/自动刷新 | 顶栏已有页面名；页内无标题（产品曾要求删） | **冲突，见 3.2**（Phase 3 保持无页内标题） |
+| §8.2 KPI 条 | 五个可点 KPI（点后转筛选，不跳页） | 顶栏三个指示器（设备数/在线/未确认告警） | **✅ Phase 3 做了四格**（严重/高/未确认/平均确认耗时）+ 点一下转筛选；「聚合事件」属 Phase 6，所以没有那一格（见 3.7） |
+| §9 筛选 | 搜索 260–320px、六个下拉、Chippy 激活态、Saved Views、URL 同步 | 筛选栏（设备/等级/时间等） | **✅ Phase 3**：搜索（260–320px）+ 左侧四组带计数面板 + 六个内置视图 + URL/localStorage 记忆。关键字只在已加载页内搜（见 3.8），"六个下拉"变成"面板四组 + 时间两个"（见 3.9） |
+| §10 告警队列 | 88–104px 行、3px 左竖条、三种视图模式（Compact/Standard/Evidence）、偏好保留 | 表格行（`.table`） | **✅ Phase 3**：表格 → 队列行（56/88/104 三档、3px 严重度色条、键盘 ↑/↓）；Evidence 模式没有缩略图（见 3.10） |
+| §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 有右侧详情面板（滚动分区，无页签、无宽度拖拽） | Phase 4（Phase 3 已接上 Esc 关闭与 ↑/↓ 选中） |
 | §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | Phase 4（**冲突**：见 3.1） |
 | §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | Phase 5（Activity 需要落库） |
-| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | Phase 6（**冲突**：见 3.3） |
-| §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | 随 Phase 3–5 |
-| §16 组件树/Store/ViewModel | EventCenterPage → KPI/Filter/Queue/Drawer … | `EventCenterView.vue` 单文件 + `stores/eventCenter.ts` | Phase 3 起按规格拆组件（见第 4 节） |
-| §17 Design Tokens | 一套 `--hz-*` 等 token，禁止组件里硬编码 | 已有 token 体系（组件里不写 hex） | **✅ 取值与清单已对齐**，对照表见 §2 |
+| §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | Phase 6（**冲突**：见 3.3）。Phase 3 的视图模型已带 `occurrenceCount`（恒为 1，界面在 1 时不渲染 ×N） |
+| §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | Phase 3 已做：点行不跳页、↑/↓ 选中并同步焦点、Esc 关抽屉、行与筛选项都有焦点环 |
+| §16 组件树/Store/ViewModel | EventCenterPage → KPI/Filter/Queue/Drawer … | `EventCenterView.vue` 单文件 + `stores/eventCenter.ts` | Phase 3 拆出 `EventKpiStrip` / `EventFilterPanel` / `AlertQueue` 与纯函数层 `shared/domain/event-view.ts`（`AlertViewModel` 适配器），见第 4 节 |
+| §17 Design Tokens | 一套 `--hz-*` 等 token，禁止组件里硬编码 | 已有 token 体系（组件里不写 hex） | **✅ 取值与清单已对齐**，对照表见 §2；Phase 3 新增 `.severity--<档>` 变量类（一个类给出强调色与软底色） |
 | §18.1 Phase 1–6 | 六个阶段 | — | 见第 4 节进度 |
 
 ---
@@ -125,18 +125,92 @@ V1 只做**人工 Create Incident + 手动关联告警**（P2），不做规则�
 做法：把这两个名字写进 `--font-sans` 的**最前面**（本机装了就用），后面保留系统字体回退。
 不新增依赖、不引 webfont、不联网。
 
+### 3.6 等级：我们的四级 → 规格五级是**展示层**换算（Phase 3）
+
+规格要五级（Critical/High/Medium/Low/Info），我们的领域层只有四级，而且 `unknown`
+**是合法取值**（相机 `alarm_level` 从未在真机上回过、声纹协议里根本没有等级字段 ——
+`event-center.ts` 的注释写了原因）。做法是加一层显式适配器（`toAlertViewModel`）：
+
+| 我们的 `EventSeverity` | 界面等级 | 理由 |
+|---|---|---|
+| `critical` | Critical | 同义 |
+| `warning` | **High** | `deriveEventSeverity()` 里 `'warning'` 不是"从设备读到的等级"，而是这条记录本身的语义（设备确实报了非零告警位）。它是我们唯一站得住的等级信号；压到 Medium 只会让"永远为 0 的 Critical/High 占着最高两档" |
+| `info` | Info | 同义 |
+| `unknown` | Info + **「等级未知」** | 不许把"不知道"装成"提示"：界面显示「等级未知」，KPI 也不把它算进任何一档 |
+
+`medium` / `low` 在当前的领域层里**没有任何代码路径能产生**，所以它们不出现在筛选面板、
+不出现在 KPI 条、也不出现在下拉里 —— 一个永远搜不到东西的筛选项比没有更糟。
+界面上"真的会出现"的等级由 `VISIBLE_ALERT_SEVERITIES` 一处定义。
+
+Phase 5 做等级迁移（v13：把等级**存进库**）时，要改的只有这一个函数加数据库 CHECK。
+
+### 3.7 KPI 与分组计数的作用域 = **已加载的那一页**（Phase 3）
+
+规格 §8 的 KPI 条读起来像"当前筛选范围的整体统计"。我们做不到，而且原因在代码里：
+主进程的等级过滤是**按来源整路跳过**的（`event-center-service.ts`：
+`input.severity !== deriveEventSeverity(source)` 直接返回空），所以"整个筛选结果"的等级分布
+在主进程里根本没被算过。
+
+做法：KPI 与筛选面板的计数都按 `store.items`（当前页）算，并且**把作用域印在界面上**
+（`eventsUi.kpiScope`「已加载 {loaded} / 本次结果 {total} 条」、`eventsUi.panelScope`）。
+数字是准的，只是范围小一号，而且使用者看得见它小一号。
+
+要真正做全量分面，得在主进程里加一次聚合查询（不增列、不增表），那是后续的事项；
+在拿到之前，界面不把一页的分布说成全库分布。
+
+### 3.8 关键字只在已加载的那一页里搜（Phase 3）
+
+规格 §9.1 有一个 260–320px 的搜索框。三路来源的检索是**三件不同的事**
+（相机是设备 HTTP、联动是内存待处理列表、声纹是 SQLite），所以关键字没有进查询参数，
+而是在已加载的那一页里匹配（设备名 / 事件种类 / 标识 / 指标值）。
+
+做法：搜索框下面/旁边（`eventsUi.searchScope`「搜索只在已加载的 N 条里生效」）把这件事说出来。
+另外：**改关键字不重新查询**（只有设备/来源/等级/时间/确认状态会触发查询）—— 否则每敲一个字
+就去连一次相机。
+
+### 3.9 "六个下拉"改成"面板四组 + 时间两个"（Phase 3）
+
+规格 §9 的下拉是 搜索 + 六个（Severity / Status / Type / Device / Time / Owner…）。
+我们把**设备 / 来源 / 等级 / 确认状态**做成左侧筛选面板的四组（带计数），筛选栏里只留
+搜索 + 时间范围 + 内置视图 + 视图模式。理由：同样的四个条件在面板与下拉里各放一份，
+两处状态要同步、两处都要维护计数，而操作员会看到"同一个筛选有两个开关"。
+
+时间范围没有进面板（它是两个 `datetime-local`，放进 216px 的窄栏里会挤成一团）。
+Owner / Assignee 那一组属于 Phase 5（状态机带指派人）—— 现在没有指派人这个字段，
+画出来就是一个永远为空的筛选。
+
+### 3.10 Evidence 视图模式里**没有缩略图**（Phase 3）
+
+规格 §10 的 Evidence 模式带证据缩略图。联动抓帧在我们这儿只有一条**存储根相对路径**
+（`EventCenterEntry.frameRelativePath`，目前只用于邮件附件与文本显示），把它变成 `<img>`
+需要一个**新的回环图片接口**（`video-file-server` 里的 `serveImages()` 已经有了，
+但还没为抓帧接过 IPC），那是 Phase 4 证据页一起做的事。
+
+Phase 3 的 Evidence 模式画的是**这条事件有哪些证据**（录像 / 抓帧 / 结果文件 N 个）+ 最多五个指标。
+"有证据"与"证据长什么样"是两件事，前者我们已经知道，后者要等接口。
+
 ---
 
 ## 4. 进度与下一步（按规格 §18.1 的六个阶段）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Phase 1 | Design Tokens + 基础组件样式 | **✅ 本轮**：token 取值对齐 + 补齐（含严重度五级、页面底色、控件高度、焦点环、事件行度量、三栏宽度、字号档位）；按钮/输入/chip/card 的圆角与高度按规格改；页面底色 `#F7F8FA` |
-| Phase 2 | 侧栏（232/64 折叠）+ 顶栏 + 事件中心骨架 | **✅ 侧栏**（折叠动画 200ms、3px 橙色竖条、偏好 localStorage、折叠后 tooltip）；事件中心骨架属 Phase 3 |
-| Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | 待做 |
-| Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | 待做（Evidence 只做 Acoustic，见 3.1） |
-| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | 待做（需要 schema v13：状态、指派人、Activity 表，以及四级→五级严重度的旧数据映射） |
-| Phase 6 | 重复触发聚合 + 人工 Incident | 待做（需要聚合键与 Incident 表） |
+| Phase 1 | Design Tokens + 基础组件样式 | **✅**：token 取值对齐 + 补齐（含严重度五级、页面底色、控件高度、焦点环、事件行度量、三栏宽度、字号档位）；按钮/输入/chip/card 的圆角与高度按规格改；页面底色 `#F7F8FA` |
+| Phase 2 | 侧栏（232/64 折叠）+ 顶栏 + 事件中心骨架 | **✅ 侧栏**（折叠动画 200ms、3px 橙色竖条、偏好 localStorage、折叠后 tooltip） |
+| Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | **✅ 本轮**：<br>· 纯函数层 `src/shared/domain/event-view.ts`（`AlertViewModel` 适配器、`eventKpis`、`eventFilterCounts`、筛选/URL/存取的容错解析）+ `tests/event-view.test.ts`（40 条）<br>· `EventKpiStrip.vue`（四格、可点、作用域印在下面）<br>· `EventFilterPanel.vue`（等级/来源/确认状态/设备四组带计数、216px）<br>· `AlertQueue.vue`（三档行高、3px 严重度色条、↑/↓ 选中并同步焦点、整行是 button、等级文字每一档都印）<br>· `EventCenterView.vue`：表格 → 队列、搜索 + 时间 + 六个内置视图 + 视图模式、URL/localStorage 记忆、Esc 关抽屉、来源读况改为**只在失败/截断时**出现、关键字不再触发重新查询<br>· `main.css`：`.severity--<五档>`（一个类给出强调色 + 软底色）、`.alert-row`、`.chip--tiny` 提升为全局<br>· 探针：`scripts/demo-shot-driver.cjs` 增加事件中心一段（KPI 四格与作用域、平均确认耗时是「—」、面板 216px 与四组、六个视图、三档行高、点行开抽屉 + Esc 关、点 KPI「严重」后地址栏/面板/localStorage 三处都对、四条版面关系），并修掉三处**探针自己**的缺陷（见 `docs/Ivms4200-UX-REFERENCE.md` §15.41.6） |
+| Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | 待做（Evidence 只做 Acoustic，见 3.1；缩略图接口见 3.10） |
+| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | 待做（需要 schema v13：状态、指派人、Activity 表，以及四级→五级严重度的旧数据映射；`AlertStatus` 类型与标签**已经在**了） |
+| Phase 6 | 重复触发聚合 + 人工 Incident | 待做（需要聚合键与 Incident 表；`AlertViewModel.occurrenceCount` 已经带着，界面在它等于 1 时不渲染 ×N） |
 
 **每一阶段的交付口径**（与仓库既有规矩一致）：四语言文案 + 单测/源码守卫 + 探针断言 +
 文档记录 + 重新打包；写库/写设备一律**写完读回**；规格没说的取值一律在文档里标明是我们的设计。
+
+**Phase 3 的已知未验证**（探针在有数据的 profile 里跑通，但下面这些没有被证明）：
+- **长列表下的滚动与虚拟化**：队列是一页 50 条直接渲染，没有做虚拟滚动（规格也没要求）。
+  上万条的滚动表现**没有测过**。
+- **筛选面板的计数在"结果超过一页"时的说服力**：作用域已经印出来了，但"点一个计数为 0 的设备
+  仍然可能在别的页上有数据"这件事只在文案里说明，没有在界面上做过实验。
+- **多显示器 / 缩放比例**：三栏在 1440×900 的窗口里验过（探针量了 216px），其它分辨率没有量。
+- **四语言的实际排版**：es/tr 的文案更长（"Confirmación media"、"Onaylanmadı"），窄栏里
+  是否换行、KPI 首屏是否被挤成两行**没有逐语言看过**。
+

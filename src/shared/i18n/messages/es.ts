@@ -2376,13 +2376,6 @@ export const es: MessageSchema = {
     ackUnacknowledged: 'Sin confirmar',
     ackAcknowledged: 'Confirmado',
 
-    columnTime: 'Hora',
-    columnDevice: 'Equipo',
-    columnSource: 'Fuente',
-    columnKind: 'Evento',
-    columnSeverity: 'Nivel',
-    columnStatus: 'Estado',
-
     approximateBadge: 'Hora aproximada',
     approximateHint:
       'La interfaz de la cámara nunca declara la unidad de sus marcas de tiempo, así que aquí la hora del equipo se interpreta en segundos y el valor convertido es aproximado.',
@@ -2441,7 +2434,60 @@ export const es: MessageSchema = {
     detailLocalAlarmChannel: 'Canal',
     detailLocalAlarmTypes: 'Tipos de alarma',
 
-    downloadDone: 'Descargado {name} ({size})'
+    downloadDone: 'Descargado {name} ({size})',
+
+    // --- Phase 3: KPI strip / filters / alert queue (spec §8–§10) -----------
+    // All five spec levels have a name (see VISIBLE_ALERT_SEVERITIES for why
+    // medium/low are not rendered yet).
+    alertSeverity: {
+      critical: 'Crítico',
+      high: 'Alto',
+      medium: 'Medio',
+      low: 'Bajo',
+      info: 'Info'
+    },
+    alertStatus: {
+      new: 'Nuevo',
+      acknowledged: 'Confirmado',
+      investigating: 'En investigación',
+      resolved: 'Resuelto',
+      closed: 'Cerrado'
+    },
+    severityUnknown: 'Gravedad desconocida',
+
+    kpiUnacknowledged: 'Sin confirmar',
+    kpiAvgAck: 'Confirmación media',
+    kpiScope: 'Los KPI y recuentos cubren las {loaded} filas cargadas de {total} resultados',
+
+    viewMode: {
+      compact: 'Compacta',
+      standard: 'Estándar',
+      evidence: 'Evidencia'
+    },
+
+    searchPlaceholder: 'Buscar equipo, evento o métrica',
+    searchScope: 'La búsqueda solo cubre las {loaded} filas cargadas',
+
+    savedViewTitle: 'Vistas',
+    savedView: {
+      all: 'Todo',
+      critical: 'Crítico',
+      high: 'Alto',
+      unacknowledged: 'Sin confirmar',
+      last24h: 'Últimas 24 horas',
+      last7d: 'Últimos 7 días'
+    },
+
+    filterPanelTitle: 'Filtros',
+    filterPanelToggle: 'Panel de filtros',
+    panelCount: '{count}',
+    panelScope: 'Recuentos sobre las {loaded} filas cargadas',
+    clearFilters: 'Borrar todo',
+
+    evidenceRecording: 'Grabación',
+    evidenceFrame: 'Fotograma',
+    evidenceFiles: '{count} archivos',
+    metricMore: '+{count} más'
 
   }
 }

@@ -2643,13 +2643,6 @@ export const zhCN = {
     ackUnacknowledged: '未确认',
     ackAcknowledged: '已确认',
 
-    columnTime: '时间',
-    columnDevice: '设备',
-    columnSource: '来源',
-    columnKind: '事件',
-    columnSeverity: '等级',
-    columnStatus: '状态',
-
     approximateBadge: '近似时间',
     approximateHint:
       '相机接口没有声明时间戳单位，本页按秒解读设备时间，因此换算结果是近似值。',
@@ -2705,7 +2698,61 @@ export const zhCN = {
     detailLocalAlarmChannel: '通道',
     detailLocalAlarmTypes: '告警类型',
 
-    downloadDone: '已下载 {name}（{size}）'
+    downloadDone: '已下载 {name}（{size}）',
+
+    // --- Phase 3：KPI 条 / 筛选 / 告警队列（规格 §8–§10） --------------------
+    // 规格的五档都给出中文名：`medium` / `low` 现在没有代码路径能产生（界面不渲染它们，
+    // 见 `VISIBLE_ALERT_SEVERITIES`），但 `AlertSeverity` 是完整类型 —— 少两个名字，
+    // Phase 5 把五级存进库的那天就会渲染出裸 key。
+    alertSeverity: {
+      critical: '严重',
+      high: '高',
+      medium: '中',
+      low: '低',
+      info: '提示'
+    },
+    alertStatus: {
+      new: '待处理',
+      acknowledged: '已确认',
+      investigating: '调查中',
+      resolved: '已解决',
+      closed: '已关闭'
+    },
+    severityUnknown: '等级未知',
+
+    kpiUnacknowledged: '未确认',
+    kpiAvgAck: '平均确认耗时',
+    kpiScope: 'KPI 与计数按已加载的 {loaded} 条统计（本次结果 {total} 条）',
+
+    viewMode: {
+      compact: '紧凑',
+      standard: '标准',
+      evidence: '证据'
+    },
+
+    searchPlaceholder: '搜索设备、事件、指标',
+    searchScope: '搜索只在已加载的 {loaded} 条里生效',
+
+    savedViewTitle: '视图',
+    savedView: {
+      all: '全部',
+      critical: '严重',
+      high: '高',
+      unacknowledged: '未确认',
+      last24h: '近 24 小时',
+      last7d: '近 7 天'
+    },
+
+    filterPanelTitle: '筛选',
+    filterPanelToggle: '筛选面板',
+    panelCount: '{count} 条',
+    panelScope: '计数按已加载的 {loaded} 条',
+    clearFilters: '清除全部',
+
+    evidenceRecording: '录像',
+    evidenceFrame: '抓帧',
+    evidenceFiles: '{count} 个文件',
+    metricMore: '另有 {count} 项'
 
   }
 }

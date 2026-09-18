@@ -216,3 +216,280 @@ describe('Phase 2 · 侧栏折叠（规格 §3.2 / §3.3）', () => {
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// Phase 3：KPI 条 / 筛选面板 / 告警队列（规格 §8–§11）
+// ---------------------------------------------------------------------------
+
+const kpiStrip = read('src/renderer/src/components/event-center/EventKpiStrip.vue')
+const filterPanel = read('src/renderer/src/components/event-center/EventFilterPanel.vue')
+const alertQueue = read('src/renderer/src/components/event-center/AlertQueue.vue')
+const eventView = read('src/renderer/src/views/EventCenterView.vue')
+const eventViewDomain = read('src/shared/domain/event-view.ts')
+
+/** 新组件里不许出现写死的颜色（工程规则：颜色只在 main.css 的 token 里）。 */
+function expectNoHardcodedColor(source: string, name: string): void {
+  const live = stripComments(source)
+  const hits = live.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d/g) ?? []
+  assert.deepEqual(hits, [], `${name} 里出现了写死的颜色：${hits.join(', ')}`)
+}
+
+describe('Phase 3 · 严重度五级与队列行（规格 §2.3 / §10）', () => {
+  it('main.css 里五档严重度各自给出强调色与软背景两个变量', () => {
+    for (const severity of ['critical', 'high', 'medium', 'low', 'info']) {
+      const block = new RegExp(
+        `\\.severity--${severity} \\{[\\s\\S]*?--severity-accent:\\s*var\\(--color-severity-${severity}\\)[\\s\\S]*?--severity-soft:\\s*var\\(--color-severity-${severity}-soft\\)`
+      )
+      assert.match(css, block, `\`.severity--${severity}\` 没有把两个变量都指到 token`)
+    }
+    // 「等级未知」不是一档等级色：它必须用中性色，否则会被读成"某一级"。
+    assert.match(
+      css,
+      /\.severity--unknown \{[\s\S]*?--severity-accent:\s*var\(--color-text-disabled\)/,
+      '等级未知没有用中性色（会被读成一个真实等级）'
+    )
+  })
+
+  it('队列行：3px 左侧色条 + 行高变量 + 键盘焦点环', () => {
+    const row = css.slice(css.indexOf('.alert-row {'), css.indexOf('.alert-row:focus-visible'))
+    assert.match(row, /border-left:\s*3px solid var\(--severity-accent/, '队列行没有 3px 严重度色条')
+    assert.match(
+      row,
+      /min-height:\s*var\(--event-row-mode-height,\s*var\(--event-row-min-height\)\)/,
+      '队列行没有用行高变量（三档模式会顶不动）'
+    )
+    assert.match(css, /\.alert-row:focus-visible \{[\s\S]*?box-shadow:\s*var\(--focus-ring\)/, '队列行没有焦点环')
+  })
+
+  it('三档行高：标准 88 / 证据 104 来自规格，紧凑比标准矮', () => {
+    assert.match(eventViewDomain, /standard:\s*88/, '标准行高不是规格给的 88')
+    assert.match(eventViewDomain, /evidence:\s*104/, '证据行高不是规格给的 104')
+    const compact = /compact:\s*(\d+)/.exec(eventViewDomain)?.[1] ?? ''
+    assert.ok(Number(compact) > 0 && Number(compact) < 88, '紧凑行高没有比标准矮')
+    assert.ok(alertQueue.includes('--event-row-mode-height'), '队列没有把行高传给行')
+  })
+
+  it('新组件里没有写死的颜色（颜色只在 main.css 的 token 里）', () => {
+    expectNoHardcodedColor(kpiStrip, 'EventKpiStrip.vue')
+    expectNoHardcodedColor(filterPanel, 'EventFilterPanel.vue')
+    expectNoHardcodedColor(alertQueue, 'AlertQueue.vue')
+  })
+
+  it('队列的等级文案走适配器：`unknown` 显示「等级未知」，不装成「提示」', () => {
+    assert.ok(
+      alertQueue.includes("t('eventsUi.severityUnknown')"),
+      '队列没有把"等级认不出来"单独说出来'
+    )
+    assert.ok(
+      alertQueue.includes('alertSeverityLabelKey(alert.severity)'),
+      '队列没有用等级标签键（自己拼文案就会与筛选面板分叉）'
+    )
+    assert.ok(
+      alertQueue.includes("severityUnknown ? 'severity--unknown'"),
+      '等级未知没有走中性的严重度类'
+    )
+  })
+
+  it('队列的键盘：↑/↓ 移动选中并同步焦点（告警风暴里是连着按的）', () => {
+    assert.ok(alertQueue.includes('@keydown.down.prevent="move(1)"'), '没有 ↓ 移动')
+    assert.ok(alertQueue.includes('@keydown.up.prevent="move(-1)"'), '没有 ↑ 移动')
+    assert.ok(alertQueue.includes('.focus()'), '移动选中时没有把焦点带上')
+    // 整行是 button：可 Tab、Enter/空格可开（这是不用 div 的理由，注释里写了）。
+    assert.match(alertQueue, /<button[\s\S]{0,400}?class="alert-row"/, '队列行不是 button')
+  })
+
+  it('等级文字每一档都印（紧凑模式也一样）：颜色不许是唯一的信息', () => {
+    // 左侧色条是颜色，规格 §15.3 要求不靠颜色单独表意 —— 所以正文里必须有那两个字。
+    const head = alertQueue.slice(alertQueue.indexOf('alert-row__head'), alertQueue.indexOf('alert-row__meta'))
+    assert.ok(head.includes('alert-row__severity'), '紧凑模式的正文里没有等级文字（只剩颜色）')
+    assert.ok(head.includes('severityLabel(alert)'), '正文里的等级不是走标签函数来的')
+  })
+})
+
+describe('Phase 3 · KPI 条与筛选（规格 §8 / §9）', () => {
+  it('KPI 条只画四格：严重 / 高 / 未确认 / 平均确认耗时（聚合事件是 Phase 6）', () => {
+    assert.ok(kpiStrip.includes("t('eventsUi.alertSeverity.critical')"), '没有严重那一格')
+    assert.ok(kpiStrip.includes("t('eventsUi.alertSeverity.high')"), '没有高那一格')
+    assert.ok(kpiStrip.includes("t('eventsUi.kpiUnacknowledged')"), '没有未确认那一格')
+    assert.ok(kpiStrip.includes("t('eventsUi.kpiAvgAck')"), '没有平均确认耗时那一格')
+    // 聚合事件（Incidents）在 Phase 6 之前不渲染：一个恒为 0 的格子会被读成"聚合过了"。
+    assert.equal(kpiStrip.includes('incidents'), false, 'KPI 条渲染了还没实现的聚合事件')
+  })
+
+  it('平均确认耗时拿不到时显示「—」而不是 0（`avgAckMs` 恒为 null）', () => {
+    assert.ok(
+      kpiStrip.includes('props.kpis.avgAckMs === null ? null : props.kpis.avgAckMs / 1000'),
+      '没有把"没有确认时刻"当成 0 秒'
+    )
+    assert.ok(kpiStrip.includes(':value="avgAckSeconds"'), '那一格没有把换算结果接上')
+    assert.match(
+      eventViewDomain,
+      /avgAckMs:\s*null,[\s\S]{0,80}incidents:\s*null/,
+      '视图模型没有如实声明这两个数拿不到'
+    )
+  })
+
+  it('KPI 与计数都写明作用域（只统计已加载的那一页）', () => {
+    assert.ok(kpiStrip.includes("t('eventsUi.kpiScope'"), 'KPI 条没有印作用域')
+    assert.ok(filterPanel.includes("t('eventsUi.panelScope'"), '筛选面板没有印作用域')
+    assert.ok(kpiStrip.includes("t('eventsUi.kpiScope'"), 'KPI 条缺少作用域说明')
+  })
+
+  it('KPI 可点：严重/高/未确认三格把筛选打开或关掉', () => {
+    assert.ok(kpiStrip.includes('@click="toggleSeverity(\'critical\')"'), '严重那一格不可点')
+    assert.ok(kpiStrip.includes('@click="toggleSeverity(\'high\')"'), '高那一格不可点')
+    assert.ok(kpiStrip.includes('@click="toggleAck(\'unacknowledged\')"'), '未确认那一格不可点')
+    assert.ok(kpiStrip.includes(':aria-pressed='), '可点的 KPI 没有 aria-pressed')
+    assert.ok(eventView.includes('@filter="patchFilter"'), 'KPI 与筛选没有接上')
+  })
+
+  it('筛选面板四组都带计数，且"计数为 0 也能点"（它们是筛选，不是统计）', () => {
+    for (const group of [
+      'eventsUi.filterSeverity',
+      'eventsUi.filterSource',
+      'eventsUi.filterAck',
+      'eventsUi.filterDevice'
+    ]) {
+      assert.ok(filterPanel.includes(`t('${group}')`), `筛选面板没有「${group}」这一组`)
+    }
+    assert.equal(
+      (filterPanel.match(/panelCount/g) ?? []).length >= 4,
+      true,
+      '分组计数没有逐组给出'
+    )
+    assert.ok(eventView.includes('@patch="patchFilter"'), '筛选面板与页面没有接上')
+  })
+
+  it('筛选面板只列**真的会出现**的等级（medium / low 没有代码路径能产生）', () => {
+    assert.ok(
+      filterPanel.includes('VISIBLE_ALERT_SEVERITIES'),
+      '筛选面板没有用"会出现的那几档"常量（会画出永远搜不到的选项）'
+    )
+    assert.equal(filterPanel.includes("'medium'"), false, '筛选面板列出了 medium')
+    assert.equal(filterPanel.includes("'low'"), false, '筛选面板列出了 low')
+    assert.ok(filterPanel.includes("t('eventsUi.severityUnknown')"), '筛选面板没有「等级未知」')
+  })
+
+  it('五档等级与五个状态**每一档都有四语言文案**（少一个名字，Phase 5 那天就会渲染出裸 key）', () => {
+    for (const locale of ['zh-CN', 'en', 'es', 'tr']) {
+      const catalogue = read(`src/shared/i18n/messages/${locale}.ts`)
+      const severityBlock = catalogue.slice(
+        catalogue.indexOf('alertSeverity: {'),
+        catalogue.indexOf('alertStatus: {')
+      )
+      for (const severity of ['critical', 'high', 'medium', 'low', 'info']) {
+        assert.ok(
+          new RegExp(`\\b${severity}:`).test(severityBlock),
+          `${locale} 的 alertSeverity 里缺少 ${severity}`
+        )
+      }
+      const statusBlock = catalogue.slice(
+        catalogue.indexOf('alertStatus: {'),
+        catalogue.indexOf('severityUnknown:')
+      )
+      for (const status of ['new', 'acknowledged', 'investigating', 'resolved', 'closed']) {
+        assert.ok(
+          new RegExp(`\\b${status}:`).test(statusBlock),
+          `${locale} 的 alertStatus 里缺少 ${status}`
+        )
+      }
+    }
+  })
+
+  it('筛选面板的选项数与来源数一致（来源少了就等于把数据藏了）', () => {
+    assert.ok(filterPanel.includes('EVENT_SOURCE_KINDS.map'), '来源选项没有按领域常量生成')
+    assert.ok(
+      filterPanel.includes('devices.length > 0'),
+      '设备组没有处理"一台设备都没有"的情况'
+    )
+  })
+})
+
+describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
+  it('筛选与视图模式各自一个 localStorage 键，读写都在 try/catch 里', () => {
+    assert.ok(
+      eventView.includes("window.localStorage.getItem(EVENT_FILTER_STORAGE_KEY)"),
+      '没有读回上次的筛选'
+    )
+    assert.ok(
+      eventView.includes('window.localStorage.setItem(EVENT_FILTER_STORAGE_KEY'),
+      '没有记住本次筛选'
+    )
+    assert.ok(
+      eventView.includes('window.localStorage.setItem(EVENT_VIEW_MODE_STORAGE_KEY, mode)'),
+      '没有记住视图模式'
+    )
+    assert.equal(
+      (eventView.match(/try \{/g) ?? []).length >= 3,
+      true,
+      'localStorage 的读写没有各自的兜底'
+    )
+  })
+
+  it('地址栏同步：URL > localStorage，且"地址里写了空筛选"不会被旧条件顶回来', () => {
+    assert.ok(eventView.includes('hasEventFilterQuery(query)'), '没有区分"地址里没写筛选"')
+    assert.ok(
+      eventView.includes('void router.replace({ query: eventFilterToQuery(filters) })'),
+      '筛选没有写回地址栏'
+    )
+    assert.ok(
+      eventView.indexOf('eventFilterFromQuery(query)') <
+        eventView.indexOf('EVENT_FILTER_STORAGE_KEY)'),
+      'URL 的优先级没有高于 localStorage'
+    )
+  })
+
+  it('关键字只在已加载的那一页里搜，而且把这件事印出来', () => {
+    assert.ok(
+      eventView.includes('matchEventSearch(alert, filters.search, eventKindLabel(alert.kind))'),
+      '关键字没有走纯函数（自己实现就会与用例分叉）'
+    )
+    assert.ok(eventView.includes("t('eventsUi.searchScope'"), '没有说明搜索的作用域')
+  })
+
+  it('内置视图是一组筛选，点一下写进同一份筛选状态', () => {
+    assert.ok(eventView.includes('applySavedView(view)'), '内置视图没有接上')
+    assert.ok(eventView.includes('savedViewFromMs(view, Date.now())'), '时间视图没有算窗口')
+    assert.equal(
+      /v-for="view in EVENT_SAVED_VIEWS"/.test(eventView),
+      true,
+      '内置视图没有按常量渲染'
+    )
+  })
+
+  it('来源读况只在**有话说**时出现（三路正常时它只是三行绿字，却占掉第一屏）', () => {
+    assert.ok(
+      eventView.includes('v-if="sourcesNeedAttention"'),
+      '来源读况没有按"是否失败/截断"条件渲染'
+    )
+    assert.match(
+      eventView,
+      /sourcesNeedAttention = computed\(\(\) =>[\s\S]{0,200}?!source\.ok \|\| source\.truncated > 0/,
+      '来源读况的条件不是"某一路失败或被截断"'
+    )
+  })
+
+  it('旧的表格已经拆掉（队列取代了它），但详情抽屉的确认/下载逻辑还在', () => {
+    assert.equal(
+      /<table class="table">/.test(stripComments(eventView)),
+      false,
+      '旧的事件表格还在（队列已经取代它）'
+    )
+    assert.ok(eventView.includes('<AlertQueue'), '页面没有挂上队列')
+    assert.ok(eventView.includes('toggleAcknowledge'), '确认逻辑被删掉了')
+    assert.ok(eventView.includes('downloadFile('), '结果文件下载逻辑被删掉了')
+  })
+
+  it('Esc 关抽屉（监听在 window 上，且只在抽屉开着时响应）', () => {
+    assert.ok(
+      eventView.includes("if (event.key === 'Escape' && detail.value) closeDetail()"),
+      'Esc 没有关抽屉'
+    )
+    assert.ok(eventView.includes("window.addEventListener('keydown', onWindowKeydown)"), '没有挂上键盘监听')
+    assert.ok(
+      eventView.includes("window.removeEventListener('keydown', onWindowKeydown)"),
+      '卸载时没有摘掉键盘监听'
+    )
+  })
+})
+

@@ -1,0 +1,509 @@
+/**
+ * 事件中心视图模型 / 筛选 / 聚合的纯函数（`src/shared/domain/event-view.ts`）。
+ *
+ * 为什么这些断言值得写：它们守的是**换算与口径**，而这两样算错了界面上看不出来 ——
+ *   1. **等级换算**：我们的四级（`'unknown'` 是合法取值）与规格 §2.3 的五级之间有一个
+ *      展示层适配器。哪一个领域取值落到哪一档、`'unknown'` 有没有被偷偷装成 `'info'`，
+ *      只能靠断言钉住；Phase 5 做等级迁移时，这个文件就是"改对了没有"的判据。
+ *   2. **计数口径**：KPI 与筛选面板算的都是**已加载的这一页**。把「没有确认能力的来源」
+ *      算进「未确认」、把「等级未知」混进「提示」，都会让操作员盯着一个永远清不掉的数字。
+ *   3. **存取容错**：筛选要从 localStorage 与手改过的 URL 里读回来。坏值必须退回默认，
+ *      而不是让页面打不开 —— 这条路径平时不会有人走，所以必须由测试走。
+ *
+ * 中文注释是仓库约定（见 `tests/channel-state.test.ts`）。
+ */
+
+import { strict as assert } from 'assert'
+import { describe, it } from 'node:test'
+
+import { EVENT_SEVERITIES, EVENT_SOURCE_KINDS } from '../src/shared/domain/event-center'
+import type { EventCenterEntry } from '../src/shared/domain/event-center'
+import {
+  ALERT_SEVERITIES,
+  ALERT_STATUSES,
+  EMPTY_EVENT_FILTER,
+  EVENT_SAVED_VIEWS,
+  EVENT_SEVERITY_FILTERS,
+  EVENT_VIEW_MODES,
+  EVENT_ROW_HEIGHT,
+  EVENT_FILTER_STORAGE_KEY,
+  EVENT_FILTER_QUERY_KEYS,
+  EVENT_VIEW_MODE_STORAGE_KEY,
+  VISIBLE_ALERT_SEVERITIES,
+  ackFilterToQuery,
+  alertMetrics,
+  alertSeverityLabelKey,
+  alertSeverityOf,
+  alertStatusLabelKey,
+  eventFilterCounts,
+  eventFilterFromQuery,
+  eventFilterToQuery,
+  eventKpis,
+  hasEventFilterQuery,
+  isEventFilterActive,
+  isSeverityUnknown,
+  matchEventSearch,
+  parseEventFilter,
+  parseEventViewMode,
+  querySeverityFor,
+  savedViewFromMs,
+  serializeEventFilter,
+  severityFilterFor,
+  toAlertViewModel,
+  toAlertViewModels
+} from '../src/shared/domain/event-view'
+import type { AlertViewModel, EventQueueFilter } from '../src/shared/domain/event-view'
+
+/** 最小可用的事件样本：只给断言用得上的字段，其余按接口要求补默认值。 */
+function entry(overrides: Partial<EventCenterEntry> = {}): EventCenterEntry {
+  return {
+    id: 'alarm:1',
+    source: 'localAlarm',
+    deviceId: 'dev-1',
+    deviceName: '听诊盒子 1',
+    at: 1_700_000_000_000,
+    atApproximate: false,
+    severity: 'warning',
+    kind: 'localAlarm',
+    acknowledged: false,
+    ...overrides
+  }
+}
+
+function view(overrides: Partial<EventCenterEntry> = {}): AlertViewModel {
+  return toAlertViewModel(entry(overrides))
+}
+
+describe('等级换算：领域四级 → 规格五级（规格 §2.3）', () => {
+  it('四个领域取值都落到规格五级之内（Phase 5 若加取值，这里会先报）', () => {
+    for (const severity of EVENT_SEVERITIES) {
+      const mapped = alertSeverityOf(severity)
+      assert.ok(
+        (ALERT_SEVERITIES as readonly string[]).includes(mapped),
+        `${severity} 映射出了规格之外的等级 ${mapped}`
+      )
+    }
+  })
+
+  it('逐条对应，且 `unknown` **不**被算成一个等级', () => {
+    assert.equal(alertSeverityOf('critical'), 'critical')
+    assert.equal(alertSeverityOf('warning'), 'high')
+    assert.equal(alertSeverityOf('info'), 'info')
+    assert.equal(isSeverityUnknown('unknown'), true)
+    assert.equal(isSeverityUnknown('warning'), false)
+    // `unknown` 映射到 info 只是为了让色带有个中性色，界面必须靠 `severityUnknown` 说真话。
+    assert.equal(alertSeverityOf('unknown'), 'info')
+  })
+
+  it('`medium` / `low` 不在"会出现"的等级里（当前没有代码路径能产生它们）', () => {
+    assert.deepEqual([...VISIBLE_ALERT_SEVERITIES], ['critical', 'high', 'info'])
+    assert.equal(querySeverityFor('medium'), undefined)
+    assert.equal(querySeverityFor('low'), undefined)
+  })
+
+  it('界面等级 → 查询等级 → 界面等级是**往返一致**的', () => {
+    for (const value of EVENT_SEVERITY_FILTERS) {
+      const query = querySeverityFor(value)
+      assert.notEqual(query, undefined, `${value} 没有对应的查询等级`)
+      assert.equal(severityFilterFor(query as never), value, `${value} 往返之后变了`)
+    }
+    assert.equal(querySeverityFor(''), undefined)
+  })
+
+  it('`high` 查的是领域里的 `warning`（设备的非零告警位），不是别的', () => {
+    assert.equal(querySeverityFor('high'), 'warning')
+    assert.equal(querySeverityFor('critical'), 'critical')
+    assert.equal(querySeverityFor('info'), 'info')
+    assert.equal(querySeverityFor('unknown'), 'unknown')
+  })
+
+  it('等级与状态的标签键都指向 `eventsUi.*`', () => {
+    for (const severity of ALERT_SEVERITIES) {
+      assert.equal(alertSeverityLabelKey(severity), `eventsUi.alertSeverity.${severity}`)
+    }
+    for (const status of ALERT_STATUSES) {
+      assert.equal(alertStatusLabelKey(status), `eventsUi.alertStatus.${status}`)
+    }
+  })
+})
+
+describe('视图模型：状态、证据摘要、指标', () => {
+  it('状态由 `acknowledged` 推出来（Phase 5 才有状态列）', () => {
+    assert.equal(view({ acknowledged: false }).status, 'new')
+    assert.equal(view({ acknowledged: true }).status, 'acknowledged')
+  })
+
+  it('相机检测日志**没有确认能力**：状态锁住，且不计入「未确认」', () => {
+    const detect = view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    assert.equal(detect.statusLocked, true)
+    assert.equal(detect.status, 'new')
+    assert.equal(view({ source: 'linkage', kind: 'linkageAlarm' }).statusLocked, false)
+    assert.equal(view({ source: 'localAlarm', kind: 'localAlarm' }).statusLocked, false)
+  })
+
+  it('标题键按种类生成（渲染层只查目录，不自己判断）', () => {
+    assert.equal(view({ kind: 'deviceDetectAlarm' }).titleKey, 'domain.eventKind.deviceDetectAlarm')
+  })
+
+  it('证据摘要：有没有录像 / 抓帧 / 几个结果文件', () => {
+    const plain = view()
+    assert.equal(plain.hasRecording, false)
+    assert.equal(plain.hasFrame, false)
+    assert.equal(plain.evidenceFileCount, 0)
+
+    const rich = view({
+      source: 'deviceDetect',
+      kind: 'deviceDetect',
+      severity: 'unknown',
+      recordingId: 'rec-1',
+      frameRelativePath: 'linkage/frames/a.jpg',
+      detect: {
+        timeUnit: 'epoch_milliseconds',
+        files: [
+          { kind: 'power_spectrum_photo', fileName: 'a.jpg', container: 'jpg' },
+          { kind: 'soundmap_video', fileName: 'b.mp4', container: 'mp4' }
+        ]
+      }
+    })
+    assert.equal(rich.hasRecording, true)
+    assert.equal(rich.hasFrame, true)
+    assert.equal(rich.evidenceFileCount, 2)
+  })
+
+  it('聚合次数在 Phase 6 之前恒为 1（是事实，不是占位符）', () => {
+    assert.equal(view().occurrenceCount, 1)
+  })
+
+  it('指标：只产出真的存在的字段，**绝不补 0**', () => {
+    assert.deepEqual(alertMetrics(entry()), [])
+    const metrics = alertMetrics(entry({ metrics: { spl: 61.25 } }))
+    assert.equal(metrics.length, 1)
+    const [first] = metrics
+    assert.ok(first)
+    assert.equal(first.field, 'spl')
+    assert.equal(first.value, 61.25)
+    assert.equal(first.unit, 'dB')
+    assert.equal(first.digits, 2)
+    assert.equal(first.labelKey, 'metrics.spl')
+  })
+
+  it('指标：NaN / Infinity 不算"设备报了这个数"', () => {
+    const metrics = alertMetrics(
+      entry({ metrics: { spl: Number.NaN, mainFrequency: Number.POSITIVE_INFINITY, smoothness: 0.5 } })
+    )
+    assert.deepEqual(
+      metrics.map((metric) => metric.field),
+      ['smoothness']
+    )
+  })
+
+  it('指标的固定小数位与既有页面一致（同一指标印成同一个样子）', () => {
+    const byField = new Map(alertMetrics(
+      entry({
+        metrics: {
+          spl: 1,
+          mainFrequency: 2,
+          smoothness: 3,
+          bandEnergyRatio: 4,
+          soundmapIntensity: 5,
+          leakVolume: 6,
+          leakCost: 7
+        }
+      })
+    ).map((metric) => [metric.field, metric.digits]))
+    assert.deepEqual(
+      [...byField.entries()],
+      [
+        ['spl', 2],
+        ['mainFrequency', 2],
+        ['smoothness', 3],
+        ['bandEnergyRatio', 3],
+        ['soundmapIntensity', 2],
+        ['leakVolume', 3],
+        ['leakCost', 3]
+      ]
+    )
+  })
+
+  it('批量换算保持顺序', () => {
+    const views = toAlertViewModels([entry({ id: 'a' }), entry({ id: 'b' })])
+    assert.deepEqual(
+      views.map((item) => item.id),
+      ['a', 'b']
+    )
+  })
+})
+
+describe('KPI（规格 §8）', () => {
+  it('按等级与"等着人确认"分别计数', () => {
+    const kpis = eventKpis([
+      view({ id: 'a', severity: 'critical', source: 'linkage', kind: 'linkageAlarm' }),
+      view({ id: 'b', severity: 'warning', source: 'linkage', kind: 'linkageAlarm' }),
+      view({ id: 'c', severity: 'unknown', source: 'deviceDetect', kind: 'deviceDetect' }),
+      view({ id: 'd', severity: 'warning', acknowledged: true })
+    ])
+    assert.equal(kpis.total, 4)
+    assert.equal(kpis.critical, 1)
+    assert.equal(kpis.high, 2)
+    assert.equal(kpis.unknownSeverity, 1)
+    // 只有 a、b 两条是"能确认但还没确认"；c 没有确认接口，d 已经确认。
+    assert.equal(kpis.unacknowledged, 2)
+  })
+
+  it('没有确认能力的来源不计入「未确认」（否则那个数字永远清不掉）', () => {
+    const kpis = eventKpis([
+      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' }),
+      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    ])
+    assert.equal(kpis.total, 2)
+    assert.equal(kpis.unacknowledged, 0)
+  })
+
+  it('平均确认耗时与聚合事件数都是 `null`（来源里没有这两样东西）', () => {
+    const kpis = eventKpis([view()])
+    assert.equal(kpis.avgAckMs, null)
+    assert.equal(kpis.incidents, null)
+  })
+
+  it('空列表给出全 0（界面据此显示 0 而不是"—"）', () => {
+    const kpis = eventKpis([])
+    assert.equal(kpis.total, 0)
+    assert.equal(kpis.critical, 0)
+    assert.equal(kpis.high, 0)
+    assert.equal(kpis.unknownSeverity, 0)
+    assert.equal(kpis.unacknowledged, 0)
+  })
+})
+
+describe('筛选：激活判定与查询换算', () => {
+  it('空筛选不算激活；只打空格也不算；时间、来源、确认状态都算', () => {
+    assert.equal(isEventFilterActive(EMPTY_EVENT_FILTER), false)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, search: '   ' }), false)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, search: 'x' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, deviceId: 'dev-1' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, source: 'linkage' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, severity: 'high' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, from: '2026-09-17T00:00' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, to: '2026-09-17T00:00' }), true)
+    assert.equal(isEventFilterActive({ ...EMPTY_EVENT_FILTER, ack: 'unacknowledged' }), true)
+  })
+
+  it('确认状态换算成查询里的布尔（`all` → 不带这个参数）', () => {
+    assert.equal(ackFilterToQuery('all'), undefined)
+    assert.equal(ackFilterToQuery('unacknowledged'), false)
+    assert.equal(ackFilterToQuery('acknowledged'), true)
+  })
+
+  it('关键字匹配：设备名、事件标题、标识、指标值都能搜到', () => {
+    const alert = view({ deviceName: 'AE08 北侧', metrics: { spl: 61.25 } })
+    assert.equal(matchEventSearch(alert, '', '声纹告警'), true)
+    assert.equal(matchEventSearch(alert, '   ', '声纹告警'), true)
+    assert.equal(matchEventSearch(alert, 'ae08', '声纹告警'), true)
+    assert.equal(matchEventSearch(alert, '北侧', '声纹告警'), true)
+    assert.equal(matchEventSearch(alert, '声纹告警', '声纹告警'), true)
+    assert.equal(matchEventSearch(alert, '61.25', ''), true)
+    assert.equal(matchEventSearch(alert, '不存在的词', '声纹告警'), false)
+  })
+
+  it('事件标题由调用方查好目录再传进来（本模块不认识 i18n）', () => {
+    const alert = view({ deviceName: 'AE08', kind: 'localAlarm' })
+    // 调用方没给标题文本时，标题搜不到 —— 这不是 bug，是"标题不在这个模型里"。
+    assert.equal(matchEventSearch(alert, '声纹告警', ''), false)
+    assert.equal(matchEventSearch(alert, '声纹告警', '声纹告警'), true)
+  })
+
+  it('关键字匹配区分"没搜到"与"事件没有这个字段"', () => {
+    const bare = view()
+    assert.equal(matchEventSearch(bare, 'spl', '声纹告警'), false)
+    assert.equal(matchEventSearch(bare, 'alarm:1', '声纹告警'), true)
+  })
+})
+
+describe('筛选面板计数（口径：已加载的这一页）', () => {
+  it('等级分布里**不含**"等级未知"，它单独一档', () => {
+    const counts = eventFilterCounts([
+      view({ severity: 'critical', source: 'linkage', kind: 'linkageAlarm' }),
+      view({ severity: 'warning' }),
+      view({ severity: 'unknown', source: 'deviceDetect', kind: 'deviceDetect' })
+    ])
+    assert.equal(counts.bySeverity.critical, 1)
+    assert.equal(counts.bySeverity.high, 1)
+    assert.equal(counts.bySeverity.info, 0)
+    assert.equal(counts.bySeverity.medium, 0)
+    assert.equal(counts.bySeverity.low, 0)
+    assert.equal(counts.unknownSeverity, 1)
+  })
+
+  it('三路来源都有键（某一路为 0 也要能显示"读到了 0 条"）', () => {
+    const counts = eventFilterCounts([view({ source: 'linkage', kind: 'linkageAlarm' })])
+    assert.deepEqual(Object.keys(counts.bySource).sort(), [...EVENT_SOURCE_KINDS].sort())
+    assert.equal(counts.bySource.linkage, 1)
+    assert.equal(counts.bySource.deviceDetect, 0)
+    assert.equal(counts.bySource.localAlarm, 0)
+  })
+
+  it('确认状态的分组计数与 KPI 同一口径（相机检测日志不算"未确认"）', () => {
+    const counts = eventFilterCounts([
+      view({ id: 'a', acknowledged: true }),
+      view({ id: 'b' }),
+      view({ id: 'c', source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
+    ])
+    assert.equal(counts.acknowledged, 1)
+    assert.equal(counts.unacknowledged, 1)
+  })
+
+  it('按设备的计数只包含**这一页里出现过的**设备（没出现的按 0 显示，不是"不存在"）', () => {
+    const counts = eventFilterCounts([
+      view({ id: 'a', deviceId: 'dev-1' }),
+      view({ id: 'b', deviceId: 'dev-1' }),
+      view({ id: 'c', deviceId: 'dev-2' })
+    ])
+    assert.equal(counts.byDevice['dev-1'], 2)
+    assert.equal(counts.byDevice['dev-2'], 1)
+    assert.equal(counts.byDevice['dev-3'] ?? 0, 0)
+  })
+})
+
+describe('存取与容错（localStorage / URL）', () => {
+  const filter: EventQueueFilter = {
+    search: '声纹',
+    deviceId: 'dev-1',
+    source: 'localAlarm',
+    severity: 'high',
+    from: '2026-09-17T08:00',
+    to: '2026-09-17T18:00',
+    ack: 'unacknowledged'
+  }
+
+  it('序列化 → 反序列化是往返一致的', () => {
+    assert.deepEqual(parseEventFilter(serializeEventFilter(filter)), filter)
+  })
+
+  it('坏 JSON / 非对象 / 空串都退回默认，不抛错', () => {
+    for (const raw of ['', '   ', '{不是 JSON', '[]', '42', 'null', '"字符串"']) {
+      assert.deepEqual(parseEventFilter(raw), EMPTY_EVENT_FILTER, `坏值 ${raw} 没有退回默认`)
+    }
+    assert.deepEqual(parseEventFilter(undefined), EMPTY_EVENT_FILTER)
+  })
+
+  it('逐字段收窄：认不出的来源 / 等级 / 确认状态退回默认', () => {
+    const parsed = parseEventFilter({
+      search: 'x',
+      deviceId: 'dev-2',
+      source: '声纹设备',
+      severity: 'medium',
+      from: '',
+      to: '',
+      ack: 'yes'
+    })
+    assert.equal(parsed.search, 'x')
+    assert.equal(parsed.deviceId, 'dev-2')
+    assert.equal(parsed.source, '')
+    assert.equal(parsed.severity, '')
+    assert.equal(parsed.ack, 'all')
+  })
+
+  it('能认的来源与等级被保留', () => {
+    for (const source of EVENT_SOURCE_KINDS) {
+      assert.equal(parseEventFilter({ source }).source, source)
+    }
+    for (const severity of EVENT_SEVERITY_FILTERS) {
+      assert.equal(parseEventFilter({ severity }).severity, severity)
+    }
+  })
+
+  it('进 URL 只写非默认字段，且能原样读回来', () => {
+    const query = eventFilterToQuery(filter)
+    assert.deepEqual(Object.keys(query).sort(), [
+      'ack',
+      'device',
+      'from',
+      'search',
+      'severity',
+      'source',
+      'to'
+    ])
+    assert.deepEqual(eventFilterToQuery(EMPTY_EVENT_FILTER), {})
+    assert.deepEqual(eventFilterFromQuery(query), filter)
+  })
+
+  it('URL 里的未知键忽略，坏值退回默认（手改地址栏不会把页面弄坏）', () => {
+    const parsed = eventFilterFromQuery({
+      search: 'x',
+      severity: 'critical',
+      source: 'nope',
+      ack: 'maybe',
+      page: '3'
+    })
+    assert.equal(parsed.search, 'x')
+    assert.equal(parsed.severity, 'critical')
+    assert.equal(parsed.source, '')
+    assert.equal(parsed.ack, 'all')
+    assert.deepEqual(eventFilterFromQuery(null), EMPTY_EVENT_FILTER)
+  })
+
+  it('区分「地址里没写筛选」与「地址里写了空筛选」（否则清空后刷新会被旧条件顶回来）', () => {
+    assert.equal(hasEventFilterQuery({}), false)
+    assert.equal(hasEventFilterQuery(null), false)
+    assert.equal(hasEventFilterQuery({ search: '' }), false)
+    assert.equal(hasEventFilterQuery({ page: '3' }), false)
+    assert.equal(hasEventFilterQuery({ search: 'x' }), true)
+    assert.equal(hasEventFilterQuery({ severity: 'high' }), true)
+    assert.equal(hasEventFilterQuery({ search: ['a'] }), true)
+    assert.equal(hasEventFilterQuery({ search: [] }), false)
+    // 写出去的那套键名与"认哪些键"必须对得上。
+    for (const key of Object.keys(eventFilterToQuery(filter))) {
+      assert.ok(EVENT_FILTER_QUERY_KEYS.includes(key), `${key} 不在 URL 键白名单里`)
+    }
+  })
+
+  it('视图偏好：容错到 `standard`，三个模式的行高符合规格', () => {
+    assert.equal(parseEventViewMode('compact'), 'compact')
+    assert.equal(parseEventViewMode('evidence'), 'evidence')
+    assert.equal(parseEventViewMode('标准'), 'standard')
+    assert.equal(parseEventViewMode(undefined), 'standard')
+    assert.deepEqual([...EVENT_VIEW_MODES], ['compact', 'standard', 'evidence'])
+    assert.equal(EVENT_ROW_HEIGHT.standard, 88)
+    assert.equal(EVENT_ROW_HEIGHT.evidence, 104)
+    assert.ok(EVENT_ROW_HEIGHT.compact < EVENT_ROW_HEIGHT.standard)
+  })
+
+  it('两个 localStorage 键带 `hertzinno.` 前缀（与侧栏折叠同一套命名）', () => {
+    assert.equal(EVENT_FILTER_STORAGE_KEY, 'hertzinno.eventCenter.filters')
+    assert.equal(EVENT_VIEW_MODE_STORAGE_KEY, 'hertzinno.eventCenter.viewMode')
+  })
+})
+
+describe('内置视图（规格 §9.4）', () => {
+  it('id 唯一、标签键都在 `eventsUi.savedView.*` 下', () => {
+    const ids = EVENT_SAVED_VIEWS.map((view) => view.id)
+    assert.equal(new Set(ids).size, ids.length)
+    for (const view of EVENT_SAVED_VIEWS) {
+      assert.ok(view.labelKey.startsWith('eventsUi.savedView.'), `${view.id} 的标签键不对`)
+    }
+  })
+
+  it('视图里的等级都是界面上真的能选的那些', () => {
+    for (const view of EVENT_SAVED_VIEWS) {
+      if (view.severity === undefined) continue
+      assert.ok(
+        (EVENT_SEVERITY_FILTERS as readonly string[]).includes(view.severity),
+        `${view.id} 的等级 ${view.severity} 不在筛选取值里`
+      )
+      assert.notEqual(querySeverityFor(view.severity), undefined)
+    }
+  })
+
+  it('时间窗口是从"现在"往前推的毫秒数（不掺时区）', () => {
+    const now = 1_700_000_000_000
+    const day = EVENT_SAVED_VIEWS.find((view) => view.id === 'last24h')
+    const week = EVENT_SAVED_VIEWS.find((view) => view.id === 'last7d')
+    assert.ok(day)
+    assert.ok(week)
+    assert.equal(savedViewFromMs(day, now), now - 24 * 3_600_000)
+    assert.equal(savedViewFromMs(week, now), now - 7 * 24 * 3_600_000)
+    const plain = EVENT_SAVED_VIEWS[0]
+    assert.ok(plain)
+    assert.equal(savedViewFromMs(plain, now), undefined)
+  })
+})

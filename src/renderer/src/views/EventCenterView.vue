@@ -23,18 +23,45 @@
  */
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type {
   EventCenterEntry,
   EventCenterQuery,
   EventDetectDownloadInput,
-  EventDownloadProgress,
-  EventSeverity,
-  EventSourceKind
+  EventDownloadProgress
 } from '@shared/ipc/contract'
-import { EVENT_SEVERITIES, EVENT_SOURCE_KINDS, eventCenterPerSourceCap } from '@shared/domain/event-center'
+import { eventCenterPerSourceCap } from '@shared/domain/event-center'
+import {
+  EVENT_FILTER_STORAGE_KEY,
+  EVENT_SAVED_VIEWS,
+  EVENT_VIEW_MODES,
+  EVENT_VIEW_MODE_STORAGE_KEY,
+  ackFilterToQuery,
+  emptyEventFilter,
+  eventFilterCounts,
+  eventFilterFromQuery,
+  eventFilterToQuery,
+  eventKpis,
+  hasEventFilterQuery,
+  isEventFilterActive,
+  matchEventSearch,
+  parseEventFilter,
+  parseEventViewMode,
+  querySeverityFor,
+  savedViewFromMs,
+  serializeEventFilter,
+  toAlertViewModels
+} from '@shared/domain/event-view'
+import type {
+  AlertViewModel,
+  EventQueueFilter,
+  EventSavedView,
+  EventViewMode
+} from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
-import EmptyState from '@renderer/components/EmptyState.vue'
+import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
+import EventFilterPanel from '@renderer/components/event-center/EventFilterPanel.vue'
+import EventKpiStrip from '@renderer/components/event-center/EventKpiStrip.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 import {
   alarmTypeLabel,
@@ -50,7 +77,8 @@ import {
   formatBytes,
   formatDateTime,
   formatNumber,
-  fromDateTimeLocalValue
+  fromDateTimeLocalValue,
+  toDateTimeLocalValue
 } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { EVENT_PAGE_SIZE, eventDownloadKey, useEventCenterStore } from '@renderer/stores/eventCenter'
@@ -59,36 +87,55 @@ import { useSessionStore } from '@renderer/stores/session'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 const store = useEventCenterStore()
 const devices = useDevicesStore()
 const session = useSessionStore()
 const linkage = useAlarmLinkageStore()
 
-const SOURCE_OPTIONS: readonly EventSourceKind[] = EVENT_SOURCE_KINDS
-const SEVERITY_OPTIONS: readonly EventSeverity[] = EVENT_SEVERITIES
+// ---------------------------------------------------------------------------
+// 筛选状态（规格 §9）：URL > localStorage > 默认
+// ---------------------------------------------------------------------------
 
-type AckFilter = 'all' | 'true' | 'false'
-
-interface FilterState {
-  deviceId: string
-  source: string
-  severity: string
-  from: string
-  to: string
-  ack: AckFilter
+/**
+ * 初始筛选。
+ *
+ * 优先级是 **URL > localStorage**：分享出去的一条链接必须把对方带到同一个视图上，
+ * 而"上次看到哪儿"只是本机的舒适度。这里用 `hasEventFilterQuery` 区分"地址里没写筛选"
+ * 与"地址里明确写了空筛选"—— 后者（清空后刷新）不该被 localStorage 里的旧条件顶回来。
+ */
+function readInitialFilter(): EventQueueFilter {
+  const query = route.query as Record<string, unknown>
+  if (hasEventFilterQuery(query)) return eventFilterFromQuery(query)
+  try {
+    return parseEventFilter(window.localStorage.getItem(EVENT_FILTER_STORAGE_KEY))
+  } catch {
+    // 读不到偏好不是错误：`parseEventFilter` 对坏值退回默认（它自己的注释写了原因）。
+    return parseEventFilter(null)
+  }
 }
 
-const filters = reactive<FilterState>({
-  deviceId: '',
-  source: '',
-  severity: '',
-  from: '',
-  to: '',
-  ack: 'all'
-})
+const filters = reactive<EventQueueFilter>(readInitialFilter())
+
+/** 视图模式（规格 §10.2）：紧凑 / 标准 / 证据，记住上次选的。 */
+function readInitialViewMode(): EventViewMode {
+  try {
+    return parseEventViewMode(window.localStorage.getItem(EVENT_VIEW_MODE_STORAGE_KEY))
+  } catch {
+    return 'standard'
+  }
+}
+
+const viewMode = ref<EventViewMode>(readInitialViewMode())
+/** 左侧筛选面板是否展开。**不持久化**：这是本次操作的临时状态，不是偏好（规格 §16.3 只要求视图模式）。 */
+const filterPanelOpen = ref(true)
+/** 最近一次点过的内置视图；手动改任何一项筛选就清空（不给一个假的"当前视图"高亮）。 */
+const activeSavedViewId = ref<string | null>(null)
 
 const detail = ref<EventCenterEntry | null>(null)
+/** 队列里当前选中的告警 id（↑/↓ 与详情抽屉都看它）。 */
+const selectedId = ref<string | null>(null)
 /** 抽屉里正在播放的音频录像行（deviceDetect 的结果文件按需切换）。 */
 const playerRecordingId = ref<string | null>(null)
 /** 抽屉里的视频地址；**非播放状态恒为空串**（空 src 不变式）。 */
@@ -97,6 +144,21 @@ const videoError = ref('')
 const videoBusy = ref(false)
 
 const rows = computed(() => store.items)
+/** 整页告警的视图模型（规格 §16.2）。 */
+const allAlerts = computed(() => toAlertViewModels(store.items))
+/**
+ * 队列里显示的告警。
+ *
+ * 关键字是**在已加载的这一页里**匹配的（主进程的查询没有关键字参数，三路来源的检索
+ * 是三件不同的事），所以 `searchScope` 必须把这件事说出来。
+ */
+const alerts = computed(() =>
+  allAlerts.value.filter((alert) =>
+    matchEventSearch(alert, filters.search, eventKindLabel(alert.kind))
+  )
+)
+const kpis = computed(() => eventKpis(alerts.value))
+const counts = computed(() => eventFilterCounts(alerts.value))
 const page = computed(() => store.page)
 const canPrev = computed(() => page.value.offset > 0)
 const canNext = computed(() => page.value.offset + rows.value.length < store.total)
@@ -113,14 +175,18 @@ const detectStatus = computed(() => store.sources.find((source) => source.source
  */
 const perSourceCap = computed(() => eventCenterPerSourceCap(page.value.limit, page.value.offset))
 
-const hasActiveFilters = computed(
-  () =>
-    filters.deviceId !== '' ||
-    filters.source !== '' ||
-    filters.severity !== '' ||
-    filters.from !== '' ||
-    filters.to !== '' ||
-    filters.ack !== 'all'
+const hasActiveFilters = computed(() => isEventFilterActive(filters))
+const searchActive = computed(() => filters.search.trim() !== '')
+
+/**
+ * 「来源读况」只在**有话说**时渲染。
+ *
+ * 三路都读到了、也没截断时，这块卡片只是三行绿字，却占掉了队列的第一屏 —— 而来源条数
+ * 已经在左侧筛选面板里逐路给出了。一旦某一路失败或被截断，它立刻出现（并且是页面级的
+ * 警示，不随面板折叠而消失）。
+ */
+const sourcesNeedAttention = computed(() =>
+  store.sources.some((source) => !source.ok || source.truncated > 0)
 )
 
 /** 空状态文案：区分「设备什么都没报」与「筛选把数据排除了」。 */
@@ -131,13 +197,15 @@ const emptyTitle = computed(() =>
 function buildQuery(): Partial<EventCenterQuery> {
   const query: Partial<EventCenterQuery> = { limit: EVENT_PAGE_SIZE, offset: 0 }
   if (filters.deviceId !== '') query.deviceId = filters.deviceId
-  if (filters.source !== '') query.sources = [filters.source as EventSourceKind]
-  if (filters.severity !== '') query.severity = filters.severity as EventSeverity
+  if (filters.source !== '') query.sources = [filters.source]
+  const severity = querySeverityFor(filters.severity)
+  if (severity !== undefined) query.severity = severity
   const from = fromDateTimeLocalValue(filters.from)
   if (from !== undefined) query.from = from
   const to = fromDateTimeLocalValue(filters.to)
   if (to !== undefined) query.to = to
-  if (filters.ack !== 'all') query.acknowledged = filters.ack === 'true'
+  const acknowledged = ackFilterToQuery(filters.ack)
+  if (acknowledged !== undefined) query.acknowledged = acknowledged
   return query
 }
 
@@ -146,26 +214,64 @@ async function reload(): Promise<void> {
   await store.applyQuery(buildQuery())
 }
 
-function reset(): void {
-  filters.deviceId = ''
-  filters.source = ''
-  filters.severity = ''
-  filters.from = ''
-  filters.to = ''
-  filters.ack = 'all'
-  void reload()
+/** 筛选面板 / KPI 条点一下：只改一处，其余不动（改了就会重新查询，见下面的 watch）。 */
+function patchFilter(patch: Partial<EventQueueFilter>): void {
+  activeSavedViewId.value = null
+  Object.assign(filters, patch)
+}
+
+function clearFilters(): void {
+  activeSavedViewId.value = null
+  Object.assign(filters, emptyEventFilter())
+}
+
+/**
+ * 应用一个内置视图（规格 §9.4）。
+ *
+ * 视图是**一组筛选**，不是另一份数据：它把等级/确认状态/时间窗口写进同一份筛选状态，
+ * 后面走的还是同一条查询与同一份队列。
+ */
+function applySavedView(view: EventSavedView): void {
+  activeSavedViewId.value = view.id
+  const fromMs = savedViewFromMs(view, Date.now())
+  const next = emptyEventFilter()
+  next.severity = view.severity ?? ''
+  next.ack = view.ack ?? 'all'
+  // 时间窗口按本机时区换算成 `datetime-local` 的字符串 —— 那个控件要的就是本地墙上时间。
+  next.from = fromMs === undefined ? '' : toDateTimeLocalValue(fromMs)
+  Object.assign(filters, next)
+}
+
+function setViewMode(mode: EventViewMode): void {
+  viewMode.value = mode
+  try {
+    window.localStorage.setItem(EVENT_VIEW_MODE_STORAGE_KEY, mode)
+  } catch {
+    // 偏好存不下不影响使用（与侧栏折叠同一条取舍：读写各自 try/catch）。
+  }
 }
 
 // ---------------------------------------------------------------------------
-// 下载进度订阅
+// 下载进度订阅 + 生命周期
 // ---------------------------------------------------------------------------
 
 let unsubscribeProgress: (() => void) | undefined
+
+/**
+ * Esc 关抽屉（规格 §10.3）。
+ *
+ * 监听在 `window` 上而不是某个元素上：抽屉是覆盖层，焦点可能在任何地方（甚至是刚点完的
+ * 下载按钮）。只在抽屉确实开着时才响应，避免把其它页面的 Esc 语义吃掉。
+ */
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && detail.value) closeDetail()
+}
 
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
   // 联动待处理列表只有在这里读一次，才能把「已确认/未确认」与顶栏角标对齐。
   if (!linkage.loaded) void linkage.load()
+  window.addEventListener('keydown', onWindowKeydown)
   unsubscribeProgress = window.events.onEventCenterDownloadProgress(
     (progress: EventDownloadProgress) => store.handleProgress(progress)
   )
@@ -173,15 +279,50 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
   unsubscribeProgress?.()
   unsubscribeProgress = undefined
 })
 
+/**
+ * 把当前筛选写回 localStorage 与地址栏。
+ *
+ * 两处都写：localStorage 管"下次打开还是这个视图"，地址栏管"这条链接发给别人也是这个视图"。
+ * 序列化用的是同一个函数（`serializeEventFilter`），所以两者不会分叉。
+ */
+function persistFilter(): void {
+  try {
+    window.localStorage.setItem(EVENT_FILTER_STORAGE_KEY, serializeEventFilter(filters))
+  } catch {
+    // 同 `setViewMode`：偏好存不下不影响使用。
+  }
+  void router.replace({ query: eventFilterToQuery(filters) })
+}
+
 // 与 `AlarmsView` 同一条取舍：改筛选就查，不额外要求点一次「查询」。
+//
+// **但关键字不重新查询**：搜索是在**已加载的这一页**里做的（`matchEventSearch`），它不改变
+// 查询参数。把 `search` 也算进来，每敲一个字就会去读一次设备 —— 相机的检测日志是一次 HTTP
+// 请求，那不是搜索该有的代价（而且它换不来更全的结果）。
+watch(
+  () => [
+    filters.deviceId,
+    filters.source,
+    filters.severity,
+    filters.from,
+    filters.to,
+    filters.ack
+  ],
+  () => {
+    void reload()
+  }
+)
+
+// 关键字只影响地址栏与 localStorage（刷新或把链接发出去之后，还是同一个搜索词）。
 watch(
   () => ({ ...filters }),
   () => {
-    void reload()
+    persistFilter()
   }
 )
 
@@ -195,9 +336,11 @@ function defaultPlayerId(entry: EventCenterEntry): string | null {
   return entry.recordingContainer === 'mp4' ? null : entry.recordingId
 }
 
-function openDetail(entry: EventCenterEntry): void {
-  detail.value = entry
-  playerRecordingId.value = defaultPlayerId(entry)
+/** 队列选中一条 → 打开详情。选中态留在队列上（关掉抽屉后还能从原处继续按 ↑/↓）。 */
+function openDetail(alert: AlertViewModel): void {
+  selectedId.value = alert.id
+  detail.value = alert.entry
+  playerRecordingId.value = defaultPlayerId(alert.entry)
   videoUrl.value = ''
   videoError.value = ''
 }
@@ -403,37 +546,26 @@ async function goToPage(offset: number): Promise<void> {
       {{ t('eventsUi.truncated', { cap: perSourceCap }) }}
     </p>
 
+    <EventKpiStrip
+      :kpis="kpis"
+      :loaded="alerts.length"
+      :total="store.total"
+      :severity="filters.severity"
+      :ack="filters.ack"
+      @filter="patchFilter"
+    />
+
     <section class="card">
       <div class="filter-bar">
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterDevice') }}</span>
-          <select v-model="filters.deviceId" class="select">
-            <option value="">{{ t('eventsUi.filterAllDevices') }}</option>
-            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-              {{ device.name }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterSource') }}</span>
-          <select v-model="filters.source" class="select">
-            <option value="">{{ t('eventsUi.filterAllSources') }}</option>
-            <option v-for="source in SOURCE_OPTIONS" :key="source" :value="source">
-              {{ eventSourceLabel(source) }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterSeverity') }}</span>
-          <select v-model="filters.severity" class="select">
-            <option value="">{{ t('eventsUi.filterAllSeverities') }}</option>
-            <option v-for="severity in SEVERITY_OPTIONS" :key="severity" :value="severity">
-              {{ eventSeverityLabel(severity) }}
-            </option>
-          </select>
-        </label>
+        <div class="field event-filters__search">
+          <input
+            v-model="filters.search"
+            class="input"
+            type="search"
+            :placeholder="t('eventsUi.searchPlaceholder')"
+            :aria-label="t('eventsUi.searchPlaceholder')"
+          />
+        </div>
 
         <label class="field">
           <span class="field-label">{{ t('eventsUi.filterFrom') }}</span>
@@ -445,24 +577,117 @@ async function goToPage(offset: number): Promise<void> {
           <input v-model="filters.to" class="input" type="datetime-local" />
         </label>
 
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterAck') }}</span>
-          <select v-model="filters.ack" class="select">
-            <option value="all">{{ t('eventsUi.ackAll') }}</option>
-            <option value="false">{{ t('eventsUi.ackUnacknowledged') }}</option>
-            <option value="true">{{ t('eventsUi.ackAcknowledged') }}</option>
-          </select>
-        </label>
+        <button
+          v-if="hasActiveFilters"
+          type="button"
+          class="btn event-filters__clear"
+          @click="clearFilters"
+        >
+          {{ t('eventsUi.clearFilters') }}
+        </button>
+      </div>
 
-        <button type="button" class="btn" @click="reset">{{ t('common.reset') }}</button>
+      <div class="filter-bar filter-bar--views">
+        <div class="field">
+          <span class="field-label">{{ t('eventsUi.savedViewTitle') }}</span>
+          <div class="btn-row">
+            <button
+              v-for="view in EVENT_SAVED_VIEWS"
+              :key="view.id"
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--primary': activeSavedViewId === view.id }"
+              :aria-pressed="activeSavedViewId === view.id"
+              @click="applySavedView(view)"
+            >
+              {{ t(view.labelKey) }}
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">{{ t('eventsUi.filterPanelToggle') }}</span>
+          <div class="btn-row">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :aria-pressed="filterPanelOpen"
+              data-action="filter-panel-toggle"
+              @click="filterPanelOpen = !filterPanelOpen"
+            >
+              {{ t('eventsUi.filterPanelTitle') }}
+            </button>
+            <button
+              v-for="mode in EVENT_VIEW_MODES"
+              :key="mode"
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--primary': viewMode === mode }"
+              :aria-pressed="viewMode === mode"
+              :data-view-mode="mode"
+              @click="setViewMode(mode)"
+            >
+              {{ t(`eventsUi.viewMode.${mode}`) }}
+            </button>
+          </div>
+        </div>
       </div>
     </section>
+
+    <div class="event-layout">
+      <EventFilterPanel
+        v-if="filterPanelOpen"
+        :filter="filters"
+        :counts="counts"
+        :devices="devices.devices"
+        :loaded="alerts.length"
+        @patch="patchFilter"
+      />
+
+      <div class="event-main">
+        <AlertQueue
+          :alerts="alerts"
+          :selected-id="selectedId"
+          :view-mode="viewMode"
+          :empty-title="emptyTitle"
+          @select="openDetail"
+        />
+
+        <div class="pager">
+          <span class="muted">{{ t('eventsUi.countSummary', { total: store.total }) }}</span>
+          <span v-if="searchActive" class="muted">
+            {{ t('eventsUi.searchScope', { loaded: allAlerts.length }) }}
+          </span>
+          <div class="btn-row">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="!canPrev"
+              @click="goToPage(page.offset - EVENT_PAGE_SIZE)"
+            >
+              {{ t('alarmsUi.prevPage') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="!canNext"
+              @click="goToPage(page.offset + EVENT_PAGE_SIZE)"
+            >
+              {{ t('alarmsUi.nextPage') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!--
       逐来源读况。相机离线时另外两路照样渲染，而这一块把「哪一路读不到、
       为什么」写在页面上——失败既不被吞掉，也不会让整页空白。
+
+      只在**有话说**时出现（某一路失败 / 被截断）：三路都正常时这块卡片只是三行绿字，
+      却占掉队列的第一屏；来源条数已经在左侧筛选面板里逐路给出。
     -->
-    <section class="card sources">
+    <section v-if="sourcesNeedAttention" class="card sources">
       <h3 class="section-title">{{ t('eventsUi.sourcesTitle') }}</h3>
       <div class="sources__grid">
         <div v-for="source in store.sources" :key="source.source" class="sources__item">
@@ -482,90 +707,6 @@ async function goToPage(offset: number): Promise<void> {
         </div>
       </div>
     </section>
-
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>{{ t('eventsUi.columnTime') }}</th>
-            <th>{{ t('eventsUi.columnDevice') }}</th>
-            <th>{{ t('eventsUi.columnSource') }}</th>
-            <th>{{ t('eventsUi.columnKind') }}</th>
-            <th>{{ t('eventsUi.columnSeverity') }}</th>
-            <th>{{ t('eventsUi.columnStatus') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="rows.length === 0">
-            <td colspan="6" class="table-empty">
-              <EmptyState :title="emptyTitle" />
-            </td>
-          </tr>
-          <tr
-            v-for="entry in rows"
-            :key="entry.id"
-            class="is-clickable"
-            :class="{ 'row--active': detail?.id === entry.id }"
-            @click="openDetail(entry)"
-          >
-            <td class="nowrap">
-              <span>{{ formatDateTime(entry.at) }}</span>
-              <span v-if="entry.atApproximate" class="chip chip--tiny">
-                {{ t('eventsUi.approximateBadge') }}
-              </span>
-            </td>
-            <td class="nowrap">
-              <button type="button" class="link-btn" @click.stop="openDevice(entry.deviceId)">
-                {{ devices.nameById(entry.deviceId) }}
-              </button>
-            </td>
-            <td class="nowrap">{{ eventSourceLabel(entry.source) }}</td>
-            <td>{{ eventKindLabel(entry.kind) }}</td>
-            <td>
-              <span class="badge" :class="`badge--severity-${entry.severity}`">
-                {{ eventSeverityLabel(entry.severity) }}
-              </span>
-            </td>
-            <td>
-              <span v-if="entry.source === 'deviceDetect'" class="muted">—</span>
-              <span
-                v-else
-                class="badge"
-                :class="entry.acknowledged ? 'badge--success' : 'badge--warning'"
-              >
-                {{
-                  entry.acknowledged
-                    ? t('eventsUi.ackAcknowledged')
-                    : t('eventsUi.ackUnacknowledged')
-                }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="pager">
-      <span class="muted">{{ t('eventsUi.countSummary', { total: store.total }) }}</span>
-      <div class="btn-row">
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="!canPrev"
-          @click="goToPage(page.offset - EVENT_PAGE_SIZE)"
-        >
-          {{ t('alarmsUi.prevPage') }}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="!canNext"
-          @click="goToPage(page.offset + EVENT_PAGE_SIZE)"
-        >
-          {{ t('alarmsUi.nextPage') }}
-        </button>
-      </div>
-    </div>
 
     <!-- 详情抽屉 -->
     <div v-if="detail" class="drawer-overlay" @click.self="closeDetail">
@@ -613,7 +754,11 @@ async function goToPage(offset: number): Promise<void> {
             </div>
             <div class="kv__item">
               <dt class="kv__label">{{ t('eventsUi.detailDevice') }}</dt>
-              <dd class="kv__value">{{ devices.nameById(detail.deviceId) }}</dd>
+              <dd class="kv__value">
+                <button type="button" class="link-btn" @click="openDevice(detail.deviceId)">
+                  {{ devices.nameById(detail.deviceId) }}
+                </button>
+              </dd>
             </div>
             <div class="kv__item">
               <dt class="kv__label">{{ t('eventsUi.detailSource') }}</dt>
@@ -862,6 +1007,33 @@ async function goToPage(offset: number): Promise<void> {
 </template>
 
 <style scoped>
+/*
+ * 三栏：左侧筛选面板（216，规格 §4.1）| 告警队列 | （详情抽屉是覆盖层，不占列）。
+ * 面板收起来时 `1fr` 那一列自动铺满 —— 不需要第二套布局。
+ */
+.event-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.event-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.event-filters__search {
+  flex: 1 1 260px;
+  max-width: 320px;
+}
+
+.event-filters__clear {
+  align-self: flex-end;
+}
+
 .filter-note {
   margin-top: var(--space-2);
   font-size: 11.5px;
@@ -886,31 +1058,6 @@ async function goToPage(offset: number): Promise<void> {
 
 .sources__name {
   font-weight: 600;
-}
-
-.chip--tiny {
-  font-size: 10.5px;
-  padding: 1px 5px;
-}
-
-.badge--severity-unknown {
-  background: rgba(107, 114, 128, 0.12);
-  color: #4b5563;
-}
-
-.badge--severity-info {
-  background: rgba(56, 189, 248, 0.14);
-  color: #0369a1;
-}
-
-.badge--severity-warning {
-  background: rgba(245, 158, 11, 0.16);
-  color: #92400e;
-}
-
-.badge--severity-critical {
-  background: rgba(239, 68, 68, 0.16);
-  color: #991b1b;
 }
 
 .badge--action-success {
@@ -940,10 +1087,6 @@ async function goToPage(offset: number): Promise<void> {
 .link-btn:hover {
   color: var(--color-accent);
   text-decoration: underline;
-}
-
-.row--active {
-  background: var(--color-accent-soft);
 }
 
 .pager {

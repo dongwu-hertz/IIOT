@@ -1438,6 +1438,22 @@ async function run() {
     'const firstRow = rows[0];' +
     'const ipButton = firstRow ? firstRow.querySelector("button.devices-table__ip") : null;' +
     'out.firstIp = text(ipButton);' +
+    /*
+     * 回到设备管理页之后**等表出现**，而不是等一个固定毫秒数。
+     *
+     * 为什么（2026-09-17 第 9 批实测踩到）：从实时监测页切回设备管理页时，设备管理页会
+     * 重新读一次设备列表（含逐台探活），忙的时候 900ms 内表格还没进 DOM —— 于是下面两次
+     * 查找都拿到 null，报出来的是"点配置没进详情页"与"单击 IP 把页面带走了"两条**假失败**
+     * （真正的现象是"我还没看到表格"）。探针自己的时间假设也要能被质疑，见 15.40.3。
+     */
+    'const waitForRow = async () => {' +
+    '  for (let i = 0; i < 24; i += 1) {' +
+    '    const row = document.querySelector("table.devices-table tbody tr");' +
+    '    if (row) return row;' +
+    '    await wait(250);' +
+    '  }' +
+    '  return null;' +
+    '};' +
     // ③ 查看：进实时监测页，并把设备 id 带在查询串上。
     'const eye = firstRow ? firstRow.querySelector("[data-action=device-monitor]") : null;' +
     'if (eye) { eye.click(); await wait(900); }' +
@@ -1449,14 +1465,15 @@ async function run() {
     '  channelTabs: document.querySelectorAll(".channel-tabs").length,' +
     '  trendPanel: document.querySelectorAll(".trend-panel").length };' +
     // ③ 配置：进这台设备的详情页。
-    'location.hash = "#/devices"; await wait(900);' +
-    'const row2 = document.querySelector("table.devices-table tbody tr");' +
+    'location.hash = "#/devices";' +
+    'const row2 = await waitForRow();' +
     'const gear = row2 ? row2.querySelector("[data-action=device-configure]") : null;' +
-    'if (gear) { gear.click(); await wait(900); }' +
+    'if (gear) { gear.click(); await wait(1200); }' +
     'out.afterConfigure = location.hash;' +
     // ④ 单击 IP：什么都不许发生（不跳转、不选中别的东西）。
-    'location.hash = "#/devices"; await wait(900);' +
-    'const ip2 = document.querySelector("table.devices-table button.devices-table__ip");' +
+    'location.hash = "#/devices";' +
+    'const row3 = await waitForRow();' +
+    'const ip2 = row3 ? row3.querySelector("button.devices-table__ip") : null;' +
     'if (ip2) {' +
     '  ip2.click();' +
     '  await wait(600);' +
@@ -1810,7 +1827,17 @@ async function run() {
    *   2. **所有**页面都没有页面内标题（外层框架的标题栏已经写了）；
    *   3. 告警图标点开是那张面板：没有告警时写「当前无告警」，角标与列表同源。
    */
-  const devicesChrome = await layout('/devices', '(() => {' +
+  const devicesChrome = await layout('/devices', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    /*
+     * 等拓扑树出现再断言，而不是"切过来 1.2 秒后一定已经渲染好了"。
+     *
+     * 2026-09-17 第 9 批实测：机器忙的时候（操作员库里 200 条告警 + 每 10 秒一轮设备探活）
+     * 这一页 1.2 秒内还没画出树，于是"找不到「添加设备」按钮"被报成产品问题 —— 而紧接着
+     * 的 addDialog 探针（同一页，晚一两秒）就找到了那个按钮。**同一个东西一次找不到、
+     * 一次找得到，说明问题在探针的等待上，不在界面上。**
+     */
+    'for (let i = 0; i < 24 && !document.querySelector(".device-tree"); i += 1) await wait(250);' +
     'const add = [...document.querySelectorAll("button")]' +
     '  .find((b) => b.textContent.trim().includes("添加设备"));' +
     'const tree = document.querySelector(".device-tree");' +
@@ -2576,6 +2603,248 @@ async function run() {
     }
   } else {
     problems.push('一次性 profile 里找不到相机设备，无法验证相机页签：' + JSON.stringify(cameraList))
+  }
+
+  /**
+   * 事件中心（业主 2026-09-17 规格 Phase 3）：KPI 条 / 筛选面板 / 告警队列 / 抽屉 / Esc。
+   *
+   * 这一条是**只读**的（点一行、点 KPI 都只读库与设备），所以排在下面那些写操作之前。
+   *
+   * 有几个断言只有在**队列真的有行**时才成立（行高、点开抽屉、Esc）。没有行时不报"问题"
+   * 也不假装通过：日志里明确写「没有验证」——操作员库里某个时段没有事件是正常状态，
+   * 把它报成失败会训练出"报告里的红灯不用看"的习惯。
+   */
+  const eventsCenter = await layout('/events', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
+    // 首屏要等一次全量查询（相机 HTTP + 声纹 SQLite + 联动内存），所以等的是 KPI 条出现。
+    'for (let i = 0; i < 60 && !document.querySelector(".kpi-strip"); i += 1) await sleep(500);' +
+    /*
+     * 每一步都往 `window` 上留一个进度标记。
+     *
+     * 为什么（2026-09-17 实测）：这一段探针**挂住过一次**（180 秒没有返回，而主进程日志
+     * 一直在动），超时后除了"超时"什么都看不出来 —— 是页面结构没渲染、还是点 KPI 之后
+     * 卡住，无从判断。有了这个标记，超时时能直接报"卡在哪一步"。
+     */
+    'window.__eventsProbeStep = "structure";' +
+    'const tiles = [...document.querySelectorAll(".kpi-strip__tile")];' +
+    'const tileLabels = tiles.map((t) => text(t.querySelector(".metric__label")));' +
+    'const tileValues = tiles.map((t) => text(t.querySelector(".metric__value")));' +
+    'const scope = text(document.querySelector(".kpi-strip__scope"));' +
+    'const searchBox = document.querySelector(".event-filters__search input");' +
+    'const panel = document.querySelector(".filter-panel");' +
+    'const panelWidth = panel ? Math.round(panel.getBoundingClientRect().width) : 0;' +
+    'const groups = [...document.querySelectorAll(".filter-panel__group .field-label")].map(text);' +
+    'const optionCount = document.querySelectorAll(".filter-panel__option").length;' +
+    'const panelScope = text(document.querySelector(".filter-panel__scope"));' +
+    'const viewsRow = [...document.querySelectorAll(".filter-bar--views .btn-row")][0];' +
+    'const savedLabels = viewsRow ? [...viewsRow.querySelectorAll("button")].map(text) : [];' +
+    'const modeButtons = [...document.querySelectorAll("[data-view-mode]")];' +
+    'const modeLabels = modeButtons.map(text);' +
+    'const oldTable = document.querySelector("table.table");' +
+    'const summary = text(document.querySelector(".pager .muted"));' +
+    'window.__eventsProbeStep = "modes";' +
+    'const heights = {};' +
+    'const setMode = async (mode) => {' +
+    '  const button = document.querySelector(`[data-view-mode="${mode}"]`);' +
+    '  if (button) button.click();' +
+    '  await sleep(400);' +
+    '  const rows = [...document.querySelectorAll(".alert-row")];' +
+    '  heights[mode] = rows.length' +
+    '    ? getComputedStyle(rows[0]).getPropertyValue("--event-row-mode-height").trim()' +
+    '    : null;' +
+    '  return rows.length;' +
+    '};' +
+    'const rowCounts = {};' +
+    'rowCounts.compact = await setMode("compact");' +
+    'rowCounts.standard = await setMode("standard");' +
+    'rowCounts.evidence = await setMode("evidence");' +
+    'let drawerOpened = false;' +
+    'let drawerClosedByEsc = false;' +
+    'window.__eventsProbeStep = "drawer";' +
+    'const firstRow = document.querySelector(".alert-row");' +
+    'if (firstRow) {' +
+    '  firstRow.click();' +
+    '  await sleep(600);' +
+    '  drawerOpened = !!document.querySelector(".drawer");' +
+    '  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));' +
+    '  await sleep(300);' +
+    '  drawerClosedByEsc = !document.querySelector(".drawer");' +
+    '}' +
+    // KPI → 筛选：点「严重」那一格（这一条查询只读声纹 SQLite，不会去连相机）。
+    'window.__eventsProbeStep = "kpi";' +
+    'const criticalTile = tiles[0];' +
+    'if (criticalTile && criticalTile.tagName === "BUTTON") criticalTile.click();' +
+    'await sleep(2000);' +
+    'const hashAfterKpi = location.hash;' +
+    // 用**同一批**格子里的那一个（`tiles`），而不是重新查一次 DOM：重查拿到 undefined 时
+    // `.getAttribute` 会同步抛，而同步抛在 `executeJavaScript` 里就是"探针挂住"。
+    'const pressedAfterKpi = tiles[0] ? tiles[0].getAttribute("aria-pressed") : "NO_TILE";' +
+    'const activeOptions = [...document.querySelectorAll(".filter-panel__option--active")].map(text);' +
+    /*
+     * 记忆的**读回**：界面往 localStorage 写了一份筛选，就从 localStorage 把它读回来 ——
+     * "写了"与"写对了"是两件事（工程规则：每个写操作写完要读回验证）。
+     */
+    'let storedFilter = null;' +
+    'try { storedFilter = window.localStorage.getItem("hertzinno.eventCenter.filters"); } catch (error) { storedFilter = "READ_FAILED"; }' +
+    /*
+     * 版面几何。结构对了不等于版面没坏：三栏挤在一起、出现横向滚动条、KPI 被挤成两行，
+     * 都是"控件都在、断言全绿"却肉眼一看就废的那种。这几条量的是**关系**（谁在谁左边、
+     * 有没有溢出），不是绝对值 —— 绝对值（216px 之类）在前面已经量过了。
+     */
+    'const rect = (selector) => {' +
+    '  const node = document.querySelector(selector);' +
+    '  return node ? node.getBoundingClientRect() : null;' +
+    '};' +
+    'const panelRect = rect(".filter-panel");' +
+    'const queueRect = rect(".alert-queue");' +
+    'const stripRect = rect(".kpi-strip");' +
+    'const overflowX = document.documentElement.scrollWidth - window.innerWidth;' +
+    'const viewport = window.innerWidth + "x" + window.innerHeight;' +
+    'window.__eventsProbeStep = "done";' +
+    'return JSON.stringify({' +
+    '  tileLabels, tileValues, scope, hasSearchBox: !!searchBox, panelWidth, groups, optionCount,' +
+    '  panelScope, savedLabels, modeLabels, oldTable: !!oldTable, summary, rowCounts, heights,' +
+    '  drawerOpened, drawerClosedByEsc, hashAfterKpi, pressedAfterKpi, activeOptions, storedFilter,' +
+    '  viewport, overflowX,' +
+    '  panelRight: panelRect ? Math.round(panelRect.right) : null,' +
+    '  queueLeft: queueRect ? Math.round(queueRect.left) : null,' +
+    '  queueWidth: queueRect ? Math.round(queueRect.width) : null,' +
+    '  stripHeight: stripRect ? Math.round(stripRect.height) : null' +
+    '});' +
+    '})()', 90_000)
+  log('events center : ' + JSON.stringify(eventsCenter))
+  /*
+   * 探针超时时**只报超时，不编造别的结论**。
+   *
+   * 为什么单独写这一支（2026-09-17 实测踩到）：`layout()` 超时返回 `{probeTimeout:true}`，
+   * 而下面每一条断言都要读字段 —— 第一版直接读 `scope.includes(...)`，于是整个 driver 抛
+   * `TypeError` 退出，**连报告都没打印出来**（一次运行白跑，还看不出是超时）。超时本身已经是
+   * 一条 problems（`layout()` 里推的），这一段就不该再添 12 条"缺字段"的噪声。
+   *
+   * 卡在哪一步：页面脚本每一步都往 `window.__eventsProbeStep` 写过标记（见上面的注释），
+   * 所以这里再问一句就能报出来 —— 前提是渲染进程还能应答，问不到就写"读不到"。
+   */
+  if (eventsCenter.probeTimeout === true) {
+    const step = await Promise.race([
+      win.webContents
+        .executeJavaScript('(window.__eventsProbeStep || "none")')
+        .catch(() => 'unreadable'),
+      sleep(5000).then(() => 'unreadable')
+    ])
+    log('events center : 这一段**超时**，卡在：' + step)
+    problems.push('事件中心探针超时（卡在 ' + step + '）—— 这一段没有任何结论')
+  } else {
+    for (const label of ['严重', '高', '未确认', '平均确认耗时']) {
+      if (!eventsCenter.tileLabels.includes(label)) {
+        problems.push('KPI 条缺少「' + label + '」那一格：' + JSON.stringify(eventsCenter.tileLabels))
+      }
+    }
+    if (eventsCenter.tileLabels.length !== 4) {
+      problems.push(
+        'KPI 条不是四格（「聚合事件」属于 Phase 6，画出来就是一个恒为 0 的假数字）：' +
+          JSON.stringify(eventsCenter.tileLabels)
+      )
+    }
+    // 作用域：数字只统计已加载的那一页，不说出来就会被读成全量。
+    if (!eventsCenter.scope.includes('已加载')) {
+      problems.push('KPI 条没有印出统计作用域：' + JSON.stringify(eventsCenter.scope))
+    }
+    // 平均确认耗时：三路来源都没有确认时刻，显示 0 会被读成"确认得飞快"。
+    if (eventsCenter.tileValues[3] !== '—') {
+      problems.push(
+        '平均确认耗时不是「—」（来源里没有确认时刻）：' + JSON.stringify(eventsCenter.tileValues)
+      )
+    }
+    if (!eventsCenter.hasSearchBox) {
+      problems.push('筛选栏里没有关键字搜索框')
+    }
+    if (eventsCenter.panelWidth !== 216) {
+      problems.push('筛选面板宽度不是规格的 216px：' + eventsCenter.panelWidth)
+    }
+    for (const group of ['等级', '来源', '确认状态', '设备']) {
+      if (!eventsCenter.groups.includes(group)) {
+        problems.push('筛选面板没有「' + group + '」这一组：' + JSON.stringify(eventsCenter.groups))
+      }
+    }
+    // 每组至少有一个选项 + 一个「全部」：4 组 + 严重3+未知1 + 来源3 + 确认2 + 设备3 = 16 起。
+    if (eventsCenter.optionCount < 12) {
+      problems.push('筛选面板的选项太少（计数或分组没渲染）：' + eventsCenter.optionCount)
+    }
+    if (!eventsCenter.panelScope.includes('已加载')) {
+      problems.push('筛选面板没有说出计数的作用域：' + JSON.stringify(eventsCenter.panelScope))
+    }
+    if (eventsCenter.savedLabels.length !== 6) {
+      problems.push('内置视图不是六个：' + JSON.stringify(eventsCenter.savedLabels))
+    }
+    if (eventsCenter.modeLabels.length !== 3) {
+      problems.push('视图模式不是三档：' + JSON.stringify(eventsCenter.modeLabels))
+    }
+    if (eventsCenter.oldTable) {
+      problems.push('事件中心还在渲染旧的事件表格（告警队列已经取代它）')
+    }
+    if (eventsCenter.rowCounts.standard > 0) {
+      if (eventsCenter.heights.compact !== '56px') {
+        problems.push('紧凑模式的行高不是 56px：' + JSON.stringify(eventsCenter.heights))
+      }
+      if (eventsCenter.heights.standard !== '88px') {
+        problems.push('标准模式的行高不是规格的 88px：' + JSON.stringify(eventsCenter.heights))
+      }
+      if (eventsCenter.heights.evidence !== '104px') {
+        problems.push('证据模式的行高不是规格的 104px：' + JSON.stringify(eventsCenter.heights))
+      }
+      if (!eventsCenter.drawerOpened) {
+        problems.push('点告警队列的一行没有打开详情抽屉')
+      }
+      if (!eventsCenter.drawerClosedByEsc) {
+        problems.push('Esc 没有关掉详情抽屉')
+      }
+    } else {
+      log(
+        'events center : 这一屏没有告警行（' + JSON.stringify(eventsCenter.summary) +
+          '）——行高 / 点开抽屉 / Esc 三项**没有验证**'
+      )
+    }
+    if (!eventsCenter.hashAfterKpi.includes('severity=critical')) {
+      problems.push('点 KPI「严重」没有把筛选写进地址栏：' + eventsCenter.hashAfterKpi)
+    }
+    if (eventsCenter.pressedAfterKpi !== 'true') {
+      problems.push('点 KPI「严重」之后那一格没有标成按下：' + eventsCenter.pressedAfterKpi)
+    }
+    if (!eventsCenter.activeOptions.some((option) => option.startsWith('严重'))) {
+      problems.push(
+        '点 KPI「严重」没有同步到左侧筛选面板：' + JSON.stringify(eventsCenter.activeOptions)
+      )
+    }
+    // 写进 localStorage 的那一份要能读回来（"写了"与"写对了"是两件事）。
+    if (
+      typeof eventsCenter.storedFilter !== 'string' ||
+      !eventsCenter.storedFilter.includes('"severity":"critical"')
+    ) {
+      problems.push(
+        '筛选没有（或写错了）记进 localStorage，读回来是：' + JSON.stringify(eventsCenter.storedFilter)
+      )
+    }
+    // 版面关系：横向不溢出、面板在队列左边不重叠、KPI 条一行放得下。
+    if (eventsCenter.overflowX > 2) {
+      problems.push(
+        '事件中心出现了横向溢出：' + eventsCenter.overflowX + 'px（视口 ' + eventsCenter.viewport + '）'
+      )
+    }
+    if (
+      eventsCenter.panelRight !== null &&
+      eventsCenter.queueLeft !== null &&
+      eventsCenter.queueLeft < eventsCenter.panelRight
+    ) {
+      problems.push(
+        '筛选面板与告警队列重叠：面板右缘 ' + eventsCenter.panelRight + '，队列左缘 ' + eventsCenter.queueLeft
+      )
+    }
+    if (eventsCenter.stripHeight !== null && eventsCenter.stripHeight > 160) {
+      problems.push(
+        'KPI 条在 ' + eventsCenter.viewport + ' 下被挤成了多行（高 ' + eventsCenter.stripHeight + 'px）'
+      )
+    }
   }
 
   /**
