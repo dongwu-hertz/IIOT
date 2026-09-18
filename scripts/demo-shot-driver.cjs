@@ -3920,9 +3920,18 @@ async function run() {
     'const counts = {};' +
     'for (const name of deviceNames) if (name) counts[name] = (counts[name] || 0) + 1;' +
     'const repeated = Object.keys(counts).find((name) => counts[name] >= 2) || null;' +
+    /*
+     * **优先**挑一台"恰好 2 条"的设备：只有这时才能量到"阈值可调"这件事本身
+     * （阈值 2 给建议、调到 10 就不给）。没有这种设备时退回"≥2 条"的那种，
+     * 阈值翻转那一段如实记成"没量到"。
+     */
+    'const exactlyTwo = Object.keys(counts).find((name) => counts[name] === 2) || null;' +
+    'const picked = exactlyTwo || repeated;' +
     'out.queueRows = allRows.length;' +
     'out.repeatedDevice = repeated;' +
-    'const row = repeated ? allRows[deviceNames.indexOf(repeated)] : allRows[0];' +
+    'out.pickedDevice = picked;' +
+    'out.pickedDeviceRows = picked ? counts[picked] : 0;' +
+    'const row = picked ? allRows[deviceNames.indexOf(picked)] : allRows[0];' +
     'if (!row) {' +
     /*
      * 空队列时**直接问一次主进程**：这样能分开两种完全不同的故障 ——
@@ -3994,6 +4003,39 @@ async function run() {
     'if (relatedTab) { relatedTab.click(); await sleep(600); }' +
     'out.incidentPanelPresent = !!document.querySelector(".drawer [data-panel=incident]");' +
     'out.incidentSuggestion = !!document.querySelector(".drawer [data-incident-suggestion]");' +
+    /*
+     * 建议阈值是**可调的**（业主 2026-09-18）：量三件事 —— 下拉里有几个档位、
+     * 改了会不会写回本机（localStorage）、以及"调高到不给建议、调回来又给"。
+     * 最后那一条只在"同设备恰好 2 条"时才成立（阈值 2 给、10 不给），
+     * 数据形状不允许时如实记"没量到"。
+     */
+    'const thresholdSelect = document.querySelector("[data-field=incident-threshold]");' +
+    'out.thresholdOptions = thresholdSelect ? thresholdSelect.options.length : 0;' +
+    'out.thresholdBefore = thresholdSelect ? thresholdSelect.value : null;' +
+    'if (thresholdSelect && out.pickedDeviceRows === 2) {' +
+    '  out.thresholdFlipTested = true;' +
+    '  thresholdSelect.value = "10";' +
+    '  thresholdSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(800);' +
+    '  out.storedThreshold = window.localStorage.getItem("hertzinno.eventCenter.incidentThreshold");' +
+    '  out.cardAtHighThreshold = !!document.querySelector(".drawer [data-incident-suggestion]");' +
+    '  out.belowNoticeShown = !!document.querySelector(".drawer [data-incident-below-threshold]");' +
+    '  thresholdSelect.value = out.thresholdBefore || "2";' +
+    '  thresholdSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(800);' +
+    '  out.cardAtLowThreshold = !!document.querySelector(".drawer [data-incident-suggestion]");' +
+    '  out.thresholdRestored = window.localStorage.getItem("hertzinno.eventCenter.incidentThreshold");' +
+    '} else if (thresholdSelect) {' +
+    '  out.thresholdFlipTested = false;' +
+    '  thresholdSelect.value = "10";' +
+    '  thresholdSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(600);' +
+    '  out.storedThreshold = window.localStorage.getItem("hertzinno.eventCenter.incidentThreshold");' +
+    '  thresholdSelect.value = out.thresholdBefore || "2";' +
+    '  thresholdSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  await sleep(600);' +
+    '  out.thresholdRestored = window.localStorage.getItem("hertzinno.eventCenter.incidentThreshold");' +
+    '}' +
     'const linkedBefore = await window.api.eventCenter.incidentsForAlert(out.entryId);' +
     'out.incidentsBefore = linkedBefore && linkedBefore.success ? linkedBefore.data.length : -1;' +
     'const createBtn = document.querySelector(".drawer [data-action=incident-create]");' +
@@ -4031,6 +4073,25 @@ async function run() {
     'const linkedFinal = await window.api.eventCenter.incidentsForAlert(out.entryId);' +
     'out.incidentsFinal = linkedFinal && linkedFinal.success ? linkedFinal.data.length : -1;' +
     'out.incidentRowsAfterUnlink = document.querySelectorAll(".drawer [data-incident-linked] .incident-row").length;' +
+    /*
+     * 「未到阈值」那句话：切到一条**独占一台设备**的告警（同设备其它告警 0 条 < 阈值 2），
+     * 这一段里应当没有建议卡、而是那一句说明。空白与"软件没做这件事"看起来一模一样，
+     * 所以这一条也要量（业主对界面的硬要求）。
+     */
+    'const singleIndex = deviceNames.findIndex((name) => name && counts[name] === 1);' +
+    'out.singleDeviceRow = singleIndex >= 0;' +
+    'if (singleIndex >= 0) {' +
+    '  allRows[singleIndex].click();' +
+    '  await sleep(1200);' +
+    '  const relatedTab2 = document.querySelector(".drawer [data-tab=related]");' +
+    '  if (relatedTab2) { relatedTab2.click(); await sleep(500); }' +
+    '  out.cardForSingleDevice = !!document.querySelector(".drawer [data-incident-suggestion]");' +
+    '  out.belowNoticeForSingle = !!document.querySelector(".drawer [data-incident-below-threshold]");' +
+    '  out.belowNoticeText = (() => {' +
+    '    const el = document.querySelector(".drawer [data-incident-below-threshold]");' +
+    '    return el ? (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80) : null;' +
+    '  })();' +
+    '}' +
     // 恢复聚合窗口（见上面：这一段顺手改过它）。
     'const restoreSelect = document.querySelector("[data-field=group-window]");' +
     'if (restoreSelect && out.groupWindowBefore !== null) {' +
@@ -4087,6 +4148,61 @@ async function run() {
         '（建议卡没量到：这一页 ' + eventsHandling.queueRows +
           ' 行里没有两台以上同设备的告警 —— 不是缺陷，是这一次的数据形状）'
       )
+    }
+    // 建议阈值可调（业主 2026-09-18）：下拉在、写回本机、调高调低真的改变建议。
+    if (!(eventsHandling.thresholdOptions >= 2)) {
+      problems.push(
+        '建议阈值不是一个可选的下拉（选项 ' + eventsHandling.thresholdOptions + ' 个）：' +
+          JSON.stringify(eventsHandling)
+      )
+    }
+    if (eventsHandling.storedThreshold !== '10') {
+      problems.push(
+        '改了建议阈值没有写回本机（localStorage 里是 ' +
+          JSON.stringify(eventsHandling.storedThreshold) + '）'
+      )
+    }
+    if (eventsHandling.thresholdRestored !== eventsHandling.thresholdBefore) {
+      problems.push(
+        '阈值没有恢复到原值：原来 ' + JSON.stringify(eventsHandling.thresholdBefore) +
+          '，现在 ' + JSON.stringify(eventsHandling.thresholdRestored)
+      )
+    }
+    if (eventsHandling.thresholdFlipTested) {
+      if (eventsHandling.cardAtHighThreshold) {
+        problems.push('阈值调到 10 之后建议卡还在（阈值没生效）：' + JSON.stringify(eventsHandling))
+      }
+      if (!eventsHandling.belowNoticeShown) {
+        problems.push('没给建议时也没有说一句"未到阈值"（那一段会是空白）')
+      }
+      if (!eventsHandling.cardAtLowThreshold) {
+        problems.push('阈值调回 2 之后建议卡没有回来：' + JSON.stringify(eventsHandling))
+      }
+    } else {
+      log(
+        '（阈值翻转没量到：这一页没有"同设备恰好 2 条"的设备（挑中的是 ' +
+          JSON.stringify(eventsHandling.pickedDevice) + '，' + eventsHandling.pickedDeviceRows +
+          ' 条）—— 不是缺陷，是这一次的数据形状）'
+      )
+    }
+    // 「未到阈值」那一句：独占一台设备的告警上，不给建议卡、而是说一句为什么。
+    if (!eventsHandling.singleDeviceRow) {
+      log('（"未到阈值"那句没量到：这一页没有独占一台设备的告警 —— 不是缺陷，是数据形状）')
+    } else {
+      if (eventsHandling.cardForSingleDevice) {
+        problems.push(
+          '一条独占一台设备的告警也弹了建议卡（阈值 2 时它不该有建议）：' +
+            JSON.stringify(eventsHandling)
+        )
+      }
+      if (!eventsHandling.belowNoticeForSingle) {
+        problems.push('没给建议时那一段是空白的（没有说"未到阈值"）：' + JSON.stringify(eventsHandling))
+      }
+      if (!String(eventsHandling.belowNoticeText || '').includes('阈值')) {
+        problems.push(
+          '"未到阈值"那句没有说清阈值这件事：' + JSON.stringify(eventsHandling.belowNoticeText)
+        )
+      }
     }
     if (!eventsHandling.incidentDialogOpen) {
       problems.push('点 [创建 Incident] 没有打开对话框：' + JSON.stringify(eventsHandling))

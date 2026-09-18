@@ -2558,6 +2558,9 @@ export const es: MessageSchema = {
      * (§2.1) y ningún sinónimo en español es igual de preciso y sin ambigüedad.
      */
     incidentTitle: 'Incidentes',
+    incidentThreshold: 'Umbral de sugerencia',
+    incidentThresholdOption: '{count} alertas',
+    incidentBelowThreshold: 'Hay otras {related} alertas en el mismo dispositivo; no se alcanza el umbral ({count}), así que no hay sugerencia.',
     incidentNone: 'Esta alerta todavía no está vinculada a ningún incidente.',
     incidentAlertCount: '{count} alerta(s) vinculada(s)',
     incidentUnlink: 'Desvincular',

@@ -963,6 +963,53 @@ describe('Phase 6 后半 · Incident：人工创建 + 手动关联（规格 §14
     )
     assert.ok(dialog.includes('INCIDENT_TITLE_MAX_LENGTH'), '对话框没有引用领域上限')
   })
+
+  /**
+   * 建议阈值**可调**（业主 2026-09-18：「可以设置为可调整的」）。
+   *
+   * 规格 §13.2 只说"当相关性达到阈值时"，阈值本身手册未说明 —— 所以它必须由操作员定，
+   * 而且要在**看得见建议的那一段里**能改（放到系统设置里就成了"要改一个眼前的东西先走开"）。
+   */
+  it('建议阈值就地可调：离散档位、跟着本机记住、永远可见', () => {
+    assert.ok(
+      eventView.includes('INCIDENT_THRESHOLD_CHOICES'),
+      '下拉没有按常量渲染档位（写死几个数字就会与领域分叉）'
+    )
+    assert.ok(
+      eventView.includes('data-field="incident-threshold"'),
+      '抽屉里没有阈值下拉（探针要它）'
+    )
+    assert.ok(
+      eventView.includes("'hertzinno.eventCenter.incidentThreshold'"),
+      '阈值没有沿用事件中心那套本机偏好键'
+    )
+    assert.ok(
+      /localStorage\.setItem\(INCIDENT_THRESHOLD_STORAGE_KEY, String\(next\)\)/.test(eventView),
+      '改了阈值没有写回本机'
+    )
+    // 阈值传给判据（而不是判据自己写死 2）。
+    assert.match(
+      stripComments(eventView),
+      /incidentSuggestion\(\{ id: detail\.value\.id \}, related\.value, incidentThreshold\.value\)/,
+      '建议判据没有拿到界面上的阈值'
+    )
+    /*
+     * 下拉必须在 `v-if="incidentSuggested"` **之外**：低于阈值时建议卡不画，
+     * 而那一刻恰恰最需要能把阈值调下来。
+     */
+    const section = eventView.slice(
+      eventView.indexOf('data-panel="incident"'),
+      eventView.indexOf('data-incident-linked')
+    )
+    assert.ok(section.includes('data-field="incident-threshold"'), '阈值下拉不在 Incident 那一段里')
+    assert.ok(
+      eventView.includes('data-incident-below-threshold'),
+      '没给建议时没有说一句"未到阈值"（那一段会是一片空白）'
+    )
+    // 领域那一份要能解析磁盘上的值（坏值回落），这一条是"读过一次就不会崩"的保证。
+    assert.ok(domain.includes('export function parseIncidentThreshold'), '没有解析函数')
+    assert.ok(domain.includes('DEFAULT_INCIDENT_THRESHOLD'), '没有默认档常量')
+  })
 })
 
 

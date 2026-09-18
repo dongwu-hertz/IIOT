@@ -2834,6 +2834,13 @@ export const zhCN = {
      * 「事件」撞车，翻成"故障单"则加了规格没有的含义。
      */
     incidentTitle: 'Incident 关联',
+    /*
+     * 建议阈值就地可调（业主 2026-09-18：「可以设置为可调整的」）。规格 §13.2 只说
+     * "当相关性达到阈值时"，阈值本身手册未说明 —— 所以由操作员在这几个离散档位里选。
+     */
+    incidentThreshold: '建议阈值',
+    incidentThresholdOption: '{count} 条',
+    incidentBelowThreshold: '同设备上还有 {related} 条其它告警，未到阈值（{count} 条），因此没有给建议。',
     incidentNone: '这一条还没有关联任何 Incident。',
     incidentAlertCount: '{count} 条关联告警',
     incidentUnlink: '解除关联',

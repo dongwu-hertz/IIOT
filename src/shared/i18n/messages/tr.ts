@@ -2559,6 +2559,9 @@ export const tr: MessageSchema = {
      * (§2.1) ve Türkçede hem doğru hem de belirsizlik yaratmayan bir karşılık yok.
      */
     incidentTitle: 'Incident kayıtları',
+    incidentThreshold: 'Öneri eşiği',
+    incidentThresholdOption: '{count} alarm',
+    incidentBelowThreshold: 'Aynı cihazda {related} alarm daha var; eşiğe ({count}) ulaşılmadığı için öneri gösterilmiyor.',
     incidentNone: 'Bu alarm henüz bir incident kaydına bağlı değil.',
     incidentAlertCount: '{count} bağlı alarm',
     incidentUnlink: 'Bağlantıyı kaldır',

@@ -75,11 +75,14 @@ import type {
 } from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
 import {
+  DEFAULT_INCIDENT_THRESHOLD,
+  INCIDENT_THRESHOLD_CHOICES,
   incidentSuggestion,
   incidentSuggestedTitleParams,
+  parseIncidentThreshold,
   sortIncidentsDesc
 } from '@shared/domain/incident'
-import type { IncidentView } from '@shared/domain/incident'
+import type { IncidentThreshold, IncidentView } from '@shared/domain/incident'
 import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
 import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
@@ -187,9 +190,40 @@ const videoBusy = ref(false)
 const incidentOpen = ref(false)
 const incidentError = ref('')
 
+/**
+ * 建议卡的阈值（**可调**，业主 2026-09-18：「可以设置为可调整的」）。
+ *
+ * 与事件中心的其它偏好（视图模式 / 抽屉宽度 / 筛选）同一套：读一次、改了就写回本机。
+ * 规格 §13.2 只说"当相关性达到阈值时"，**阈值本身手册未说明** —— 所以它由操作员定，
+ * 默认档与可选档写在 `@shared/domain/incident` 里（离散档位，不是一个自由输入框）。
+ */
+const INCIDENT_THRESHOLD_STORAGE_KEY = 'hertzinno.eventCenter.incidentThreshold'
+
+function readInitialIncidentThreshold(): IncidentThreshold {
+  try {
+    return parseIncidentThreshold(window.localStorage.getItem(INCIDENT_THRESHOLD_STORAGE_KEY))
+  } catch {
+    return DEFAULT_INCIDENT_THRESHOLD
+  }
+}
+
+const incidentThreshold = ref<IncidentThreshold>(readInitialIncidentThreshold())
+
+function setIncidentThreshold(value: string | number): void {
+  const next = parseIncidentThreshold(value)
+  incidentThreshold.value = next
+  try {
+    window.localStorage.setItem(INCIDENT_THRESHOLD_STORAGE_KEY, String(next))
+  } catch {
+    // 记不住偏好不该让这次调整本身失败（与视图模式/抽屉宽度同一条规矩）。
+  }
+}
+
 /** 这一条 Alert 的建议（够阈值才有）。判据只有 `incidentSuggestion()` 一处。 */
 const incidentSuggested = computed(() =>
-  detail.value ? incidentSuggestion({ id: detail.value.id }, related.value) : undefined
+  detail.value
+    ? incidentSuggestion({ id: detail.value.id }, related.value, incidentThreshold.value)
+    : undefined
 )
 
 /** 已关联的 Incident（新的在前）。读失败时保留上一次的列表，不清空。 */
@@ -1180,7 +1214,28 @@ async function goToPage(offset: number): Promise<void> {
           已关联的列出来（可解除），够阈值时给一张**建议卡**（不自动合并）。
         -->
         <section class="drawer__section drawer__section--first" data-panel="incident">
-          <h4 class="drawer__section-title">{{ t('eventsUi.incidentTitle') }}</h4>
+          <div class="incident-head">
+            <h4 class="drawer__section-title">{{ t('eventsUi.incidentTitle') }}</h4>
+            <!--
+              阈值就地可调（业主 2026-09-18）：它是"什么时候给建议"的判据，而操作员正是
+              在这一段里看建议的 —— 放到系统设置里就成了"要改一个眼前的东西得先走开"。
+              选项是离散档位（不是自由输入），并且**永远可见**：低于阈值时建议卡不画，
+              那时更需要能把它调下来。
+            -->
+            <label class="incident-threshold">
+              <span class="muted">{{ t('eventsUi.incidentThreshold') }}</span>
+              <select
+                class="select select--sm"
+                data-field="incident-threshold"
+                :value="incidentThreshold"
+                @change="setIncidentThreshold(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="choice in INCIDENT_THRESHOLD_CHOICES" :key="choice" :value="choice">
+                  {{ t('eventsUi.incidentThresholdOption', { count: choice }) }}
+                </option>
+              </select>
+            </label>
+          </div>
 
           <ul v-if="linkedIncidents.length > 0" class="incident-list" data-incident-linked>
             <li v-for="item in linkedIncidents" :key="item.id" class="incident-row">
@@ -1217,6 +1272,18 @@ async function goToPage(offset: number): Promise<void> {
               {{ t('eventsUi.incidentSuggestionCount', { count: incidentSuggested.alertCount }) }}
             </p>
           </div>
+          <!--
+            没到阈值时说一句"为什么没有建议"，并把当前阈值写出来：一段空白的区域与
+            "软件没做这件事"看起来一模一样（本仓库的"控件没渲染 vs 没有数据"那条规矩）。
+          -->
+          <p v-else class="muted" data-incident-below-threshold>
+            {{
+              t('eventsUi.incidentBelowThreshold', {
+                count: incidentThreshold,
+                related: related.find((group) => group.id === 'same-device')?.ids.length ?? 0
+              })
+            }}
+          </p>
 
           <div class="chip-row incident-actions">
             <button
@@ -1717,6 +1784,31 @@ async function goToPage(offset: number): Promise<void> {
 }
 
 /* --- Incident（规格 §13.2 的建议卡 + §14.2 的 V1） -------------------------- */
+
+/* 标题行：左边是段标题，右边是阈值选择器（就地可调，见模板里的注释）。 */
+.incident-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.incident-head .drawer__section-title {
+  margin: 0;
+}
+
+.incident-threshold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-meta);
+  white-space: nowrap;
+}
+
+.incident-threshold .select {
+  width: auto;
+}
 
 .incident-list {
   margin: 0 0 var(--space-2);

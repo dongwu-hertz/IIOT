@@ -2588,6 +2588,9 @@ export const en: MessageSchema = {
      * (§2.1), and no English synonym is both accurate and unambiguous here.
      */
     incidentTitle: 'Incidents',
+    incidentThreshold: 'Suggestion threshold',
+    incidentThresholdOption: '{count} alerts',
+    incidentBelowThreshold: 'Another {related} alert(s) on the same device — below the threshold ({count}), so no suggestion.',
     incidentNone: 'This alert is not linked to any incident yet.',
     incidentAlertCount: '{count} linked alert(s)',
     incidentUnlink: 'Unlink',

@@ -41,14 +41,37 @@ export const INCIDENT_TITLE_MAX_LENGTH = 120
 export const INCIDENT_NOTE_MAX_LENGTH = 500
 
 /**
- * 「潜在关联 Incident」建议卡出现的**阈值**：同一条链上至少要有这么多条 Alert（含当前这条）。
+ * 「潜在关联 Incident」建议卡的**阈值选项**：同一条相关性链上至少要有这么多条 Alert
+ * （含当前这条）才给建议。
  *
- * 规格 §13.2 的原话是"当相关性达到阈值时显示"，但**阈值本身手册未说明**。我们取 **2**：
- * 一条 Alert 孤零零的时候无话可说（"建议把这一条关联成一个事件"没有信息量），而只要同设备
- * 上还有第二条，就已经构成"一台设备上出了不止一件事"这个值得记下来的事实。取更大的值会让
- * 这条入口在只有两三台设备的现场永远不出现 —— 而那正是我们现场的规模。
+ * 规格 §13.2 的原话是"当相关性达到阈值时显示"，但**阈值本身手册未说明** —— 所以它必须是
+ * **可调的**（业主 2026-09-18：「可以设置为可调整的」）。可选值刻意是一小组离散档位而不是
+ * 自由输入：这是一个"多敏感"的取舍（调低会让建议变多），离散档位让操作员能预判
+ * 自己按下去会发生什么，也不会出现 `0` / `1` / `999` 这种没有意义的输入。
+ *
+ * 默认 **2** 的理由：一条 Alert 孤零零的时候无话可说（"建议把这一条关联成一个事件"没有
+ * 信息量），而只要同设备上还有第二条，就已经构成"一台设备上出了不止一件事"这个值得记下来的
+ * 事实。取更大的值会让这条入口在只有两三台设备的现场永远不出现 —— 而那正是我们现场的规模。
  */
-export const INCIDENT_SUGGESTION_MIN_ALERTS = 2
+export const INCIDENT_THRESHOLD_CHOICES = [2, 3, 5, 10] as const
+
+export type IncidentThreshold = (typeof INCIDENT_THRESHOLD_CHOICES)[number]
+
+/** 没选过 / 存坏了时用的档位（最小的一档）。 */
+export const DEFAULT_INCIDENT_THRESHOLD: IncidentThreshold = 2
+
+/**
+ * 把磁盘上/地址栏里读到的东西解析成一个合法档位。
+ *
+ * 一律当作**不可信输入**（与 `parseDrawerWidth` / `parseEventViewMode` 同一条规矩）：
+ * 坏值回落到默认档，而不是让界面起来就崩或者显示一个"2.5 条告警"的怪阈值。
+ */
+export function parseIncidentThreshold(value: unknown): IncidentThreshold {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return (INCIDENT_THRESHOLD_CHOICES as readonly number[]).includes(parsed)
+    ? (parsed as IncidentThreshold)
+    : DEFAULT_INCIDENT_THRESHOLD
+}
 
 /**
  * 建议卡依据的那一组相关性。
@@ -123,7 +146,7 @@ export function sortIncidentsDesc(items: readonly IncidentView[]): IncidentView[
 export interface IncidentLinkState {
   /** 这一条已经属于哪些 Incident（新的在前）。 */
   linked: IncidentView[]
-  /** 建议卡：够阈值才有（见 `INCIDENT_SUGGESTION_MIN_ALERTS`）。 */
+  /** 建议卡：够阈值才有（阈值见 `INCIDENT_THRESHOLD_CHOICES`）。 */
   suggestion?: IncidentSuggestion
 }
 
@@ -139,22 +162,30 @@ export interface IncidentSuggestion {
    */
   entryIds: string[]
   alertCount: number
+  /** 这一次用的阈值（界面把它印在卡片上，好解释"为什么现在弹/不弹"）。 */
+  threshold: IncidentThreshold
 }
 
 /**
  * 从相关性分组里算出建议（纯函数，界面与测试共用一处判据）。
  *
  * 注意这里**不做任何写操作、也不改任何状态**：它只回答"要不要给操作员看一眼这个建议"。
+ *
+ * `threshold` 由调用方给（界面把它做成可调的偏好）：给坏了也不怕 —— 调用方应当已经过
+ * `parseIncidentThreshold()`，这里再守一道，坏值按默认档处理（纯函数不该因为一个参数
+ * 是 `NaN` 就悄悄改变行为）。
  */
 export function incidentSuggestion(
   current: { id: string },
-  groups: readonly RelatedGroup[]
+  groups: readonly RelatedGroup[],
+  threshold: IncidentThreshold = DEFAULT_INCIDENT_THRESHOLD
 ): IncidentSuggestion | undefined {
+  const limit = parseIncidentThreshold(threshold)
   const group = groups.find((item) => item.id === INCIDENT_SUGGESTION_GROUP)
   if (!group) return undefined
   const entryIds = [current.id, ...group.ids]
-  if (entryIds.length < INCIDENT_SUGGESTION_MIN_ALERTS) return undefined
-  return { groupId: group.id, entryIds, alertCount: entryIds.length }
+  if (entryIds.length < limit) return undefined
+  return { groupId: group.id, entryIds, alertCount: entryIds.length, threshold: limit }
 }
 
 /**

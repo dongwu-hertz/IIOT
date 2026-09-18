@@ -18,11 +18,13 @@ import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 
 import {
+  DEFAULT_INCIDENT_THRESHOLD,
   INCIDENT_NOTE_MAX_LENGTH,
-  INCIDENT_SUGGESTION_MIN_ALERTS,
+  INCIDENT_THRESHOLD_CHOICES,
   INCIDENT_TITLE_MAX_LENGTH,
   incidentSuggestion,
   incidentSuggestedTitleParams,
+  parseIncidentThreshold,
   sortIncidentsDesc,
   validateIncidentDraft
 } from '../src/shared/domain/incident'
@@ -87,7 +89,7 @@ describe('Incident 草稿校验（对话框与主进程共用一处）', () => {
 
 describe('「潜在关联 Incident」建议（规格 §13.2）', () => {
   it('同设备上只有它自己 → 不给建议（一条孤立的告警没什么可建议的）', () => {
-    assert.equal(INCIDENT_SUGGESTION_MIN_ALERTS, 2)
+    assert.equal(DEFAULT_INCIDENT_THRESHOLD, 2)
     assert.equal(incidentSuggestion({ id: 'alarm:1' }, groups([])), undefined)
   })
 
@@ -97,6 +99,7 @@ describe('「潜在关联 Incident」建议（规格 §13.2）', () => {
     assert.equal(suggestion.groupId, 'same-device')
     assert.deepEqual(suggestion.entryIds, ['alarm:1', 'alarm:2'])
     assert.equal(suggestion.alertCount, 2)
+    assert.equal(suggestion.threshold, DEFAULT_INCIDENT_THRESHOLD, '建议里要带上这次用的阈值')
   })
 
   it('建议只**给初值**：它不改任何东西，entryIds 就是分组里的那几条 + 当前这条', () => {
@@ -115,6 +118,57 @@ describe('「潜在关联 Incident」建议（规格 §13.2）', () => {
       undefined,
       '同类型不算"一台设备上的现实问题"，不能拿它当建议依据'
     )
+  })
+})
+
+/**
+ * 阈值是**可调的**（业主 2026-09-18：「可以设置为可调整的」）。
+ *
+ * 规格 §13.2 只说"当相关性达到阈值时"，**阈值本身手册未说明** —— 所以它是我们的取值，
+ * 而且要能被操作员改。这一组钉住三件事：档位是一小组离散值、默认是最小那档、
+ * 坏输入一律回落到默认（纯函数不该因为一个参数是 `NaN` 就悄悄改行为）。
+ */
+describe('建议阈值：可调的离散档位', () => {
+  it('档位是离散的、升序、最小档就是默认档', () => {
+    assert.deepEqual([...INCIDENT_THRESHOLD_CHOICES], [...INCIDENT_THRESHOLD_CHOICES].sort((a, b) => a - b))
+    assert.equal(INCIDENT_THRESHOLD_CHOICES[0], DEFAULT_INCIDENT_THRESHOLD)
+    for (const choice of INCIDENT_THRESHOLD_CHOICES) {
+      assert.ok(Number.isInteger(choice) && choice >= 2, `档位 ${choice} 不是一个合理的条数`)
+    }
+  })
+
+  it('同一条数据在阈值 2 下给建议、在阈值 3 下不给（这就是"可调"的意义）', () => {
+    const data = groups(['alarm:2'])
+    assert.ok(incidentSuggestion({ id: 'alarm:1' }, data, 2), '阈值 2 时应当给建议')
+    assert.equal(incidentSuggestion({ id: 'alarm:1' }, data, 3), undefined, '阈值 3 时不该给建议')
+  })
+
+  it('阈值恰好等于条数时**给**建议（阈值是闭区间，不是"大于"）', () => {
+    const data = groups(['alarm:2', 'alarm:3'])
+    assert.ok(incidentSuggestion({ id: 'alarm:1' }, data, 3), '刚好 3 条，阈值 3 应当给建议')
+    assert.equal(incidentSuggestion({ id: 'alarm:1' }, data, 5), undefined)
+  })
+
+  it('解析磁盘/界面来的值：合法档位原样用，别的（含字符串数字）回落到默认', () => {
+    assert.equal(parseIncidentThreshold(2), 2)
+    assert.equal(parseIncidentThreshold('5'), 5, '下拉框给的是字符串')
+    for (const bad of [undefined, null, '', 'abc', 0, 1, 2.5, 4, 999, -1, {}]) {
+      assert.equal(
+        parseIncidentThreshold(bad),
+        DEFAULT_INCIDENT_THRESHOLD,
+        `${String(bad)} 应当回落到默认档`
+      )
+    }
+  })
+
+  it('传进去一个坏阈值也不会让建议"消失或全给"：一律按默认档判', () => {
+    const data = groups(['alarm:2'])
+    // @ts-expect-error 故意传一个界面不该给的值，验证纯函数自己守得住。
+    assert.ok(incidentSuggestion({ id: 'alarm:1' }, data, Number.NaN))
+    // 3 条相关告警、坏阈值 → 按默认档 2 判 → 给建议。
+    const more = groups(['alarm:2', 'alarm:3'])
+    // @ts-expect-error 同上。
+    assert.ok(incidentSuggestion({ id: 'alarm:1' }, more, 'x'))
   })
 })
 
