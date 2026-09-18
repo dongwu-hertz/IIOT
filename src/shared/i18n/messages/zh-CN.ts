@@ -2362,7 +2362,8 @@ export const zhCN = {
     layoutGroup: '分屏档位',
     layoutLabel: '{count} 分屏',
     pickDevice: '选择相机',
-    pickPlaceholder: '请选择相机',
+    // 浮层里一台可选的相机都没有时的那一行（其它格已经把它们都占了）。
+    pickNoOption: '没有可选的相机',
     replaceDevice: '更换相机',
     noCamera: '还没有添加声学相机',
     assignToCell: '放入这一格',
@@ -2397,7 +2398,12 @@ export const zhCN = {
      *   offlineDevice   设备被删/离线现在只显示短状态词，哪一台由叠加条上的名字回答；
      *   noCameraHint    同一件事标题行已经说过，而且「请先在设备管理中添加」是说明；
      *   setActive       本来就没有任何地方渲染它；
-     *   streamError     同上（格子上的诊断原文来自主进程，不来自这条词）。
+     *   streamError     同上（格子上的诊断原文来自主进程，不来自这条词）；
+     *   pickPlaceholder 原生 `<select>` 的第一个 `<option>`（「请选择相机」）。
+     *                   选择器改成自己画的浮层之后它没有读者了：浮层的无障碍名字来自
+     *                   `pickDevice`，清单为空那一行是新增的 `pickNoOption`
+     *                   （业主 2026-09-18 报的那个「弹出来看不见」的 bug，见
+     *                   `CameraCellPicker.vue`）。
      */
     limitNotice: '同时直播上限为 {max} 路，当前 {active} 路。再开一路会超过上限，请先停掉另一格。',
     limitSummary: '同时直播 {active} / {max} 路',

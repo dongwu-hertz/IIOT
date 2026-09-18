@@ -7,7 +7,8 @@
 - 想知道某个设计**为什么**这样：`docs/Ivms4200-UX-REFERENCE.md`（按 §15.x 分段，逐条写出处）
 - 想知道协议细节与实测发现：`docs/PROTOCOL-FINDINGS.md`、`docs/FA371-*.md`、`docs/reference/`
 - **事件中心改造（业主 2026-09-17 新规格）做到哪一步**：`docs/EVENT-CENTER.md`
-  （规格逐节对照：要求 → 现状 → 我们的做法；Phase 1–2 已完成，Phase 3–6 待做）
+  （规格逐节对照：要求 → 现状 → 我们的做法；Phase 1–5 已完成，Phase 6 前半（重复触发聚合）已完成，
+  Phase 6 后半（人工 Create Incident + 手动关联 Alert）待做）
 
 ---
 
@@ -25,6 +26,11 @@
 | IPC | `src/shared/ipc/contract.ts` 里 **171** 个通道；主进程逐一登记权限 |
 | 界面语言 | **四本目录必须同步**：`zh-CN` / `en` / `es` / `tr` |
 | 单测基线 | **1693 / 0 失败**（`npm test`） |
+
+> 上面这两行是**分叉当时**（2026-09-17 收盘）的快照，不是最新一轮的数字：分叉之后又做了
+> 事件中心 Phase 1–6 前半（schema **v13**）与相机选择器那个 bug。**当前**数字每轮都写在
+> `docs/UI-VERIFY.md` 对应的那一段里 —— 截至 2026-09-18：单测 **1882 / 0 失败**、schema **v13**、
+> 安装包 sha256 `4BB063BCB974B2E027738F857B4A31D2D0416164EEED7B4C64C62B9C3D24A6CF`（见该文 AA 段）。
 
 ---
 

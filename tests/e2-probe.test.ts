@@ -130,6 +130,10 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
      * 2026-09-18（第 9 批 Phase 5）加了**第三条**：事件中心的处置闭环（改一条事件的状态、
      * 写 `event_status` / `event_activity`）。它同样是写操作，所以同样排在最末尾 ——
      * 只读的那一批探针（含事件中心自己的结构断言）看的是"操作员库原样"。
+     *
+     * 2026-09-18（同日，相机选择器 bug）加了**第四条**：总览页相机墙空白格上的「+」
+     * → 相机选择器浮层 → 真把一台相机放进一格（界面上的写），并读回那一格、离开页面
+     * 再回来确认清干净。它同样排在最后一条。
      */
     const mockStart = driver.indexOf('await startMockE2Device(')
     const report = driver.indexOf("log('problems     : ' + problems.length)")
@@ -138,16 +142,20 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
     const layoutsAfterMock = (afterMock.match(/await layout\(/g) || []).length
     assert.equal(
       layoutsAfterMock,
-      3,
+      4,
       '假设备启动之后还有别的探针在跑（' + layoutsAfterMock + ' 次 layout）——' +
         '写操作的探针必须排在所有只读探针之后'
     )
-    // 三次都是"写操作那些流程"，不是别的页面探针。
+    // 四次都是"写操作那些流程"，不是别的页面探针。
     assert.ok(afterMock.includes('const e2Flow = await layout('), '听诊盒子那一套不见了')
     assert.ok(afterMock.includes('const sonarFlow = await layout('), '空气声呐那一套不见了')
     assert.ok(
       afterMock.includes('const eventsHandling = await layout('),
       '事件中心的处置闭环那一条不见了'
+    )
+    assert.ok(
+      afterMock.includes('const cameraPicker = await layout('),
+      '相机选择器（把相机放进一格）那一条不见了'
     )
   })
 })

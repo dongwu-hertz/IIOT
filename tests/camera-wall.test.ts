@@ -26,6 +26,7 @@ import { describe, it } from 'node:test'
 import {
   CAMERA_CELL_STATUSES,
   CAMERA_CELL_STATUS_KEYS,
+  CAMERA_PICKER_GAP,
   CAMERA_WALL_LAYOUTS,
   DEFAULT_CAMERA_WALL_LAYOUT,
   activeCameraStreams,
@@ -43,6 +44,7 @@ import {
   isCameraWallLayout,
   isWallCapableDevice,
   normaliseCameraWallModel,
+  placeCameraPicker,
   removeDeviceFromWall,
   setActiveSlot,
   setAudioSlot,
@@ -922,5 +924,70 @@ describe('画面格的右键菜单（NVR 式）', () => {
         assert.ok((messages.get(`domain.eventDownloadStage.${stage}`) ?? '').trim().length > 0, `${locale} 缺 domain.eventDownloadStage.${stage}`)
       }
     }
+  })
+})
+
+/**
+ * 空白格上的相机选择器浮层摆在哪儿（业主 2026-09-18 报的 bug）。
+ *
+ * 修之前那块选择器是原生 `<select>`，挂在墙末尾的 1×1 隐藏宿主里，由 `showPicker()`
+ * 打开 —— 下拉贴在**宿主那个盒子**上，墙一高就落到窗口外面。换成自己画的浮层之后，
+ * 「开在哪里」是我们自己的算术，因此必须能被单元测试直接钉住（而不是只能靠肉眼看）。
+ */
+describe('相机选择器浮层的落点', () => {
+  /** 1440×900 的一次真实几何：被点的那一格在页面中部。 */
+  const viewport = { width: 1440, height: 900 }
+  const cell = { left: 320, top: 200, right: 800, bottom: 470 }
+
+  it('优先开在那一格下面，左边缘与那一格对齐', () => {
+    const placed = placeCameraPicker(cell, { width: 220, height: 160 }, viewport)
+    assert.equal(placed.placement, 'below')
+    assert.equal(placed.left, cell.left)
+    assert.equal(placed.top, cell.bottom + CAMERA_PICKER_GAP)
+  })
+
+  it('下面放不下时翻到上面，且整块仍在视口里', () => {
+    // 这一格贴着窗口底部：下面只剩 20px，而浮层高 160px。
+    const low = { left: 320, top: 700, right: 800, bottom: 880 }
+    const placed = placeCameraPicker(low, { width: 220, height: 160 }, viewport)
+    assert.equal(placed.placement, 'above')
+    assert.equal(placed.top, low.top - CAMERA_PICKER_GAP - 160)
+    assert.ok(placed.top >= 0, '翻到上面之后不能是负的')
+    assert.ok(placed.top + 160 <= viewport.height, '翻到上面之后要整个在视口里')
+  })
+
+  it('上下都放不下时仍然给得出一个落点，且不出界', () => {
+    // 一格比视口还高（16 分屏下把窗口缩到很矮时就是这个形状）。
+    const tall = { left: 0, top: -40, right: 1440, bottom: 1200 }
+    const placed = placeCameraPicker(tall, { width: 260, height: 200 }, viewport)
+    assert.ok(placed.top >= CAMERA_PICKER_GAP, 'top 不能跑到窗口上面去')
+    assert.ok(placed.top + 200 <= viewport.height, 'top 不能把浮层推到窗口下面')
+    assert.ok(placed.left >= CAMERA_PICKER_GAP)
+    assert.ok(placed.left + 260 <= viewport.width)
+  })
+
+  it('水平方向夹进视口：贴右边缘的那一格不会把浮层推出窗口', () => {
+    const right = { left: 1300, top: 200, right: 1440, bottom: 400 }
+    const placed = placeCameraPicker(right, { width: 220, height: 160 }, viewport)
+    assert.ok(placed.left + 220 <= viewport.width, '浮层右边缘出界了')
+    assert.ok(placed.left >= CAMERA_PICKER_GAP)
+  })
+
+  it('浮层比视口还宽时退到左边缘，不产生负坐标', () => {
+    const placed = placeCameraPicker(cell, { width: 1600, height: 160 }, viewport)
+    assert.equal(placed.left, CAMERA_PICKER_GAP)
+  })
+
+  it('视口高度为 0 之类的退化输入不会算出 NaN', () => {
+    const placed = placeCameraPicker(cell, { width: 220, height: 160 }, { width: 0, height: 0 })
+    assert.ok(Number.isFinite(placed.left) && Number.isFinite(placed.top))
+    assert.equal(placed.left, CAMERA_PICKER_GAP)
+    assert.equal(placed.top, CAMERA_PICKER_GAP)
+  })
+
+  it('负数尺寸（量不到的浮层）不会把落点算成负的', () => {
+    const placed = placeCameraPicker(cell, { width: -10, height: -10 }, viewport)
+    assert.ok(placed.left >= CAMERA_PICKER_GAP && placed.top >= CAMERA_PICKER_GAP)
+    assert.ok(placed.left <= viewport.width && placed.top <= viewport.height)
   })
 })

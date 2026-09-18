@@ -819,3 +819,77 @@ export function isWallCapableDevice(device: Pick<Device, 'kind'> | undefined): b
 export function deviceChannelState(channel: Channel | undefined): ChannelState {
   return channelState(channel)
 }
+
+// ---------------------------------------------------------------------------
+// 空白格上的相机选择器：那块浮层摆在哪儿
+// ---------------------------------------------------------------------------
+
+/** 一个矩形，视口坐标（`getBoundingClientRect()` 的形状，只取需要的四个边）。 */
+export interface ViewportRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+/** 浮层落在被点那一格的哪一侧。 */
+export type CameraPickerPlacement = 'below' | 'above'
+
+/** 浮层的落点（`position: fixed` 的 `left` / `top`）。 */
+export interface CameraPickerPosition {
+  left: number
+  top: number
+  placement: CameraPickerPlacement
+}
+
+/** 浮层与那一格之间留的缝（也是它与窗口边缘留的缝）。 */
+export const CAMERA_PICKER_GAP = 4
+
+/**
+ * 把相机选择器的浮层放进视口 —— **贴着被点的那一格**。
+ *
+ * 为什么这件事要有一个纯函数（业主 2026-09-18 报的 bug）
+ * 上一版的选择器是一个原生 `<select>`，挂在整面墙末尾的 `.visually-hidden` 宿主里
+ * （1×1、`clip: rect(0 0 0 0)`），由 `showPicker()` 打开。原生下拉贴在**它自己那个
+ * 盒子的边上**，于是清单弹在页面左上区那个 1×1 的盒子上，而不是操作员点的那一格上 ——
+ * 真窗口里量到两者相距 **561px**（宿主 `{left:273, top:97, 1×1}`，被点的那一格
+ * `{left:834, top:148}`，1440×900，见 `scripts/demo-shot-driver.cjs` 的
+ * `camera picker` 探针）。操作员的说法是「位置好像被盖住了，没有显示出来」。
+ * 换成自己画的浮层之后，「开在哪里」变成我们自己的算术，而算术要有测试：
+ * 它不会再随页面布局漂走。
+ *
+ * 规则（三条，按优先级）：
+ *   1. **优先开在那一格下面**（与下拉框一致）；下面放不下就翻到**上面**；
+ *      `placement` 把选了哪一侧如实报出来（探针据此断言，不靠猜）。
+ *   2. **水平方向对齐那一格的左边缘**，然后夹进 `[gap, 视口宽 - 浮层宽 - gap]`；
+ *      浮层比视口还宽时退到左边缘 `gap`（宁可窄，不可出界）。
+ *   3. 上下两侧都放不下时**仍然选下面**，只把 `top` 夹进视口 —— 夹紧之后它会压住那一格，
+ *      但「压住一格」比「跑到窗口外面」好：看得见的东西才能被点，这是这个 bug 的教训。
+ */
+export function placeCameraPicker(
+  anchor: ViewportRect,
+  menu: { width: number; height: number },
+  viewport: { width: number; height: number },
+  gap: number = CAMERA_PICKER_GAP
+): CameraPickerPosition {
+  const menuWidth = Math.max(0, menu.width)
+  const menuHeight = Math.max(0, menu.height)
+  const gapPx = Math.max(0, gap)
+
+  const belowTop = anchor.bottom + gapPx
+  const aboveTop = anchor.top - gapPx - menuHeight
+  const fitsBelow = belowTop + menuHeight <= viewport.height
+  const fitsAbove = aboveTop >= 0
+  const placement: CameraPickerPlacement = fitsBelow || !fitsAbove ? 'below' : 'above'
+
+  const maxLeft = Math.max(gapPx, viewport.width - menuWidth - gapPx)
+  const maxTop = Math.max(gapPx, viewport.height - menuHeight - gapPx)
+  const clamp = (value: number, max: number): number =>
+    Math.min(Math.max(gapPx, value), Math.max(gapPx, max))
+
+  return {
+    left: clamp(anchor.left, maxLeft),
+    top: clamp(placement === 'below' ? belowTop : aboveTop, maxTop),
+    placement
+  }
+}

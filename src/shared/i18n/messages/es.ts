@@ -2148,7 +2148,7 @@ export const es: MessageSchema = {
     layoutGroup: 'Disposición de celdas',
     layoutLabel: '{count} celdas',
     pickDevice: 'Elegir cámara',
-    pickPlaceholder: 'Seleccione una cámara',
+    pickNoOption: 'No hay cámara disponible',
     replaceDevice: 'Cambiar cámara',
     noCamera: 'Todavía no hay cámaras acústicas',
     assignToCell: 'Poner en esta celda',

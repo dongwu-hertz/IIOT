@@ -38,10 +38,16 @@
  * 一个大的+号放在右侧」）。产品负责人这一轮改主意了 ——「添加新视频或者声纹图的加号
  * 应该在窗口中心」—— 所以 `+` 现在在格子的正中（横向、纵向都居中）。
  * 仍然没有文字、没有可见的下拉框（产品要求）。`+` 也仍然是真正的入口：点它（或用键盘
- * 回车）就打开这一格的相机选择器。选择器本身还是原生 `<select>`（设备名、键盘操作、
- * 读屏朗读全部交给浏览器，本组件不自己造一个列表控件），但它挂在**整面墙的隐藏宿主**
- * 里，不在画面格内 —— 那样画面格里才可能真的一字不写；选项仍然只来自
- * `optionsForCell()`，「哪几台相机可选」没有第二份实现。
+ * 回车）就打开这一格的相机选择器。
+ *
+ * 选择器**不再是原生 `<select>`**（业主 2026-09-18 报的 bug）
+ * 上一版把它做成藏在墙末尾 `1×1` 宿主里的原生下拉、用 `showPicker()` 打开，结果原生
+ * 下拉贴在页面左上区那个 1×1 的盒子上：真窗口里量到它离操作员点的那一格 **561px**
+ * （见 `CameraCellPicker.vue` 文件头里的数字），操作员看到的是「弹了一下 / 位置被盖住 /
+ * 根本没显示出来」。现在换成自己画的浮层（`CameraCellPicker.vue`），位置由
+ * `placeCameraPicker()` 这个纯函数算出来（贴在这一格旁边、放不下翻到上面、最后夹进
+ * 视口，有单测也有 GUI 探针断言）。选项仍然只来自 `optionsForCell()`，
+ * 「哪几台相机可选」没有第二份实现。
  *
  * 生命周期
  * 进入页面时按模型恢复（只对已经在墙上的相机重新拉流），离开页面时停止**所有**会话并
@@ -73,7 +79,8 @@ import {
   findCameraSlot,
   isCameraCellLive,
   type CameraCellView,
-  type CameraWallLayout
+  type CameraWallLayout,
+  type ViewportRect
 } from '@renderer/lib/cameraWall'
 import { formatBytes, formatDuration } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
@@ -82,6 +89,9 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import { useCameraWallStore } from '@renderer/stores/liveWall'
 import { useSettingsStore } from '@renderer/stores/settings'
 import CameraAlarmDialog from '@renderer/components/CameraAlarmDialog.vue'
+import CameraCellPicker, {
+  type CameraPickerItem
+} from '@renderer/components/CameraCellPicker.vue'
 import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloadDialog.vue'
 import CameraRecordingPlaybackDialog from '@renderer/components/CameraRecordingPlaybackDialog.vue'
 import LayoutGridIcon from '@renderer/components/LayoutGridIcon.vue'
@@ -349,37 +359,92 @@ async function toggleCell(cell: CameraCellView): Promise<void> {
   else await startCell(cell)
 }
 
-/** 下拉选择：把相机放进这一格。已经在别格时会移动过来（不会出现两格同一台）。 */
-async function onPickDevice(cell: CameraCellView, event: Event): Promise<void> {
-  const deviceId = (event.target as HTMLSelectElement).value
-  if (deviceId === '') return
-  // 换掉的旧相机必须先停止，否则主进程会留下一个没人看的会话。
-  if (cell.deviceId && cell.deviceId !== deviceId) await stopCell(cell)
-  wall.placeDevice(cell.index, deviceId)
+/**
+ * 相机选择器浮层的状态：打开的是哪一格、那一格的视口矩形、以及触发它的那个按钮。
+ *
+ * 矩形在**打开的那一刻**量一次（而不是每次渲染都量）：浮层就是对着「刚才点的那一格」
+ * 开的，格子随后被 resize 或滚动改变位置时浮层会关掉（`CameraCellPicker` 的
+ * scroll/resize 监听），所以不需要跟着动。
+ */
+const pickerSlot = ref<number | null>(null)
+const pickerAnchor = ref<ViewportRect | null>(null)
+/** 触发浮层的按钮：关掉之后焦点要还给键盘用户，否则焦点会掉到 `<body>`。 */
+let pickerTrigger: HTMLElement | null = null
+
+/** 浮层里的候选项：与旧的下拉框同一份来源（`optionsForCell()`）。 */
+const pickerItems = computed<CameraPickerItem[]>(() => {
+  const slot = pickerSlot.value
+  if (slot === null) return []
+  const cell = cells.value.find((item) => item.index === slot)
+  if (!cell) return []
+  return optionsForCell(cell).map((device) => ({ id: device.id, name: device.name }))
+})
+
+/** 浮层的无障碍名字：空白格是「选择相机」，已经有一台的是「更换相机」。 */
+const pickerLabel = computed(() => {
+  const slot = pickerSlot.value
+  const cell = slot === null ? undefined : cells.value.find((item) => item.index === slot)
+  return cell && cell.deviceId ? t('cameraWallUi.replaceDevice') : t('cameraWallUi.pickDevice')
+})
+
+/**
+ * 打开/收起某一格的相机选择器 —— 空白格正中那个大 `+`、以及叠加条上的设备名都指向它。
+ *
+ * **位置由 `placeCameraPicker()` 算**（纯函数、有单测）：浮层贴在这一格的下面，放不下
+ * 就翻到上面，最后夹进视口。业主 2026-09-18 报的那个 bug 就是位置问题：上一版用的是
+ * 原生 `<select>` + `showPicker()`，下拉贴在「页面左上区那个 1×1 隐藏宿主」上（实测离
+ * 被点的那一格 561px），详见 `CameraCellPicker.vue` 的文件头。
+ *
+ * 再点一次同一个入口 = 收起：`CameraCellPicker` 会让开带
+ * `data-camera-picker-trigger` 的元素，所以这里能用一个开关表达「开/关」。
+ */
+function togglePicker(cell: CameraCellView, event?: MouseEvent): void {
+  if (pickerSlot.value === cell.index) {
+    closePicker()
+    return
+  }
+  const stage = cellEls.value[cell.index]
+  if (!stage) return
+  const rect = stage.getBoundingClientRect()
+  pickerAnchor.value = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+  pickerSlot.value = cell.index
+  const target = event?.currentTarget
+  pickerTrigger = target instanceof HTMLElement ? target : null
 }
 
 /**
- * 打开某一格的相机选择器 —— 空白格正中那个大 `+`、以及叠加条上的设备名都指向它。
+ * 关掉浮层。
  *
- * 空白格里不写任何说明文字，可见的只有一个 `+`；选项列表仍然交给原生 `<select>`
- * （设备名、键盘操作、读屏朗读全部由浏览器负责，本组件不自己造一个列表控件）。
- * 那个选择器挂在墙级别的隐藏宿主里（见模板末尾的 `.camera-wall__pickers`），所以：
- *   - `showPicker()` 必须在用户手势里调用，`+` 的点击/回车就是手势；
- *   - 它可能被环境拒绝（没有手势、被策略挡住），所以捕获异常后退回 `focus()`：
- *     焦点落到选择器上，键盘用户按方向键一样能选。
+ * `restoreFocus` 在「选中了一台相机」时为 `false`：那条路上触发它的按钮（空白格的 `+`）
+ * 会被换掉，把焦点还给它没有意义 —— 选完之后焦点交给这一格新出现的设备名按钮。
  */
-function openPicker(slot: number): void {
-  const select = document.getElementById(`wall-pick-${slot}`) as HTMLSelectElement | null
-  if (!select) return
-  try {
-    if (typeof select.showPicker === 'function') {
-      select.showPicker()
-      return
-    }
-  } catch {
-    // 落到下面的 focus()：选择器没有被打开，但焦点仍然给了正确的控件。
-  }
-  select.focus()
+function closePicker(restoreFocus = true): void {
+  const trigger = pickerTrigger
+  pickerSlot.value = null
+  pickerAnchor.value = null
+  pickerTrigger = null
+  if (restoreFocus && trigger && document.contains(trigger)) trigger.focus()
+}
+
+/** 选中一台相机：先收起浮层，再放进来（旧的那一路先停）。 */
+async function pickDevice(deviceId: string): Promise<void> {
+  const slot = pickerSlot.value
+  closePicker(false)
+  if (slot === null) return
+  const cell = cells.value.find((item) => item.index === slot)
+  if (!cell) return
+  // 换掉的旧相机必须先停止，否则主进程会留下一个没人看的会话。
+  if (cell.deviceId && cell.deviceId !== deviceId) await stopCell(cell)
+  wall.placeDevice(slot, deviceId)
+  /*
+   * 焦点跟着这一格走。
+   *
+   * 键盘用户按回车选完之后，那个候选项（连同整个浮层）就没了 —— 不还给这一格，
+   * 焦点会掉到 `<body>` 上，下一次按 Tab 从窗口最前面重新开始。放好之后这一格里
+   * 出现的设备名按钮就是同一个入口（它打开的是「更换相机」），焦点交给它。
+   */
+  await nextTick()
+  cellEls.value[slot]?.querySelector<HTMLElement>('.camera-wall__name--action')?.focus()
 }
 
 /** 拖拽落点（HTML5 DnD，不引入任何依赖）。 */
@@ -1492,9 +1557,12 @@ function cellBadgeClass(cell: CameraCellView): string {
             v-if="cell.status === 'empty' && cameraDevices.length"
             type="button"
             class="camera-wall__add"
+            data-camera-picker-trigger
+            aria-haspopup="listbox"
+            :aria-expanded="pickerSlot === cell.index"
             :aria-label="t('cameraWallUi.assignToCell')"
             :title="t('cameraWallUi.assignToCell')"
-            @click.stop="openPicker(cell.index)"
+            @click.stop="togglePicker(cell, $event)"
           >
             <svg class="camera-wall__plus" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <line x1="4" y1="12" x2="20" y2="12" />
@@ -1516,9 +1584,12 @@ function cellBadgeClass(cell: CameraCellView): string {
             v-if="cameraDevices.length"
             type="button"
             class="camera-wall__name camera-wall__name--action"
+            data-camera-picker-trigger
+            aria-haspopup="listbox"
+            :aria-expanded="pickerSlot === cell.index"
             :aria-label="t('cameraWallUi.replaceDevice')"
             :title="t('cameraWallUi.replaceDevice')"
-            @click.stop="openPicker(cell.index)"
+            @click.stop="togglePicker(cell, $event)"
           >
             {{ cell.deviceName }}
           </button>
@@ -1645,36 +1716,25 @@ function cellBadgeClass(cell: CameraCellView): string {
     </div>
 
     <!--
-      相机选择器：**整面墙共用的一组隐藏宿主**，刻意不放在画面格里。
-      放在格子里的话，`<option>` 的文字与那个视觉隐藏的标签都会成为格子里的文本节点，
-      而空白格的要求是「只有一个 `+`、一个字都没有」。选择器仍然是原生 `<select>`
-      （键盘与读屏朗读交给浏览器），`+` / 设备名按钮用手势把它的下拉打开。
+      相机选择器：**一块自己画的浮层**，贴在被点的那一格旁边。
+
+      为什么不再是原生 `<select>` + 隐藏宿主（业主 2026-09-18 报的 bug）：
+      原生下拉贴在它自己那个盒子的边上，而那个盒子（1×1、`clip: rect(0 0 0 0)`）在整面墙
+      的末尾 —— 墙一高就落到窗口外面，于是「点了 + 只弹一下 / 位置被盖住 / 根本没显示」。
+      现在的位置由 `placeCameraPicker()`（纯函数、有单测）算，浮层挂在 `<body>` 上
+      （`position: fixed`），不随页面的高度漂走。详见 `CameraCellPicker.vue` 的文件头。
+
       选项仍然只来自 `optionsForCell()`：「哪几台相机可选」没有第二份实现。
-      它 `tabindex="-1"`：Tab 顺序里只有真正的入口（`+` / 设备名按钮），隐藏控件不参与。
     -->
-    <div v-if="cameraDevices.length" class="camera-wall__pickers visually-hidden">
-      <select
-        v-for="cell in cells"
-        :id="`wall-pick-${cell.index}`"
-        :key="`pick:${cell.key}`"
-        class="select select--sm"
-        tabindex="-1"
-        :aria-label="t('cameraWallUi.pickDevice')"
-        :value="''"
-        @change="onPickDevice(cell, $event)"
-      >
-        <option value="">
-          {{
-            cell.status === 'empty'
-              ? t('cameraWallUi.pickPlaceholder')
-              : t('cameraWallUi.replaceDevice')
-          }}
-        </option>
-        <option v-for="device in optionsForCell(cell)" :key="device.id" :value="device.id">
-          {{ device.name }}
-        </option>
-      </select>
-    </div>
+    <CameraCellPicker
+      :open="pickerSlot !== null"
+      :anchor="pickerAnchor"
+      :items="pickerItems"
+      :empty-label="t('cameraWallUi.pickNoOption')"
+      :label="pickerLabel"
+      @select="pickDevice"
+      @close="closePicker()"
+    />
 
     <!--
       右键菜单与三个对话框：挂在**墙级别**，只画一份。
@@ -2143,18 +2203,5 @@ function cellBadgeClass(cell: CameraCellView): string {
 
 .camera-wall__nvr--error {
   background: rgba(153, 27, 27, 0.9);
-}
-
-/*
- * 隐藏宿主里的选择器必须真的看不见：`.visually-hidden` 给的是 1×1 的盒子，而
- * `.select--sm` 的内边距与边框会把 border box 顶大，露出一小块白矩形（本仓库的 GUI
- * 探针抓到过 12×8 px 的那种）。宿主自己 `overflow: hidden` 已经能裁掉它，这里再把
- * 内边距与边框去掉：两道都不需要解释，选择器仍然渲染着，`showPicker()` 与键盘聚焦
- * 都还能用。
- */
-.camera-wall__pickers select {
-  padding: 0;
-  border: 0;
-  max-width: 100%;
 }
 </style>

@@ -164,11 +164,21 @@ describe('视频墙的格子是 16:9，空白格的 + 在正中', () => {
     assert.match(body, /align-items:\s*center/)
   })
 
-  it('空白格仍然只有一个 +：没有文字、没有可见的 <select>', () => {
+  it('空白格仍然只有一个 +：没有文字、没有格内的下拉框', () => {
     assert.match(template, /class="camera-wall__add"/)
     assert.match(template, /camera-wall__plus/)
-    // 选择器宿主在墙级别：空白格里因此不可能出现一条 <option> 文本。
-    assert.match(template, /camera-wall__pickers/)
+    /*
+     * 选择器是一块**贴在被点那一格旁边的浮层**（`CameraCellPicker`，Teleport 到
+     * `<body>`），所以空白格的 DOM 里没有 `<select>`、也没有 `<option>` 那几行文本。
+     * 旧那版把原生 `<select>` 藏在墙末尾的 1×1 宿主里（同样是为了「格里一个字都不写」），
+     * 但原生下拉贴在那个盒子上、离被点的那一格很远 —— 业主 2026-09-18 报的
+     * 「弹出请选择相机，位置好像被盖住了，没有显示出来」就是它。
+     */
+    assert.match(template, /<CameraCellPicker/)
+    // 只看标记、不看注释：解释这件事的注释里就写着 `<select>` 与 `showPicker()`。
+    const markupOnly = template.replace(/<!--[\s\S]*?-->/g, '')
+    assert.equal(/<option/.test(markupOnly), false, '画面格里又出现了原生 <option>')
+    assert.equal(/<select/.test(markupOnly), false, '画面格里又出现了原生 <select>')
   })
 
   it('每一格 <video> 仍然被地址与状态双重守卫（空地址时不存在播放器）', () => {

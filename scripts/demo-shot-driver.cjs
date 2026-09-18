@@ -3851,6 +3851,239 @@ async function run() {
       problems.push('界面上的处置记录页签里没有那一行：' + JSON.stringify(eventsHandling))
     }
   }
+  /**
+   * 相机墙空白格上的「+」：点它必须弹出一个**贴在被点那一格旁边**的相机选择器。
+   *
+   * 为什么会有这一条（业主 2026-09-18 报的 bug：「点击添加视频通道，弹出请选择相机，
+   * 但是好像位置被覆盖了，没有显示出来」）：
+   * 修之前那个选择器是原生 `<select>`，挂在整面墙末尾的 `.visually-hidden` 宿主里
+   * （1×1、`clip: rect(0 0 0 0)`），靠 `showPicker()` 打开。原生下拉贴在**宿主那个
+   * 1×1 的盒子**上，而那个盒子在页面左上区 —— 实测（1440×900）宿主在
+   * `{left:273, top:97}`，被点的那一格在 `{left:834, top:148, right:1389, bottom:460}`，
+   * 两者相距 **561px**，清单于是弹在操作员没在看的地方（压在别的方块上）。
+   *
+   * 所以这里量的是**几何**，不是「元素存在」：
+   *   legacyHiddenHost            旧实现的那个 1×1 隐藏宿主必须不在了
+   *   menuInsideViewport          浮层整个落在视口里（报告里「没有显示出来」那件事）
+   *   menuOnTop                   浮层中心点上的最上层元素属于浮层自己（「被覆盖」）
+   *   menuVerticalGapPx           浮层贴着那一格：下面放不下时翻到上面，间隙同样很小
+   *   menuHorizontallyOverlapsCell 浮层在水平方向对着那一格
+   *   itemsBeforeFree             清单里的相机名（`optionsForCell()` 的产物）
+   *   emptyLabelText              清单为空时必须说一句短状态词，而不是画一块空浮层
+   *   closedByEsc                 键盘能关掉，而且关掉**不改**那一格
+   *   pickItems / placedName      腾出一台相机之后→选中它→那一格显示它的名字（写要读回）
+   *
+   * 为什么中间要「腾出一台相机」：操作员库里只有**一台**相机，而总览页的自动起播会先
+   * 把它放进一格（`autoPlayOnce()` 的第一步），所以空白格能选的相机恰好是 0 台 ——
+   * 这也正是他看到的「弹出请选择相机」那一行占位文字。要验证"选中"这条路，就得先通过
+   * **真实的右键菜单**（「关闭这一格」）把它从格子里放回去。腾不出格子时这一段会如实
+   * 报一条"没有被验证到"，而不是假装过了。
+   *
+   * 这一段最后离开总览页再回来，格子回到原来的样子 —— 探针自己写进去的那台相机由导航
+   * 清掉（`CameraVideoWall` 卸载时 `clearAll()`），并且**读回**验证清干净了。
+   *
+   * 因为它有写（清空一格、把相机放进一格，可能触发一次自动起播），所以它和上面两条
+   * 一样排在**所有只读探针之后**。
+   */
+  const cameraPicker = await layout('/', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const out = {};' +
+    'const textOf = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : null);' +
+    'const emptyCellsNow = () => Array.prototype.slice.call(document.querySelectorAll(".camera-wall__cell--empty"));' +
+    'const addOf = (cell) => (cell ? cell.querySelector(".camera-wall__add") : null);' +
+    'const host = document.querySelector(".camera-wall__pickers");' +
+    'out.legacyHiddenHost = !!host;' +
+    // 旧实现那个宿主的**绝对**位置：修之前原生下拉就贴在这个 1×1 的盒子上，
+    // 而不是贴在操作员点的那一格上。两个矩形之间的距离就是"位置不对"的全部证据。
+    'out.legacyHostRect = host ? (() => { const r = host.getBoundingClientRect(); return {' +
+    '  left: Math.round(r.left), top: Math.round(r.top),' +
+    '  width: Math.round(r.width), height: Math.round(r.height) }; })() : null;' +
+    'out.emptyCells = emptyCellsNow().length;' +
+    'out.addButtons = document.querySelectorAll(".camera-wall__add").length;' +
+    'const firstCell = emptyCellsNow()[0];' +
+    'const add = addOf(firstCell);' +
+    'if (!add) return JSON.stringify(Object.assign(out, { reason: "no-empty-cell" }));' +
+    'const cell = add.closest(".camera-wall__cell");' +
+    'const cellRect = cell.getBoundingClientRect();' +
+    'out.clickedCellRect = { left: Math.round(cellRect.left), top: Math.round(cellRect.top),' +
+    '  right: Math.round(cellRect.right), bottom: Math.round(cellRect.bottom) };' +
+    'out.legacyHostToCellPx = out.legacyHostRect' +
+    '  ? Math.round(Math.max(' +
+    '      Math.abs(out.legacyHostRect.left - cellRect.left),' +
+    '      Math.abs(out.legacyHostRect.top - cellRect.top)))' +
+    '  : null;' +
+    'add.click();' +
+    'await sleep(700);' +
+    'const menu = document.querySelector("[data-camera-picker]");' +
+    'out.menuPresent = !!menu;' +
+    'if (!menu) {' +
+    // 旧实现打开的是原生下拉：它**不是 DOM 节点**，探针量不到它落在哪里。
+    // 能记下来的是另一件事实：`showPicker()` 需要**真实用户手势**，合成 .click() 没有
+    // 那个手势，于是它抛异常、代码退回 `select.focus()` —— 焦点落在一个 1×1、被裁掉的
+    // 隐藏 <select> 上（`focusedInstead` 就是这件事的证据）。真人点的那一次并不是这条
+    // 路径：那时原生下拉真的会开，但它是贴在那个 1×1 宿主上的（`legacyHostRect`）。
+    '  out.focusedInstead = document.activeElement' +
+    '    ? (document.activeElement.id || document.activeElement.tagName) : null;' +
+    '  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));' +
+    '  return JSON.stringify(Object.assign(out, { reason: "no-menu" }));' +
+    '}' +
+    'const rect = menu.getBoundingClientRect();' +
+    'out.menuRect = { left: Math.round(rect.left), top: Math.round(rect.top),' +
+    '  right: Math.round(rect.right), bottom: Math.round(rect.bottom),' +
+    '  width: Math.round(rect.width), height: Math.round(rect.height) };' +
+    'out.menuInsideViewport = rect.width > 0 && rect.height > 0 && rect.left >= 0 &&' +
+    '  rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight;' +
+    'const hit = document.elementFromPoint(Math.round(rect.left + rect.width / 2), Math.round(rect.top + rect.height / 2));' +
+    'out.menuOnTop = !!(hit && menu.contains(hit));' +
+    'out.menuVerticalGapPx = Math.round(rect.top >= cellRect.bottom' +
+    '  ? rect.top - cellRect.bottom' +
+    '  : (cellRect.top >= rect.bottom ? cellRect.top - rect.bottom : 0));' +
+    'out.menuHorizontallyOverlapsCell = rect.right > cellRect.left && rect.left < cellRect.right;' +
+    'out.menuFocused = menu.contains(document.activeElement);' +
+    'const itemsOf = (el) => Array.prototype.slice.call(el.querySelectorAll("[data-camera-picker-item]"));' +
+    'out.itemsBeforeFree = itemsOf(menu).map((b) => textOf(b));' +
+    'out.emptyLabelText = textOf(menu.querySelector(".picker__empty"));' +
+    'menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));' +
+    'await sleep(400);' +
+    'out.closedByEsc = !document.querySelector("[data-camera-picker]");' +
+    'out.cellUnchangedAfterEsc = !!cell.querySelector(".camera-wall__add") && !cell.querySelector(".camera-wall__name");' +
+    // ② 腾出一台相机：右键那一格 → 菜单里的「关闭这一格」（四个语言的写法都认）。
+    'const occupied = Array.prototype.slice.call(document.querySelectorAll(".camera-wall__cell"))' +
+    '  .find((c) => !c.classList.contains("camera-wall__cell--empty"));' +
+    'out.occupiedCellFound = !!occupied;' +
+    'if (occupied) {' +
+    '  const r = occupied.getBoundingClientRect();' +
+    '  occupied.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true,' +
+    '    clientX: Math.round(r.left + 40), clientY: Math.round(r.top + 40) }));' +
+    '  await sleep(600);' +
+    '  const entries = Array.prototype.slice.call(document.querySelectorAll(".vmenu__item"));' +
+    '  const closeLabels = ["关闭这一格", "Clear this cell", "Vaciar esta celda", "Bu hücreyi boşalt"];' +
+    '  const closeItem = entries.find((b) => closeLabels.some((label) => (textOf(b) || "").indexOf(label) === 0));' +
+    '  out.menuLabels = entries.map((b) => textOf(b));' +
+    '  out.foundCloseItem = !!closeItem;' +
+    '  if (closeItem) { closeItem.click(); await sleep(1200); }' +
+    '}' +
+    'out.emptyCellsAfterFree = emptyCellsNow().length;' +
+    // ③ 现在有得选了：点 + → 清单里应当有那台相机 → 选它 → 读回那一格（写必须读回）。
+    'const add2 = addOf(emptyCellsNow()[0]);' +
+    'const targetCell = add2 ? add2.closest(".camera-wall__cell") : null;' +
+    'out.reopened = !!add2;' +
+    'if (add2) { add2.click(); await sleep(700); }' +
+    'const openMenu = document.querySelector("[data-camera-picker]");' +
+    'out.pickItems = openMenu ? itemsOf(openMenu).map((b) => textOf(b)) : [];' +
+    'const item = openMenu ? openMenu.querySelector("[data-camera-picker-item]") : null;' +
+    'out.firstItem = textOf(item);' +
+    'if (item) { item.click(); await sleep(1800); }' +
+    'out.placedName = targetCell ? textOf(targetCell.querySelector(".camera-wall__name")) : null;' +
+    'out.cellStillEmptyAfterPick = targetCell' +
+    '  ? targetCell.classList.contains("camera-wall__cell--empty") : null;' +
+    'out.menuClosedAfterPick = !document.querySelector("[data-camera-picker]");' +
+    // ④ 离开这一页再回来：探针自己写进去的那台相机必须已经被清掉。
+    'location.hash = "#/devices";' +
+    'await sleep(1300);' +
+    'location.hash = "#/";' +
+    'await sleep(1800);' +
+    'out.emptyCellsAfterRestore = emptyCellsNow().length;' +
+    'out.ok = true;' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+  log('camera picker: ' + JSON.stringify(cameraPicker))
+  if (cameraPicker.probeTimeout) {
+    problems.push('相机选择器探针超时 —— 这一段没有任何结论')
+  } else if (cameraPicker.reason === 'no-empty-cell') {
+    problems.push(
+      '总览页的相机墙上一个空白格都没有（相机台数 ≥ 档位）——「+ 添加视频通道」这条路没有被验证到：' +
+        JSON.stringify(cameraPicker)
+    )
+  } else {
+    if (cameraPicker.legacyHiddenHost) {
+      problems.push(
+        '相机选择器仍然挂在墙末尾的 1×1 隐藏宿主（.camera-wall__pickers）里，' +
+          '原生下拉贴在那个盒子上、离操作员点的那一格有 ' + cameraPicker.legacyHostToCellPx + 'px：' +
+          JSON.stringify({ host: cameraPicker.legacyHostRect, cell: cameraPicker.clickedCellRect })
+      )
+    }
+    if (!cameraPicker.menuPresent) {
+      problems.push('点空白格上的「+」没有弹出相机选择器（前端浮层不存在）：' + JSON.stringify(cameraPicker))
+    } else {
+      if (!cameraPicker.menuInsideViewport) {
+        problems.push('相机选择器没有整个落在视口里（跑到窗口外面去了）：' + JSON.stringify(cameraPicker.menuRect))
+      }
+      if (!cameraPicker.menuOnTop) {
+        problems.push('相机选择器被别的元素盖住了（中心点上最上层的不是它）：' + JSON.stringify(cameraPicker.menuRect))
+      }
+      if (!(cameraPicker.menuVerticalGapPx <= 16)) {
+        problems.push(
+          '相机选择器没有贴着被点的那一格（与那一格上下边的最小间隙 ' +
+            cameraPicker.menuVerticalGapPx + 'px）：' + JSON.stringify(cameraPicker.menuRect)
+        )
+      }
+      if (!cameraPicker.menuHorizontallyOverlapsCell) {
+        problems.push('相机选择器在水平方向不对着被点的那一格：' + JSON.stringify(cameraPicker.menuRect))
+      }
+      if (!cameraPicker.menuFocused) {
+        problems.push('相机选择器打开之后焦点没有进到浮层里（键盘用户选不了）')
+      }
+      // 清单为空时（库里只有一台相机、而它已经在墙上）必须有一句短状态词：
+      // 一块空浮层与「还没渲染出来」看起来一模一样。
+      if (
+        (cameraPicker.itemsBeforeFree || []).length === 0 &&
+        !String(cameraPicker.emptyLabelText || '').trim()
+      ) {
+        problems.push('相机选择器里一台可选的相机都没有，而且什么也没说（画了一块空浮层）')
+      }
+      if (cameraPicker.itemsBeforeFree.some((name) => !name)) {
+        problems.push('相机选择器里有一项没有名字：' + JSON.stringify(cameraPicker.itemsBeforeFree))
+      }
+      if (!cameraPicker.closedByEsc) problems.push('Esc 没有关掉相机选择器')
+      if (!cameraPicker.cellUnchangedAfterEsc) {
+        problems.push('Esc 关掉相机选择器之后那一格被改了（取消不该有副作用）')
+      }
+      // ②③ 腾出一台相机 → 选中它 → 读回那一格。腾不出来就如实说"没验证到"。
+      if (!cameraPicker.occupiedCellFound) {
+        problems.push('墙上没有一台已经在格子里的相机 —— 空清单那一半没有被验证到')
+      } else if (!cameraPicker.foundCloseItem) {
+        problems.push(
+          '右键菜单里找不到「关闭这一格」，探针没法腾出一台相机 —— ' +
+            '"在清单里选中一台相机"这条路没有被验证到（菜单项：' +
+            JSON.stringify(cameraPicker.menuLabels) + '）'
+        )
+      } else {
+        if (!(cameraPicker.emptyCellsAfterFree === cameraPicker.emptyCells + 1)) {
+          problems.push(
+            '「关闭这一格」没有真的腾出格子：空格从 ' + cameraPicker.emptyCells +
+              ' 变成 ' + cameraPicker.emptyCellsAfterFree + '（应当是 +1）'
+          )
+        }
+        if (!cameraPicker.reopened) {
+          problems.push('腾出一格之后那一格上没有「+」按钮')
+        } else if (!(cameraPicker.pickItems || []).length) {
+          problems.push(
+            '腾出一台相机之后，选择器里仍然一台可选相机都没有（选项来源坏了）：' +
+              JSON.stringify(cameraPicker.pickItems)
+          )
+        } else if (cameraPicker.placedName !== cameraPicker.firstItem) {
+          problems.push(
+            '选了相机之后那一格没有显示这台相机的名字（写没生效或没读回）：格子显示 ' +
+              JSON.stringify(cameraPicker.placedName) + '，选的是 ' + JSON.stringify(cameraPicker.firstItem)
+          )
+        }
+        if (cameraPicker.cellStillEmptyAfterPick === true) {
+          problems.push('选了相机之后那一格仍然是空的')
+        }
+        if (!cameraPicker.menuClosedAfterPick) {
+          problems.push('选完一台相机之后选择器没有关掉')
+        }
+      }
+      if (cameraPicker.emptyCellsAfterRestore !== cameraPicker.emptyCells) {
+        problems.push(
+          '离开总览页再回来，格子没有回到原来的样子：探针写进去的相机没有被清掉（' +
+            cameraPicker.emptyCellsAfterRestore + ' 个空格 vs 原来 ' + cameraPicker.emptyCells + ' 个）'
+        )
+      }
+    }
+  }
+
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)
 

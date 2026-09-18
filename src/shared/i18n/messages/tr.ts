@@ -2153,7 +2153,7 @@ export const tr: MessageSchema = {
     layoutGroup: 'Hücre düzeni',
     layoutLabel: '{count} hücre',
     pickDevice: 'Kamera seç',
-    pickPlaceholder: 'Bir kamera seçin',
+    pickNoOption: 'Seçilebilir kamera yok',
     replaceDevice: 'Kamerayı değiştir',
     noCamera: 'Henüz akustik kamera yok',
     assignToCell: 'Bu hücreye koy',

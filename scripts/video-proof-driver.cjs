@@ -1825,10 +1825,11 @@ function uiScript() {
     '     addButtons: emptyButtons.length,' +
     '     addLabels: emptyButtons.map((b) => b.getAttribute("aria-label") || ""),' +
     '     addTitles: emptyButtons.map((b) => b.getAttribute("title") || ""),' +
-    // Visible words only: the camera picker is still a real <select> (and its
-    // <label>), just visually hidden, and `textContent` would count its options as
-    // text. Cloning the cell and dropping the `.visually-hidden` subtrees leaves
-    // exactly what a person can read.
+    // Visible words only. The `.visually-hidden` strip is kept as a belt-and-braces
+    // measure: the picker used to be a hidden <select> and `textContent` would have
+    // counted its <option> labels as cell text. Since 2026-09-18 the picker is an
+    // overlay teleported to <body> (`CameraCellPicker`), so there is nothing hidden
+    // inside the cell to strip — the numbers below must be zero either way.
     '     texts: emptyCells.map((c) => {' +
     '       const copy = c.cloneNode(true);' +
     '       Array.prototype.slice.call(copy.querySelectorAll(".visually-hidden"))' +
@@ -1869,10 +1870,10 @@ function uiScript() {
     '         .some((s) => { const r = s.getBoundingClientRect(); return r.width > 4 || r.height > 4; })).length,' +
     // The strictest reading of the owner's requirement, and the one this probe now
     // measures: the empty cell must contain **zero text nodes** and **zero <select>**
-    // elements. The camera picker is a real <select>, so it cannot live inside the cell
-    // at all — it is hosted at wall level (`.camera-wall__pickers`), which is why there
-    // is nothing to hide. `texts` (above) strips the hidden subtrees and could therefore
-    // never prove this on its own.
+    // elements. The picker is an overlay rendered on <body> (it used to be a hidden
+    // wall-level <select>, see the 2026-09-18 bug in `CameraCellPicker.vue`), so there
+    // is nothing for the cell to hide. `texts` (above) strips hidden subtrees and could
+    // therefore never prove this on its own.
     '     textNodeCounts: emptyCells.map((c) => {' +
     '       const walker = document.createTreeWalker(c, NodeFilter.SHOW_TEXT, null);' +
     '       let textNodes = 0;' +
@@ -5866,8 +5867,9 @@ async function run() {
       }
     }
     // NO TEXT AT ALL, counted as TEXT NODES. "只有一个加号，不要任何文字说明" is not
-    // satisfied by hiding text: a visually-hidden <select> inside the cell still puts its
-    // `<option>` labels in the DOM, which is why the picker is hosted at wall level.
+    // satisfied by hiding text: a visually-hidden <select> inside the cell would still
+    // put its `<option>` labels in the DOM. The picker is an overlay on <body> since
+    // 2026-09-18, so the cell has nothing to hide in the first place.
     for (const count of empty.textNodeCounts || []) {
       if (count !== 0) problems.push('an empty cell still contains ' + count + ' text node(s)')
     }

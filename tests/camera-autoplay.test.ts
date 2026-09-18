@@ -484,7 +484,7 @@ describe('CameraVideoWall template', () => {
     }
   })
 
-  it('空白格只有一个 `+`：没有文字、没有下拉框在格子里', () => {
+  it('空白格只有一个 `+`：没有文字、没有格内的下拉框', () => {
     // 加号必须是**画出来**的（两条 SVG 线），不能是文字 —— 空白格里任何一个文本节点
     // 都是产品明确不要的「文字说明」。
     const addStart = source.indexOf('class="camera-wall__add"')
@@ -495,12 +495,21 @@ describe('CameraVideoWall template', () => {
     const plusStart = addBlock.indexOf('camera-wall__plus')
     const plusBlock = addBlock.slice(plusStart, addBlock.indexOf('</svg>', plusStart))
     assert.equal((plusBlock.match(/<line/g) ?? []).length, 2, '加号应当是两条线')
-    // 相机选择器挂在**墙级别**的隐藏宿主里（见 `.camera-wall__pickers`），所以空白格的
-    // DOM 里没有 `<select>`，也就没有 `<option>` 那几行文字。
-    const host = source.indexOf('class="camera-wall__pickers')
-    assert.ok(host > 0, '没有墙级别的选择器宿主')
-    const idAttr = source.indexOf(':id="`wall-pick-')
-    assert.ok(idAttr > host, '相机选择器仍然渲染在画面格里（空白格会有文本节点）')
+    /*
+     * 选择器**不再**是藏在墙末尾的原生 `<select>`（业主 2026-09-18 报的 bug：点「+」
+     * 之后「弹出来请选择相机，但位置被盖住 / 没有显示出来」—— 原生下拉贴在墙末尾那个
+     * 1×1 的 `.visually-hidden` 宿主上，离被点的那一格有几百像素）。现在是一块自己画的
+     * 浮层（`CameraCellPicker`，Teleport 到 `<body>`、位置由 `placeCameraPicker()` 算），
+     * 所以空白格的 DOM 里既没有 `<select>` 也没有 `<option>` —— 格里仍然一个字都不写。
+     *
+     * 断言看的是**去掉注释**之后的源码：解释这件事的注释里就有 `showPicker` 这几个字母。
+     */
+    const codeOnly = source
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+    assert.match(codeOnly, /<CameraCellPicker/)
+    assert.equal(codeOnly.includes('wall-pick-'), false, '又出现了「墙级别隐藏 <select>」那种写法')
+    assert.equal(codeOnly.includes('showPicker'), false, '又用回 showPicker() 了')
   })
 
   it('改「当前设备」不会直接起流：它只让自动起播被重新评估一次', () => {

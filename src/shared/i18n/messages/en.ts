@@ -2169,7 +2169,7 @@ export const en: MessageSchema = {
     layoutGroup: 'Cell layout',
     layoutLabel: '{count} cells',
     pickDevice: 'Choose camera',
-    pickPlaceholder: 'Select a camera',
+    pickNoOption: 'No camera available',
     replaceDevice: 'Replace camera',
     noCamera: 'No acoustic camera registered yet',
     assignToCell: 'Put in this cell',
