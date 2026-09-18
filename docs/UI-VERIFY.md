@@ -1549,7 +1549,10 @@ CPU**（`Get-Process` 里一个从 9/16 起跑、累计 3600 秒以上 CPU 的 `
   > 验证到的是**会话自动起来了**（状态行从"未启动"变成"接收中"，且没有任何点击）。
   > 相机上线后这张页面的数据要看 `scripts/video-proof-driver.cjs` 那条真机流程。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,100,957 字节**，sha256 `1FB4A00E8E2CC9ACD1D3243BC5C8BB77C3EAC08695B097DFD809F45866DCD779`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
