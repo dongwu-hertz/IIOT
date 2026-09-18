@@ -1785,7 +1785,10 @@ IP 地址 / **未确认告警**（有就说条数，没有就明说没有 "没�
   > 其中 2 条是那次异常的连带（超时 + 切不到设备）。改成**单独走一趟 `layout('/alarms?device=…')`**
   > 之后干净通过。
 
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,105,388 字节**，sha256 `ABFB071F5CCEDD54FD2CDE1C520CF6410BDFED1AC0C2CC349B55F8030A9F6396`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
