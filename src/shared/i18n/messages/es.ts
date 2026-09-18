@@ -1881,6 +1881,7 @@ export const es: MessageSchema = {
     /** La tarjeta de alarma de la página de monitorización (junto al control de cámara). */
     entryHint:
       'Las estrategias y condiciones se aplican en el equipo; esta página solo las lee y las edita.',
+    noAlarms: 'Aún no hay registros de alarma de esta cámara en este equipo.',
     goAlarmList: 'Abrir el registro de alarmas',
     // `subtitle` se eliminó junto con el aviso que se mostraba; `refresh` era el
     // texto del antiguo botón de actualizar, ahora solo con icono y por tanto

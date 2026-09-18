@@ -3332,6 +3332,19 @@ async function run() {
     '    volumeSlider: (function(){ const el = document.querySelector("[data-action=camera-volume]");' +
     '      return el ? { value: Number(el.value), disabled: !!el.disabled } : null; })(),' +
     /*
+     * 第 24 条：这一页要支持 **检测模式 / 告警配置 / 告警信息 / 历史告警展示**。
+     *   · 检测模式 = 控制面板的「模式」那一段；
+     *   · 告警配置 = 那张卡片的按钮（对话框）；
+     *   · 告警信息 = 就地列出来的最近几条（`[data-camera-alarms]`）；
+     *   · 历史告警 = 「查看告警记录」那个链接，**必须带 `?device=`**。
+     */
+    '    detectModeSection: !!document.querySelector("[data-camera-panel=mode]"),' +
+    '    alarmListPresent: !!document.querySelector("[data-camera-alarms]"),' +
+    '    alarmListEmpty: !!document.querySelector("[data-camera-alarms-empty]"),' +
+    '    alarmItems: document.querySelectorAll("[data-camera-alarm-id]").length,' +
+    '    alarmHistoryHref: (function(){ const a = document.querySelector("[data-link=camera-alarm-history]");' +
+    '      return a ? a.getAttribute("href") : null; })(),' +
+    /*
      * ⑤ 16:9 视频窗口：量的是**窗口本身**的宽高比，不是视频源的比例。
      * 判据用 16/9 = 1.7778，允许 ±0.05（边框、圆角与 devicePixelRatio 的取整）。
      */
@@ -3455,6 +3468,50 @@ async function run() {
     }
     if (!monitorCamera.volumeSlider) {
       problems.push('控制条里没有音量滑杆')
+    }
+    /*
+     * 第 24 条：检测模式 / 告警信息 / 历史告警链接。
+     */
+    if (monitorCamera.detectModeSection !== true) {
+      problems.push('相机页没有「检测模式」（控制面板里没有 [data-camera-panel=mode]）')
+    }
+    if (monitorCamera.alarmListPresent !== true) {
+      problems.push('相机页没有告警信息那一块（[data-camera-alarms]）')
+    } else if (monitorCamera.alarmItems === 0 && monitorCamera.alarmListEmpty !== true) {
+      // 「一条都没有」与「没渲染」必须分得开：前者应当有那句空态。
+      problems.push('告警信息既没有条目、也没有空态 —— 分不出"没有告警"与"没渲染"')
+    }
+    if (!String(monitorCamera.alarmHistoryHref || '').includes('device=')) {
+      problems.push(
+        '「查看告警记录」没有带上这一台设备：' + JSON.stringify(monitorCamera.alarmHistoryHref)
+      )
+    }
+    // 那条链接的**后半段**：告警记录页的设备筛选要真的预置成这一台。
+    if (monitorCamera.alarmHistoryHref) {
+      const deviceId = String(monitorCamera.alarmHistoryHref).split('device=').pop() ?? ''
+      /*
+       * 单独走一趟（不能在相机那段里顺手做：那段脚本是**非 async** 的 IIFE，
+       * 里面写 `await` 会抛 `Uncaught ReferenceError: await is not defined` ——
+       * 实测踩过，报告里当时是 3 条问题，其中 2 条是那次异常的连带）。
+       */
+      const history = await layout('/alarms?device=' + encodeURIComponent(deviceId), '(() => {' +
+        'const sel = document.querySelector(".page select");' +
+        'return JSON.stringify({' +
+        '  value: sel ? sel.value : null,' +
+        '  options: sel ? sel.options.length : -1' +
+        '});})()')
+      if (history.probeTimeout === true) {
+        problems.push('量告警记录页的预置筛选时超时')
+      } else if (history.value !== deviceId) {
+        problems.push(
+          '点了「查看告警记录」之后，告警记录页的设备筛选不是这一台：' +
+          JSON.stringify(history) + '（应为 ' + deviceId + '）'
+        )
+      } else {
+        log('camera alarms : 告警记录页的预置筛选 = ' + JSON.stringify(history))
+      }
+    } else {
+      problems.push('相机页没有「查看告警记录」那条链接')
     }
     /*
      * ⑤ 16:9 视频窗口：窗口本身的宽高比必须是 16:9（1.7778 ± 0.05）。

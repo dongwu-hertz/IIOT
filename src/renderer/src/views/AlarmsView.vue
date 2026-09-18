@@ -15,7 +15,7 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { AlarmEvent, AlarmQuery } from '@shared/domain/models'
 import { AlarmType, ALARM_NOTE_MAX_LENGTH, CHANNEL_COUNT } from '@shared/domain/models'
 import type { EventSeverity } from '@shared/domain/event-center'
@@ -41,6 +41,7 @@ import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const alarms = useAlarmsStore()
 const devices = useDevicesStore()
 
@@ -208,6 +209,20 @@ function reset(): void {
 
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
+  /*
+   * 地址栏里的 `?device=<id>` 预置设备筛选（业主 2026-09-18 第 10 批第 24 条）。
+   *
+   * 为什么要有它：相机页上那条「查看告警记录」原来指向**不带任何筛选**的 /alarms ——
+   * 点过去看到的是全库的告警，"这一台的记录"要靠操作员自己在下拉里再选一次。
+   * 一个从"这一台相机"出发的入口，落到一个不筛这一台的列表上，是界面在答非所问。
+   *
+   * 预设**排在 reload 之前**：读一次库就够了（筛选变化会再触发一次，是同一份数据）。
+   * 只在 id 真的存在于设备列表里时才用 —— 一个过期的书签不该把列表筛成空的。
+   */
+  const fromQuery = typeof route.query.device === 'string' ? route.query.device : ''
+  if (fromQuery !== '' && devices.devices.some((device) => device.id === fromQuery)) {
+    filters.deviceId = fromQuery
+  }
   await reload()
 })
 

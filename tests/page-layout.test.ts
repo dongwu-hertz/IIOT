@@ -447,11 +447,32 @@ describe('⑨ 相机配置搬家：同实现分块渲染 + 页签按机型', () 
     )
   })
 
-  it('实时监测页只留「检测启停 + 应用场景」两块', () => {
-    assert.ok(
-      /<CameraControlPanel[\s\S]*?:sections="\['detect', 'preset'\]"/.test(monitor),
-      '实时监测页没有限定 sections（会把四块配置也画出来）'
-    )
+  /**
+   * 实时监测页的控制面板**按 `sections` 限定**：不限定就会把维护/升级那些也画出来。
+   *
+   * **口径在 2026-09-18 第 10 批第 24 条改过一次**：原来是 `['detect', 'preset']`
+   * （⑨ 把「模式」搬去了设备详情页），第 24 条要求这一页「支持检测模式」，所以
+   * `mode`（工作模式＝局放 / 气体泄漏 / 机械）回来了。这里断言的是**现在的**那一组，
+   * 并且仍然**必须限定** —— 不限定会把维护与升级也画到实时页上，那是另一件事。
+   */
+  it('实时监测页按 sections 限定，而且第 24 条之后包含「检测模式」', () => {
+    const usage = /<CameraControlPanel[\s\S]*?:sections="\[([^\]]*)\]"/.exec(monitor)
+    assert.ok(usage, '实时监测页没有限定 sections（会把维护/升级那几块也画出来）')
+    const sections = (usage[1] ?? '').replace(/\s/g, '')
+    for (const want of ["'mode'", "'detect'", "'preset'"]) {
+      assert.ok(
+        sections.includes(want),
+        `实时监测页的控制面板缺少 ${want}（第 24 条要求这一页支持检测模式）：${sections}`
+      )
+    }
+    // 维护与升级**不许**回到这一页（第 24 条没有要求它，而它们在设备详情页）。
+    for (const unwanted of ["'maintenance'", "'upgrade'"]) {
+      assert.equal(
+        sections.includes(unwanted),
+        false,
+        `实时监测页出现了 ${unwanted}：那是设备详情页的页签`
+      )
+    }
   })
 
   it('设备管理页：相机三块各占一个页签，且相机**不再看到 FA8 的页签**', () => {

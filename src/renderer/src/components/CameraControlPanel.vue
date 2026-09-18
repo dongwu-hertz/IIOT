@@ -1101,8 +1101,8 @@ watch(
       <section v-if="wants('mode') || wants('preset') || wants('detect')" class="card cctl__card cctl__section">
         <h4 class="cctl__label cctl__section-title">{{ t('cameraControlUi.modeTitle') }}</h4>
 
-      <!-- ---- 检测模式（⑨ 之后只在设备管理里渲染） --------------------- -->
-      <div v-if="wants('mode')" class="cctl__row">
+      <!-- ---- 检测模式（⑨ 搬到设备管理；第 24 条之后两处都能渲染） ------- -->
+      <div v-if="wants('mode')" class="cctl__row" data-camera-panel="mode">
         <span class="cctl__label">{{ t('cameraControlUi.modeTitle') }}</span>
         <div class="cctl__modes">
           <button

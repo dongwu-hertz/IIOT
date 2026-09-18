@@ -1886,6 +1886,7 @@ export const tr: MessageSchema = {
     /** İzleme sayfasındaki alarm kartı (kamera kontrolünün yanında). */
     entryHint:
       'Stratejiler ve koşullar cihazda geçerlidir; bu sayfa yalnızca okur ve düzenler.',
+    noAlarms: 'Bu makinede bu kamera için henüz alarm kaydı yok.',
     goAlarmList: 'Alarm kayıtlarını aç',
     // `subtitle` gösterilen uyarı satırıyla birlikte kaldırıldı; `refresh` eski
     // yenile düğmesinin metniydi, düğme artık yalnızca simge olduğu için adı

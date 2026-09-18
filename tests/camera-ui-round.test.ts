@@ -41,10 +41,12 @@ function count(source: string, pattern: RegExp): number {
 const ALARM = 'src/renderer/src/components/CameraAlarmDialog.vue'
 const CONTROL = 'src/renderer/src/components/CameraControlPanel.vue'
 const MONITOR = 'src/renderer/src/views/MonitorView.vue'
+const DETAIL = 'src/renderer/src/views/DeviceDetailView.vue'
 
 const alarm = read(ALARM)
 const control = read(CONTROL)
 const monitor = read(MONITOR)
+const detail = read(DETAIL)
 
 /** 取出一对标记之间的源码；找不到就断言失败（改名/删除必须报出来，不能静默通过）。 */
 function between(source: string, open: string, close: string, label: string): string {
@@ -575,6 +577,99 @@ describe('相机界面这一轮的目录条目', () => {
           `${locale}.cameraStreamUi.${key} 丢失了（状态仍然要说得出来）`
         )
       }
+    }
+  })
+
+  /**
+   * 第 24 条（2026-09-18 第 10 批）：「该页（相机页）支持检测模式、告警配置、告警信息与历史告警展示」。
+   *
+   * 四件事各自的落点，以及**一处与既有决定的冲突**：
+   *   · **检测模式**：「模式」那一段（工作模式＝局放/气体泄漏/机械）按 2026-09-17（⑨）**搬去了**
+   *     设备详情页；第 24 条把它要回来了 —— 所以这里钉的是"它在这一页的 `sections` 里"，
+   *     同时钉住设备详情页那几个页签**没有**被删（同一份组件、两个入口）。
+   *   · **告警配置**：对话框（本来就在）。
+   *   · **告警信息**：这一台最近十条告警，就地列出来。
+   *   · **历史告警展示**：「查看告警记录」必须带上 `?device=`，并且告警记录页要认这个参数
+   *     （一个从"这一台"出发的入口落到全库列表上是答非所问）。
+   */
+  it('㉔ 检测模式回到这一页，而设备详情页那几个页签没有丢（同组件两个入口）', () => {
+    assert.match(
+      monitor,
+      /:sections="\['mode', 'detect', 'preset'\]"/,
+      '相机页的控制面板没有包含「模式」（检测模式）那一段'
+    )
+    // 设备详情页仍然按自己的页签取用同一个组件（不是把组件搬回来）。
+    const detailUsage = detail.slice(detail.indexOf('<CameraControlPanel'))
+    assert.ok(
+      detailUsage.includes(':sections='),
+      '设备详情页不再按 sections 取用控制面板：两个入口开始分叉'
+    )
+    assert.ok(
+      detail.includes("import CameraControlPanel from '@renderer/components/CameraControlPanel.vue'"),
+      '设备详情页不再用同一个组件：会出现第二份实现'
+    )
+  })
+
+  it('㉔ 告警信息就地列出来，取数与告警记录页同源', () => {
+    assert.ok(monitor.includes('data-camera-alarms'), '相机页没有告警信息那一块')
+    assert.ok(monitor.includes('data-camera-alarms-empty'), '没有"这台相机还没有告警"的空态')
+    assert.match(
+      monitor,
+      /window\.api\.alarms\.query\(\{ deviceId, limit: 10 \}\)/,
+      '告警信息不是按这台设备查的（那会显示别的相机的告警）'
+    )
+    // 换设备要重新读：否则列表还是上一台的。
+    const switchBlock = monitor.slice(monitor.indexOf('watch(selectedDeviceId'))
+    assert.match(
+      switchBlock.slice(0, 2500),
+      /await loadCameraAlarms\(id\)/,
+      '换相机之后没有重新读告警信息'
+    )
+    // 切走之后到达的结果不许写进另一台的列表。
+    assert.match(
+      monitor,
+      /if \(selectedDeviceId\.value !== deviceId\) return/,
+      '告警信息的回包没有做"还是不是这一台"的守卫'
+    )
+  })
+
+  it('㉔ 「查看告警记录」带上这一台设备，而且告警记录页认这个参数', () => {
+    assert.match(
+      monitor,
+      /:to="\{ path: '\/alarms', query: \{ device: selectedDeviceId \} \}"/,
+      '「查看告警记录」没有带上这一台设备'
+    )
+    const alarms = read('src/renderer/src/views/AlarmsView.vue')
+    assert.match(alarms, /const route = useRoute\(\)/, '告警记录页没有读路由')
+    assert.match(
+      alarms,
+      /const fromQuery = typeof route\.query\.device === 'string' \? route\.query\.device : ''/,
+      '告警记录页没有读 ?device='
+    )
+    // 预置必须**排在 reload 之前**：读一次库就够。
+    const mountedBlock = alarms.slice(alarms.indexOf('onMounted(async () => {'))
+    const mountedBody = mountedBlock.slice(0, mountedBlock.indexOf('\n})'))
+    assert.ok(
+      mountedBody.indexOf('filters.deviceId = fromQuery') < mountedBody.indexOf('await reload()'),
+      '?device= 预置排在 reload 之后：那一次查询仍然是不筛设备的'
+    )
+    // 过期的书签（设备已经不在库里）不许把列表筛成空的。
+    assert.match(
+      mountedBody,
+      /devices\.devices\.some\(\(device\) => device\.id === fromQuery\)/,
+      '?device= 没有校验设备是否存在'
+    )
+  })
+
+  it('新增的文案在四种语言里齐全', () => {
+    for (const [locale, catalogue] of Object.entries(CATALOGUES)) {
+      const alarmUi = (catalogue as { cameraAlarmUi: Record<string, string> }).cameraAlarmUi
+      assert.ok(
+        typeof alarmUi.noAlarms === 'string' && alarmUi.noAlarms.trim().length > 0,
+        `${locale}.cameraAlarmUi.noAlarms 缺失`
+      )
+      assert.match(alarmUi.noAlarms, /相机|camera|cámara|kamera/i,
+        `${locale} 的空态没有说清是"这一台相机"`)
     }
   })
 

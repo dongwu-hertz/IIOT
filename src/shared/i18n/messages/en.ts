@@ -1907,6 +1907,7 @@ export const en: MessageSchema = {
     title: 'Camera alarm configuration',
     /** The alarm card on the live-monitoring page (side by side with camera control). */
     entryHint: 'Strategies and conditions take effect on the device; this page only reads and edits them.',
+    noAlarms: 'No alarm records for this camera on this machine yet.',
     goAlarmList: 'Open the alarm list',
     // `subtitle` was deleted with the notice line it rendered; `refresh` was the
     // text label of the old refresh button, which is now icon-only and therefore

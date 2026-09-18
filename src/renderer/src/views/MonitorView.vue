@@ -36,7 +36,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
-import type { Channel, Device, RealtimeFeature } from '@shared/domain/models'
+import type { AlarmEvent, Channel, Device, RealtimeFeature } from '@shared/domain/models'
 import { CHANNEL_COUNT } from '@shared/domain/models'
 import type { CameraLiveState, CameraLiveStatus } from '@shared/domain/camera-live'
 import {
@@ -60,7 +60,7 @@ import {
   channelStateLabelKey,
   type ChannelState
 } from '@renderer/lib/channelState'
-import { channelLabel, formatBytes, formatDuration, formatNumber } from '@renderer/lib/format'
+import { channelLabel, formatBytes, formatDateTime, formatDuration, formatNumber } from '@renderer/lib/format'
 import {
   channelFeatureState,
   channelFeatureStateLabelKey,
@@ -791,6 +791,34 @@ async function refreshCameraState(): Promise<void> {
   cameraLive.value = result.success ? (unwrap(result)?.[0] ?? null) : null
 }
 
+// ---------------------------------------------------------------------------
+// 这一台相机的告警信息（第 24 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 最近几条告警，就地显示在「告警配置」那张卡片里。
+ *
+ * 为什么在页面上直接列出来、而不是只给一个"查看告警记录"的链接：第 24 条要的是
+ * **告警信息与历史告警展示**两件事 —— 链接解决"去看全部"，这几行解决"现在有没有事"。
+ * 数据与告警记录页同源（同一个 `alarms.query`），所以两处不会各说一套。
+ *
+ * 只读一次、不订阅：这一页不持有告警的实时推送（那一条在事件中心与右上角告警图标里），
+ * 刷新由换设备与「刷新」按钮触发。
+ */
+const cameraAlarms = ref<AlarmEvent[]>([])
+const cameraAlarmsLoading = ref(false)
+
+async function loadCameraAlarms(deviceId: string): Promise<void> {
+  cameraAlarms.value = []
+  if (!deviceId) return
+  cameraAlarmsLoading.value = true
+  const result = await callApi(() => window.api.alarms.query({ deviceId, limit: 10 }))
+  cameraAlarmsLoading.value = false
+  // 切走了设备：这一批结果不该写进另一台的列表。
+  if (selectedDeviceId.value !== deviceId) return
+  cameraAlarms.value = result.success ? (unwrap(result)?.items ?? []) : []
+}
+
 async function startCameraLive(): Promise<void> {
   const id = selectedDeviceId.value
   if (!id || cameraBusy.value) return
@@ -1314,6 +1342,8 @@ onMounted(async () => {
       // 所以起播是静音的，出声要由滑杆那一次手势决定。
       liveVolume.value = loadCameraVolume(selectedDeviceId.value)
       audioUnlocked.value = false
+      // 第 24 条：告警信息（最近几条）与自动起播一起读一次。
+      await loadCameraAlarms(selectedDeviceId.value)
       await autoPlayCameraIfWorking()
     } else if (isVoiceprint.value) {
       await startSession()
@@ -1374,6 +1404,8 @@ watch(selectedDeviceId, async (id) => {
     audioUnlocked.value = false
     await refreshCameraState()
     await refreshRecordingState()
+    // 第 24 条：换了一台相机要重新读它的告警信息（否则列表还是上一台的）。
+    await loadCameraAlarms(id)
     // 第 21 条：**选中即自动播放**。挂在换设备这条路径上，与挂载那条走同一个
     // `autoPlayCameraIfWorking()` —— 两条入口读的是同一份判定，不会一个自动一个不自动。
     await autoPlayCameraIfWorking()
@@ -1862,14 +1894,20 @@ const sessionLabel = computed(() => {
       />
 
       <!--
-        相机控制：这里**只留实时要看/要按的两块** ——「检测启停」与「应用场景」。
-        「检测模式 / 应用模式 / 告警策略 / 维护 / 升级」按业主 2026-09-17（⑨）搬去了
-        **设备管理的配置界面**（`DeviceDetailView` 的相机页签），同一份实现按 `sections` 取用。
+        相机控制：**检测模式 / 应用场景 / 检测启停**。
+
+        业主 2026-09-18 第 10 批第 24 条要求这一页「支持检测模式、告警配置、告警信息与历史告警展示」，
+        **推翻了 2026-09-17（⑨）那条**「检测模式…搬去设备管理的配置界面」。所以 `mode`
+        （工作模式＝**检测模式**：局放 / 气体泄漏 / 机械）在这一页回来了。
+
+        实现上没有第二份：`CameraControlPanel` 是按 `sections` 取用的同一份组件，
+        设备详情页那几个页签照旧 —— 两处共享同一批 IPC 与同一套"读了要写回"的规矩
+        （那个组件文件头写的就是这条理由）。
       -->
       <CameraControlPanel
         v-if="isCamera"
         :device-id="selectedDeviceId"
-        :sections="['detect', 'preset']"
+        :sections="['mode', 'detect', 'preset']"
       />
 
       <section v-if="isCamera" class="card camera-alarm-entry">
@@ -1881,7 +1919,40 @@ const sessionLabel = computed(() => {
           <button type="button" class="btn btn--primary btn--sm" @click="alarmDialogOpen = true">
             {{ t('cameraNvrUi.menuAlarmConfig') }}
           </button>
-          <RouterLink class="btn btn--sm" to="/alarms">{{ t('cameraAlarmUi.goAlarmList') }}</RouterLink>
+          <!--
+            第 24 条的「历史告警展示」：**这一台**的记录。带上 `?device=` 之后
+            告警记录页会预置设备筛选（见 `AlarmsView` 的 onMounted）——
+            原来这个链接指向不筛任何设备的 /alarms，一个从"这一台相机"出发的入口
+            落到全库列表上是答非所问。
+          -->
+          <RouterLink
+            class="btn btn--sm"
+            :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
+            data-link="camera-alarm-history"
+          >
+            {{ t('cameraAlarmUi.goAlarmList') }}
+          </RouterLink>
+        </div>
+
+        <!--
+          告警信息（第 24 条）：这一台相机**最近几条**告警，就地看得见，
+          不必先跳走。读的是同一个 `alarms.query`，与告警记录页同一份数据。
+        -->
+        <div class="camera-alarm-entry__list" data-camera-alarms>
+          <p v-if="cameraAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
+          <p v-else-if="cameraAlarms.length === 0" class="muted" data-camera-alarms-empty>
+            {{ t('cameraAlarmUi.noAlarms') }}
+          </p>
+          <ul v-else class="camera-alarm-entry__items">
+            <li v-for="alarm in cameraAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
+              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+              <span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
+              <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
+                {{ alarm.snapshotDir ? t('mapUi.hasSnapshot') : t('mapUi.noSnapshot') }}
+              </span>
+              <span v-if="alarm.deviceReason" class="muted">{{ alarm.deviceReason }}</span>
+            </li>
+          </ul>
         </div>
       </section>
 
@@ -2717,6 +2788,42 @@ const sessionLabel = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/*
+ * 这一台相机的告警信息（第 24 条）。
+ *
+ * 只列最近十条、超过就滚：这是"现在有没有事"的一眼，不是告警记录页（那一条由旁边的
+ * 「查看告警记录」带 `?device=` 过去）。行内不做表格 —— 四条信息（时间 / 声压级 /
+ * 有无抓图 / 设备原文）在一行里读完，比一个五列表格在这里更省地方。
+ */
+.camera-alarm-entry__list {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-2);
+}
+
+.camera-alarm-entry__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.camera-alarm-entry__items li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.camera-alarm-entry__items li > span:first-child {
+  font-variant-numeric: tabular-nums;
+  min-width: 132px;
 }
 
 /* 全屏时铺满：窗口比例这时由屏幕决定（`<video>` 仍然 contain，不拉伸）。 */
