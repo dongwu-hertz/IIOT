@@ -25,6 +25,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { formatDateTime } from '@renderer/lib/format'
 import { documentTitle, pageTitle } from '@renderer/i18n'
 import AlarmLinkagePanel from '@renderer/components/AlarmLinkagePanel.vue'
@@ -33,6 +34,7 @@ const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
+const uiRefresh = useUiRefreshStore()
 
 const refreshing = ref(false)
 const lastRefreshAt = ref(0)
@@ -81,6 +83,13 @@ async function refresh(): Promise<void> {
   refreshing.value = true
   try {
     await devices.refreshStatus()
+    /*
+     * 同时让**当前这一页**重读它自己的数据（业主 2026-09-19 更正第 4 条：页面里那几颗
+     * 单独的刷新按钮都删掉了，顶栏这一颗成了唯一的刷新）。
+     * 顶栏不认识任何一页，只把"该重读了"这件事说出去；每一页按自己的方式重读
+     * （有的重查库、有的只重读诊断读数）—— 见 `stores/uiRefresh.ts`。
+     */
+    uiRefresh.bump()
     lastRefreshAt.value = Date.now()
   } finally {
     refreshing.value = false

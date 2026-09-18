@@ -82,7 +82,7 @@ export const es: MessageSchema = {
        * debajo de Resumen (lote 10, punto 12: la página también lleva un servicio GIS o un
        * plano, así que «mapa de dispositivos» ya no la describe).
        */
-      map: 'Información de mapas (GIS)',
+      map: 'Información de mapas',
       events: 'Centro de eventos y alarmas',
       recordings: 'Grabaciones',
       samples: 'Biblioteca de muestras',
@@ -544,7 +544,6 @@ export const es: MessageSchema = {
   },
 
   trendsUi: {
-    querying: 'Consultando…',
     noDeviceTitle: 'Añada primero un equipo',
     goToDevices: 'Ir a Equipos',
     filterDevice: 'Equipo',

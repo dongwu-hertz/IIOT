@@ -114,7 +114,7 @@ export const zhCN = {
        * 『地图信息（GIS）』并移到设备管理上方、总览下方」—— 名字与顺序都是业主给的。
        * 名字里带上 GIS 是因为这一页要放 GIS 服务/平面图（第 13 条），不只是几个点。
        */
-      map: '地图信息（GIS）',
+      map: '地图信息',
       /**
        * 事件与告警中心（产品要求「设置事件和告警中心」）。
        *
@@ -676,7 +676,6 @@ export const zhCN = {
   },
 
   trendsUi: {
-    querying: '查询中…',
     noDeviceTitle: '请先添加设备',
     goToDevices: '前往设备管理',
     filterDevice: '设备',

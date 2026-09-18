@@ -195,7 +195,7 @@ describe('应用外壳：页脚的落点与顶栏指示器', () => {
    * 探针会如实说"跳过"，而这条守卫保证"接线本身"仍然被钉住。
    * 卡片的边界用 `templateBlock` 取那段 `<section class="card">…</section>`。
    */
-  it('历史趋势：两个动作在筛选卡片里，页头不回来，设备下拉收窄了', () => {
+  it('历史趋势：动作在筛选卡片里，页头不回来，设备下拉收窄了（「刷新」已按更正第 4 条删掉）', () => {
     const source = stripCssComments(read('src/renderer/src/views/TrendsView.vue'))
     assert.equal(
       /class="page-header"/.test(source),
@@ -211,8 +211,22 @@ describe('应用外壳：页脚的落点与顶栏指示器', () => {
     const card = source.slice(cardStart, cardEnd)
     assert.ok(card.includes('trend-actions'), '筛选卡片里没有 trend-actions 那一块')
     assert.ok(
-      card.includes("t('common.refresh')") && card.includes("t('settingsUi.trendFlushNow')"),
-      '刷新 / 立即落盘必须画在筛选卡片**里面**'
+      card.includes("t('settingsUi.trendFlushNow')"),
+      '「立即落盘」必须画在筛选卡片**里面**'
+    )
+    /*
+     * 更正第 4 条（2026-09-19）：「每个子页面里面的单独刷新按钮都应该删除」——
+     * 这一页原来那颗「刷新」与顶栏那颗重复，已经删掉（重查由顶栏那颗触发，见
+     * `stores/uiRefresh.ts`）。所以这里断言的是**它没有回来**。
+     */
+    assert.equal(
+      /t\('common\.refresh'\)/.test(source),
+      false,
+      '历史趋势页又出现了自己的「刷新」按钮（业主更正第 4 条要求删掉）'
+    )
+    assert.ok(
+      /watch\(\s*\(\) => uiRefresh\.tick/.test(source),
+      '删掉刷新按钮之后没有接上顶栏那颗（否则就没有任何办法重查当前筛选了）'
     )
     assert.ok(
       /\.field--wide\s*\{[^}]*flex:\s*0 0 auto/.test(source) &&

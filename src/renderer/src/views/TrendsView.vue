@@ -38,6 +38,7 @@ import {
   TREND_RANGE_OPTIONS,
   useTrendsStore
 } from '@renderer/stores/trends'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { channelState, channelStateLabelKey, type ChannelState } from '@renderer/lib/channelState'
 import {
@@ -69,6 +70,7 @@ const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
 const trends = useTrendsStore()
+const uiRefresh = useUiRefreshStore()
 
 const selectedDeviceId = ref('')
 /** Local text mirrors of the custom bounds, so typing is never fought by a re-render. */
@@ -678,6 +680,15 @@ watch(
 onUnmounted(() => {
   trends.cancelPendingQuery()
 })
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：页面里那颗「刷新」删掉之后，
+ * 重查当前筛选条件这件事由它触发。`refresh()` 里做的正是原来那颗按钮做的事。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => refresh()
+)
 </script>
 
 <template>
@@ -847,19 +858,13 @@ onUnmounted(() => {
           </div>
 
           <!--
-            刷新 / 立即落盘：产品要求与设备选择放在**同一张卡片**里。
-            放在筛选栏末尾并推到右端（`.trend-actions`）——它们作用于整组筛选条件，
-            不属于某一个下拉框。
+            立即落盘：与设备选择放在**同一张卡片**里（产品要求），放在筛选栏末尾并推到右端
+            （`.trend-actions`）——它作用于整组筛选条件，不属于某一个下拉框。
+
+            **「刷新」那一颗已经删掉**（业主 2026-09-19 更正第 4 条：页面里单独的刷新按钮都删掉）。
+            重查当前筛选走顶栏那颗唯一的刷新（见 `stores/uiRefresh.ts` 与下面的 watch）。
           -->
           <div class="btn-row trend-actions">
-            <button
-              type="button"
-              class="btn"
-              :disabled="!selectedDeviceId || trends.loading"
-              @click="refresh"
-            >
-              {{ trends.loading ? t('trendsUi.querying') : t('common.refresh') }}
-            </button>
             <button type="button" class="btn" :disabled="flushing" @click="flushNow">
               {{ flushing ? t('settingsUi.trendFlushing') : t('settingsUi.trendFlushNow') }}
             </button>

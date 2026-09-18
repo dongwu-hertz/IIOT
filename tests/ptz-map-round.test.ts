@@ -243,11 +243,22 @@ describe('点位图：不联网、点声呐看抓图', () => {
     )
   })
 
-  it('页面名只有一处：面板标题用 `app.nav.map`，画布的无障碍名另说', () => {
-    // 第 12 条改了名字之后，同一句名字出现在顶栏/侧栏/面板标题三处 —— 只能有一个来源。
+  it('页面名只在顶栏那一处：页内不再有标题，名字改挂在 `<section>` 的无障碍属性上', () => {
+    /*
+     * 更正第 2 条（2026-09-19）：「地图信息出现了两个标题，可以把第一个删除掉」——
+     * 删掉的是**页内**那一个 `<h3 class="section-title">`，因为外层框架的标题栏
+     * 已经写了页面名（这也是全应用从 2026-09-16 起就有的口径：页面内不再画标题）。
+     * 名字没有丢：它成了这一块 `<section>` 的 `aria-label`，否则读屏走到这里只剩一串数字。
+     */
+    assert.equal(
+      /<h3[^>]*class="section-title"[^>]*>\{\{\s*t\('app\.nav\.map'\)/.test(mapTemplate),
+      false,
+      '页内又画了一个写着页面名的标题（与顶栏重复）'
+    )
     assert.ok(
-      mapTemplate.includes("t('app.nav.map')"),
-      '面板标题没有复用页面名（app.nav.map）'
+      mapTemplate.includes('data-map-panel') &&
+        /data-map-panel[^>]*:aria-label="t\('app\.nav\.map'\)"/.test(mapTemplate),
+      '地图区没有用页面名当无障碍名字（删了标题之后这一块就没名字了）'
     )
     assert.equal(
       /mapUi\.mapTitle/.test(mapView),
@@ -262,22 +273,24 @@ describe('点位图：不联网、点声呐看抓图', () => {
     assert.ok(/onUnmounted\(\(\) => \{\s*void closeSnapshots\(\)/.test(mapView), '离开页面没有关端点')
   })
 
-  it('四种语言的地图文案齐全，而且名字是业主给的那一个', () => {
+  it('四种语言的地图文案齐全，而且名字**不带括号与 GIS**', () => {
     for (const locale of Object.keys(CATALOGUES)) {
       for (const key of ['app.nav.map', 'mapUi.canvasLabel', 'mapUi.noPoints', 'mapUi.snapshotNotCaptured']) {
         assert.ok(messageAt(locale, key), `${locale} 缺 ${key}`)
       }
     }
-    // 第 12 条：名字从「点位图」改成「地图信息（GIS）」。中文这一条逐字带上 GIS。
-    assert.match(String(messageAt('zh-CN', 'app.nav.map')), /地图信息（GIS）/, '中文名不是第 12 条给的那一个')
-    // 四本目录里都得是"地图 + GIS"的说法，不能只有中文改了。
-    for (const locale of ['en', 'es', 'tr']) {
-      assert.match(
-        String(messageAt(locale, 'app.nav.map')),
-        /GIS/,
-        `${locale} 的名字里没有 GIS`
-      )
+    /*
+     * 名字改过两次，两次都是业主给的：
+     *   ① 第 12 条（2026-09-18）：「点位图」→「地图信息（GIS）」；
+     *   ② 更正第 1 条（2026-09-19）：**把括号和 GIS 去掉**。
+     * 所以现在四种语言里都不该再有那对括号。
+     */
+    for (const locale of Object.keys(CATALOGUES)) {
+      const name = String(messageAt(locale, 'app.nav.map'))
+      assert.equal(/（GIS）|\(GIS\)/.test(name), false, `${locale} 的名字里还带着 GIS 括号：${name}`)
+      assert.equal(/[（(]/.test(name), false, `${locale} 的名字里还有括号：${name}`)
     }
+    assert.equal(String(messageAt('zh-CN', 'app.nav.map')), '地图信息', '中文名不是更正第 1 条给的那一个')
     // 点位图不能把"没有点位"写成"地图加载失败"：那不是网络问题。
     assert.equal(/加载失败|loading failed/i.test(String(messageAt('zh-CN', 'mapUi.noPoints'))), false)
   })

@@ -81,7 +81,7 @@ export const en: MessageSchema = {
        * Overview (owner batch 10, item 12: the page also carries a GIS service or floor plan,
        * so "device map" no longer covers it).
        */
-      map: 'Map information (GIS)',
+      map: 'Map information',
       /**
        * Event & alarm centre. Unlike `/alarms` (acoustic-box rows only) this page
        * merges three sources newest-first: camera detection logs, local alarm
@@ -558,7 +558,6 @@ export const en: MessageSchema = {
   },
 
   trendsUi: {
-    querying: 'Querying…',
     noDeviceTitle: 'Add a device first',
     goToDevices: 'Go to Devices',
     filterDevice: 'Device',

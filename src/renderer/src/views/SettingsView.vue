@@ -14,6 +14,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AppSettingsPatch } from '@shared/ipc/contract'
 import { useSettingsStore } from '@renderer/stores/settings'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { RELEASE, formatVersion, parsePlainDate } from '@shared/release'
 
 /**
@@ -43,6 +44,7 @@ import { useSessionStore } from '@renderer/stores/session'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
+const uiRefresh = useUiRefreshStore()
 /** Trend buffering counters live in the trends store, shared with the trend page. */
 const trends = useTrendsStore()
 /** 当前登录的账号：设置页「账号」页签要显示它，并提供改密与退出登录（业主 ③）。 */
@@ -144,6 +146,31 @@ onMounted(async () => {
 })
 
 watch(() => settings.settings, seedFromStore)
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：这一页里那两颗「刷新」
+ * （磁盘占用 / 趋势存储）都删掉了，重读这两个诊断读数由它触发。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => {
+    void settings.loadDiskUsage()
+    void trends.loadStats()
+  }
+)
+
+/**
+ * 切到「存储」页签时**重读一次**两个诊断读数。
+ *
+ * 为什么需要它：那两个数（磁盘占用、趋势落盘计数）会随时间变，而它们原来各有一颗
+ * 「刷新」按钮。按钮删掉之后，如果只在挂载时读一次，操作员在这一页上切换页签再回来
+ * 会看到一个永远不会变的数字 —— 那比没有这个数更糟。
+ */
+watch(activeTab, (tab) => {
+  if (tab !== 'storage') return
+  void settings.loadDiskUsage()
+  void trends.loadStats()
+})
 
 function validate(): string {
   if (!draft.storageRoot.trim()) return t('settingsUi.errStorageRoot')
@@ -628,9 +655,8 @@ async function confirmRestore(): Promise<void> {
       >
         <div class="settings-group__head">
           <span class="settings-group__title">{{ t('settingsUi.diskSection') }}</span>
-          <button type="button" class="btn btn--sm" @click="settings.loadDiskUsage()">
-            {{ t('common.refresh') }}
-          </button>
+          <!-- 这一颗「刷新」已删（业主 2026-09-19 更正第 4 条）：切到这个页签会重读一次，
+               顶栏那颗唯一的刷新也会重读这两个诊断读数。 -->
         </div>
 
         <p v-if="disk?.belowSafetyFloor" class="alert alert--danger" role="alert">
@@ -687,9 +713,8 @@ async function confirmRestore(): Promise<void> {
         <div class="settings-group__head">
           <span class="settings-group__title">{{ t('settingsUi.trendSection') }}</span>
           <div class="btn-row">
-            <button type="button" class="btn btn--sm" @click="trends.loadStats()">
-              {{ t('common.refresh') }}
-            </button>
+            <!-- 「刷新」那一颗已删（业主 2026-09-19 更正第 4 条）：切到页签与顶栏刷新都会重读。
+                 「立即落盘」留着 —— 它不是刷新，是让主进程把缓冲写进库。 -->
             <button
               type="button"
               class="btn btn--sm"

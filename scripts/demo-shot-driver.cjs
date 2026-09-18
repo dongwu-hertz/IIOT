@@ -882,11 +882,14 @@ async function run() {
         JSON.stringify((sidebarToggle.navLabels || []).slice(0, 4))
       )
     }
-    // 地图那一项的标签必须真的带 GIS（业主第 12 条给的名字）。
+    // 地图那一项的名字必须**不含**括号里的 GIS（业主 2026-09-19 更正第 1 条推翻了第 12 条）。
     const mapIndex = navPaths.indexOf('/map')
     const mapLabel = mapIndex >= 0 ? (sidebarToggle.navLabels || [])[mapIndex] : ''
-    if (!/GIS/.test(String(mapLabel))) {
-      problems.push('侧栏里地图那一项的名字里没有 GIS：「' + mapLabel + '」（第 12 条要求「地图信息（GIS）」）')
+    if (/GIS|（|\(/.test(String(mapLabel))) {
+      problems.push('侧栏里地图那一项还带着括号 / GIS：「' + mapLabel + '」（更正第 1 条要求去掉）')
+    }
+    if (String(mapLabel).trim() === '') {
+      problems.push('侧栏里地图那一项没有名字')
     }
   }
 
@@ -1655,6 +1658,25 @@ async function run() {
     'location.hash = "#/devices";' +
     'const row2 = await waitForRow();' +
     'const gear = row2 ? row2.querySelector("[data-action=device-configure]") : null;' +
+    /*
+     * 业主 2026-09-19 更正第 3 条：**序号那一列居中**，且**每一列之间一条浅色竖线**。
+     * 两条都只能量：`text-align` 与 `border-left-color` 源码里写了也可能被后面的规则覆盖。
+     */
+    'out.indexAlign = (function(){ const c = document.querySelector("table.devices-table tbody td");' +
+    '  return c ? getComputedStyle(c).textAlign : null; })();' +
+    'out.indexHeaderAlign = (function(){ const th = document.querySelector("table.devices-table thead th");' +
+    '  return th ? getComputedStyle(th).textAlign : null; })();' +
+    'out.columnSeparators = (function(){' +
+    '  const cells = [...document.querySelectorAll("table.devices-table tbody tr td")];' +
+    // 每行 10 列：cells[0] 第一行第一列、cells[1] 第一行第二列、cells[11] 第二行第二列。
+    '  if (cells.length < 12) return null;' +
+    '  const first = getComputedStyle(cells[0]);' +
+    '  const second = getComputedStyle(cells[1]);' +
+    '  const secondRowSecond = getComputedStyle(cells[11]);' +
+    '  return { firstLeftWidth: first.borderLeftWidth, secondLeftWidth: second.borderLeftWidth,' +
+    '    secondLeftColor: second.borderLeftColor,' +
+    '    secondRowFirstLeftWidth: getComputedStyle(cells[10]).borderLeftWidth,' +
+    '    secondRowSecondLeftWidth: secondRowSecond.borderLeftWidth }; })();' +
     'const dialogOf = () => document.querySelector(".overlay [role=dialog]");' +
     'if (gear) {' +
     '  gear.click();' +
@@ -1770,6 +1792,42 @@ async function run() {
       problems.push('不是每一行的 IP 都是可双击的按钮：' + devicesTable.ipButtons + ' vs ' + devicesTable.rows)
     }
     const monitor = devicesTable.afterMonitor || {}
+    /*
+     * 更正第 3 条：序号列居中 + 每一列之间一条浅色竖线。
+     */
+    for (const [label, value] of [
+      ['序号列表头', devicesTable.indexHeaderAlign],
+      ['序号列单元格', devicesTable.indexAlign]
+    ]) {
+      if (value !== 'center') {
+        problems.push(label + '没有居中对齐（text-align = ' + JSON.stringify(value) + '）')
+      }
+    }
+    {
+      const sep = devicesTable.columnSeparators
+      if (!sep) {
+        problems.push('量不到设备表的列分隔线（行里不足 11 个单元格？）')
+      } else {
+        if (String(sep.firstLeftWidth) !== '0px') {
+          problems.push('第一列左边也画了竖线（那是表格自己的边框，会成重影）：' + sep.firstLeftWidth)
+        }
+        if (Number.parseFloat(sep.secondLeftWidth) <= 0) {
+          problems.push('第二列左边没有竖线：' + JSON.stringify(sep))
+        }
+        // 表体的**每一列之间**都要有：第一列（每行的开头）仍然不许有。
+        if (String(sep.secondRowFirstLeftWidth) !== '0px') {
+          problems.push('第二行的第一列左边也画了竖线：' + JSON.stringify(sep))
+        }
+        if (Number.parseFloat(sep.secondRowSecondLeftWidth) <= 0) {
+          problems.push('第二行的第二列左边没有竖线（列线只在第一行？）：' + JSON.stringify(sep))
+        }
+        // 「浅一些」：不能是强调色或深灰，必须是那一档浅边线色。
+        const rgb = String(sep.secondLeftColor).replace(/\s/g, '')
+        if (!/^rgb\(228,231,236\)$/.test(rgb)) {
+          problems.push('列分隔线的颜色不是那一档浅边线（--color-border #e4e7ec）：' + sep.secondLeftColor)
+        }
+      }
+    }
     if (!/^#\/monitor/.test(String(monitor.hash || ''))) {
       problems.push('点「查看」没有进实时监测页：' + monitor.hash)
     } else if (!/\?device=/.test(String(monitor.hash))) {
@@ -2432,24 +2490,132 @@ async function run() {
    * **断言写得太宽**，不是界面错了。
    */
   const titlesByRoute = {}
+  /*
+   * 顺带量**每一页的左上间距**（业主 2026-09-19 更正第 5 条：
+   * 「每个分页面的布局，内容距离左侧和上侧应该是保持一致的」）。
+   *
+   * 量的是 `.page` 相对 `.app-content` **内容盒**（padding 之内、滚动条之外）的偏移：
+   * 只要有人给某一页加了页头、外边距或内边距，这个数就会与别页不同 —— 而"看起来差不多"
+   * 正是业主报这条时看到的处境。
+   */
+  const layoutByRoute = {}
   for (const [name, route] of ROUTES) {
     const state = await layout(route, '(() => {' +
       '  const page = document.querySelector(".page");' +
       '  const first = page ? page.firstElementChild : null;' +
       '  const leading = first && /^(H1|H2)$/.test(first.tagName)' +
       '    ? first.textContent.trim().slice(0, 40) : "";' +
+      '  const content = document.querySelector(".app-content");' +
+      '  const cs = content ? getComputedStyle(content) : null;' +
+      '  const box = content ? {' +
+      '    left: content.getBoundingClientRect().left + (parseFloat(cs.paddingLeft) || 0),' +
+      '    top: content.getBoundingClientRect().top + (parseFloat(cs.paddingTop) || 0)' +
+      '  } : null;' +
+      '  const rect = page ? page.getBoundingClientRect() : null;' +
+      /*
+       * `.page` 自己在 0/0 并不等于"内容从 0/0 开始"：页面里第一个**有盒子**的子元素
+       * 可能带着外边距或内边距（`.card` 的内边距、扁平段的上边线 + padding-block）。
+       * 业主说的"内容距离左侧和上侧"是**眼睛看到的那个起点**，所以这里量它的左上角。
+       */
+      '  const kids = page ? Array.prototype.slice.call(page.children) : [];' +
+      '  const firstBox = kids.find((el) => el.getBoundingClientRect().height > 0) || null;' +
+      '  const fr = firstBox ? firstBox.getBoundingClientRect() : null;' +
+      '  const fs = firstBox ? getComputedStyle(firstBox) : null;' +
+      '  const inner = firstBox ? {' +
+      '    left: fr.left + (parseFloat(fs.paddingLeft) || 0) + (parseFloat(fs.borderLeftWidth) || 0),' +
+      '    top: fr.top + (parseFloat(fs.paddingTop) || 0) + (parseFloat(fs.borderTopWidth) || 0)' +
+      '  } : null;' +
       '  return JSON.stringify({' +
       '    pageTitleClass: document.querySelectorAll(".page-title").length,' +
-      '    leadingHeading: leading' +
+      '    leadingHeading: leading,' +
+      '    leftGapPx: rect && box ? Math.round(rect.left - box.left) : null,' +
+      '    topGapPx: rect && box ? Math.round(rect.top - box.top) : null,' +
+      '    contentLeftGapPx: inner && box ? Math.round(inner.left - box.left) : null,' +
+      '    contentTopGapPx: inner && box ? Math.round(inner.top - box.top) : null,' +
+      /*
+       * 更正第 4 条：**页面里不许再有单独的「刷新」按钮**（顶栏那一颗是唯一的）。
+       * 逐页数一遍，因为"某一页漏删了一颗"正是这条要求最可能的失败形态。
+       */
+      '    refreshButtons: [...document.querySelectorAll(".page button")]' +
+      '      .filter((b) => /^刷新$/.test((b.textContent || "").trim())).length,' +
+      /*
+       * 更正第 2 条：页面里不许再有与顶栏重复的标题（`.section-title` 写着页面名）。
+       * `leadingHeading` 只管"第一个元素是不是 h1/h2"，管不到"页面名是不是又被写了一遍"。
+       */
+      '    pageNameInPage: [...document.querySelectorAll(".page .section-title, .page h1, .page h2")]' +
+      '      .filter((el) => (el.textContent || "").trim() === (document.querySelector(".topbar__heading") || {}).textContent.trim()).length,' +
+      '    firstTag: firstBox ? firstBox.tagName.toLowerCase() + "." + (firstBox.className || "").split(" ")[0] : null' +
       '  });' +
       '})()')
     titlesByRoute[route] = state
+    layoutByRoute[route] = {
+      left: state.leftGapPx,
+      top: state.topGapPx,
+      contentLeft: state.contentLeftGapPx,
+      contentTop: state.contentTopGapPx,
+      first: state.firstTag
+    }
+    if (state.refreshButtons > 0) {
+      problems.push(
+        route + ' 里还有 ' + state.refreshButtons + ' 个「刷新」按钮（更正第 4 条：只留顶栏那一颗）'
+      )
+    }
+    if (state.pageNameInPage > 0) {
+      problems.push(
+        route + ' 的页面里又写了一遍页面名（更正第 2 条：与顶栏那个标题重复）'
+      )
+    }
     if (state.pageTitleClass > 0)
       problems.push(route + ' 仍有 .page-title：' + state.pageTitleClass + ' 个')
     if (state.leadingHeading !== '')
       problems.push(route + ' 的 .page 第一个元素又是标题：' + JSON.stringify(state.leadingHeading))
   }
   log('page titles   : ' + JSON.stringify(titlesByRoute))
+  /*
+   * 各页的左上间距**必须是同一个数**（容差 2px：亚像素与取整）。
+   * 判据是**逐页相等**，不是"都小于某个上限"—— 后者会让"某一页多了 8px"永远不被发现。
+   */
+  {
+    const pick = (key) =>
+      Object.entries(layoutByRoute)
+        .filter(([, value]) => value[key] !== null)
+        .map(([route, value]) => [route, value[key]])
+    const lefts = pick('left')
+    const tops = pick('top')
+    log('page spacing  : left=' + JSON.stringify(Object.fromEntries(lefts)) +
+      ' top=' + JSON.stringify(Object.fromEntries(tops)))
+    for (const [label, pairs] of [['左侧', lefts], ['上侧', tops]]) {
+      if (pairs.length === 0) {
+        problems.push('量不到任何一页的' + label + '间距（.page / .app-content 没找到？）')
+        continue
+      }
+      const values = pairs.map(([, value]) => value)
+      const min = Math.min(...values)
+      const max = Math.max(...values)
+      if (max - min > 2) {
+        problems.push(
+          '各页的' + label + '间距不一致（' + min + '–' + max + 'px）：' +
+          JSON.stringify(Object.fromEntries(pairs))
+        )
+      }
+    }
+    /*
+     * **眼睛看到的那个起点**：第一块内容的左上角到内容盒的距离。
+     *
+     * 这一组只**记录**、不断言逐页相等：它含的是各组件家族自己的内边距
+     * （卡片 16px、扁平表 0 + 单元格 8px、页签条 12px、提示条 12px），
+     * 而那些是逐个被业主认可过的设计值（卡片是全应用共用的、扁平表是第 2b 条、
+     * 画布铺满是第 13 条）。要求它们逐一相等会变成"为了对齐而改掉每一个组件"。
+     * 真正断言的是上面那一组：**每一页的第一块都从内容盒的左上角开始（0/0）**。
+     */
+    const contentLefts = pick('contentLeft')
+    const contentTops = pick('contentTop')
+    log('page content  : left=' + JSON.stringify(Object.fromEntries(contentLefts)) +
+      ' top=' + JSON.stringify(Object.fromEntries(contentTops)) +
+      ' first=' + JSON.stringify(Object.fromEntries(
+        Object.entries(layoutByRoute).map(([route, value]) => [route, value.first])
+      )))
+  }
 
   /**
    * 告警图标那颗面板：**待处理告警 + 系统消息**，而且打开它不许动布局。
@@ -2628,13 +2794,20 @@ async function run() {
    */
   const trendsChrome = await layout('/trends', '(() => {' +
     'const card = document.querySelector(".page .card");' +
+    /*
+     * 「刷新」那一颗按业主 2026-09-19 更正第 4 条**已经删掉**（顶栏那颗是唯一的刷新），
+     * 所以这里数的是**剩下**的动作：只有「立即落盘」。
+     */
     'const buttons = [...document.querySelectorAll(".page button")]' +
-    '  .filter((b) => /刷新|落盘/.test(b.textContent.trim()));' +
+    '  .filter((b) => /落盘/.test(b.textContent.trim()));' +
+    'const refreshLeft = [...document.querySelectorAll(".page button")]' +
+    '  .filter((b) => /^刷新$/.test(b.textContent.trim())).length;' +
     'const select = card ? card.querySelector("select") : null;' +
     'return JSON.stringify({' +
     '  hasCard: !!card,' +
     '  actionCount: buttons.length,' +
     '  actionsInsideCard: buttons.length > 0 && buttons.every((b) => card && card.contains(b)),' +
+    '  refreshButtonLeft: refreshLeft,' +
     '  deviceSelectWidth: select ? Math.round(select.getBoundingClientRect().width) : -1,' +
     '  pageHeaderPresent: !!document.querySelector(".page .page-header"),' +
     '  emptyState: /尚未添加设备|还没有添加任何设备/.test(document.body.textContent)' +
@@ -2646,12 +2819,18 @@ async function run() {
   if (!trendsChrome.hasCard) {
     log('trends chrome : skipped（这个一次性 profile 里没有设备，筛选卡片不渲染）')
   } else {
-    if (trendsChrome.actionCount < 2) {
-      problems.push('历史趋势页找不到「刷新 / 立即落盘」两个动作（找到 ' +
+    if (trendsChrome.actionCount < 1) {
+      problems.push('历史趋势页找不到「立即落盘」那个动作（找到 ' +
         trendsChrome.actionCount + ' 个）')
     }
+    if (trendsChrome.refreshButtonLeft > 0) {
+      problems.push(
+        '历史趋势页还有 ' + trendsChrome.refreshButtonLeft +
+        ' 个「刷新」按钮（更正第 4 条要求删掉，只留顶栏那一颗）'
+      )
+    }
     if (!trendsChrome.actionsInsideCard) {
-      problems.push('刷新 / 立即落盘不在设备选择那张卡片里')
+      problems.push('「立即落盘」不在设备选择那张卡片里')
     }
     if (trendsChrome.deviceSelectWidth <= 0 || trendsChrome.deviceSelectWidth > 220) {
       problems.push('历史趋势的设备下拉没有收窄：' + trendsChrome.deviceSelectWidth + 'px')

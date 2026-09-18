@@ -110,6 +110,7 @@ import {
 } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { EVENT_PAGE_SIZE, eventDownloadKey, useEventCenterStore } from '@renderer/stores/eventCenter'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSessionStore } from '@renderer/stores/session'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
@@ -118,6 +119,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const store = useEventCenterStore()
+const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
 const session = useSessionStore()
 const linkage = useAlarmLinkageStore()
@@ -484,6 +486,18 @@ function setViewMode(mode: EventViewMode): void {
 // ---------------------------------------------------------------------------
 
 let unsubscribeProgress: (() => void) | undefined
+
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：这一页自己那颗「刷新」已经删掉，
+ * 重读数据由它触发 —— 调用的还是原来那个函数。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => {
+    void reload()
+  }
+)
 
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
@@ -940,14 +954,6 @@ async function goToPage(offset: number): Promise<void> {
 <template>
   <div class="page">
     <!-- 没有页面标题：外层框架已经写了「事件与告警中心」。只剩刷新动作。 -->
-    <div class="page-header">
-      <div class="btn-row">
-        <button type="button" class="btn btn--sm" :disabled="store.loading" @click="reload">
-          {{ store.loading ? t('common.loading') : t('common.refresh') }}
-        </button>
-      </div>
-    </div>
-
     <p v-if="store.error" class="alert alert--danger" role="alert">{{ store.error }}</p>
     <p v-else-if="store.notice" class="alert alert--success" role="status">{{ store.notice }}</p>
 

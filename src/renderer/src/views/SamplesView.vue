@@ -15,7 +15,7 @@
  * "这个标签能不能删"也是主进程数出来的（`SampleLabelEntry.usedBy`）。渲染层再判一次
  * 就会出现两个版本的口径。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SampleAiLabelOutcome, SampleExportResult, SampleView } from '@shared/ipc/contract'
 import type {
@@ -26,10 +26,12 @@ import type {
 import { SAMPLE_LABEL_DIMENSIONS, SAMPLE_LABEL_SOURCES } from '@shared/domain/sample-library'
 import { EMPTY_VALUE, formatBytes, formatDateTime, formatNumber } from '@renderer/lib/format'
 import { useSamplesStore } from '@renderer/stores/samples'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
 
 const { t } = useI18n()
 const samples = useSamplesStore()
+const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
 
 type SourceFilter = '' | SampleSource
@@ -75,6 +77,18 @@ function query(): Parameters<typeof samples.load>[0] {
 
 const faultOptions = computed(() => samples.labelOptions('fault'))
 const equipmentOptions = computed(() => samples.labelOptions('equipment'))
+
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：这一页自己那颗「刷新」已经删掉，
+ * 重读数据由它触发 —— 调用的还是原来那个函数。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => {
+    void applyFilters()
+  }
+)
 
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
@@ -440,9 +454,6 @@ async function exportDataset(): Promise<void> {
         </label>
 
         <div class="btn-row sample-actions">
-          <button type="button" class="btn" :disabled="samples.loading" @click="applyFilters">
-            {{ samples.loading ? t('common.loading') : t('common.refresh') }}
-          </button>
           <button type="button" class="btn btn--primary" :disabled="samples.busy" @click="train">
             {{ t('samplesUi.trainButton') }}
           </button>

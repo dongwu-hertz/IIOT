@@ -470,13 +470,17 @@ onUnmounted(() => {
         `.map-canvas-frame` 是**定比例的那一层**（`aspect-ratio: 16 / 9`），SVG 填满它；
         两者比例必须一致（`CANVAS` 也是 16:9），否则图上会出现两条留白边。
       -->
-      <section class="map-panel" data-map-panel>
+      <section class="map-panel" data-map-panel :aria-label="t('app.nav.map')">
+        <!--
+          **这一块原来还有一个 `<h3>` 写着页面名**，与顶栏那个标题重复（业主 2026-09-19 更正第 2 条：
+          「地图信息出现了两个标题，可以把第一个删除掉」）。删掉的是**页内**那一个：
+          外层框架的标题栏已经写了页面名（这也是全应用从 2026-09-16 起就有的口径 ——
+          页面内不再画标题），所以页内这一个才是多出来的那一个。
+          牌子上的读数（图上 N 台 / 共 M 台）留着：它不是标题，是这一块的内容。
+          删掉标题之后这一块的无障碍名字改挂在 `<section>` 上（见上面的 `aria-label`）——
+          否则读屏走到这里会只剩下一串数字。
+        -->
         <div class="section-header">
-          <!--
-            面板标题用**页面名**（`app.nav.map`）而不是第二个键：第 12 条把这一页改名成
-            「地图信息（GIS）」之后，同一句名字出现在顶栏、侧栏与这里，只能有一个来源。
-          -->
-          <h3 class="section-title">{{ t('app.nav.map') }}</h3>
           <span class="muted" data-map-counts>
             {{
               t('mapUi.counts', {
@@ -867,7 +871,14 @@ onUnmounted(() => {
 .map-panel {
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
-  padding-block: var(--space-3);
+  /*
+   * 上下内边距取**卡片那一档**（`--space-4` = 16px，加上 1px 上边线正好 17px）：
+   * 业主 2026-09-19 更正第 5 条要求各页"内容距离左侧和上侧保持一致"，
+   * 而这一块原来用的是 `--space-3`（12px）—— 它比别页的卡片高 5px。
+   * **左右仍然是 0**：那是第 13 条（16:9 占满内容宽度）的要求，两者不冲突
+   * （上下是这一段自己的留白，左右是画布要铺满的那条）。
+   */
+  padding-block: var(--space-4);
 }
 
 .map-block {

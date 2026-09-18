@@ -412,7 +412,7 @@ function onAdded(deviceId: string): void {
       <table class="table devices-table">
         <thead>
           <tr>
-            <th scope="col" class="devices-table__num">{{ t('devicesUi.indexColumn') }}</th>
+            <th scope="col" class="devices-table__num devices-table__index">{{ t('devicesUi.indexColumn') }}</th>
             <th scope="col">{{ t('devices.name') }}</th>
             <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
             <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
@@ -436,7 +436,7 @@ function onAdded(deviceId: string): void {
             ]"
             @click="selectRow(device)"
           >
-            <td class="devices-table__num muted">{{ index + 1 }}</td>
+            <td class="devices-table__num devices-table__index muted">{{ index + 1 }}</td>
             <td>
               <!--
                 设备名是一**个入口**：点它进设备详情/配置页（业主第 8 条的列清单里没有
@@ -762,6 +762,32 @@ function onAdded(deviceId: string): void {
 .devices-table .devices-table__num {
   text-align: right;
   white-space: nowrap;
+}
+
+/*
+ * 「序号」那一列**居中**（业主 2026-09-19 更正第 3 条：「序号下面的数字应该是居中对齐」）。
+ *
+ * 它单独一条规则、覆盖上面的右对齐：序号是一位或两位的序号，右对齐时它与表格左边缘之间
+ * 会空出一大块，而居中让"第几台"这件事读起来像一句话的开头。
+ * 告警数量/通道数两列仍然是右对齐（数字列右对齐才读得成一列）。
+ */
+.devices-table .devices-table__index {
+  text-align: center;
+}
+
+/*
+ * 每一列之间一条**浅色竖线**（业主 2026-09-19 更正第 3 条：「每一列都应该用浅一些的线条隔开」）。
+ *
+ * 三条取舍：
+ *   1. 用 `--color-border`（#e4e7ec）而不是 `--color-border-strong`：业主说的是"浅一些"，
+ *      而这一页的上下边线已经是 `--color-border`，竖线比它还重就会抢走横线；
+ *   2. **只画在左侧**（`border-left`）而不是两侧：两侧会让相邻两列之间出现双线；
+ *   3. **第一列不画**（`:first-child`）：它左边是表格自己的边框，再画一条就是重影。
+ * 表头与表体都要画，否则列线在表头处断开（那看起来像两条列宽不同的表）。
+ */
+.devices-table th + th,
+.devices-table td + td {
+  border-left: 1px solid var(--color-border);
 }
 
 /*

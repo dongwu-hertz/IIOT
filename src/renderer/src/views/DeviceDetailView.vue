@@ -22,6 +22,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import { channelState } from '@renderer/lib/channelState'
 import { resolveChannelCount } from '@renderer/lib/channelWall'
@@ -47,6 +48,7 @@ const props = defineProps<{ id: string }>()
 const { t } = useI18n()
 const router = useRouter()
 const devices = useDevicesStore()
+const uiRefresh = useUiRefreshStore()
 const config = useDeviceConfigStore()
 
 type TabId =
@@ -279,6 +281,18 @@ async function resolveE2Variant(): Promise<void> {
   await devices.refreshStatus(props.id)
 }
 
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：这一页自己那颗「刷新」已经删掉，
+ * 重读数据由它触发 —— 调用的还是原来那个函数。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => {
+    void refresh()
+  }
+)
+
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
   // Subscribe before the first read: a change already in flight still reports the
@@ -379,9 +393,6 @@ const webUiAddress = computed(() => {
       </div>
 
       <div class="btn-row">
-        <button type="button" class="btn" :disabled="loading" @click="refresh">
-          {{ loading ? t('deviceDetailUi.refreshing') : t('common.refresh') }}
-        </button>
         <button type="button" class="btn" @click="openWebUi">{{ t('deviceDetailUi.openWebUi') }}</button>
         <button type="button" class="btn btn--primary" @click="goMonitor">{{ t('deviceDetailUi.monitor') }}</button>
       </div>

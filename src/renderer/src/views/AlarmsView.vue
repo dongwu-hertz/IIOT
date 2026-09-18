@@ -31,6 +31,7 @@ import { channelState, channelStateLabelKey, type ChannelState } from '@renderer
 import { ALARM_PAGE_SIZE, useAlarmsStore } from '@renderer/stores/alarms'
 import { useSamplesStore } from '@renderer/stores/samples'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import {
   channelLabel,
   formatDateTime,
@@ -43,6 +44,7 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const alarms = useAlarmsStore()
+const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
 
 const ALARM_TYPE_OPTIONS: AlarmType[] = Object.values(AlarmType).filter(
@@ -206,6 +208,18 @@ function reset(): void {
   filters.ack = 'all'
   void reload()
 }
+
+
+/**
+ * 顶栏那颗唯一的刷新（业主 2026-09-19 更正第 4 条）：这一页自己那颗「刷新」已经删掉，
+ * 重读数据由它触发 —— 调用的还是原来那个函数。
+ */
+watch(
+  () => uiRefresh.tick,
+  () => {
+    void reload()
+  }
+)
 
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
@@ -471,9 +485,6 @@ function openDevice(deviceId: string): void {
           @click="addSelectedToSamples"
         >
           {{ t('alarmsUi.addSelectedToSamples') }}
-        </button>
-        <button type="button" class="btn btn--sm" :disabled="alarms.loading" @click="reload">
-          {{ alarms.loading ? t('common.loading') : t('common.refresh') }}
         </button>
       </div>
     </div>

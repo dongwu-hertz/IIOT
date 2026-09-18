@@ -90,7 +90,7 @@ export const tr: MessageSchema = {
        * altına taşındı (10. parti, 12. madde: sayfa artık bir GIS servisi ya da kat planı da
        * taşıdığı için «cihaz haritası» adı onu anlatmıyor).
        */
-      map: 'Harita bilgileri (GIS)',
+      map: 'Harita bilgileri',
       events: 'Olay ve alarm merkezi',
       recordings: 'Kayıtlar',
       samples: 'Örnek kitaplığı',
@@ -550,7 +550,6 @@ export const tr: MessageSchema = {
   },
 
   trendsUi: {
-    querying: 'Sorgulanıyor…',
     noDeviceTitle: 'Önce bir cihaz ekleyin',
     goToDevices: 'Cihazlar sayfasına git',
     filterDevice: 'Cihaz',
