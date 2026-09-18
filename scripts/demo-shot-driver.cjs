@@ -2232,7 +2232,20 @@ async function run() {
     '  stabilityHint: (() => {' +
     '    const el = document.querySelector("[data-live-no-source]");' +
     '    return el ? (el.getAttribute("title") || "").slice(0, 120) : null;' +
-    '  })()' +
+    '  })(),' +
+    /*
+     * 第 15、16 条：**悬停浮层**。这一段跑在加设备之前，所以 operator 库那三台
+     * （如果一台点位都没录）可能没有标记 —— 那时如实跳过，并在报告里写清楚。
+     *
+     * 浮层里**不许有 `<video>`**（一条会话只有一个观看者，悬停接管会踢掉正在看的人），
+     * 所以这里也数一遍 video 的个数：它是这一条最容易被下一个人"顺手加上"的东西。
+     */
+    '  hoverMarker: (function(){ const m = document.querySelector("[data-map-marker]");' +
+    '    if (!m) return null;' +
+    '    m.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));' +
+    '    return m.getAttribute("data-map-marker"); })(),' +
+    '  hoverPresent: (function(){ return !!document.querySelector("[data-map-hover]"); })(),' +
+    '  hoverVideoCount: document.querySelectorAll("[data-map-hover] video").length' +
     '});' +
     '})()')
   log('map layout    : ' + JSON.stringify(mapLayout))
@@ -2327,6 +2340,29 @@ async function run() {
     }
     if (!mapLayout.stabilityHint || mapLayout.stabilityHint.length < 10) {
       problems.push('「稳定度」表头没有那句"没有数据源"的说明')
+    }
+    /*
+     * 第 15、16 条：悬停浮层。**必须在有标记时断言**；operator 库那三台都没录点位时
+     * 如实跳过（那时图上是那句"去补录"的提示，没有可悬停的东西）。
+     */
+    if (mapLayout.markerCount > 0) {
+      if (mapLayout.hoverMarker === null || mapLayout.hoverPresent !== true) {
+        problems.push(
+          '悬停一个标记之后没有出现浮层（第 15、16 条）：' +
+          JSON.stringify({ marker: mapLayout.hoverMarker, present: mapLayout.hoverPresent })
+        )
+      }
+      if (mapLayout.hoverVideoCount > 0) {
+        problems.push(
+          '浮层里出现了 <video>（' + mapLayout.hoverVideoCount + ' 个）：主进程对一台相机只有一条会话、' +
+          '一条会话只有一个观看者，悬停接管会把正在看这一路的人的画面当场换掉'
+        )
+      }
+    } else {
+      log(
+        'map hover     : skipped（图上没有标记：operator 库那几台都没录完整点位）——' +
+        ' **悬停浮层这一次没有量到**'
+      )
     }
   }
   /**
@@ -4466,6 +4502,23 @@ async function run() {
      */
     '  out.markerTone = marker.getAttribute("data-marker-tone");' +
     '  out.markerCount = document.querySelectorAll("[data-map-marker]").length;' +
+    /*
+     * 第 15/16 条的**悬停浮层**：这一台是真的画在图上的（下面那些只读探针跑在"加设备"之前，
+     * operator 库那几台都没录点位，所以量不到）。派发一次 `mouseenter` 之后浮层应当出现，
+     * 而且里面**不许有 `<video>`**。它是声纹设备，所以**不该有**"当前视频流"那一行
+     * （第 16 条只要基本信息；那一行是第 15 条给相机的）。
+     */
+    '  marker.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));' +
+    '  await wait(300);' +
+    '  out.hoverPresent = !!document.querySelector("[data-map-hover]");' +
+    '  out.hoverText = text(document.querySelector("[data-map-hover]")).slice(0, 200);' +
+    '  out.hoverVideoCount = document.querySelectorAll("[data-map-hover] video").length;' +
+    '  out.hoverStreamRow = !!document.querySelector("[data-map-hover-stream]");' +
+    '  out.hoverAlarmRow = document.querySelector("[data-map-hover-alarm]")' +
+    '    ? document.querySelector("[data-map-hover-alarm]").getAttribute("data-map-hover-alarm") : null;' +
+    '  marker.dispatchEvent(new MouseEvent("mouseleave", { bubbles: false }));' +
+    '  await wait(200);' +
+    '  out.hoverClosed = !document.querySelector("[data-map-hover]");' +
     '  out.legendCounts = [...document.querySelectorAll("[data-map-legend] [data-legend-tone]")].map((li) => ({' +
     '    tone: li.getAttribute("data-legend-tone"),' +
     '    count: Number(((li.textContent || "").match(/(\\d+)\\s*$/) || [])[1])' +
@@ -4540,6 +4593,30 @@ async function run() {
     // ③b 落点配色（第 14 条）：这一台真的画在图上，所以它的色调是可读的。
     if (!['alarm', 'online', 'offline'].includes(String(sonarFlow.markerTone))) {
       problems.push('这一台的落点色调不在三档里：' + JSON.stringify(sonarFlow.markerTone))
+    }
+    // ③c 悬停浮层（第 16 条，声纹设备）：基本信息要在，而且**不许有 `<video>`**。
+    if (sonarFlow.hoverPresent !== true) {
+      problems.push('悬停一个标记之后没有出现浮层（第 16 条）')
+    } else {
+      if (String(sonarFlow.hoverText || '').indexOf('探针声呐') < 0) {
+        problems.push('浮层里没有这一台的设备名：' + JSON.stringify(sonarFlow.hoverText))
+      }
+      if (sonarFlow.hoverVideoCount > 0) {
+        problems.push(
+          '浮层里出现了 <video>（' + sonarFlow.hoverVideoCount + ' 个）：一条相机会话只有一个观看者，' +
+          '悬停接管会踢掉正在看的人'
+        )
+      }
+      // 声纹设备**不该**有"当前视频流"那一行（第 15 条那一行是相机的）。
+      if (sonarFlow.hoverStreamRow === true) {
+        problems.push('声纹设备的浮层里出现了"当前视频流"那一行（它没有视频流）')
+      }
+      if (sonarFlow.hoverAlarmRow === null) {
+        problems.push('浮层里没有未确认告警那一行')
+      }
+    }
+    if (sonarFlow.hoverClosed !== true) {
+      problems.push('鼠标移开之后浮层没有关掉')
     }
     {
       const counts = sonarFlow.legendCounts || []

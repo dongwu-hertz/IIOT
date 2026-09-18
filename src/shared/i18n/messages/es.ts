@@ -1104,6 +1104,10 @@ export const es: MessageSchema = {
      * regla de alarma (un criterio, no una medida). La magnitud real de la vía de descarga
      * parcial se llama «suavidad» y no es la misma, así que no se sustituye.
      */
+    hoverStream: 'Flujo de vídeo actual',
+    hoverAlarm: '{count} alarma(s) sin confirmar',
+    hoverNoAlarm: 'Sin alarmas sin confirmar',
+    hoverHint: 'Doble clic para abrir este equipo.',
     stabilityNoSourceHint:
       'Esta columna no tiene origen de datos: el manual no describe una medida de «estabilidad» y esta máquina no tiene lectura de ella (el producto solo tiene una regla de alarma «umbral de estabilidad del nivel de presión sonora», que es un criterio, no una medida). La magnitud real de la vía de descarga parcial se llama «suavidad» y no es la misma, así que no se usa como sustituto.',
     /** «No se pudo leer» y «no hay» deben seguir siendo distinguibles (misma regla que la tabla de equipos). */

@@ -1109,6 +1109,10 @@ export const tr: MessageSchema = {
      * (ölçüm değil, ölçüt). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük
      * değildir; bu yüzden onun yerine konmaz.
      */
+    hoverStream: 'Geçerli video akışı',
+    hoverAlarm: '{count} onaylanmamış alarm',
+    hoverNoAlarm: 'Onaylanmamış alarm yok',
+    hoverHint: 'Bu cihazı açmak için çift tıklayın.',
     stabilityNoSourceHint:
       'Bu sütunun veri kaynağı yok: kılavuz «kararlılık» diye bir ölçüm tanımlamıyor ve bu makinede onun okuması yok (üründe yalnızca «ses basıncı düzeyi kararlılık eşiği» alarm kuralı var; o bir ölçüt, ölçüm değil). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük değildir, bu yüzden onun yerine kullanılmaz.',
     /** «Okunamadı» ile «hiç yok» ayrılabilir kalmalı (cihaz tablosundaki kuralın aynısı). */

@@ -51,6 +51,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { AlarmEvent, Device } from '@shared/domain/models'
+import type { CameraLiveStatus } from '@shared/domain/camera-live'
 import type { E2AlarmSnapshotView, E2SyncOutcome } from '@shared/ipc/contract'
 import {
   deviceMapLayout,
@@ -277,6 +278,110 @@ function openDeviceDetail(deviceId: string): void {
   void router.push({ path: `/devices/${deviceId}` })
 }
 
+// ---------------------------------------------------------------------------
+// 悬停浮层（业主第 15、16 条）
+// ---------------------------------------------------------------------------
+
+const hoveredId = ref('')
+
+const hoveredDevice = computed<Device | undefined>(() =>
+  hoveredId.value === '' ? undefined : devices.byId(hoveredId.value)
+)
+
+/**
+ * 悬停那一台**当前的视频流状态**（只有相机有）。
+ *
+ * 为什么悬停要去问一次主进程：视频流的状态是主进程的事实（会话在不在、是不是
+ * `rtsp-disabled`），渲染层没有第二份。一次 IPC 换一行准确的话，比在浮层里写一句
+ * "未知"好。
+ *
+ * **浮层里不放 `<video>`**：主进程对一台相机只有一条会话、一条会话只有一个观看者，
+ * 悬停去接管它会把正在看这一路的人的画面当场换掉。所以这里给状态，不给画面 ——
+ * 理由写在模板那段注释里。
+ */
+const hoverLiveStatus = ref<CameraLiveStatus | null>(null)
+const hoverLiveDiagnosis = ref('')
+
+async function loadHoverStream(deviceId: string): Promise<void> {
+  hoverLiveStatus.value = null
+  hoverLiveDiagnosis.value = ''
+  const result = await callApi(() => window.api.cameraLive.state(deviceId))
+  // 悬停已经移走了：这一条结果不该写进另一个设备的浮层。
+  if (hoveredId.value !== deviceId) return
+  if (!result.success) return
+  const state = unwrap(result)?.[0] ?? null
+  hoverLiveStatus.value = state?.status ?? 'idle'
+  hoverLiveDiagnosis.value = state?.error ?? ''
+}
+
+function openHover(deviceId: string): void {
+  hoveredId.value = deviceId
+  const device = devices.byId(deviceId)
+  if (device?.kind === 'acousticCamera') void loadHoverStream(deviceId)
+}
+
+function closeHover(): void {
+  hoveredId.value = ''
+  hoverLiveStatus.value = null
+  hoverLiveDiagnosis.value = ''
+}
+
+/**
+ * 浮层的位置：**百分比**，不量盒子。
+ *
+ * 标记坐标在画布的逻辑坐标系里（`CANVAS` 1280×720），而定比例那一层
+ * （`.map-canvas-frame`）与画布**恰好同比例**，所以 `x / 1280`、`y / 720` 就是它在浮层
+ * 坐标系里的位置。量 `getBoundingClientRect()` 要等一帧、而且缩放或滚动时会晚一拍。
+ */
+const hoverStyle = computed(() => {
+  const device = hoveredDevice.value
+  if (!device) return {}
+  const marker = layout.value.markers.find((item) => item.id === device.id)
+  if (!marker) return {}
+  return {
+    left: `${((marker.x / CANVAS.width) * 100).toFixed(3)}%`,
+    top: `${((marker.y / CANVAS.height) * 100).toFixed(3)}%`
+  }
+})
+
+/**
+ * 「当前视频流」那一行的文字。
+ *
+ * 复用 `cameraLiveUi.status*` 那几条（**一件事只有一处措辞**）：浮层上写的"RTSP 未启用"
+ * 与相机页徽标上那句必须是同一句，否则同一次故障会有两种说法。
+ * 主进程给了原文（诊断）时优先用它 —— 它引用了设备亲口说的话。
+ */
+const hoverStreamText = computed(() => {
+  if (hoverLiveStatus.value === null) return t('common.loading')
+  if (hoverLiveDiagnosis.value !== '') return hoverLiveDiagnosis.value
+  switch (hoverLiveStatus.value) {
+    case 'starting':
+      return t('cameraLiveUi.statusStarting')
+    case 'playing':
+      return t('cameraLiveUi.statusPlaying')
+    case 'rtsp-disabled':
+      return t('cameraLiveUi.statusRtspDisabled')
+    case 'ffmpeg-missing':
+      return t('cameraLiveUi.statusFfmpegMissing')
+    case 'limit-exceeded':
+      return t('overviewLiveUi.statusLimitExceeded')
+    case 'error':
+      return t('cameraLiveUi.statusError')
+    default:
+      return t('cameraLiveUi.statusIdle')
+  }
+})
+
+/** 有未确认告警就说条数，没有就明说没有（「—」读不出"没有"还是"没读到"）。 */
+const hoverAlarmText = computed(() => {
+  const device = hoveredDevice.value
+  if (!device) return t('mapUi.none')
+  const facts = alarmFacts.value[device.id]
+  if (!facts || facts.pending < 0) return t('mapUi.notRead')
+  if (facts.pending === 0) return t('mapUi.hoverNoAlarm')
+  return t('mapUi.hoverAlarm', { count: facts.pending })
+})
+
 async function loadAlarms(deviceId: string): Promise<void> {
   alarmsLoading.value = true
   const result = await callApi(() => window.api.alarms.query({ deviceId, limit: 20 }))
@@ -457,6 +562,11 @@ onUnmounted(() => {
               :data-map-marker="marker.id"
               :data-marker-tone="markerTones[marker.id]"
               @click="selectDevice(marker.id)"
+              @mouseenter="openHover(marker.id)"
+              @mouseleave="closeHover()"
+              @focus="openHover(marker.id)"
+              @blur="closeHover()"
+              @dblclick="openDeviceDetail(marker.id)"
               @keydown.enter.prevent="selectDevice(marker.id)"
               @keydown.space.prevent="selectDevice(marker.id)"
             >
@@ -464,6 +574,68 @@ onUnmounted(() => {
               <text class="map-marker__label" x="12" y="4">{{ marker.name }}</text>
             </g>
           </svg>
+
+          <!--
+            悬停浮层（业主第 15、16 条）：
+              · **相机**：基本信息 + **当前视频流**的状态 + 有告警就显示告警；
+              · **声纹设备**：基本信息；有告警也显示（第 16 条没点名，但同一张图上
+                两种设备各有各的说法会更难读，所以同一条浮层，区别只在"视频流"那一行）。
+              · **双击进详情**。
+
+            三条实现上的判断：
+
+            1. **浮层里不放 `<video>`**。主进程对**一台相机只有一条会话，而一条会话只有
+               一个观看者**（`CameraLiveSession` 的 `res.write` 对象，见
+               `camera-alive.ts` 的注释）。悬停就去接管那条会话，会把**正在看这一路的人**
+               的画面当场换掉 —— 一个鼠标划过就能踢掉别人的画面。所以这里给的是**这一路
+               视频流现在的状态**（播放中 / 未启动 / RTSP 未启用…），而不是画面本身。
+            2. **位置用百分比算**，不量盒子：标记坐标在画布的逻辑坐标系里（1280×720），
+               而定比例那一层与画布**恰好同比例**，所以 `x / 1280` 与 `y / 720` 就是它在
+               浮层坐标系里的位置。量 `getBoundingClientRect()` 也行，但那要等一帧、
+               而且会在缩放/滚动时晚一拍。
+            3. **`@focus` / `@blur` 与鼠标同一套**：标记本来就有 `tabindex="0"`，
+               键盘走到它上面时浮层也该出来（否则键盘用户拿不到这一条信息）。
+          -->
+          <div
+            v-if="hoveredDevice"
+            class="map-hover"
+            :style="hoverStyle"
+            data-map-hover
+          >
+            <div class="map-hover__head">
+              <span class="map-table__tone" :class="`map-table__tone--${markerTone(hoveredDevice)}`"
+                aria-hidden="true"></span>
+              <strong>{{ hoveredDevice.name }}</strong>
+            </div>
+            <dl class="map-hover__kv">
+              <div class="map-hover__item">
+                <dt>{{ t('addDeviceUi.kindLabel') }}</dt>
+                <dd>{{ t(`domain.deviceKind.${hoveredDevice.kind}`) }}</dd>
+              </div>
+              <div class="map-hover__item">
+                <dt>{{ t('devicesUi.onlineColumn') }}</dt>
+                <dd>
+                  <StatusBadge :status="hoveredDevice.status" :connection-type="hoveredDevice.connectionType" />
+                </dd>
+              </div>
+              <div class="map-hover__item">
+                <dt>{{ t('devices.ip') }}</dt>
+                <dd class="mono">{{ hoveredDevice.ip || t('monitorUi.noAddress') }}</dd>
+              </div>
+              <!-- 只有相机有"当前视频流"这一行（声纹设备没有视频流）。 -->
+              <div v-if="hoveredDevice.kind === 'acousticCamera'" class="map-hover__item">
+                <dt>{{ t('mapUi.hoverStream') }}</dt>
+                <dd data-map-hover-stream>{{ hoverStreamText }}</dd>
+              </div>
+              <div class="map-hover__item">
+                <dt>{{ t('mapUi.colAlarms') }}</dt>
+                <dd :data-map-hover-alarm="alarmCell(hoveredDevice.id)">
+                  {{ hoverAlarmText }}
+                </dd>
+              </div>
+            </dl>
+            <p class="muted map-hover__hint">{{ t('mapUi.hoverHint') }}</p>
+          </div>
         </div>
 
         <!--
@@ -716,7 +888,70 @@ onUnmounted(() => {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-bg-subtle);
-  overflow: hidden;
+  /*
+   * 浮层要能浮到图外面一点（最右/最下那一台设备的浮层会被边裁掉）。
+   * `overflow: hidden` 换成 `visible`：SVG 自己是 100%×100%，不会溢出，
+   * 需要裁的只有"图"本身，而图不会超出这一层。
+   */
+  position: relative;
+  overflow: visible;
+}
+
+/*
+ * 悬停浮层（第 15、16 条）。
+ *
+ * `left` / `top` 是**标记的位置**（百分比），所以它压在标记上 —— 用 `translate(-50%, -100%)`
+ * 把它抬到标记上方、水平居中；`pointer-events: none` 是关键：浮层压住标记之后，
+ * 鼠标会"离开"标记而触发 `mouseleave`，浮层立刻消失又出现（闪烁）。
+ */
+.map-hover {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 12px));
+  pointer-events: none;
+  z-index: 5;
+  min-width: 190px;
+  max-width: 260px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  box-shadow: 0 6px 18px rgba(16, 24, 40, 0.12);
+  font-size: 12px;
+}
+
+.map-hover__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.map-hover__kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.map-hover__item {
+  display: flex;
+  gap: 6px;
+}
+
+.map-hover__item dt {
+  flex: 0 0 62px;
+  color: var(--color-text-secondary);
+}
+
+.map-hover__item dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.map-hover__hint {
+  font-size: 11px;
+  margin: 4px 0 0;
 }
 
 .map-canvas {

@@ -1121,6 +1121,10 @@ export const en: MessageSchema = {
      * criterion, not a reading). The real measured value for the partial-discharge path is
      * "smoothness", which is a different quantity, so it is not substituted here.
      */
+    hoverStream: 'Current video stream',
+    hoverAlarm: '{count} unacknowledged alarm(s)',
+    hoverNoAlarm: 'No unacknowledged alarms',
+    hoverHint: 'Double-click to open this device.',
     stabilityNoSourceHint:
       'This column has no data source: the manual does not describe a "stability" measurement and this machine has no reading for it (the product only has an "SPL stability threshold" alarm rule, which is a criterion rather than a measurement). The partial-discharge path\u2019s real measured value is called "smoothness" and is not the same quantity, so it is not used as a substitute.',
     /** "Could not be read" and "there is none" must stay distinguishable (same rule as the device table). */

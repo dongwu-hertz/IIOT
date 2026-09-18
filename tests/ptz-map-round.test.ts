@@ -512,3 +512,114 @@ describe('地图下方依次三张列表（第 17 条）', () => {
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// 第 10 批第 15、16 条：设备悬停浮层
+// ---------------------------------------------------------------------------
+
+describe('地图上的设备悬停浮层（第 15、16 条）', () => {
+  it('悬停与键盘焦点走同一套（标记本来就有 tabindex，键盘用户也要拿得到这条信息）', () => {
+    for (const binding of ['@mouseenter="openHover(marker.id)"', '@focus="openHover(marker.id)"']) {
+      assert.ok(mapTemplate.includes(binding), `标记缺少 ${binding}`)
+    }
+    for (const binding of ['@mouseleave="closeHover()"', '@blur="closeHover()"']) {
+      assert.ok(mapTemplate.includes(binding), `标记缺少 ${binding}`)
+    }
+    assert.ok(mapTemplate.includes('data-map-hover'), '没有那块浮层')
+    assert.ok(
+      /role="button"\s*\n\s*tabindex="0"/.test(mapTemplate),
+      '标记不再是可聚焦的按钮：键盘走到它上面时浮层不会出现'
+    )
+  })
+
+  it('双击标记也进详情（第 15、16 条都要求"双击进详情"）', () => {
+    assert.ok(
+      mapTemplate.includes('@dblclick="openDeviceDetail(marker.id)"'),
+      '标记上没有双击进详情'
+    )
+    assert.match(
+      mapView,
+      /function openDeviceDetail\(deviceId: string\): void \{\s*void router\.push\(\{ path: `\/devices\/\$\{deviceId\}` \}\)/,
+      'openDeviceDetail 不再是"进这一台的详情页"'
+    )
+  })
+
+  it('浮层里**不放** `<video>`：一条会话只有一个观看者，悬停会踢掉正在看的人', () => {
+    const hoverStart = mapTemplate.indexOf('data-map-hover')
+    assert.ok(hoverStart >= 0, '找不到浮层')
+    const hoverBlock = mapTemplate.slice(hoverStart, hoverStart + 2400)
+    assert.equal(
+      /<video/.test(hoverBlock),
+      false,
+      '浮层里塞了 <video>：主进程对一台相机只有一条会话、一条会话只有一个观看者（res.write），' +
+        '悬停接管会把正在看这一路的人的画面当场换掉'
+    )
+    // 给的是**状态**：一行文字，来自主进程。
+    assert.ok(hoverBlock.includes('data-map-hover-stream'), '浮层没有"当前视频流"那一行')
+    assert.match(
+      mapView,
+      /window\.api\.cameraLive\.state\(deviceId\)/,
+      '浮层没有去问主进程视频流的状态'
+    )
+  })
+
+  it('只有相机有「当前视频流」那一行（声纹设备没有视频流）', () => {
+    assert.match(
+      mapTemplate,
+      /v-if="hoveredDevice\.kind === 'acousticCamera'"[\s\S]{0,400}data-map-hover-stream/,
+      '"当前视频流"那一行没有按设备类型过滤'
+    )
+  })
+
+  it('位置用百分比算（画布与定比例那一层同比例，量盒子会晚一拍）', () => {
+    assert.match(
+      mapView,
+      /left: `\$\{\(\(marker\.x \/ CANVAS\.width\) \* 100\)\.toFixed\(3\)\}%`/,
+      '浮层的 left 不是按画布比例算的'
+    )
+    assert.match(
+      mapView,
+      /top: `\$\{\(\(marker\.y \/ CANVAS\.height\) \* 100\)\.toFixed\(3\)\}%`/,
+      '浮层的 top 不是按画布比例算的'
+    )
+    // 浮层压在标记上，所以必须 `pointer-events: none`：否则鼠标"离开"标记 →
+    // 浮层消失 → 又出现（闪烁）。
+    const style = mapView.slice(mapView.indexOf('.map-hover {'))
+    assert.match(style.slice(0, style.indexOf('}')), /pointer-events: none/, '浮层会自己引起闪烁')
+  })
+
+  it('浮层里的四句话在四种语言里齐全，占位符一致', () => {
+    const REQUIRED = [
+      'mapUi.hoverStream',
+      'mapUi.hoverAlarm',
+      'mapUi.hoverNoAlarm',
+      'mapUi.hoverHint'
+    ]
+    for (const key of REQUIRED) {
+      for (const locale of Object.keys(CATALOGUES)) {
+        const message = messageAt(locale, key)
+        assert.ok(message && message.trim() !== '', `${locale} 缺 ${key}`)
+        assert.equal(message.includes('@'), false, `${locale} 的 ${key} 含裸 @`)
+      }
+      const reference = messageAt('zh-CN', key) as string
+      for (const locale of ['en', 'es', 'tr']) {
+        assert.notEqual(messageAt(locale, key), reference, `${locale} 的 ${key} 与中文逐字相同`)
+      }
+    }
+    for (const locale of Object.keys(CATALOGUES)) {
+      assert.deepEqual(
+        (messageAt(locale, 'mapUi.hoverAlarm') as string).match(/\{(\w+)\}/g),
+        ['{count}'],
+        `${locale} 的 hoverAlarm 占位符不是 {count}`
+      )
+    }
+  })
+
+  it('「有告警就显示告警」用的是与图上同一个数（未确认告警），而且"没有"与"没读到"分得开', () => {
+    assert.match(
+      mapView,
+      /const hoverAlarmText = computed\(\(\) => \{[\s\S]*?facts\.pending < 0[\s\S]*?facts\.pending === 0[\s\S]*?mapUi\.hoverAlarm/,
+      'hoverAlarmText 没有区分"没读到"与"没有"'
+    )
+  })
+})
