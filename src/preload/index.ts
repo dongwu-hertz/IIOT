@@ -29,6 +29,7 @@ import type {
   EventDetectDownloadInput,
   EventDownloadProgress,
   EventEvidenceImageInput,
+  EventStatusChangeInput,
   Fa371DetectFeedbackPreview,
   Fa371EnergyPreview,
   Fa371FftPreview,
@@ -465,7 +466,11 @@ const api: RendererApi = {
     evidenceImage: (input: EventEvidenceImageInput) =>
       ipcRenderer.invoke(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE, input),
     closeEvidenceImage: () =>
-      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE_CLOSE)
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_EVIDENCE_IMAGE_CLOSE),
+    changeStatus: (input: EventStatusChangeInput) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_CHANGE_STATUS, input),
+    activity: (entryId: string, limit?: number) =>
+      ipcRenderer.invoke(IpcChannels.EVENT_CENTER_ACTIVITY, entryId, limit)
   }
 }
 

@@ -22,9 +22,10 @@ import type {
   EventCenterEntry,
   EventKind,
   EventSeverity,
-  EventSourceKind
+  EventSourceKind,
+  EventStatus
 } from './event-center'
-import { EVENT_SOURCE_KINDS } from './event-center'
+import { EVENT_SOURCE_KINDS, EVENT_STATUSES, isEventStatus } from './event-center'
 import type { DeviceKind } from './models'
 
 // ---------------------------------------------------------------------------
@@ -98,28 +99,226 @@ export function alertSeverityLabelKey(severity: AlertSeverity): string {
 /**
  * 规格 §2.2 的状态机取值。
  *
- * Phase 3 只可能产生 `'new'` / `'acknowledged'` 两个（`EventCenterEntry` 里只有
- * `acknowledged: boolean`，没有状态列也没有状态变更时刻）；`investigating` /
- * `resolved` / `closed` 属于 Phase 5 的 schema 迁移（v13）。类型先按规格写全，
- * 这样 Phase 5 加状态时渲染层不用改类型。
+ * 七个取值全部来自规格的状态图：主线 New → Acknowledged → Investigating → Resolved →
+ * Closed，加上分叉上的 **Muted** 与 **Reopened**。
+ *
+ * 两处读完规格之后的判断（都写在这里，免得后面有人按自己的理解改）：
+ *   1. **Reassigned 不是状态**。状态图上它是 Acknowledged 的一个分叉，但"指派给谁"是
+ *      `assignee` 字段，不是状态 —— 把它做成状态会出现"已指派的已确认"这种没有意义的组合。
+ *      所以它落成一条 **Activity**（`kind: 'assign'`）。
+ *   2. **`'acknowledged'` 与来源自己的 `acknowledged` 标志是两件事**（见 §3.12）：
+ *      前者是我们自己的工作流状态，后者是来源侧的事实（联动待处理记录 / 声纹告警行）。
+ *      两者一致时最好，不一致时以工作流状态为准（`AlertViewModel.status`）。
  */
-export type AlertStatus = 'new' | 'acknowledged' | 'investigating' | 'resolved' | 'closed'
+export type AlertStatus = EventStatus
 
-export const ALERT_STATUSES: readonly AlertStatus[] = [
-  'new',
-  'acknowledged',
-  'investigating',
-  'resolved',
-  'closed'
-]
+export const ALERT_STATUSES: readonly AlertStatus[] = EVENT_STATUSES
 
 export function isAlertStatus(value: unknown): value is AlertStatus {
-  return typeof value === 'string' && (ALERT_STATUSES as readonly string[]).includes(value)
+  return isEventStatus(value)
+}
+
+/**
+ * 允许的状态迁移（规格 §2.2 的状态图）。
+ *
+ * 图上是主线 + 两条分叉，这里逐条落成表。**两处比图更宽**，都是刻意的：
+ *   - `new → investigating`：操作员常常是"打开就直接查"，逼他先点一下确认只会多一次点击；
+ *   - `acknowledged → resolved`：一条一看就明白的告警（例如测试触发）不必先"调查中"。
+ * 反过来**比图更严**的地方也有一处：`closed` 只能回到 `reopened`（不能直接回
+ * `investigating`）—— 已关闭的东西要动，必须留下"重新开启"这条记录（规格要求记原因）。
+ *
+ * `muted` 的分支：规格说"静默期间事件仍然记录"，所以静默不是终点，要能回到工作状态。
+ */
+export const ALERT_STATUS_TRANSITIONS: Readonly<Record<AlertStatus, readonly AlertStatus[]>> = {
+  new: ['acknowledged', 'investigating', 'muted'],
+  acknowledged: ['investigating', 'resolved', 'muted'],
+  investigating: ['resolved', 'muted'],
+  resolved: ['closed', 'reopened'],
+  closed: ['reopened'],
+  muted: ['new', 'acknowledged', 'investigating'],
+  reopened: ['investigating', 'resolved']
+}
+
+export function allowedStatusTargets(from: AlertStatus): readonly AlertStatus[] {
+  return ALERT_STATUS_TRANSITIONS[from]
+}
+
+export function canTransitionStatus(from: AlertStatus, to: AlertStatus): boolean {
+  if (from === to) return false
+  return ALERT_STATUS_TRANSITIONS[from].includes(to)
 }
 
 /** 状态标签的目录键。 */
 export function alertStatusLabelKey(status: AlertStatus): string {
   return `eventsUi.alertStatus.${status}`
+}
+
+// ---------------------------------------------------------------------------
+// 处置动作（规格 §11.2 的头部动作 + §2.2 的状态迁移）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一个处置动作。
+ *
+ * `assign` **不改状态**（它写 `assignee` 并留一条 Activity），其余动作各自对应一个目标状态。
+ */
+export type EventStatusAction =
+  | 'acknowledge'
+  | 'investigate'
+  | 'resolve'
+  | 'close'
+  | 'reopen'
+  | 'mute'
+  | 'unmute'
+  | 'assign'
+
+export interface StatusActionDescriptor {
+  id: EventStatusAction
+  /** 目标状态；`assign` 没有（它只改指派人）。 */
+  to?: AlertStatus
+  labelKey: string
+  /** 必须填原因才允许提交（规格 §2.2：Reopened 要记录重新开启的原因）。 */
+  requiresNote?: boolean
+  /** 头部的主 CTA（规格 §11.2：一次只有一个）。 */
+  primary?: boolean
+}
+
+const ACTION_LABEL_KEYS: Readonly<Record<EventStatusAction, string>> = {
+  acknowledge: 'eventsUi.detailAck',
+  investigate: 'eventsUi.actionInvestigate',
+  resolve: 'eventsUi.actionResolve',
+  close: 'eventsUi.actionClose',
+  reopen: 'eventsUi.actionReopen',
+  mute: 'eventsUi.actionMute',
+  unmute: 'eventsUi.actionUnmute',
+  assign: 'eventsUi.actionAssign'
+}
+
+/** 目标状态 → 产生它的动作（`muted` 有两个入口：进入与退出）。 */
+const ACTION_FOR_TARGET: Readonly<Record<AlertStatus, EventStatusAction | undefined>> = {
+  new: undefined,
+  acknowledged: 'acknowledge',
+  investigating: 'investigate',
+  resolved: 'resolve',
+  closed: 'close',
+  muted: 'mute',
+  reopened: 'reopen'
+}
+
+/**
+ * 当前状态下**可以**做的动作（规格 §11.2：一次只给一个主 CTA）。
+ *
+ * @param options.locked `true` 表示这一路来源**没有确认接口**（相机检测日志）。此时
+ *   「确认」这个动作不出现 —— 不是灰掉，是不画（工程规则：不存在的能力不渲染）。
+ *   其余动作照旧：状态机是本机工作流，不依赖设备。
+ * @param options.canAssign 有没有可指派的账户（一个账户都没有时「指派」不出现：
+ *   点开只有一个空的用户列表比没有这个按钮更糟）。
+ */
+export function statusActionsFor(
+  status: AlertStatus,
+  options: { locked?: boolean; canAssign?: boolean } = {}
+): StatusActionDescriptor[] {
+  const actions: StatusActionDescriptor[] = []
+
+  if (status === 'muted') {
+    /**
+     * 静默中：**只给一个**「取消静默」，回到「已确认」。
+     *
+     * 状态表里 `muted → new` 也是允许的（取消静默后回到"谁都没动过"），但它不作为一个
+     * 独立的按钮出现：界面上一行两个都叫「取消静默」、只是落点不同的按钮，没人分得清。
+     * 那条迁移留给程序化调用（`status` 直接给值）。
+     */
+    actions.push({
+      id: 'unmute',
+      to: 'acknowledged',
+      labelKey: ACTION_LABEL_KEYS.unmute,
+      primary: true
+    })
+    for (const target of allowedStatusTargets(status)) {
+      if (target === 'acknowledged' || target === 'new') continue
+      actions.push(descriptorFor(target))
+    }
+  } else {
+    for (const target of allowedStatusTargets(status)) {
+      const descriptor = descriptorFor(target)
+      if (descriptor.id === 'acknowledge' && options.locked === true) continue
+      actions.push(descriptor)
+    }
+  }
+
+  if (options.canAssign === true) {
+    actions.push({ id: 'assign', labelKey: ACTION_LABEL_KEYS.assign })
+  }
+
+  /**
+   * 主 CTA 的次序：确认 → 开始调查 → 解决 → 关闭 → 重新开启（与状态图的推进方向一致）。
+   * **已经有主 CTA 的（静默中的"取消静默"）不再抢** —— 规格 §11.2 只允许一个。
+   */
+  if (!actions.some((action) => action.primary === true)) {
+    const primaryOrder: EventStatusAction[] = [
+      'acknowledge',
+      'investigate',
+      'resolve',
+      'close',
+      'reopen'
+    ]
+    for (const id of primaryOrder) {
+      const found = actions.find((action) => action.id === id)
+      if (found) {
+        found.primary = true
+        break
+      }
+    }
+  }
+  return actions
+}
+
+function descriptorFor(target: AlertStatus): StatusActionDescriptor {
+  const id = ACTION_FOR_TARGET[target]
+  if (id === undefined) {
+    // `new` 没有"回到新建"这个动作（它只在取消静默时作为目标出现）。
+    return { id: 'unmute', to: target, labelKey: ACTION_LABEL_KEYS.unmute }
+  }
+  return {
+    id,
+    to: target,
+    labelKey: ACTION_LABEL_KEYS[id],
+    // 重新开启必须留下原因（规格 §2.2 明说）。
+    ...(id === 'reopen' ? { requiresNote: true } : {})
+  }
+}
+
+/**
+ * 一个动作会把状态带到哪（`assign` 不改状态，返回 `undefined`）。
+ *
+ * 主进程用它把"界面点了哪个动作"翻成"要写哪个状态"，于是这条对应关系只有一处 ——
+ * 界面上的动作列表与库里的状态值不会各说各话。
+ */
+export function statusForAction(action: EventStatusAction): AlertStatus | undefined {
+  if (action === 'assign') return undefined
+  if (action === 'unmute') return 'acknowledged'
+  if (action === 'acknowledge') return 'acknowledged'
+  if (action === 'investigate') return 'investigating'
+  if (action === 'resolve') return 'resolved'
+  if (action === 'close') return 'closed'
+  if (action === 'reopen') return 'reopened'
+  return 'muted'
+}
+
+/**
+ * 一次处置写入的结果（IPC 的返回值）。
+ *
+ * `status` / `assignee` 来自**写完读回**的那一行，不是请求里传进去的参数 ——
+ * 业主的硬规矩：写完必须读回，不能拿"请求发出去了"当成功。
+ */
+export interface EventStatusChangeResult {
+  entryId: string
+  status: AlertStatus
+  assignee?: string
+  /** 这次写入产生的那一条 Activity（读回来的那一条）。 */
+  activity: EventActivityView
+  /** 工作流之前的那个状态（界面据此显示"从 X 变成 Y"）。 */
+  fromStatus: AlertStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +463,7 @@ export function toAlertViewModel(entry: EventCenterEntry): AlertViewModel {
     severity: alertSeverityOf(entry.severity),
     severityUnknown: isSeverityUnknown(entry.severity),
     severityRaw: entry.severity,
-    status: entry.acknowledged ? 'acknowledged' : 'new',
+    status: entryStatus(entry),
     statusLocked: isStatusLocked(entry.source),
     titleKey: `domain.eventKind.${entry.kind}`,
     kind: entry.kind,
@@ -283,6 +482,19 @@ export function toAlertViewModel(entry: EventCenterEntry): AlertViewModel {
     durationMs: 0,
     entry
   }
+}
+
+/**
+ * 一条事件的**工作流状态**。
+ *
+ * 规则的唯一一处（`docs/EVENT-CENTER.md` §3.12）：主进程从 `event_status` 表读到的状态
+ * 优先；表里没有这一条时，用来源侧的确认标志推出 `acknowledged` / `new`。
+ * 两个来源（我们的工作流表、来源自己的 ack）**可能不一致** —— 以工作流为准，
+ * 因为它是操作员在本机按下的那一次动作，而来源的 ack 是设备侧的历史事实。
+ */
+function entryStatus(entry: EventCenterEntry): AlertStatus {
+  if (isEventStatus(entry.status)) return entry.status
+  return entry.acknowledged ? 'acknowledged' : 'new'
 }
 
 export function toAlertViewModels(entries: readonly EventCenterEntry[]): AlertViewModel[] {
@@ -691,6 +903,185 @@ export function eventFilterFromQuery(query: Record<string, unknown> | null | und
     to: query.to,
     ack: query.ack
   })
+}
+
+// ---------------------------------------------------------------------------
+// Activity / Timeline / Related（规格 §13）
+// ---------------------------------------------------------------------------
+
+/** Activity 的三种记录（规格 §13.3 的三类行：状态变更、指派、人工留言）。 */
+export type EventActivityKind = 'status' | 'assign' | 'note'
+
+export const EVENT_ACTIVITY_KINDS: readonly EventActivityKind[] = ['status', 'assign', 'note']
+
+export function isEventActivityKind(value: unknown): value is EventActivityKind {
+  return typeof value === 'string' && (EVENT_ACTIVITY_KINDS as readonly string[]).includes(value)
+}
+
+export function activityKindLabelKey(kind: EventActivityKind): string {
+  return `eventsUi.activityKind.${kind}`
+}
+
+/**
+ * 一条 Activity（规格 §2.2：状态变更必须记录时间、操作者、前后状态）。
+ *
+ * `actor` 是**操作者的账户名**，不是显示名：账户名唯一、可追责；显示名可以被改。
+ * `assign` 那一条里 `toStatus` 无意义，`assignee` 才是内容 —— 一条记录只该有一个"形状"
+ * （状态变化 / 指派 / 留言），由 `kind` 决定。
+ */
+export interface EventActivityView {
+  id: string
+  entryId: string
+  at: number
+  actor: string
+  kind: EventActivityKind
+  fromStatus?: AlertStatus
+  toStatus?: AlertStatus
+  assignee?: string
+  note?: string
+}
+
+/** 渲染层按 kind 分支用的结构化行（不在纯函数层翻译，见 `OverviewValue` 的同一条理由）。 */
+export type ActivityRow =
+  | { kind: 'status'; at: number; actor: string; from: AlertStatus; to: AlertStatus; note?: string }
+  | { kind: 'assign'; at: number; actor: string; assignee: string; note?: string }
+  | { kind: 'note'; at: number; actor: string; note: string }
+
+/**
+ * Activity → 可渲染的行（**新的在前**：处置工作流里"刚发生的事"在最上面更实用，
+ * 而每行都写全时间戳，顺序不会造成误读）。
+ *
+ * 不认识的取值（kind 不认识、状态字符串坏了、留言是空的）**不产出**行：宁可少一行，
+ * 也不在时间线上印一个空的"→"。
+ */
+export function activityRows(activities: readonly EventActivityView[]): ActivityRow[] {
+  const rows: ActivityRow[] = []
+  for (const activity of activities) {
+    // 不认识的 kind 直接跳过（而不是落进"留言"那一支：那样一条坏记录会伪装成一句留言）。
+    if (!isEventActivityKind(activity.kind)) continue
+    if (activity.kind === 'status') {
+      if (!isAlertStatus(activity.fromStatus) || !isAlertStatus(activity.toStatus)) continue
+      rows.push({
+        kind: 'status',
+        at: activity.at,
+        actor: activity.actor,
+        from: activity.fromStatus,
+        to: activity.toStatus,
+        ...(activity.note !== undefined ? { note: activity.note } : {})
+      })
+      continue
+    }
+    if (activity.kind === 'assign') {
+      const assignee = (activity.assignee ?? '').trim()
+      if (assignee === '') continue
+      rows.push({
+        kind: 'assign',
+        at: activity.at,
+        actor: activity.actor,
+        assignee,
+        ...(activity.note !== undefined ? { note: activity.note } : {})
+      })
+      continue
+    }
+    const note = (activity.note ?? '').trim()
+    if (note === '') continue
+    rows.push({ kind: 'note', at: activity.at, actor: activity.actor, note })
+  }
+  return rows.sort((left, right) => right.at - left.at)
+}
+
+/**
+ * Timeline 的一个节点（规格 §13.1）。
+ *
+ * 两类来源：
+ *   - **事实节点**（`detected` / `linkage-action`）：来自事件本身与来源记录；
+ *   - **动作节点**（`status` / `assign` / `note`）：来自 Activity。
+ * 规格举的例子里还有"AI 分类 · 置信度""阈值超限""通知已发"—— 我们没有那些数据
+ * （事件中心不做推理、没有通知回执），所以**不画**：时间线上只有我们真的知道的事。
+ */
+export type TimelineNode =
+  | { kind: 'detected'; at: number; approximate: boolean }
+  | { kind: 'status'; at: number; actor: string; from: AlertStatus; to: AlertStatus; note?: string }
+  | { kind: 'assign'; at: number; actor: string; assignee: string; note?: string }
+  | { kind: 'note'; at: number; actor: string; note: string }
+  | { kind: 'linkage-action'; at: number; action: string; status: string; reason?: string }
+
+/**
+ * 一条事件的完整时间线（**早的在前**：时间线是从上往下读的）。
+ *
+ * 联动动作由调用方传进来（它挂在 `entry.linkageActions` 上，不属于 Activity 表）。
+ */
+export function alertTimeline(
+  alert: AlertViewModel,
+  activities: readonly EventActivityView[],
+  linkageActions: readonly { at: number; action: string; status: string; reason?: string }[] = []
+): TimelineNode[] {
+  const nodes: TimelineNode[] = [
+    { kind: 'detected', at: alert.firstDetectedAt, approximate: alert.atApproximate },
+    ...activityRows(activities),
+    ...linkageActions.map((record) => ({
+      kind: 'linkage-action' as const,
+      at: record.at,
+      action: record.action,
+      status: record.status,
+      ...(record.reason !== undefined ? { reason: record.reason } : {})
+    }))
+  ]
+  return nodes.sort((left, right) => left.at - right.at)
+}
+
+// ---------------------------------------------------------------------------
+// Related（规格 §13.2）
+// ---------------------------------------------------------------------------
+
+export type RelatedGroupId = 'same-device' | 'same-kind' | 'time-window'
+
+export interface RelatedGroup {
+  id: RelatedGroupId
+  labelKey: string
+  /** 组里的**其它**告警（不含当前这一条）。 */
+  ids: string[]
+}
+
+export const RELATED_TIME_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * 相关性分组（规格 §13.2 的"同资产 / 同设备 / 同类型 / 邻近资产 / 时间窗口"）。
+ *
+ * **作用域是已加载的那一页**（与 KPI 同一条口径）：相关事件必须在取回的数据里找，
+ * 我们没有任何"跨全库按相关性查询"的能力。界面把这一点印出来（`relatedScope`）。
+ *
+ * 我们有的三组：
+ *   - `same-device`：同一台设备的其它告警（规格的 same device）；
+ *   - `same-kind`：同一种事件种类（规格的 same event type）；
+ *   - `time-window`：±10 分钟内的其它告警（规格的 time window）。
+ * `same-asset` / `nearby-assets` **不做**：我们没有 asset 这一层（设备就是我们的资产），
+ * 而"邻近"要靠资产树或坐标 —— 坐标是人工录的、多数设备还是空的。
+ */
+export function relatedGroups(
+  alert: AlertViewModel,
+  alerts: readonly AlertViewModel[],
+  windowMs: number = RELATED_TIME_WINDOW_MS
+): RelatedGroup[] {
+  const others = alerts.filter((item) => item.id !== alert.id)
+  const ids = (list: AlertViewModel[]): string[] => list.map((item) => item.id)
+  return [
+    {
+      id: 'same-device',
+      labelKey: 'eventsUi.relatedSameDevice',
+      ids: ids(others.filter((item) => item.deviceId === alert.deviceId))
+    },
+    {
+      id: 'same-kind',
+      labelKey: 'eventsUi.relatedSameKind',
+      ids: ids(others.filter((item) => item.kind === alert.kind))
+    },
+    {
+      id: 'time-window',
+      labelKey: 'eventsUi.relatedTimeWindow',
+      ids: ids(others.filter((item) => Math.abs(item.at - alert.at) <= windowMs))
+    }
+  ]
 }
 
 // ---------------------------------------------------------------------------

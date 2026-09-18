@@ -32,6 +32,8 @@ export const newRecordingId = (): string => createId('rec')
 export const newSampleId = (): string => createId('smp')
 /** 标签库里的一条（`sample_labels` 表，schema v8）。 */
 export const newSampleLabelId = (): string => createId('slb')
+/** 事件工作流的一条 Activity（`event_activity` 表，schema v13）。 */
+export const newEventActivityId = (): string => createId('act')
 
 /** Current epoch milliseconds. Wrapped so tests can stub it. */
 export const now = (): number => Date.now()

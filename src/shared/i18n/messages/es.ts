@@ -2450,7 +2450,9 @@ export const es: MessageSchema = {
       acknowledged: 'Confirmado',
       investigating: 'En investigación',
       resolved: 'Resuelto',
-      closed: 'Cerrado'
+      closed: 'Cerrado',
+      muted: 'Silenciado',
+      reopened: 'Reabierto'
     },
     severityUnknown: 'Gravedad desconocida',
 
@@ -2509,7 +2511,27 @@ export const es: MessageSchema = {
     evidenceFilesGone: 'La base registra esta imagen, pero el archivo ya no está en este equipo.',
     evidenceNotImage: 'El archivo existe, pero no es un formato de imagen que se pueda mostrar.',
     evidenceNotFound: 'No hay una ruta utilizable para esta evidencia de imagen.',
-    evidenceError: 'No se pudo leer la evidencia de imagen.'
+    evidenceError: 'No se pudo leer la evidencia de imagen.',
+
+    // --- Fase 5: máquina de estados / acciones / Activity / Timeline / Related (§2.2, §13)
+    actionInvestigate: 'Iniciar investigación',
+    actionResolve: 'Marcar como resuelto',
+    actionClose: 'Cerrar',
+    actionReopen: 'Reabrir',
+    actionMute: 'Silenciar',
+    actionUnmute: 'Quitar silencio',
+    actionAssign: 'Asignar',
+
+    activityKind: {
+      status: 'Cambio de estado',
+      assign: 'Asignación',
+      note: 'Nota'
+    },
+
+
+    relatedSameDevice: 'Mismo equipo',
+    relatedSameKind: 'Mismo tipo de evento',
+    relatedTimeWindow: 'Dentro de 10 minutos',
 
   }
 }

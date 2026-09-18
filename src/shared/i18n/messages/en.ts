@@ -2478,7 +2478,9 @@ export const en: MessageSchema = {
       acknowledged: 'Acknowledged',
       investigating: 'Investigating',
       resolved: 'Resolved',
-      closed: 'Closed'
+      closed: 'Closed',
+      muted: 'Muted',
+      reopened: 'Reopened'
     },
     severityUnknown: 'Severity unknown',
 
@@ -2539,7 +2541,27 @@ export const en: MessageSchema = {
     evidenceFilesGone: 'The library records this image, but the file is gone from this machine.',
     evidenceNotImage: 'The file exists, but it is not an image format that can be displayed.',
     evidenceNotFound: 'No usable path for this image evidence.',
-    evidenceError: 'Reading the image evidence failed.'
+    evidenceError: 'Reading the image evidence failed.',
+
+    // --- Phase 5: status machine / actions / Activity / Timeline / Related (§2.2, §13)
+    actionInvestigate: 'Start investigating',
+    actionResolve: 'Mark resolved',
+    actionClose: 'Close',
+    actionReopen: 'Reopen',
+    actionMute: 'Mute',
+    actionUnmute: 'Unmute',
+    actionAssign: 'Assign',
+
+    activityKind: {
+      status: 'Status change',
+      assign: 'Assignment',
+      note: 'Note'
+    },
+
+
+    relatedSameDevice: 'Same device',
+    relatedSameKind: 'Same event type',
+    relatedTimeWindow: 'Within 10 minutes',
 
   }
 }

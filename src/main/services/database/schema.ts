@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 export interface Migration {
   version: number
@@ -774,6 +774,59 @@ export const MIGRATIONS: readonly Migration[] = [
       db.exec(`
         ALTER TABLE devices ADD COLUMN e2_variant TEXT;
         ALTER TABLE alarms ADD COLUMN snapshot_dir TEXT;
+      `)
+    }
+  },
+  {
+    version: 13,
+    name: 'event-status-and-activity',
+    up: (db) => {
+      /**
+       * 事件中心的**处置工作流**（规格 §2.2 的状态机 + §13.3 的 Activity）。
+       *
+       * WHY TWO NEW TABLES RATHER THAN COLUMNS ON `alarms`
+       * 一条事件有三个所有者：声纹告警在 `alarms`（SQLite）、本机联动在引擎的待处理列表
+       * （内存 + 它自己的存储）、相机检测日志在**设备**上（我们连写接口都没有）。
+       * 状态与 Activity 是**我们自己的处置记录**，三个来源一视同仁，所以按
+       * `EventCenterEntry.id`（稳定标识，`detect:` / `linkage:` / `alarm:` 前缀）单独存：
+       *
+       *   - 不用改 `alarms` 的语义：那一行的 `acknowledged` 仍然是**来源侧的事实**，
+       *     而工作流状态是本机判断，两者可以不一致（`docs/EVENT-CENTER.md` §3.12 写了取舍）；
+       *   - 不用碰联动引擎的内部存储（它归那个模块所有）；
+       *   - 相机检测日志也能被处置（记录在本机），而不是因为"设备没有接口"就整条不能动。
+       *
+       * `event_status` 一行 = 一条事件当前的工作流状态；`event_activity` 是它的流水。
+       * 两者在**同一个事务**里写（仓储层负责），所以不会出现"状态变了但没记录"。
+       *
+       * CHECK 用规格的七个取值（`EVENT_STATUSES`）。这里是**新表**，将来要加取值可以重建，
+       * 不像 `alarms.severity` 那样牵着父表与索引（v10 的教训）。
+       *
+       * `event_activity` 会一直长：现在没有保留策略（我们自己的审计流水，删掉就没有证据了）。
+       * 真要限制得先定"多久算旧账"，那是产品决定；这一轮**不删**，如实记在文档里。
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS event_status (
+          entry_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL CHECK (
+            status IN ('new', 'acknowledged', 'investigating', 'resolved', 'closed', 'muted', 'reopened')
+          ),
+          assignee TEXT,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS event_activity (
+          id TEXT PRIMARY KEY,
+          entry_id TEXT NOT NULL,
+          at INTEGER NOT NULL,
+          actor TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('status', 'assign', 'note')),
+          from_status TEXT,
+          to_status TEXT,
+          assignee TEXT,
+          note TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_event_activity_entry ON event_activity (entry_id, at);
       `)
     }
   }

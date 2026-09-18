@@ -35,6 +35,7 @@ import type {
   EventCenterQuery,
   EventDetectDownloadInput,
   EventEvidenceImageInput,
+  EventStatusChangeInput,
   Fa371MonitorState,
   Fa371RunModeValue,
   Fa371StreamKind,
@@ -2537,6 +2538,44 @@ export function registerIpcHandlers(): void {
     toResult(async () => {
       requirePermission('viewEvents')
       getServices().eventCenter.closeEvidenceImage()
+    })
+  )
+
+  /**
+   * 处置一条事件（规格 §2.2）：改工作流状态 / 指派 / 留言。
+   *
+   * **写** —— 与 `EVENT_CENTER_ACKNOWLEDGE` 同一档：它写本机库、写 Activity，
+   * `acknowledge` 那一个动作还会连设备（来源侧的确认）。所以同样要求管理员。
+   * 操作者是谁由**会话**决定（`actor()`），不接受请求里自带一个名字：
+   * Activity 的价值就在"谁做的"这一列，让它由调用方自报就等于没有这一列。
+   */
+  ipcMain.handle(IpcChannels.EVENT_CENTER_CHANGE_STATUS, (_event, input: EventStatusChangeInput) =>
+    toResult(async () => {
+      requireAdministrator()
+      requirePermission('viewEvents')
+      if (input === null || typeof input !== 'object') {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少处置参数')
+      }
+      const result = await getServices().eventCenter.changeStatus({
+        entryId: String(input.entryId ?? ''),
+        ...(input.action !== undefined ? { action: input.action } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.assignee !== undefined ? { assignee: String(input.assignee) } : {}),
+        ...(input.note !== undefined ? { note: String(input.note) } : {}),
+        ...(input.currentStatus !== undefined ? { currentStatus: input.currentStatus } : {}),
+        actor: actor()
+      })
+      return result
+    })
+  )
+
+  ipcMain.handle(IpcChannels.EVENT_CENTER_ACTIVITY, (_event, entryId: unknown, limit: unknown) =>
+    toResult(async () => {
+      requirePermission('viewEvents')
+      return getServices().eventCenter.activity(
+        String(entryId ?? ''),
+        typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined
+      )
     })
   )
 

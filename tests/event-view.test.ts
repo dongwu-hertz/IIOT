@@ -36,13 +36,17 @@ import {
   EVENT_FILTER_QUERY_KEYS,
   EVENT_VIEW_MODE_STORAGE_KEY,
   IMPLEMENTED_DETAIL_TABS,
+  RELATED_TIME_WINDOW_MS,
   VISIBLE_ALERT_SEVERITIES,
   ackFilterToQuery,
+  activityKindLabelKey,
+  activityRows,
   alertMetrics,
   alertOverviewFields,
   alertSeverityLabelKey,
   alertSeverityOf,
   alertStatusLabelKey,
+  alertTimeline,
   clampDrawerWidth,
   detailTabLabelKey,
   drawerWidthForViewport,
@@ -60,13 +64,20 @@ import {
   parseEventFilter,
   parseEventViewMode,
   querySeverityFor,
+  relatedGroups,
   savedViewFromMs,
   serializeEventFilter,
   severityFilterFor,
+  statusActionsFor,
+  statusForAction,
   toAlertViewModel,
   toAlertViewModels
 } from '../src/shared/domain/event-view'
-import type { AlertViewModel, EventQueueFilter } from '../src/shared/domain/event-view'
+import type {
+  AlertViewModel,
+  EventActivityView,
+  EventQueueFilter
+} from '../src/shared/domain/event-view'
 
 /** 最小可用的事件样本：只给断言用得上的字段，其余按接口要求补默认值。 */
 function entry(overrides: Partial<EventCenterEntry> = {}): EventCenterEntry {
@@ -689,5 +700,197 @@ describe('Evidence 的图片从哪来（规格 §12.1）', () => {
       ),
       null
     )
+  })
+})
+
+describe('状态机与处置动作（规格 §2.2 / §11.2）', () => {
+  it('每个状态都能说出「现在能做什么」，且只有一个主 CTA', () => {
+    for (const status of ALERT_STATUSES) {
+      const actions = statusActionsFor(status)
+      assert.ok(actions.length > 0, `${status} 下一个动作都没有（界面会变成一个死结）`)
+      const primaries = actions.filter((action) => action.primary === true)
+      assert.equal(primaries.length, 1, `${status} 的主 CTA 不是恰好一个：${primaries.length}`)
+    }
+  })
+
+  it('`new`：主 CTA 是确认，另外还能直接开始调查或静默', () => {
+    const actions = statusActionsFor('new')
+    const primary = actions.find((action) => action.primary)
+    assert.equal(primary?.id, 'acknowledge')
+    assert.equal(primary?.to, 'acknowledged')
+    assert.deepEqual(
+      actions.map((action) => action.id).sort(),
+      ['acknowledge', 'investigate', 'mute']
+    )
+  })
+
+  it('没有确认能力的来源（相机检测日志）里**不出现**「确认」这个动作', () => {
+    const actions = statusActionsFor('new', { locked: true })
+    assert.equal(actions.some((action) => action.id === 'acknowledge'), false, '画了一个点不动的确认')
+    assert.equal(actions.find((action) => action.primary)?.id, 'investigate')
+  })
+
+  it('静默中：主 CTA 是「取消静默」，其余迁移照旧可选', () => {
+    const actions = statusActionsFor('muted')
+    const primary = actions.find((action) => action.primary)
+    assert.equal(primary?.id, 'unmute')
+    assert.equal(primary?.to, 'acknowledged')
+    assert.ok(actions.some((action) => action.to === 'investigating'))
+    /*
+     * `muted → new` 在状态表里是允许的（取消静默后回到"谁都没动过"），但**不作为按钮出现**：
+     * 两个都叫「取消静默」、只有落点不同的按钮没人分得清。这条迁移留给程序化调用。
+     */
+    assert.equal(
+      actions.some((action) => action.to === 'new'),
+      false,
+      '界面上出现了两个「取消静默」'
+    )
+    assert.equal(
+      actions.filter((action) => action.id === 'unmute').length,
+      1,
+      '「取消静默」出现了不止一次'
+    )
+  })
+
+  it('已关闭：只能重新开启，而且**必须**填原因（规格 §2.2）', () => {
+    const actions = statusActionsFor('closed')
+    assert.deepEqual(
+      actions.map((action) => action.id),
+      ['reopen']
+    )
+    assert.equal(actions[0]?.requiresNote, true)
+    assert.equal(actions[0]?.primary, true)
+  })
+
+  it('有可指派的账户时才给「指派」，且它不是主 CTA', () => {
+    const without = statusActionsFor('new')
+    assert.equal(without.some((action) => action.id === 'assign'), false)
+    const withAssign = statusActionsFor('new', { canAssign: true })
+    const assign = withAssign.find((action) => action.id === 'assign')
+    assert.ok(assign)
+    assert.equal(assign.primary, undefined)
+    assert.equal(assign.to, undefined, '指派不该改状态')
+  })
+
+  it('动作 → 目标状态是一处定义（主进程与界面共用它）', () => {
+    assert.equal(statusForAction('acknowledge'), 'acknowledged')
+    assert.equal(statusForAction('investigate'), 'investigating')
+    assert.equal(statusForAction('resolve'), 'resolved')
+    assert.equal(statusForAction('close'), 'closed')
+    assert.equal(statusForAction('reopen'), 'reopened')
+    assert.equal(statusForAction('mute'), 'muted')
+    assert.equal(statusForAction('unmute'), 'acknowledged')
+    assert.equal(statusForAction('assign'), undefined)
+  })
+
+  it('两个新状态也有标签键（少一个名字，界面就会印出裸 key）', () => {
+    assert.equal(alertStatusLabelKey('muted'), 'eventsUi.alertStatus.muted')
+    assert.equal(alertStatusLabelKey('reopened'), 'eventsUi.alertStatus.reopened')
+    assert.equal(activityKindLabelKey('assign'), 'eventsUi.activityKind.assign')
+  })
+})
+
+describe('Activity / Timeline（规格 §13.3 / §13.1）', () => {
+  const activity = (overrides: Partial<EventActivityView>): EventActivityView => ({
+    id: overrides.id ?? 'act-1',
+    entryId: 'alarm:1',
+    at: overrides.at ?? 1_000,
+    actor: 'admin',
+    kind: overrides.kind ?? 'status',
+    ...overrides
+  })
+
+  it('三种记录各自成行，**新的在前**', () => {
+    const rows = activityRows([
+      activity({ id: 'a', kind: 'status', at: 100, fromStatus: 'new', toStatus: 'acknowledged' }),
+      activity({ id: 'b', kind: 'assign', at: 300, assignee: 'zhang' }),
+      activity({ id: 'c', kind: 'note', at: 200, note: '现场已看' })
+    ])
+    assert.deepEqual(
+      rows.map((row) => row.kind),
+      ['assign', 'note', 'status']
+    )
+    assert.deepEqual(rows.map((row) => row.at), [300, 200, 100])
+  })
+
+  it('坏记录**不产出行**（宁可少一行，也不在时间线上印一个空的"→"）', () => {
+    const rows = activityRows([
+      // 状态字符串坏了。
+      activity({ id: 'a', kind: 'status', fromStatus: 'nope' as never, toStatus: 'acknowledged' }),
+      // 指派没给账户名。
+      activity({ id: 'b', kind: 'assign', assignee: '   ' }),
+      // 留言是空的。
+      activity({ id: 'c', kind: 'note', note: '   ' }),
+      // kind 不认识。
+      activity({ id: 'd', kind: 'approve' as never }),
+      // 一条好的。
+      activity({ id: 'e', kind: 'status', fromStatus: 'new', toStatus: 'resolved' })
+    ])
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]?.kind, 'status')
+  })
+
+  it('时间线：从"首次探测到"开始，Activity 与联动动作混在同一条线上（早的在前）', () => {
+    const alert = view({ at: 1_000 })
+    const nodes = alertTimeline(
+      alert,
+      [
+        activity({ id: 'a', kind: 'status', at: 2_000, fromStatus: 'new', toStatus: 'acknowledged' })
+      ],
+      [{ at: 1_500, action: 'record', status: 'failed', reason: '磁盘满' }]
+    )
+    assert.deepEqual(
+      nodes.map((node) => node.kind),
+      ['detected', 'linkage-action', 'status']
+    )
+    assert.equal(nodes[0]?.at, 1_000)
+    const linkageNode = nodes[1]
+    assert.equal(linkageNode?.kind === 'linkage-action' && linkageNode.reason, '磁盘满')
+  })
+
+  it('时间线只有探测那一个节点时也不报错（新事件的常态）', () => {
+    const nodes = alertTimeline(view({ at: 5_000 }), [])
+    assert.equal(nodes.length, 1)
+    assert.equal(nodes[0]?.kind, 'detected')
+    assert.equal(nodes[0]?.kind === 'detected' && nodes[0].approximate, false)
+  })
+})
+
+describe('Related 分组（规格 §13.2）', () => {
+  const deviceA = view({ id: 'a', deviceId: 'dev-1', kind: 'localAlarm', at: 10_000 })
+  const sameDevice = view({ id: 'b', deviceId: 'dev-1', kind: 'deviceDetect', at: 10_000 })
+  const sameKind = view({ id: 'c', deviceId: 'dev-2', kind: 'localAlarm', at: 11_000 })
+  const nearby = view({ id: 'd', deviceId: 'dev-3', kind: 'linkageAlarm', at: 10_000 + 60_000 })
+  const far = view({ id: 'e', deviceId: 'dev-4', kind: 'linkageAlarm', at: 10_000 + 20 * 60_000 })
+
+  it('三组：同设备 / 同种类 / 前后 10 分钟，且都不含自己', () => {
+    const groups = relatedGroups(deviceA, [deviceA, sameDevice, sameKind, nearby, far])
+    const byId = new Map(groups.map((group) => [group.id, group]))
+    assert.deepEqual(byId.get('same-device')?.ids, ['b'])
+    assert.deepEqual(byId.get('same-kind')?.ids, ['c'])
+    assert.deepEqual(byId.get('time-window')?.ids, ['b', 'c', 'd'])
+    for (const group of groups) {
+      assert.equal(group.ids.includes('a'), false, '相关性分组把自己算进去了')
+    }
+  })
+
+  it('时间窗口是**闭区间**：正好 10 分钟算相关，超过就不算', () => {
+    const exactly = view({ id: 'f', at: 10_000 + RELATED_TIME_WINDOW_MS })
+    const oneMore = view({ id: 'g', at: 10_000 + RELATED_TIME_WINDOW_MS + 1 })
+    const groups = relatedGroups(deviceA, [exactly, oneMore])
+    const window = groups.find((group) => group.id === 'time-window')
+    assert.deepEqual(window?.ids, ['f'])
+  })
+
+  it('只有这一条事件时三组都是空的（界面据此说"没有相关的其它事件"）', () => {
+    const groups = relatedGroups(deviceA, [deviceA])
+    assert.equal(groups.length, 3)
+    for (const group of groups) assert.deepEqual(group.ids, [])
+  })
+
+  it('分组带标签键（渲染层用它翻译，不自己拼文案）', () => {
+    for (const group of relatedGroups(deviceA, [])) {
+      assert.match(group.labelKey, /^eventsUi\.related/, `${group.id} 的标签键不对`)
+    }
   })
 })

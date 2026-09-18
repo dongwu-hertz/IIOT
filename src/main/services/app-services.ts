@@ -22,6 +22,7 @@ import {
   DeviceRepository
 } from './database/device-repository'
 import { AlarmRepository, RecordingRepository } from './database/alarm-repository'
+import { EventStatusRepository } from './database/event-status-repository'
 import { SampleRepository } from './database/sample-repository'
 import { SampleLibraryService } from './sample/sample-library-service'
 import { SampleLabelService } from './sample/sample-label-service'
@@ -275,6 +276,8 @@ export async function initServices(): Promise<AppServices> {
   const channelRepo = new ChannelRepository(db)
   const alarmRepo = new AlarmRepository(db)
   const recordingRepo = new RecordingRepository(db)
+  /** 处置工作流（状态 + Activity，schema v13）：事件中心自己的两张表。 */
+  const eventStatusRepo = new EventStatusRepository(db)
   /**
    * 本地异常声纹样本库（schema v7）。
    *
@@ -684,7 +687,9 @@ export async function initServices(): Promise<AppServices> {
     // 图片证据：回环端点用与录像回放**同一个**实例（那一套"只绑回环 + 每会话令牌 +
     // 不对就 403 并记日志"的推理只需要在一处成立），路径解析用存储服务（内含越界保护）。
     images: videoFiles,
-    storage
+    storage,
+    // 处置工作流（schema v13）：状态与 Activity 在我们自己的表里，与三路来源解耦。
+    statuses: eventStatusRepo
   })
 
   // ---- Startup tasks ------------------------------------------------------

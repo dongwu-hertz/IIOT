@@ -582,7 +582,15 @@ export const IpcChannels = {
   EVENT_CENTER_ACKNOWLEDGE: 'event-center:acknowledge',
   EVENT_CENTER_DOWNLOAD_DETECT_FILE: 'event-center:download-detect-file',
   EVENT_CENTER_EVIDENCE_IMAGE: 'event-center:evidence-image',
-  EVENT_CENTER_EVIDENCE_IMAGE_CLOSE: 'event-center:evidence-image-close'
+  EVENT_CENTER_EVIDENCE_IMAGE_CLOSE: 'event-center:evidence-image-close',
+  /**
+   * 处置一条事件：改工作流状态 / 指派（规格 §2.2）。**写，要管理员** ——
+   * 与 `EVENT_CENTER_ACKNOWLEDGE` 同一条规则（它会写本机库、写 Activity，
+   * 确认那一个动作还会连设备）。
+   */
+  EVENT_CENTER_CHANGE_STATUS: 'event-center:change-status',
+  /** 读一条事件的处置流水（规格 §13.3）。只读。 */
+  EVENT_CENTER_ACTIVITY: 'event-center:activity'
 } as const
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]
@@ -1136,6 +1144,48 @@ import type {
  * 而 `alarms.setSeverity()` / `countBySeverity()` 的签名要直接用它，所以这里单独导入一次。
  */
 import type { EventSeverity } from '../domain/event-center'
+
+/**
+ * 处置工作流的类型（规格 §2.2 / §13.3）。
+ *
+ * 状态机与动作都在 `domain/event-view.ts`（纯函数、有单测）：主进程用它判定迁移合法性，
+ * 渲染层用它决定"这一条事件现在能做哪些动作"。这里只是把类型带到 IPC 边界上。
+ */
+export type {
+  EventActivityView,
+  EventStatusAction,
+  EventStatusChangeResult
+} from '../domain/event-view'
+
+/**
+ * 同一条理由（`export type { … } from` 只再导出，不进本文件作用域）：
+ * `eventCenter.changeStatus` / `activity` 的签名要直接写这几个名字。
+ */
+import type {
+  EventActivityView,
+  EventStatusAction,
+  EventStatusChangeResult
+} from '../domain/event-view'
+
+/** 一次处置请求（`eventCenter.changeStatus` 的入参）。 */
+export interface EventStatusChangeInput {
+  entryId: string
+  /** 界面上的动作；与 `status` 二选一。 */
+  action?: EventStatusAction
+  /** 直接给目标状态（程序化调用；界面走 `action`）。 */
+  status?: 'new' | 'acknowledged' | 'investigating' | 'resolved' | 'closed' | 'muted' | 'reopened'
+  /** 指派给的账户名（`assign` 动作必填）。 */
+  assignee?: string
+  /** 说明/原因（`reopen` 必填；其余动作可选）。 */
+  note?: string
+  /**
+   * 界面看到的当前状态。
+   *
+   * 只在一个场景里用得上：`assign` 时这一条还没有状态行，需要按当前状态建行 ——
+   * 否则"指派"会把一条已确认的事件退回「待处理」（仓储层的注释写了完整推理）。
+   */
+  currentStatus?: 'new' | 'acknowledged' | 'investigating' | 'resolved' | 'closed' | 'muted' | 'reopened'
+}
 
 /**
  * 事件与告警中心的类型。
@@ -2401,6 +2451,27 @@ export interface RendererApi {
      * 只有界面知道；让端口挂到 TTL（30 分钟）是一种浪费，TTL 仍然兜底。
      */
     closeEvidenceImage(): Promise<DeviceResult<void>>
+    /**
+     * 处置一条事件（规格 §2.2 的状态机 + §11.2 的动作）。
+     *
+     * 两种入参，二选一（都给时 `status` 优先）：`action` 是界面上的动作
+     * （`acknowledge` / `investigate` / `resolve` / `close` / `reopen` / `mute` /
+     * `unmute` / `assign`），`status` 是直接给目标状态。
+     *
+     * 拒绝的三种情况都会如实回报（不静默）：
+     *   - 迁移不合法（`canTransitionStatus` 为假）—— 消息里带着允许的目标；
+     *   - `reopen` 没给原因（规格要求记原因）；
+     *   - `acknowledge` 而这一路来源没有确认接口（相机检测日志）—— 不替设备答应它做不到的事。
+     *
+     * ADMINISTRATOR REQUIRED。
+     */
+    changeStatus(
+      input: EventStatusChangeInput
+    ): Promise<DeviceResult<EventStatusChangeResult>>
+    /**
+     * 一条事件的处置流水（新的在前）。只读。
+     */
+    activity(entryId: string, limit?: number): Promise<DeviceResult<EventActivityView[]>>
   }
 }
 

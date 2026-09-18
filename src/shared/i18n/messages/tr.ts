@@ -2451,7 +2451,9 @@ export const tr: MessageSchema = {
       acknowledged: 'Onaylandı',
       investigating: 'İnceleniyor',
       resolved: 'Çözüldü',
-      closed: 'Kapatıldı'
+      closed: 'Kapatıldı',
+      muted: 'Sessize alındı',
+      reopened: 'Yeniden açıldı'
     },
     severityUnknown: 'Önem düzeyi bilinmiyor',
 
@@ -2510,7 +2512,27 @@ export const tr: MessageSchema = {
     evidenceFilesGone: 'Kayıt bu görüntüyü biliyor, ancak dosya artık bu makinede yok.',
     evidenceNotImage: 'Dosya var, ancak görüntülenebilen bir görüntü biçimi değil.',
     evidenceNotFound: 'Bu görsel kanıt için kullanılabilir bir yol yok.',
-    evidenceError: 'Görsel kanıt okunamadı.'
+    evidenceError: 'Görsel kanıt okunamadı.',
+
+    // --- Phase 5: durum makinesi / eylemler / Activity / Timeline / Related (§2.2, §13)
+    actionInvestigate: 'İncelemeyi başlat',
+    actionResolve: 'Çözüldü olarak işaretle',
+    actionClose: 'Kapat',
+    actionReopen: 'Yeniden aç',
+    actionMute: 'Sessize al',
+    actionUnmute: 'Sessizliği kaldır',
+    actionAssign: 'Ata',
+
+    activityKind: {
+      status: 'Durum değişikliği',
+      assign: 'Atama',
+      note: 'Not'
+    },
+
+
+    relatedSameDevice: 'Aynı cihaz',
+    relatedSameKind: 'Aynı olay türü',
+    relatedTimeWindow: '10 dakika içinde',
 
   }
 }

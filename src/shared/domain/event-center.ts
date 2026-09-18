@@ -90,6 +90,44 @@ export function isEventSeverity(value: unknown): value is EventSeverity {
 }
 
 // ---------------------------------------------------------------------------
+// 工作流状态（规格 §2.2）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条事件的**本机工作流状态**。
+ *
+ * 为什么取值定义在这里而不是界面层：它要**落库**（`event_status` 表的 CHECK 用的就是这七个），
+ * 而落库的取值域属于领域模型（与 `EventSeverity` 同一条规矩）。界面那一侧
+ * （`event-view.ts`）把它再导出成 `AlertStatus`，并加上状态机与动作。
+ *
+ * 七个取值全部来自规格的状态图，含两个分叉：`muted`（静默 ≠ 已解决）与
+ * `reopened`（已解决又被重新触发）。**`reassigned` 不在其中**：那是"指派给谁"，
+ * 落在 `assignee` 上、记一条 Activity，不是状态（见 `docs/EVENT-CENTER.md` §3.12）。
+ */
+export type EventStatus =
+  | 'new'
+  | 'acknowledged'
+  | 'investigating'
+  | 'resolved'
+  | 'closed'
+  | 'muted'
+  | 'reopened'
+
+export const EVENT_STATUSES: readonly EventStatus[] = [
+  'new',
+  'acknowledged',
+  'investigating',
+  'resolved',
+  'closed',
+  'muted',
+  'reopened'
+]
+
+export function isEventStatus(value: unknown): value is EventStatus {
+  return typeof value === 'string' && (EVENT_STATUSES as readonly string[]).includes(value)
+}
+
+// ---------------------------------------------------------------------------
 // 事件种类（稳定标识，不是文案）
 // ---------------------------------------------------------------------------
 
@@ -237,6 +275,17 @@ export interface EventCenterEntry {
   detect?: EventDetectDetail
   /** 声纹告警的细节（仅 `localAlarm`）。 */
   localAlarm?: EventLocalAlarmDetail
+  /**
+   * 本机工作流状态（规格 §2.2，`event_status` 表）。
+   *
+   * **`undefined` = 还没有人动过这一条**（不是"新建"）：主进程只在表里真有行时才填它，
+   * 界面据此用 `acknowledged` 推出 `new` / `acknowledged`（`event-view.ts` 的
+   * `entryStatus`）。把"没人动过"与"状态是 new"合成一句话会丢掉一条信息 ——
+   * 前者还可以按来源的 ack 推，后者是我们自己写下去的判断。
+   */
+  status?: EventStatus
+  /** 指派给的账户名（规格 §2.2 的 Reassigned 落在这一列；没有就是没人负责）。 */
+  assignee?: string
 }
 
 // ---------------------------------------------------------------------------

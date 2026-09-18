@@ -53,8 +53,19 @@ import type {
   EventRecordingLookup,
   EventSourceKind,
   EventSourceStatus,
+  EventStatus,
   EventAlarmLookup
 } from '@shared/domain/event-center'
+import {
+  allowedStatusTargets,
+  canTransitionStatus,
+  statusForAction
+} from '@shared/domain/event-view'
+import type {
+  EventActivityView,
+  EventStatusAction,
+  EventStatusChangeResult
+} from '@shared/domain/event-view'
 import {
   EVENT_CENTER_DEFAULT_LIMIT,
   EVENT_CENTER_MAX_LIMIT,
@@ -113,6 +124,31 @@ export interface EventCenterStorageResolver {
   resolve(storedPath: string): string
 }
 
+/**
+ * 处置工作流仓储能力（`EventStatusRepository` 结构上满足它）。
+ *
+ * 接口写窄是刻意的：服务只需要"读当前状态 / 读流水 / 写一条变更"，
+ * 测试里给一个内存假实现就够（`tests/event-center.test.ts` 就是这么做的）。
+ */
+export interface EventCenterStatusStore {
+  statusMap(
+    entryIds: readonly string[]
+  ): Map<string, { entryId: string; status: EventStatus; assignee?: string; updatedAt: number }>
+  activity(entryId: string, limit?: number): EventActivityView[]
+  setStatus(input: {
+    entryId: string
+    status?: EventStatus
+    assignee?: string
+    fromStatus?: EventStatus
+    actor: string
+    note?: string
+    at: number
+  }): {
+    row: { entryId: string; status: EventStatus; assignee?: string; updatedAt: number }
+    activity: EventActivityView
+  }
+}
+
 export interface EventCenterServiceOptions {
   listDevices(): EventCenterDeviceRef[]
   detectLibrary: EventCenterDetectLibrary
@@ -123,6 +159,8 @@ export interface EventCenterServiceOptions {
   images: EventCenterImageServer
   /** 存储根解析（把库里的相对路径变回绝对路径，越界会抛）。 */
   storage: EventCenterStorageResolver
+  /** 处置工作流（状态 + Activity，schema v13）。 */
+  statuses: EventCenterStatusStore
   /**
    * 一台相机最多取回多少条检测日志。
    *
@@ -296,12 +334,157 @@ export class EventCenterService {
       })
     }
 
+    this.mergeStatuses(pool)
+
     return {
       items: pool.slice(offset, offset + limit),
       total: pool.length,
       countsBySource,
       truncated,
       sources: statuses
+    }
+  }
+
+  /**
+   * 把处置工作流的状态与指派人并到事件行上（规格 §2.2）。
+   *
+   * 只对**这一页要返回的那些行**查一次（不逐行查）：一页 50 行逐行查就是 50 次往返。
+   * 表里没有那一行时**不填** `status`（界面据此用来源的 `acknowledged` 推 `new` /
+   * `acknowledged`）—— "没人动过"与"状态是 new"是两件事。
+   */
+  private mergeStatuses(items: readonly EventCenterEntry[]): void {
+    if (items.length === 0) return
+    let stored: ReturnType<EventCenterStatusStore['statusMap']>
+    try {
+      stored = this.options.statuses.statusMap(items.map((item) => item.id))
+    } catch (error) {
+      // 工作流表读失败**不该让整页空白**：处置状态是附加信息，事件本身仍然要显示出来。
+      // 失败如实记一条 warn，界面看到的是"没有状态"（与没人动过一样）—— 这是这一处
+      // 唯一能接受的降级方向：宁可少显示一个状态，也不能把三路来源一起藏掉。
+      deviceLog().warn('事件中心：读处置状态失败，本次不显示状态', {
+        reason: describeError(error)
+      })
+      return
+    }
+    for (const item of items) {
+      const row = stored.get(item.id)
+      if (!row) continue
+      item.status = row.status
+      if (row.assignee !== undefined) item.assignee = row.assignee
+    }
+  }
+
+  /** 一条事件的一页流水（规格 §13.3）。 */
+  activity(entryId: string, limit?: number): EventActivityView[] {
+    const id = entryId.trim()
+    if (id === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少事件标识')
+    return this.options.statuses.activity(id, limit)
+  }
+
+  /**
+   * 处置一条事件：改状态、指派、或两者一起（规格 §2.2 / §11.2）。
+   *
+   * 这一处的规则都在这里（一处而不是两处）：
+   *   1. **迁移合法性**：`canTransitionStatus(from, to)`，不合法就以
+   *      `VALIDATION_ERROR` 拒绝，并把允许的目标写在消息里（界面据此提示）；
+   *   2. **动作 → 目标状态**：`acknowledge` / `investigate` / `resolve` / `close` /
+   *      `reopen` / `mute` 各对应一个状态，`assign` 只改指派人；
+   *   3. **`acknowledge` 要同时落到来源侧**：我们的工作流状态与来源的 `acknowledged`
+   *      是两件事（§3.12），但"确认"这一个动作应该让两边都前进 —— 否则会出现
+   *      "界面上已确认、来源侧仍未确认"，那正是操作员最容易被骗的地方。
+   *      来源明确没有这个接口（相机检测日志）时**拒绝**这次状态写入：不替设备答应它做不到的事；
+   *   4. **写完读回**：返回值里的 `status` / `assignee` 来自仓储重新读出的那一行，
+   *      不是我们传进去的参数。
+   */
+  async changeStatus(input: {
+    entryId: string
+    action?: EventStatusAction
+    status?: EventStatus
+    assignee?: string
+    note?: string
+    actor: string
+    /** 界面看到的当前状态（只用于"指派时把状态行建对"，见仓储的 `fromStatus`）。 */
+    currentStatus?: EventStatus
+  }): Promise<EventStatusChangeResult> {
+    const entryId = typeof input.entryId === 'string' ? input.entryId.trim() : ''
+    if (entryId === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少事件标识')
+    const source = eventSourceFromEntryId(entryId)
+    if (source === undefined) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `认不出这条事件来自哪一路：${entryId}`)
+    }
+
+    const current = this.options.statuses.statusMap([entryId]).get(entryId)
+    const from: EventStatus = current?.status ?? 'new'
+    const isAssign = input.action === 'assign'
+    const actionTarget = input.action === undefined ? undefined : statusForAction(input.action)
+    const target: EventStatus = isAssign
+      ? from
+      : (input.status ?? actionTarget ?? from)
+    if (!isAssign && target === from && input.status === undefined && actionTarget === undefined) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '既没有给动作，也没有给目标状态')
+    }
+    if (!isAssign && !canTransitionStatus(from, target)) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        `状态不能从 ${from} 直接变成 ${target}（允许：${allowedStatusTargets(from).join(' / ') || '无'}）`
+      )
+    }
+    if (isAssign && (input.assignee ?? '').trim() === '') {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '指派必须给出账户名')
+    }
+
+    // 确认这一个动作要同时落到来源侧（见上面第 3 条）。
+    if (!isAssign && target === 'acknowledged' && input.action === 'acknowledge') {
+      const acknowledged = await this.acknowledge([entryId])
+      const perSource = acknowledged.perSource.find((item) => item.source === source)
+      if (perSource?.unsupported === true) {
+        throw new AppError(
+          ErrorCodes.VALIDATION_ERROR,
+          '这一路来源没有确认接口，因此不能把它标成已确认'
+        )
+      }
+      if (perSource?.error !== undefined) {
+        throw new AppError(ErrorCodes.NETWORK_ERROR, `来源侧确认失败：${perSource.error}`)
+      }
+      if (perSource === undefined || perSource.acknowledged === 0) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, '来源侧没有确认这一条（标识可能已经失效）')
+      }
+    }
+
+    const actor = typeof input.actor === 'string' && input.actor.trim() !== '' ? input.actor.trim() : 'unknown'
+    const note = typeof input.note === 'string' ? input.note : undefined
+    if (target === 'reopened' && (note ?? '').trim() === '') {
+      // 规格 §2.2 明说：重新开启要记录原因。空原因的重开在事后完全无法解释。
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '重新开启必须填写原因')
+    }
+
+    const written = this.options.statuses.setStatus({
+      entryId,
+      ...(isAssign ? {} : { status: target }),
+      ...(input.assignee !== undefined ? { assignee: input.assignee } : {}),
+      // 指派时把"界面看到的当前状态"带下去：状态行不存在时用它建行，
+      // 免得指派顺手把一条已确认的事件退回「待处理」。
+      ...(isAssign && input.currentStatus !== undefined ? { fromStatus: input.currentStatus } : {}),
+      actor,
+      ...(note !== undefined ? { note } : {}),
+      at: this.now()
+    })
+
+    appLog().info('事件中心：处置状态变更', {
+      entryId,
+      action: input.action ?? 'set',
+      from,
+      to: written.row.status,
+      assignee: written.row.assignee,
+      by: actor
+    })
+
+    return {
+      entryId,
+      status: written.row.status,
+      fromStatus: from,
+      ...(written.row.assignee === undefined ? {} : { assignee: written.row.assignee }),
+      activity: written.activity
     }
   }
 

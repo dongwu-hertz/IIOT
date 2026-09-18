@@ -12,7 +12,7 @@
 
 | 规格 | 要求 | 我们的现状 | 这一轮 |
 |---|---|---|---|
-| §2.2 状态机 | New → Acknowledged → Investigating → Resolved → Closed（+ Muted / Reassigned / Reopened） | 只有 `alarms.acknowledged`（二值）+ 备注 + 等级 | Phase 5（要加列/表：状态、指派人、Activity 流）。Phase 3 已把状态**类型**与标签做出来（`AlertStatus` / `eventsUi.alertStatus.*`），界面只会显示 New / Acknowledged 两个 —— 其余三个没有数据来源，所以不渲染 |
+| §2.2 状态机 | New → Acknowledged → Investigating → Resolved → Closed（+ Muted / Reassigned / Reopened） | 只有 `alarms.acknowledged`（二值）+ 备注 + 等级 | **Phase 5 后端已就绪**（schema v13 的 `event_status` + `event_activity`、状态机纯函数、`changeStatus` IPC）；界面动作与三个页签属同一阶段的界面部分（进行中）。取舍见 3.12 |
 | §2.3 严重度 | 五级 Critical/High/Medium/Low/Info + 指定色 | 四级 `info/warning/critical/unknown`（DB CHECK 钉死） | **Phase 1 加了颜色 token；Phase 3 加了展示层适配器**（`toAlertViewModel`，我们的 `warning` → 界面「高」，`unknown` → 「等级未知」而不是装成 Info，见 3.6）。值域改五级仍属 Phase 5（迁移 v13 + 旧数据映射） |
 | §3.2/§3.3 侧栏 | 232 / 64 可折叠、180–220ms、3px 橙色选中竖条、偏好本地保存 | 固定 216px、2px 竖条、无折叠 | **✅ Phase 2 做完**（偏好存 localStorage） |
 | §4.1 布局 | 1440×900 基准；内容内边距 24（≥1600 用 32）；Filter 216 / Drawer 400–560 | 三栏中的 Filter 栏 | **Filter 216 已做（Phase 3）**；Drawer 400–560 属 Phase 4（token 已就位） |
@@ -25,7 +25,7 @@
 | §10 告警队列 | 88–104px 行、3px 左竖条、三种视图模式（Compact/Standard/Evidence）、偏好保留 | 表格行（`.table`） | **✅ Phase 3**：表格 → 队列行（56/88/104 三档、3px 严重度色条、键盘 ↑/↓）；Evidence 模式没有缩略图（见 3.10） |
 | §11 详情抽屉 | 400/440/560 可拖、不跳页、Esc 关闭、↑↓ 切条、五页签 | 右侧覆盖层抽屉（滚动分区，无页签、无宽度拖拽、宽度写死 480） | **✅ Phase 4**：400–560 可拖（拖拽 + 键盘 ←→，偏好 localStorage）、默认 400（≥1600 用 440）、不跳页、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、页签条只渲染**已实现**的两个（Timeline/Related/Activity 属 Phase 5） |
 | §12 Evidence | 按 sensorType 分渲染器（Acoustic / DTS / DAS / DGA）、统一容器 | 相机检测结果、本机录音、PRPD/频谱在别的页面 | **✅ Phase 4 做了 Acoustic 一个渲染器**：图片证据（联动抓帧 / 声纹告警的球机抓图）+ 录音录像 + 指标（频谱与测量）+ 检测结果文件；链接按来源选路（`evidenceImageSource`）。DTS/DAS/DGA **不做**（**冲突**：见 3.1）。每一条事件只有**一张**图（见 3.10） |
-| §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | Phase 5（Activity 需要落库） |
+| §13 Timeline/Related/Activity | 三块：时间线、相关性分组、活动流 | 无（有告警联动动作列表） | **Phase 5 进行中**：Activity **已经落库**（`event_activity` 表 + 状态变更/指派/留言三类记录），时间线与 Related 的纯函数（`alertTimeline` / `relatedGroups`）与单测已就绪；三个页签的渲染属界面部分（待做） |
 | §14 聚合与 Incident | occurrenceCount / first-last / duration；人工 Create Incident | 无（每条告警一行、无聚合、无 Incident） | Phase 6（**冲突**：见 3.3）。Phase 3 的视图模型已带 `occurrenceCount`（恒为 1，界面在 1 时不渲染 ×N） |
 | §15 交互与可用性 | 选中不跳页、Ack 不关抽屉、键盘、焦点环、时区 | 部分符合（焦点环本轮统一为 `--focus-ring`） | Phase 3 已做：点行不跳页、↑/↓ 选中并同步焦点、Esc 关抽屉、行与筛选项都有焦点环 |
 | §16 组件树/Store/ViewModel | EventCenterPage → KPI/Filter/Queue/Drawer … | `EventCenterView.vue` 单文件 + `stores/eventCenter.ts` | Phase 3 拆出 `EventKpiStrip` / `EventFilterPanel` / `AlertQueue` 与纯函数层 `shared/domain/event-view.ts`（`AlertViewModel` 适配器），见第 4 节 |
@@ -205,6 +205,48 @@ Phase 4 **没有**做在**队列行**里显示缩略图（规格 §10 的 Eviden
 规格 §11.2 的头部是 `[Acknowledge] [Assign ▼] [⋯]`。Phase 4 只做了 `[Acknowledge]`：
 Assign（指派人）与 `⋯` 菜单里的动作都属于 Phase 5 的状态机（库里现在没有指派人这一列，
 也没有状态变更记录）。一个点开只有「暂无选项」的菜单比没有更糟，所以先不画。
+（Phase 5 的**后端**已经就位：`assignee` 与 `event_status` 都在库里，Assign 的界面属同一
+阶段的界面部分。）
+
+### 3.12 工作流状态是**我们自己的表**，与来源的确认标志是两件事（Phase 5）
+
+规格 §2.2 的状态机要落在库上，而"一条事件"有三个所有者：声纹告警在 `alarms`（SQLite）、
+本机联动在引擎的待处理列表（内存 + 它自己的存储）、相机检测日志在**设备**上（连写接口都没有）。
+三种做法里我们选了第三种：
+
+| 做法 | 为什么不选 |
+|---|---|
+| 给 `alarms` 加列 | 只有三分之一的来源能用；联动与检测日志的状态无处可放 |
+| 改联动引擎的内部存储 | 那是另一个模块的所有权；而且它仍然是"两处状态" |
+| **新建 `event_status` / `event_activity`，按 `EventCenterEntry.id` 存** | ✅ 三个来源一视同仁；不动来源表的语义；相机检测日志也能被处置（记录在本机） |
+
+由此来的三条规则（都写在代码里，这里只是索引）：
+
+1. **`status` 与 `acknowledged` 是两件事**。`acknowledged` 是**来源侧的事实**（那一条告警行、
+   ​那条待处理记录），`status` 是本机工作流状态。两者不一致时**以 `status` 为准**
+   （`event-view.ts` 的 `entryStatus`：表里有行就用表里的，没有才用 `acknowledged` 推）。
+2. **「确认」这一个动作让两边一起前进**：服务层在把状态改成 `acknowledged` 时**同时**调来源侧的
+   确认接口；来源明确没有这个接口时（相机检测日志）**拒绝**整次写入 —— 不替设备答应它做不到的事。
+   其余动作（开始调查/解决/关闭/静默/重新开启）**只**写本机：它们是我们的处置记录，与设备无关。
+3. **状态变更与 Activity 在同一个事务里**（仓储层），所以不会出现"状态变了却没有记录"。
+
+**Reassigned 不是状态**：状态图上它是 Acknowledged 的一个分叉，但"指派给谁"落在 `assignee`
+上、记一条 `kind: 'assign'` 的 Activity。做成状态会出现"已指派的已确认"这种没有意义的组合。
+
+**两个偏离状态图的地方**（都在 `ALERT_STATUS_TRANSITIONS` 里，也都有单测）：
+`new → investigating`（打开就直接查是常见操作）与 `acknowledged → resolved`（一看就明白的告警
+不必先"调查中"）；反过来**更严**一处：`closed` 只能回到 `reopened`。
+
+### 3.13 四级严重度**暂时不迁移**到五级（改在这一轮明确下来）
+
+`docs/EVENT-CENTER.md` 早先的表里把"值域改五级"排在 Phase 5。这一轮**没有做**，理由是：
+库里现在**没有任何代码路径会写** `high` / `medium` / `low`（`deriveEventSeverity()` 只给
+`warning` 或 `unknown`），所以那个 CHECK 目前不是障碍，而改它要重建 `alarms` 父表
+（v10 的教训：改 CHECK 要重建父表，重建时外键会级联删子行，风险实打实）。
+
+真正需要它的时刻是"出现可验证的五级等级来源"那一天 —— 那时这一次迁移要**连同旧数据怎么映射
+一起做**（哪一档旧值算 High、哪一档算 Medium），而不是现在先改一个没人写的 CHECK。
+界面上已经按五级**展示**（§3.6），所以这件事对使用者没有可见影响。
 
 ---
 
@@ -216,7 +258,7 @@ Assign（指派人）与 `⋯` 菜单里的动作都属于 Phase 5 的状态机�
 | Phase 2 | 侧栏（232/64 折叠）+ 顶栏 + 事件中心骨架 | **✅ 侧栏**（折叠动画 200ms、3px 橙色竖条、偏好 localStorage、折叠后 tooltip） |
 | Phase 3 | KPI 条 + 筛选栏 + 左侧筛选面板 + 告警队列（三种视图模式） | **✅ 本轮**：<br>· 纯函数层 `src/shared/domain/event-view.ts`（`AlertViewModel` 适配器、`eventKpis`、`eventFilterCounts`、筛选/URL/存取的容错解析）+ `tests/event-view.test.ts`（40 条）<br>· `EventKpiStrip.vue`（四格、可点、作用域印在下面）<br>· `EventFilterPanel.vue`（等级/来源/确认状态/设备四组带计数、216px）<br>· `AlertQueue.vue`（三档行高、3px 严重度色条、↑/↓ 选中并同步焦点、整行是 button、等级文字每一档都印）<br>· `EventCenterView.vue`：表格 → 队列、搜索 + 时间 + 六个内置视图 + 视图模式、URL/localStorage 记忆、Esc 关抽屉、来源读况改为**只在失败/截断时**出现、关键字不再触发重新查询<br>· `main.css`：`.severity--<五档>`（一个类给出强调色 + 软底色）、`.alert-row`、`.chip--tiny` 提升为全局<br>· 探针：`scripts/demo-shot-driver.cjs` 增加事件中心一段（KPI 四格与作用域、平均确认耗时是「—」、面板 216px 与四组、六个视图、三档行高、点行开抽屉 + Esc 关、点 KPI「严重」后地址栏/面板/localStorage 三处都对、四条版面关系），并修掉三处**探针自己**的缺陷（见 `docs/Ivms4200-UX-REFERENCE.md` §15.41.6） |
 | Phase 4 | 详情抽屉（400–560 可拖）+ Overview + Evidence（按 sensorType） | **✅ 本轮**：<br>· 纯函数层新增：`AlertViewModel` 的 `firstDetectedAt` / `lastDetectedAt` / `durationMs`、抽屉宽度常量与容错（400–560）、`alertOverviewFields()`（§11.4 的字段表）、`evidenceImageSource()`（图从哪来）<br>· 新组件 `EventDetailDrawer.vue`：拖拽 + 键盘改宽度（偏好 localStorage）、Esc 关、↑/↓ 与 J/K 换条（只在焦点位于抽屉内时接管）、40px 页签条 + 2px 橙色下划线、头部等级/标题/设备链接/首次探测时间/主 CTA<br>· `EventCenterView.vue`：Overview 2 列属性网格 + Evidence（图片 / 录音录像 / 指标 / 结果文件），旧的内联抽屉拆干净<br>· **新 IPC** `eventCenter.evidenceImage` / `closeEvidenceImage`（只读；四道关：路径来源 `recordingId` 优先 → 存储根越界保护 → 文件在不在 → 是不是图片）<br>· `main.css`：新增 `--color-scrim`（模态与抽屉共用一个遮罩值，顺手修掉 `AppModal` 里写死的 rgba）<br>· 探针：抽屉默认宽度 400、抓手 400–560、页签只有两个、Overview ≥8 格且有一格跨两列、切页签真的切过去、Evidence 有图或有说明、焦点进入抽屉、键盘 ← 改宽度并**写回 localStorage** |
-| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | 待做（需要 schema v13：状态、指派人、Activity 表，以及四级→五级严重度的旧数据映射；`AlertStatus` 类型与标签、`AlertViewModel` 的三个聚合字段、五个页签里缺的三个标签**都已经在**了） |
+| Phase 5 | Timeline / Related / Activity + 状态机与动作（Ack/Assign/Resolve） | **进行中（后端/领域已就绪，界面待做）**：<br>· **schema v13**（`event_status` + `event_activity`，CHECK 钉住七个状态与三种记录）+ 迁移测试（老库升级一行不少、幂等、CHECK 真的在管）<br>· `EventStatusRepository`：状态与流水**同一个事务**、写完读回、按事件分组计数、分块查询；`assign` 不会把状态退回 `new`<br>· 领域：`AlertStatus` 七个取值、`ALERT_STATUS_TRANSITIONS` + `canTransitionStatus`、`statusActionsFor`（主 CTA 只有一个；没有确认接口的来源不出现「确认」）、`activityRows` / `alertTimeline` / `relatedGroups` + 单测<br>· IPC：`eventCenter.changeStatus`（**写，要管理员**，`actor` 来自会话、不接受自报）+ `eventCenter.activity`（只读）；`PERMISSION_OPERATIONS` 同步<br>· **待做**：抽屉里的动作与 Assign、Activity / Timeline / Related 三个页签的渲染、探针断言 |
 | Phase 6 | 重复触发聚合 + 人工 Incident | 待做（需要聚合键与 Incident 表；`AlertViewModel.occurrenceCount` 已经带着，界面在它等于 1 时不渲染 ×N） |
 
 **每一阶段的交付口径**（与仓库既有规矩一致）：四语言文案 + 单测/源码守卫 + 探针断言 +
@@ -244,4 +286,15 @@ Assign（指派人）与 `⋯` 菜单里的动作都属于 Phase 5 的状态机�
   没有逐语言看过（探针在 zh-CN 下量的）。
 - **Evidence 页签里"链接到图片"的行为**：实现成 `target="_blank"` 打开回环地址，
   但没有验证窗口里点开之后浏览器/内嵌视图的表现。
+
+**Phase 5 后端（这一轮）的已知未验证**：
+- **升级现场库的实测**：迁移测试是在**临时库**上跑的（v12 → v13、幂等、CHECK）。
+  操作员那台真实的库（现在是 v12）第一次用新包启动时会升到 v13 —— 那一次升级
+  **还没有在真库上发生过**。新表是纯新增，既有数据不受影响，但"没做过"就是没做过。
+- **`event_activity` 会一直长**：没有保留策略（那是产品决定：多久算旧账）。这一轮**不删**。
+- **处置动作在界面上的闭环**：IPC 与领域规则有测试，但**还没有任何界面**调用它们 ——
+  探针自然也还没有断言（界面部分做完那一轮再补）。
+- **删除来源行之后的状态残留**：`event_status` 按 entry id 存，声纹告警行被删（保留策略）
+  之后那一行状态会变成孤儿。它不影响任何界面（事件已经不出现了），但库里会攒下这些行 ——
+  需要一条清理规则时，这一条是输入。
 

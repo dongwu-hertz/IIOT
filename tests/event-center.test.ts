@@ -29,6 +29,7 @@ import type { Database as SqliteDatabase } from 'better-sqlite3'
 import { openDatabase } from '../src/main/services/database/schema'
 import { AlarmRepository, RecordingRepository } from '../src/main/services/database/alarm-repository'
 import { DeviceRepository } from '../src/main/services/database/device-repository'
+import { EventStatusRepository } from '../src/main/services/database/event-status-repository'
 import { StorageService } from '../src/main/services/storage/storage-service'
 import { DetectLibraryService } from '../src/main/services/device/fa371/detect-library-service'
 import {
@@ -284,6 +285,7 @@ function createService(options: {
     },
     images: createImageFake(imageState),
     storage,
+    statuses: new EventStatusRepository(db),
     now: () => FIXED_NOW,
     ...(options.detectLogLimit !== undefined ? { detectLogLimit: options.detectLogLimit } : {})
   })
@@ -680,7 +682,8 @@ describe('EventCenterService.acknowledge', () => {
         listByDevice: (deviceId) => recordings.query({ deviceId, limit: 1000, offset: 0 }).items
       },
       images: createImageFake({ calls: [], closed: 0 }),
-      storage
+      storage,
+      statuses: new EventStatusRepository(db)
     })
 
     const result = await broken.acknowledge([

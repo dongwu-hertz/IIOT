@@ -2715,7 +2715,9 @@ export const zhCN = {
       acknowledged: '已确认',
       investigating: '调查中',
       resolved: '已解决',
-      closed: '已关闭'
+      closed: '已关闭',
+      muted: '已静默',
+      reopened: '重新开启'
     },
     severityUnknown: '等级未知',
 
@@ -2776,7 +2778,27 @@ export const zhCN = {
     evidenceFilesGone: '库里记着这份图，但本机磁盘上已经没有了。',
     evidenceNotImage: '这份文件在，但不是能显示的图片格式。',
     evidenceNotFound: '找不到这份图片证据的路径。',
-    evidenceError: '读取图片证据失败。'
+    evidenceError: '读取图片证据失败。',
+
+    // --- Phase 5：状态机 / 处置动作 / Activity / Timeline / Related（§2.2、§13）--
+    actionInvestigate: '开始调查',
+    actionResolve: '标记已解决',
+    actionClose: '关闭',
+    actionReopen: '重新开启',
+    actionMute: '静默',
+    actionUnmute: '取消静默',
+    actionAssign: '指派',
+
+    activityKind: {
+      status: '状态变更',
+      assign: '指派',
+      note: '说明'
+    },
+
+
+    relatedSameDevice: '同一台设备',
+    relatedSameKind: '同一种事件',
+    relatedTimeWindow: '前后 10 分钟',
 
   }
 }
