@@ -2245,6 +2245,22 @@ export const es: MessageSchema = {
   },
 
   /**
+   * Mensajes del sistema: los fallos de nivel de aplicación dentro del panel que hay detrás
+   * del icono de alarma de la barra superior (propietario, 2026-09-18).
+   *
+   * La regla está en `stores/appNotices.ts`: aquí van los fallos de nivel de aplicación (no
+   * se puede leer la lista de dispositivos, los ajustes o la lista de alarmas; fallo de
+   * autenticación…), y no la respuesta local de cada página (validación de formulario, el
+   * resultado de lo que acaba de pulsar). El panel es flotante: nada de esto mueve el diseño.
+   */
+  noticesUi: {
+    title: 'Mensajes del sistema',
+    clearAll: 'Borrar todo',
+    dismiss: 'Descartar este mensaje del sistema',
+    bellWithProblems: '{count} mensaje(s) del sistema · alarmas pendientes'
+  },
+
+  /**
    * Enlace de alarma local (grabación / ventana emergente / aviso / correo).
    *
    * Same rule as every other group: NO MESSAGE HERE MAY CONTAIN `@`

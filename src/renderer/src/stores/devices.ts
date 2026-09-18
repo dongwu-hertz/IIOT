@@ -22,6 +22,35 @@ import type {
 } from '@shared/domain/models'
 import type { ProbeResult } from '@shared/ipc/contract'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
+import { useAppNoticesStore } from '@renderer/stores/appNotices'
+
+/**
+ * 设备侧**读类**失败的去处：顶栏那颗告警图标里的「系统消息」（业主 2026-09-18）。
+ *
+ * 为什么要分开三个 id：三条读路径各自独立成功/失败 —— 通道表读回来了不该把"设备列表读不
+ * 出来"那条也撤掉，反过来也一样。同一个 id 只留一行（见 `stores/appNotices.ts`）。
+ *
+ * **增删改不报**：那是一次点击的结果，`DevicesView` / `AddDeviceDialog` 已经在它发生的地方
+ * 说了（`devices.error` 那两处读者）。同一个失败在两处说，会让人以为发生了两件事。
+ */
+const READ_ERROR_IDS = {
+  list: 'devices-list',
+  channels: 'devices-channels',
+  status: 'devices-status'
+} as const
+
+/**
+ * 把一条读类失败报进系统消息；消息为空串表示这一路读通了，把那条撤掉。
+ *
+ * 不动 `error` 字段：那个字段是给"点一下就地反馈"的调用方读的（见上），两条路各管各的。
+ */
+function reportReadError(id: string, message: string): void {
+  const notices = useAppNoticesStore()
+  const text = message.trim()
+  if (text === '') notices.clear(id)
+  else notices.report({ id, text })
+}
+
 
 export const useDevicesStore = defineStore('devices', () => {
   const devices = ref<Device[]>([])
@@ -66,10 +95,12 @@ export const useDevicesStore = defineStore('devices', () => {
     loading.value = false
     if (!result.success) {
       error.value = resultMessage(result)
+      reportReadError(READ_ERROR_IDS.list, error.value)
       return
     }
     devices.value = unwrap(result) ?? []
     error.value = ''
+    reportReadError(READ_ERROR_IDS.list, '')
     if (
       selectedDeviceId.value &&
       !devices.value.some((device) => device.id === selectedDeviceId.value)
@@ -150,9 +181,11 @@ export const useDevicesStore = defineStore('devices', () => {
     loading.value = false
     if (!result.success) {
       error.value = resultMessage(result)
+      reportReadError(READ_ERROR_IDS.status, error.value)
       return
     }
     error.value = ''
+    reportReadError(READ_ERROR_IDS.status, '')
     const list = unwrap(result)
     if (list) {
       if (id === undefined) {
@@ -198,9 +231,18 @@ export const useDevicesStore = defineStore('devices', () => {
     channelsLoading.value = { ...channelsLoading.value, [deviceId]: false }
     if (!result.success) {
       error.value = resultMessage(result)
+      reportReadError(READ_ERROR_IDS.channels, error.value)
       return
     }
     channels.value = { ...channels.value, [deviceId]: unwrap(result) ?? [] }
+    /*
+     * 这一路读通了：把"通道表读不出来"那条系统消息撤掉。
+     *
+     * 刻意**只撤这一条**（不动 `error`）：`error` 那个字段是"点一下就地反馈"的调用方在
+     * 读的（`DevicesView` / `AddDeviceDialog`），而它历史上就**没有**在读成功时清空 ——
+     * 清它会把别的失败一起抹掉（那是另一个缺陷，见 §15.47 的"还没做"）。
+     */
+    reportReadError(READ_ERROR_IDS.channels, '')
   }
 
   async function openWebUi(id: string): Promise<string> {

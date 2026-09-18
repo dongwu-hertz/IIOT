@@ -2249,6 +2249,22 @@ export const tr: MessageSchema = {
   },
 
   /**
+   * Sistem mesajları: üst çubuktaki alarm simgesinin arkasındaki panelde yer alan
+   * uygulama düzeyindeki hatalar (mal sahibi, 2026-09-18).
+   *
+   * Kural `stores/appNotices.ts` dosyasında yazılıdır: uygulama düzeyindeki hatalar
+   * (cihaz listesi, ayarlar veya alarm listesi okunamıyor; kimlik doğrulama başarısız…)
+   * buraya girer; sayfanın kendi yerinde verdiği geri bildirim (form doğrulama, az önce
+   * tıkladığınız şeyin sonucu) girmez. Panel bir kaplamadır: bu içerik yerleşimi oynatmaz.
+   */
+  noticesUi: {
+    title: 'Sistem mesajları',
+    clearAll: 'Tümünü temizle',
+    dismiss: 'Bu sistem mesajını yoksay',
+    bellWithProblems: '{count} sistem mesajı · bekleyen alarm'
+  },
+
+  /**
    * Local alarm linkage (recording / popup / notice / e-mail).
    *
    * Same rule as every other group: NO MESSAGE HERE MAY CONTAIN the at-sign

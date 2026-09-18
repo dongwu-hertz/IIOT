@@ -10,6 +10,12 @@
  *   1. the initial device list load (every selector reads from that store), and
  *   2. the device-status push subscription from the main-process health monitor.
  *
+ * 它还负责一件**应用级**的事吗？不 —— 那件事现在住在 store 里：设备侧的三条**读**路径
+ * （设备列表 / 通道表 / 状态刷新）各自把失败报进「系统消息」（`stores/devices.ts` 的
+ * `reportReadError()`，显示在顶栏那颗告警图标的面板里）。放在 store 而不是 shell：只有
+ * 读路径该报（增删改那类是你刚点的那一下的结果，由对话框就地说明），而"这是不是一次读"
+ * 只有 store 最清楚。业主 2026-09-18 要求这类内容进那颗图标、不要挂在页面顶上。
+ *
  * WHY THIS IS A SEPARATE COMPONENT FROM App.vue
  * Both lifecycles are session-scoped work: loading the device list and
  * subscribing to status pushes must not happen before somebody is signed in.

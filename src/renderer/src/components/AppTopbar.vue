@@ -191,10 +191,6 @@ async function refresh(): Promise<void> {
         </svg>
       </button>
     </div>
-
-    <!-- Store-level failures (e.g. the device list call failed) are surfaced
-         here once instead of being repeated on every page. -->
-    <p v-if="devices.error" class="topbar__error" role="alert">{{ devices.error }}</p>
   </header>
 </template>
 
@@ -307,19 +303,12 @@ async function refresh(): Promise<void> {
  * `AlarmLinkagePanel` 取代，样式也跟着删掉 —— 留着它们，下一个人会以为顶栏还有第二颗铃。
  */
 
-.topbar__error {
-  position: absolute;
-  left: var(--space-6);
-  right: var(--space-6);
-  top: calc(100% + 4px);
-  z-index: 20;
-  padding: 6px 10px;
-  border: 1px solid var(--color-danger-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
-  font-size: 12px;
-}
+/*
+ * 这里原来还有一条 `.topbar__error`：它把 `devices.error` 画成顶栏下面一条**绝对定位**的
+ * 横幅。问题是它在每一页都在，而且盖在内容上 —— 业主 2026-09-18 要求这类应用级失败放进
+ * 右上角那颗告警图标里（而不是在软件顶上再加一条信息）。现在它由 `stores/appNotices.ts`
+ * 收着、在 `AlarmLinkagePanel` 的面板里列出来；那条横幅与它的样式一起删掉。
+ */
 
 .spin {
   animation: spin 0.9s linear infinite;

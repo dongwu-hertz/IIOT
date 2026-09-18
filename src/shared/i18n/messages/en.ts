@@ -2265,6 +2265,22 @@ export const en: MessageSchema = {
   },
 
   /**
+   * System messages — the application-level failures section inside the panel behind the
+   * topbar alarm icon (owner, 2026-09-18).
+   *
+   * The rule lives in `stores/appNotices.ts`: application-level failures (the device list,
+   * settings or the alarm list cannot be read; authentication failed …) belong here, while
+   * a page's own in-place feedback (form validation, the result of what you just clicked)
+   * does not. The panel is an overlay, so this content never moves the page layout.
+   */
+  noticesUi: {
+    title: 'System messages',
+    clearAll: 'Clear all',
+    dismiss: 'Dismiss this system message',
+    bellWithProblems: '{count} system message(s) · pending alarms'
+  },
+
+  /**
    * Local alarm linkage (recording / popup / notice / e-mail).
    *
    * Same rule as every other group: NO MESSAGE HERE MAY CONTAIN `@`

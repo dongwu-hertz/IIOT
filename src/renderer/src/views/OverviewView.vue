@@ -16,8 +16,10 @@
  * （`CameraVideoWall.vue` 的 `onMounted`），所以这里不需要第二份读取。
  *
  * 空状态也跟着走了：两张卡各自的 `EmptyState`（暂无告警记录／尚未添加设备）随卡片
- * 一起删除。剩下唯一一种「说点什么」的情况是设备列表读取失败，那条错误由上面的
- * `devices.error` 原样显示 —— 那是真实状态，不是解释。
+ * 一起删除。而**设备列表读取失败**那条也不再画在这一页上了：它是应用级的失败
+ * （`devices.error`），由 shell 报进顶栏那颗告警图标里的「系统消息」（业主 2026-09-18：
+ * 这类内容放在告警图标内，不要挂在页面顶上）。这一页因此连一条页内横幅都没有 ——
+ * 「打开软件第一眼就是画面」在字面上仍然成立。
  */
 import { useDevicesStore } from '@renderer/stores/devices'
 import ChannelWall from '@renderer/components/ChannelWall.vue'
@@ -28,8 +30,6 @@ const devices = useDevicesStore()
 
 <template>
   <div class="page">
-    <div v-if="devices.error" class="alert alert--danger" role="alert">{{ devices.error }}</div>
-
     <!--
       实时视频：产品要求「总览里面应该有直接的视频播放窗口」，并要求它支持
       1 / 4 / 16 分屏。两块墙的档位**故意不同**：相机墙 1 / 4 / 9 / 16（一格 = 一台

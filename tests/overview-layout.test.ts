@@ -122,9 +122,17 @@ describe('总览页只剩视频墙与通道墙', () => {
     assert.deepEqual(hits, [], `这些键仍被引用，说明卡片没删干净：${hits.join(', ')}`)
   })
 
-  it('剩下的唯一「说点什么」是设备读取失败的原样错误，不是一个新句式', () => {
-    assert.match(template, /devices\.error/)
-    assert.match(template, /role="alert"/)
+  it('这一页不再「说点什么」：连设备读取失败也搬进了顶栏那颗告警图标', () => {
+    /*
+     * 这一条原来是「剩下唯一说点什么的是设备读取失败的原样错误」（`devices.error` +
+     * `role="alert"`）。业主 2026-09-18 要求这类**应用级**内容放进右上角那颗告警图标里，
+     * 不要挂在页面顶上 —— 所以现在这一页连一条页内横幅都没有，而那条消息由
+     * `stores/devices.ts` 的读路径报进系统消息（`tests/app-notices.test.ts` 钉着）。
+     *
+     * 反过来钉：这一页**不许**再读 `devices.error`，也不许自己画 `role="alert"`。
+     */
+    assert.equal(/devices\.error/.test(template), false, '总览页又读起了 devices.error')
+    assert.equal(/role="alert"/.test(template), false, '总览页又出现了就地告警横幅')
   })
 })
 

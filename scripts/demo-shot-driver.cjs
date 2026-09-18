@@ -1991,23 +1991,108 @@ async function run() {
   }
   log('page titles   : ' + JSON.stringify(titlesByRoute))
 
-  const alarmPanel = await layout('/alarms', '(() => {' +
-    'const bell = document.querySelector(".alarm-badge__button");' +
-    'if (!bell) return JSON.stringify({ found: false });' +
-    'bell.click();' +
-    'return new Promise((resolve) => setTimeout(() => {' +
+  /**
+   * 告警图标那颗面板：**待处理告警 + 系统消息**，而且打开它不许动布局。
+   *
+   * 业主 2026-09-18 的要求分两句：「认证失败…这些告警内容直接放在右上角的告警 ICON 内，
+   * 而不是在软件中进行顶部添加信息」+「要确保整体的布局不会因为告警等内容而改变」。
+   * 所以这一段量四件事：
+   *   1. `.topbar__error`（修之前那条挂在每一页顶上的浮动横幅）**必须不存在**；
+   *   2. 系统消息那一段在面板里，逐条列出来（有几条、都是什么话）；
+   *   3. 那几句话**不许**在页面正文里再出现一份（同一个失败不在两处说）；
+   *   4. 打开/关闭面板前后，内容区顶边、页面顶边、页面高度、滚动位置、顶栏高度**逐项相同**。
+   *
+   * 系统消息从哪来（这一段要能自己造出来，否则它只是在"结构存在"上打勾）：先把「告警记录」
+   * 页的设备筛选切到一台真设备 —— `AlarmsView` 的 watcher 会去读那台设备的通道表
+   * （`devices.loadChannels()`，三条读路径之一）。一次性 profile 里设备的凭据解不开，
+   * 这一读**必然失败**，于是系统消息里必然有一条。探针先用同一路 IPC 问一次，据此决定
+   * "这一次该不该有那条消息"——不让"环境恰好没有失败"变成一条假缺陷。
+   */
+  const alarmPanel = await layout('/alarms', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const out = { steps: [] };' +
+    'const box = (el) => {' +
+    '  if (!el) return null;' +
+    '  const r = el.getBoundingClientRect();' +
+    '  return { top: Math.round(r.top), height: Math.round(r.height) };' +
+    '};' +
+    'const snapshot = () => {' +
+    '  const content = document.querySelector(".app-content");' +
+    '  const page = document.querySelector(".app-content .page");' +
+    '  const topbar = document.querySelector(".topbar");' +
+    '  return {' +
+    '    contentTop: box(content) ? box(content).top : null,' +
+    '    pageTop: box(page) ? box(page).top : null,' +
+    '    pageHeight: box(page) ? box(page).height : null,' +
+    '    scrollTop: content ? content.scrollTop : null,' +
+    '    topbarHeight: box(topbar) ? box(topbar).height : null' +
+    '  };' +
+    '};' +
+    'try {' +
+    // ① 先造一次**已知会失败**的读（走界面自己的那条 watcher）
+    '  const filterSelects = Array.prototype.slice.call(document.querySelectorAll(".page .filter-bar select"));' +
+    '  const deviceSelect = filterSelects[0] || null;' +
+    '  out.filterSelects = filterSelects.length;' +
+    '  let deviceId = "";' +
+    '  if (deviceSelect) {' +
+    '    const option = Array.prototype.slice.call(deviceSelect.options).find((o) => o.value);' +
+    '    deviceId = option ? option.value : "";' +
+    '    out.deviceOption = option ? (option.textContent || "").trim() : null;' +
+    '    if (deviceId) {' +
+    '      deviceSelect.value = deviceId;' +
+    '      deviceSelect.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '      await sleep(1200);' +
+    '    }' +
+    '  }' +
+    // 同一路 IPC 问一次：这一次环境到底能不能读出通道表
+    '  let channelsOk = null;' +
+    '  if (deviceId) {' +
+    '    const probe = await window.api.devices.getChannels(deviceId);' +
+    '    channelsOk = !!(probe && probe.success);' +
+    '    out.channelsProbeOk = channelsOk;' +
+    '  }' +
+    // ② 页面正文（面板**不在**这棵树里）里有没有那条浮动横幅、有没有那些话
+    '  out.topbarErrorBanners = document.querySelectorAll(".topbar__error").length;' +
+    '  const contentEl = document.querySelector(".app-content");' +
+    '  out.pageTextBefore = contentEl ? (contentEl.textContent || "").replace(/\\s+/g, " ").trim() : "";' +
+    '  out.layoutClosed = snapshot();' +
+    '  const bell = document.querySelector(".alarm-badge__button");' +
+    '  if (!bell) return JSON.stringify({ found: false });' +
+    '  bell.click();' +
+    '  await sleep(400);' +
     '  const panel = document.querySelector(".alarm-panel");' +
     '  const badge = document.querySelector(".alarm-badge__count");' +
-    '  resolve(JSON.stringify({' +
-    '    found: true,' +
-    '    panelOpen: !!panel,' +
-    '    text: panel ? panel.textContent.replace(/\\s+/g, " ").trim().slice(0, 120) : "",' +
-    '    itemCount: panel ? panel.querySelectorAll(".alarm-item").length : -1,' +
-    '    badge: badge ? badge.textContent.trim() : ""' +
-    '  }));' +
-    '}, 350));})()')
+    '  const problemsBlock = document.querySelector("[data-app-notices]");' +
+    '  const problemRows = problemsBlock' +
+    '    ? Array.prototype.slice.call(problemsBlock.querySelectorAll("[data-app-notice]")) : [];' +
+    '  out.found = true;' +
+    '  out.panelOpen = !!panel;' +
+    '  out.text = panel ? panel.textContent.replace(/\\s+/g, " ").trim().slice(0, 160) : "";' +
+    '  out.itemCount = panel ? panel.querySelectorAll(".alarm-item").length : -1;' +
+    '  out.badge = badge ? badge.textContent.trim() : "";' +
+    '  out.bellDot = !!document.querySelector("[data-bell-problem]");' +
+    '  out.bellLabel = bell.getAttribute("aria-label") || "";' +
+    '  out.noticeSection = !!problemsBlock;' +
+    '  out.noticeCount = problemRows.length;' +
+    '  out.noticeTexts = problemRows.map((row) =>' +
+    '    (row.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120));' +
+    '  out.layoutOpen = snapshot();' +
+    '  bell.click();' +
+    '  await sleep(250);' +
+    '  out.panelClosed = !document.querySelector(".alarm-panel");' +
+    '  out.layoutAfterClose = snapshot();' +
+    '  out.ok = true;' +
+    '} catch (error) {' +
+    '  out.error = error && error.message ? error.message : String(error);' +
+    '}' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
   log('alarm panel   : ' + JSON.stringify(alarmPanel))
-  if (!alarmPanel.found) {
+  if (alarmPanel.probeTimeout) {
+    problems.push('告警面板探针超时 —— 这一段没有任何结论')
+  } else if (alarmPanel.error) {
+    problems.push('告警面板探针抛异常：' + alarmPanel.error + '：' + JSON.stringify(alarmPanel))
+  } else if (!alarmPanel.found) {
     problems.push('顶栏找不到告警图标（.alarm-badge__button）')
   } else if (!alarmPanel.panelOpen) {
     problems.push('点告警图标没有打开面板')
@@ -2022,6 +2107,54 @@ async function run() {
         '角标数（' + alarmPanel.badge + '）与面板列出的条数（' + alarmPanel.itemCount + '）不一致'
       )
     }
+    // ① 那条挂在每一页顶上的浮动横幅必须真的没了。
+    if (alarmPanel.topbarErrorBanners !== 0) {
+      problems.push(
+        '顶栏又出现了那条浮动错误横幅（.topbar__error × ' + alarmPanel.topbarErrorBanners +
+          '）—— 业主 2026-09-18 要求这类内容放进告警图标里'
+      )
+    }
+    // ② 系统消息那一段：有失败就必须有那一段，而且逐条列出来；没有失败就不许画空段。
+    if (alarmPanel.noticeSection && !(alarmPanel.noticeCount >= 1)) {
+      problems.push('系统消息那一段渲染了，却一条都没有：' + JSON.stringify(alarmPanel))
+    }
+    if (alarmPanel.noticeSection !== alarmPanel.bellDot) {
+      problems.push(
+        '告警图标上的"有系统消息"那个点与面板里的那一段不一致（点=' + alarmPanel.bellDot +
+          '，段=' + alarmPanel.noticeSection + '）'
+      )
+    }
+    if (alarmPanel.channelsProbeOk === false && !alarmPanel.noticeSection) {
+      problems.push(
+        '这一读**确实失败**了（getChannels 返回失败），系统消息里却没有那一条 —— ' +
+          '应用级失败没有进告警图标：' + JSON.stringify(alarmPanel)
+      )
+    }
+    if (alarmPanel.noticeSection && alarmPanel.bellLabel.indexOf('系统消息') < 0) {
+      problems.push('有系统消息时，图标的无障碍名字没有说出来：' + JSON.stringify(alarmPanel.bellLabel))
+    }
+    // ③ 那些话不许在页面正文里再出现一份（同一个失败不在两处说）。
+    for (const text of alarmPanel.noticeTexts || []) {
+      const head = String(text).slice(0, 12)
+      if (head && String(alarmPanel.pageTextBefore).includes(head)) {
+        problems.push('系统消息「' + text + '」在页面正文里也有一份（同一个失败说了两处）')
+      }
+    }
+    // ④ 打开/关闭面板不许动布局（打开前 = 打开后 = 关闭后）。
+    const closed = JSON.stringify(alarmPanel.layoutClosed)
+    if (JSON.stringify(alarmPanel.layoutOpen) !== closed) {
+      problems.push(
+        '打开告警面板改变了页面布局：关闭时 ' + closed + '，打开后 ' +
+          JSON.stringify(alarmPanel.layoutOpen)
+      )
+    }
+    if (JSON.stringify(alarmPanel.layoutAfterClose) !== closed) {
+      problems.push(
+        '关掉告警面板之后布局没有回到原样：原本 ' + closed + '，关掉后 ' +
+          JSON.stringify(alarmPanel.layoutAfterClose)
+      )
+    }
+    if (!alarmPanel.panelClosed) problems.push('再点一次告警图标没有收起面板')
   }
 
   /**

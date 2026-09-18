@@ -19,15 +19,36 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
+import { useAppNoticesStore } from '@renderer/stores/appNotices'
 import { formatDateTime } from '@renderer/lib/format'
 import type { LinkageActionRecord, PendingAlarmRecord } from '@shared/ipc/contract'
 
 const { t } = useI18n()
 const router = useRouter()
 const linkage = useAlarmLinkageStore()
+/**
+ * 应用级的失败与提示（「认证失败，请检查用户名与密码」这一类）。
+ *
+ * 业主 2026-09-18：这类内容放在**告警图标**里，不要挂在页面顶上 —— 面板是浮层，出现
+ * 与消失都不动布局。来源与口径见 `stores/appNotices.ts` 的文件头。
+ */
+const notices = useAppNoticesStore()
 
 const open = ref(false)
 const acknowledging = ref(false)
+
+/**
+ * 图标按钮的无障碍名字。
+ *
+ * 两颗数字不能混：角标里的数是**待处理告警**（`linkage.unacknowledgedCount`，与面板里的
+ * 列表同源），系统消息只用一个**点**表示"有东西要看"。把两者加起来写进同一个数字，就是
+ * 本仓库最反对的"一个数字配一份别的列表"。
+ */
+const bellLabel = computed(() =>
+  notices.count > 0
+    ? t('noticesUi.bellWithProblems', { count: notices.count })
+    : t('linkage.pendingTitle')
+)
 
 /**
  * 未确认的排前面，其余按时间倒序。
@@ -101,7 +122,7 @@ function goToAlarms(): void {
       class="alarm-badge__button"
       :class="{ 'alarm-badge__button--active': linkage.unacknowledgedCount > 0 }"
       :title="t('linkage.pendingShow')"
-      :aria-label="t('linkage.pendingTitle')"
+      :aria-label="bellLabel"
       :aria-expanded="open"
       @click="toggle"
     >
@@ -120,6 +141,16 @@ function goToAlarms(): void {
           <path d="M6.6 12.3a1.5 1.5 0 002.8 0" />
         </svg>
       </span>
+      <!--
+        系统消息的标记是一个**点**，不是数字：数字位置已经被"待处理告警条数"占了，
+        两者相加或互相替换都会让角标说出一个不对的数（见 `bellLabel`）。
+      -->
+      <span
+        v-if="notices.count > 0"
+        class="alarm-badge__problem"
+        data-bell-problem
+        aria-hidden="true"
+      ></span>
       <span v-if="linkage.unacknowledgedCount > 0" class="alarm-badge__count">
         {{ linkage.unacknowledgedCount }}
       </span>
@@ -127,6 +158,41 @@ function goToAlarms(): void {
 
     <!-- 面板：绝对定位在顶栏之下，不参与页面布局（否则打开面板会挤动内容）。 -->
     <div v-if="open" class="alarm-panel" role="dialog" :aria-label="t('linkage.pendingTitle')">
+      <!--
+        系统消息在最上面：它们是**应用级**的失败（设备列表读不出来、设置读不出来……），
+        操作员点开这颗图标最可能就是来找它们的。没有的时候整块不画 —— 一条空标题
+        只会让人以为下面那些告警属于它。
+      -->
+      <section v-if="notices.count > 0" class="alarm-panel__problems" data-app-notices>
+        <div class="alarm-panel__problems-head">
+          <strong>{{ t('noticesUi.title') }}</strong>
+          <button type="button" class="btn btn--sm" @click="notices.clearAll()">
+            {{ t('noticesUi.clearAll') }}
+          </button>
+        </div>
+        <ul class="problem-list">
+          <li
+            v-for="problem in notices.items"
+            :key="problem.id"
+            class="problem"
+            :class="`problem--${problem.kind}`"
+            data-app-notice
+          >
+            <span class="problem__text">{{ problem.text }}</span>
+            <span class="problem__time">{{ formatDateTime(problem.at) }}</span>
+            <button
+              type="button"
+              class="problem__dismiss"
+              :title="t('noticesUi.dismiss')"
+              :aria-label="t('noticesUi.dismiss')"
+              @click="notices.clear(problem.id)"
+            >
+              ×
+            </button>
+          </li>
+        </ul>
+      </section>
+
       <div class="alarm-panel__head">
         <strong>{{ t('linkage.pendingTitle') }}</strong>
         <button
@@ -249,6 +315,7 @@ function goToAlarms(): void {
 
 /* 图标容器只负责居中那个 SVG：以前它画的是一个白字「!」的实心圆。 */
 .alarm-badge__icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -263,6 +330,22 @@ function goToAlarms(): void {
   font-size: 10.5px;
   font-weight: 600;
   text-align: center;
+}
+
+/*
+ * 系统消息的标记：铃铛图标的右上角一个小点，**不是数字**（数字位置属于待处理告警条数，
+ * 两个数混在一起就再也说不清那个数是什么）。挂在图标上而不是按钮上：按钮右侧可能还有
+ * 角标，两个标记叠在一起谁都读不出来。
+ */
+.alarm-badge__problem {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  box-shadow: 0 0 0 1.5px var(--color-bg);
 }
 
 /* 面板底部的出口（去告警记录页）：与面板同宽、靠右，与头部那条分隔线呼应。 */
@@ -294,6 +377,86 @@ function goToAlarms(): void {
   justify-content: space-between;
   gap: 8px;
   font-size: 13px;
+}
+
+/* --- 系统消息（应用级失败） ------------------------------------------------ */
+
+/*
+ * 这一块在面板里，而面板是浮层（`.alarm-panel` 是 `position: absolute`），所以它出现
+ * 或消失**不会**推动页面：这正是业主 2026-09-18 要求的那件事。
+ */
+.alarm-panel__problems {
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.alarm-panel__problems-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.problem-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  font-size: 12px;
+}
+
+.problem--warning {
+  border-left-color: var(--color-warning, #b45309);
+  background: var(--color-warning-soft, #fff7e6);
+}
+
+/* 文案可能很长（错误码那一串），换行而不是把面板撑宽。 */
+.problem__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--color-text);
+}
+
+.problem__time {
+  flex: none;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.problem__dismiss {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.problem__dismiss:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text);
 }
 
 .alarm-panel__dropped,
