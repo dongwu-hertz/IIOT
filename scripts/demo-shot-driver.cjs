@@ -1016,6 +1016,14 @@ async function runIotIngestDrill(win, layout) {
     'const before = await window.api.settings.get();' +
     'const alarms = await window.api.alarms.query({ acknowledged: false, limit: 1 });' +
     /*
+     * ⚠ 第 36 轮补的一步：**「添加设备」按钮只在设备管理页上**。这一段原来整段跑在
+     * `/settings` 上（存储根也只在那一页），于是"打开对话框"那一步必然落空 ——
+     * 问题清单里那两条（`写接入端口时没打开…` / `「本机接入」里没找到保存按钮`）
+     * 就是这么来的。所以：先在设置页改完存储根，**再切到设备管理页**开对话框。
+     */
+    'location.hash = "#/devices";' +
+    'await wait(1200);' +
+    /*
      * 监听设置的**两个端口**现在在「添加设备 → 本机接入」里（业主第 13 批第 1 条）。
      * 打开对话框 → 展开 details → 填端口 → 点保存（这是这一段唯一的一次界面写操作）。
      */
@@ -4703,12 +4711,12 @@ async function run() {
     '      });' +
     '    }' +
     '  }, 1000);' +
-    '  try {' +
-    '    var beatBlob = new Blob(["setInterval(function(){ postMessage(1); }, 1000);"],' +
-    '      { type: "text/javascript" });' +
-    '    var beatWorker = new Worker(URL.createObjectURL(beatBlob));' +
-    '    beatWorker.onmessage = function () { console.log("[trend-probe] worker-heartbeat"); };' +
-    '  } catch (e) { console.log("[trend-probe] diag-worker-failed " + e.message); }' +
+    /*
+     * **不装 Web Worker 心跳**（第 36 轮删掉）：应用的 CSP **禁止 `blob:` Worker**
+     * （`Refused to create a worker from 'blob:file:///…' … Content Security Policy`），
+     * 而那是一条 `console[error]` —— 探针会因为自己装的心跳往问题清单里塞一条**与产品无关**的红。
+     * 第 33/34 轮记的"worker-heartbeat 一条都没来"到这里有了答案：**不是线程被卡，是 CSP 不许建**。
+     */
     '  /*' +
     '   * 同步原生调用那一族（`window.print()` 的打印对话框、`alert`/`confirm`/`prompt`）：' +
     '   * 它们会把渲染进程的主线程**同步**按住，直到对话框被关掉 —— 现象与我们的卡死一模一样。' +

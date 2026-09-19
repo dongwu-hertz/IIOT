@@ -784,15 +784,37 @@ let zoomWriteTarget: { start: number; end: number } | null = null
 /** 最近接受过缩放的时刻（安全阀：2 秒内太多次就停手，见 `trendZoomBurstExceeded()`）。 */
 let zoomAcceptedAt: number[] = []
 
-/** 每个量一张图的 ref（重置缩放时用其中一张的 `resetZoom()`）。 */
-const chartRefs = ref<Record<string, { resetZoom: () => void } | null>>({})
-
-/** 回退那张单序列图的 ref（同一个重置动作要能收上它）。 */
-const fallbackChart = ref<{ resetZoom: () => void } | null>(null)
+/**
+ * 每张图的实例（`resetZoom` 用）。
+ *
+ * ⚠ **故意不是 `ref`**（2026-09-20 定位到的那条死循环的**根治**）。
+ *
+ * 模板里是 `:ref="(instance) => setChartRef(bundle.metric, instance)"` —— 这个内联箭头
+ * **每次渲染都是一个新的函数**，于是 Vue 在**每次 patch** 时都会先拿 `null` 调一次旧箭头、
+ * 再拿实例调一次新箭头。原来这里写的是 `chartRefs.value = { ...chartRefs.value, … }`：
+ * 一次 `ref` 的**读 + 写**，而 patch 发生在组件自己的更新里 —— 于是这条更新**又把自己排进队列**，
+ * 生产构建里 Vue 没有"递归更新"的保护，`flushJobs` 的队列因此永远清不空：
+ * 一个核心占满、页面里的定时器被饿死、`executeJavaScript` 再也不 settle
+ * （探针看到的就是"渲染进程不响应"，第 28–35 轮全栽在这上面）。
+ *
+ * 第 36 轮的二分把这一条钉死了：**去掉这个 `:ref` 回调、其他一切不变**（ECharts 照旧挂载、
+ * 图照旧画出来 `chartCanvas = 1127x320`），卡死消失、七支探针全部跑完（心跳 204 条）。
+ *
+ * 所以实例放在一个**普通对象**里：`resetZoom()` 读它（事件处理器，不参与渲染追踪），
+ * 而 patch 期间写一个普通对象**不会触发任何 effect**。图表的 ref 本来也不需要是响应式的
+ * —— 它唯一的用途就是"重置缩放时把实例找出来"。
+ */
+const chartInstances: Record<string, { resetZoom: () => void } | null> = {}
 
 function setChartRef(metric: string, instance: unknown): void {
-  const typed = instance as { resetZoom: () => void } | null
-  chartRefs.value = { ...chartRefs.value, [metric]: typed }
+  chartInstances[metric] = instance as { resetZoom: () => void } | null
+}
+
+/** 回退那张单序列图的实例（同一个重置动作要能收上它）。同样**不是 `ref`**（理由同上）。 */
+let fallbackChartInstance: { resetZoom: () => void } | null = null
+
+function setFallbackChartRef(instance: unknown): void {
+  fallbackChartInstance = instance as { resetZoom: () => void } | null
 }
 
 /**
@@ -885,8 +907,8 @@ function onChartZoom(
  * 只重置一张会让两张图看起来在显示不同的时间范围。
  */
 function resetZoom(): void {
-  for (const instance of Object.values(chartRefs.value)) instance?.resetZoom()
-  fallbackChart.value?.resetZoom()
+  for (const instance of Object.values(chartInstances)) instance?.resetZoom()
+  fallbackChartInstance?.resetZoom()
   zoomWindow.value = null
   zoomedChart.value = null
   // 清窗口也是一次"我们改了选项"：接下来那几毫秒的 `dataZoom` 同样是回声。
@@ -1516,6 +1538,11 @@ watch(
             <p v-if="!bundle.hasValue" class="muted" :data-metric-empty="bundle.metric">
               {{ t('trendsUi.metricNoData') }}
             </p>
+            <!--
+              `:ref` 用内联箭头是**必须**的（多张图要按量区分），但 `setChartRef` 只往一个
+              **普通对象**里写（不是 `ref`）—— 理由见 `chartInstances` 那段注释：
+              patch 期间写响应式 ref 会把这条更新自己排回队列，整页就永远刷不完。
+            -->
             <EChart
               v-else
               :ref="(instance) => setChartRef(bundle.metric, instance)"
@@ -1529,7 +1556,7 @@ watch(
 
         <EChart
           v-else
-          ref="fallbackChart"
+          :ref="setFallbackChartRef"
           :option="fallbackOption"
           height="360px"
           :placeholder="chartPlaceholder"

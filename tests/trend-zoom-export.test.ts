@@ -271,8 +271,9 @@ describe('时间轴缩放', () => {
   it('「重置缩放」把**所有**图拉回整段（只重置一张会让两张图显示不同范围）', () => {
     const fn = viewCode.slice(viewCode.indexOf('function resetZoom('))
     const body = fn.slice(0, fn.indexOf('\n}\n') + 3)
-    assert.match(body, /Object\.values\(chartRefs\.value\)/, '没有遍历每一张图')
-    assert.match(body, /fallbackChart\.value\?\.resetZoom\(\)/, '回退图没有被重置')
+    // 实例放在**普通对象**里（不是 `ref`）—— 理由见下面「图表实例不放进响应式 ref」那条。
+    assert.match(body, /Object\.values\(chartInstances\)/, '没有遍历每一张图')
+    assert.match(body, /fallbackChartInstance\?\.resetZoom\(\)/, '回退图没有被重置')
     assert.match(viewTemplate, /data-trend-zoom-reset/)
     // 组件那一侧：`dispatchAction` 而不是重画整张图。
     assert.match(chartComponent, /dispatchAction\(\{ type: 'dataZoom', start: 0, end: 100 \}\)/)
@@ -593,8 +594,51 @@ describe('缩放回声：程序写入之后的 dataZoom 事件不许再改状态
    * 安全阀一次都没触发，卡死照旧。真正的判据是**来源**：`EChart.vue` 在图上用**捕获阶段**
    * 监听 `wheel` / `pointerdown`，一次手势只让**一条** `dataZoom` 带上 `userDriven: true`。
    */
-  it('userDriven 手势闸门：回声（非用户驱动）一律不记状态', () => {
-    const chart = stripComments(read('src/renderer/src/components/EChart.vue'))
+  /**
+   * **真正的根因**（2026-09-20，第 36 轮二分到）。
+   *
+   * 卡死第 28–35 轮一直没找到，最后是**二分**确定的：把 `<EChart>` 整块换掉 → 卡死消失；
+   * 把 `<EChart>` 放回去、**只去掉 `:ref` 那个内联箭头** → 卡死同样消失，
+   * 而且图真的画出来了（`chartCanvas = 1127x320`）、C⑤ 的 `yRanges=["spl=0-100"]` 也量到了。
+   *
+   * 成因：内联箭头**每次渲染都是新函数**，Vue 于是在每次 patch 里先 `null` 调旧箭头、
+   * 再用实例调新箭头；`setChartRef` 里那次 `chartRefs.value = { ...chartRefs.value, … }`
+   * 是"读 + 写同一个 `ref`"，而 patch 发生在组件自己的更新里 —— 这条更新就把**自己**排回队列，
+   * 生产构建里 Vue 没有递归更新的保护，`flushJobs` 永远清不空（一个核占满、定时器饿死、
+   * `executeJavaScript` 再不 settle）。修法：实例放进**普通对象**（`resetZoom` 读它不参与追踪）。
+   */
+  it('图表实例不放进响应式 ref（patch 期间写 ref 会把更新排回队列 → 整页刷不完）', () => {
+    const view = stripComments(read('src/renderer/src/views/TrendsView.vue'))
+    assert.equal(
+      /chartRefs/.test(view),
+      false,
+      '`chartRefs` 又回来了 —— 它是 patch 期间被写的响应式 ref，卡死会复发'
+    )
+    assert.match(
+      view,
+      /const chartInstances: Record<string, \{ resetZoom: \(\) => void \} \| null> = \{\}/,
+      '图表实例必须放在普通对象里（不是 `ref`）'
+    )
+    assert.match(
+      view,
+      /function setChartRef\(metric: string, instance: unknown\): void \{\s*\n\s*chartInstances\[metric\] =/,
+      '`setChartRef` 必须只写普通对象'
+    )
+    // 回退那张图同样不许用模板 ref（模板 ref 也是 patch 期间写 ref）。
+    assert.equal(
+      /ref="fallbackChart"/.test(view),
+      false,
+      '回退图又用回了 `ref="fallbackChart"`（模板 ref 会在 patch 期间写一个 ref）'
+    )
+    assert.match(view, /:ref="setFallbackChartRef"/, '回退图没有改成函数 ref')
+    assert.match(
+      view,
+      /for \(const instance of Object\.values\(chartInstances\)\) instance\?\.resetZoom\(\)/,
+      '`resetZoom()` 没有遍历那个普通对象'
+    )
+  })
+
+  it('userDriven 手势闸门：回声（非用户驱动）一律不记状态', () => {    const chart = stripComments(read('src/renderer/src/components/EChart.vue'))
     assert.match(
       chart,
       /@wheel\.capture="noteGesture"/,

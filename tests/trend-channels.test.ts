@@ -259,7 +259,7 @@ describe('不知道通道时退回单条聚合线（设备没返回通道表的�
     // "最后那一支（v-else）画的是 fallbackOption"。
     assert.match(
       viewTemplate,
-      /<EChart\s+v-else\s+ref="fallbackChart"\s+:option="fallbackOption"/,
+      /<EChart\s+v-else\s+:ref="setFallbackChartRef"\s+:option="fallbackOption"/,
       '没有通道信息时模板没有退回单序列'
     )
   })
