@@ -69,6 +69,12 @@ import {
 import type { Device } from '@shared/domain/models'
 import { isManualRtspId } from '@shared/domain/rtsp-source'
 import {
+  CAMERA_CELL_VIEW_KEYS,
+  type CameraCellViewMode
+} from '@shared/domain/camera-cell-view'
+import { useCameraCellChartsStore } from '@renderer/stores/cameraCellCharts'
+import CameraCellChart from '@renderer/components/CameraCellChart.vue'
+import {
   buildCameraNvrMenu,
   type CameraNvrAction,
   type CameraNvrEnvironment,
@@ -117,6 +123,8 @@ const props = defineProps<{
 const { t } = useI18n()
 const devices = useDevicesStore()
 const wall = useCameraWallStore()
+/** 图表格的数据来源（每台设备一份订阅，多条图表格共享；见那个 store 的文件头）。 */
+const charts = useCameraCellChartsStore()
 const cameraLive = useCameraLiveStore()
 const settings = useSettingsStore()
 
@@ -417,6 +425,37 @@ const pickerItems = computed<CameraPickerItem[]>(() => {
 
 /** 手填 RTSP 地址对话框的开关。 */
 const manualDialogOpen = ref(false)
+
+/**
+ * 视图的图标字形。
+ *
+ * 用字符而不是四条 SVG 路径：这一排按钮最多四颗、一遍就看得懂（▶ 播放、∿ 时域、
+ * ▥ 频域、▦ 时频），而 SVG 会让每一格多出四段路径（16 格 = 64 段）。字形都在
+ * `aria-hidden` 的容器里，读屏拿到的是 `aria-label`（目录里的那四个名字）。
+ */
+function cellViewGlyph(view: CameraCellViewMode): string {
+  if (view === 'play') return '▶'
+  if (view === 'timedomain') return '∿'
+  if (view === 'spectrum') return '▥'
+  return '▦'
+}
+
+/**
+ * 切某一格的视图。
+ *
+ * 两件事一起做：模型换视图（`setCameraCellView` 会拒绝空格与不支持的视图），
+ * 以及**停止/保留画面** —— 切到"图"的时候不能把 RTSP 会话停掉（切回来要立刻有画面），
+ * 但要把 `<video>` 从 DOM 上摘下来吗？不用：模板里那个 `v-if` 已经按 `cell.view` 判了，
+ * 元素会被卸载，`releaseVideo()` 的清理由 Vue 的卸载完成（`src` 随元素一起消失）。
+ */
+function chooseCellView(cell: CameraCellView, view: CameraCellViewMode): void {
+  if (cell.view === view) return
+  if (!cell.availableViews.includes(view)) {
+    wall.setNotice(null)
+    return
+  }
+  wall.setCellView(cell.index, view)
+}
 
 /**
  * 手填源新增/改完之后：把那一格重启一次。
@@ -1430,6 +1469,13 @@ onUnmounted(() => {
   const recordingDeviceIds = cells.value
     .filter((cell) => cell.deviceId !== null && nvrOf(cell.index).recording)
     .map((cell) => cell.deviceId as string)
+  /**
+   * 图表格的声学预览订阅也要停掉（业主 2026-09-18 第 10 批第 2 条）。
+   *
+   * 与画面那几路同一个理由，而且更硬：`pcmData` / `fftData` 各占相机一条 WebSocket，
+   * 而相机侧并发连接数只有个位数。离开画面墙还占着两条，等于替下一位使用者吃掉了预算。
+   */
+  charts.dispose()
   const assigned = wall.clearAll(layout.value)
   for (const deviceId of assigned) {
     if (recordingDeviceIds.includes(deviceId)) {
@@ -1616,7 +1662,7 @@ function cellBadgeClass(cell: CameraCellView): string {
           静音开始），之后由 `applyAudioOutput()` 写真实属性。
         -->
         <video
-          v-if="cell.url && isCameraCellLive(cell.status)"
+          v-if="cell.view === 'play' && cell.url && isCameraCellLive(cell.status)"
           :ref="(el) => bindVideo(cell.index, el as HTMLVideoElement | null)"
           class="camera-wall__video"
           :src="cell.url"
@@ -1628,6 +1674,18 @@ function cellBadgeClass(cell: CameraCellView): string {
           @error="cell.deviceId && refreshState(cell.deviceId)"
           @ended="cell.deviceId && refreshState(cell.deviceId)"
         ></video>
+
+        <!--
+          三种"图"的视图（业主 2026-09-18 第 10 批第 2 条）。数据来自相机自己的
+          声学预览通道（`pcmData` / `fftData`），由 `stores/cameraCellCharts` 按设备订阅
+          一次、同一台设备的多格共享 —— 详见那个 store 的文件头（相机的 WebSocket 路数有限）。
+        -->
+        <CameraCellChart
+          v-else-if="cell.view !== 'play' && cell.deviceId"
+          :key="cell.deviceId + ':' + cell.view"
+          :device-id="cell.deviceId"
+          :mode="cell.view"
+        />
 
         <!--
           没有画面：一整块有边框的空区域。
@@ -1714,6 +1772,31 @@ function cellBadgeClass(cell: CameraCellView): string {
           `volumeLabel()`）。控制条随格子一起进入全屏，所以全屏之后它仍然在。
         -->
         <div v-if="cell.status !== 'empty'" class="camera-wall__bar">
+          <!--
+            四种视图的切换（业主 2026-09-18 第 10 批第 2 条）。
+            手填的第三方 RTSP 源只有画面，所以它那一格只渲染一个按钮（`cell.availableViews`）——
+            「藏起来并说明原因」比"给一个点了没反应的按钮"诚实，说明在
+            `cameraWallUi.viewNeedsCamera` 那句话里（鼠标悬停与读屏都能拿到）。
+          -->
+          <button
+            v-for="view in cell.availableViews"
+            :key="view"
+            type="button"
+            class="camera-wall__bar-btn"
+            :class="{ 'camera-wall__bar-btn--on': cell.view === view }"
+            :aria-pressed="cell.view === view"
+            :aria-label="t(CAMERA_CELL_VIEW_KEYS[view])"
+            :title="
+              cell.availableViews.length === 1
+                ? t('cameraWallUi.viewNeedsCamera')
+                : t(CAMERA_CELL_VIEW_KEYS[view])
+            "
+            :data-action="`cell-view-${view}`"
+            @click.stop="chooseCellView(cell, view)"
+          >
+            <span class="camera-wall__view-glyph" aria-hidden="true">{{ cellViewGlyph(view) }}</span>
+          </button>
+
           <button
             type="button"
             class="camera-wall__bar-btn"

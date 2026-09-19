@@ -45,6 +45,7 @@ import {
   removeManualSource as removeManualSourceFromModel,
   setActiveSlot,
   setAudioSlot,
+  setCameraCellView,
   setCameraWallLayout,
   toggleAudioSlot,
   updateManualSource as updateManualSourceInModel,
@@ -53,6 +54,7 @@ import {
   type CameraWallModel
 } from '@renderer/lib/cameraWall'
 import { isManualRtspId, type ManualRtspSource } from '@shared/domain/rtsp-source'
+import type { CameraCellViewMode } from '@shared/domain/camera-cell-view'
 import {
   MAX_CUSTOM_VIEWS,
   bindViewToDevices,
@@ -283,6 +285,16 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
   function clearCell(slot: number): void {
     model.value = clearCameraCell(model.value, slot)
     clearRefusal()
+  }
+
+  /**
+   * 设置某一格的视图（播放 / 1 秒时域图 / 频域图 / 时频谱图，业主 2026-09-18 第 10 批第 2 条）。
+   *
+   * 空格与「这一格不支持的视图」都被纯函数拒掉（手填 RTSP 只有画面），所以这里不再判一次 ——
+   * 判两次的下场是两处慢慢分叉。
+   */
+  function setCellView(slot: number, view: CameraCellViewMode): void {
+    model.value = setCameraCellView(model.value, slot, view)
   }
 
   function setActive(slot: number): void {
@@ -532,6 +544,7 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     removeManualSource,
     slotForDevice,
     clearCell,
+    setCellView,
     setActive,
     toggleAudio,
     setAudio,

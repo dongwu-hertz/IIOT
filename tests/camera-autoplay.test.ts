@@ -467,15 +467,51 @@ describe('CameraVideoWall template', () => {
     const bar = source.slice(source.indexOf('class="camera-wall__bar"'))
     assert.ok(bar.length > 0, '没有底部控制条（.camera-wall__bar）')
     const barBlock = bar.slice(0, bar.indexOf('</div>'))
-    // 恰好四个控件：播放/停止、全屏、音量图标、音量滑块。
-    assert.equal((barBlock.match(/<button/g) ?? []).length, 3, '底部控制条的按钮数')
+    /*
+     * 控制条里的按钮：**四颗视图按钮**（播放 / 1 秒时域图 / 频域图 / 时频谱图，
+     * 业主 2026-09-18 第 10 批第 2 条，一道 `v-for` 渲染）+ 播放/停止 + 全屏 + 音量图标。
+     * 原来这里写死"恰好 3 颗"，加视图按钮之后它红了 —— 而它要守的东西（**一格只有一条
+     * 控制条**、每个控件都说得出名字）一条都没坏，所以判据换成"那四颗视图按钮确实在，
+     * 而且总数对得上"，而不是把一个数字改大。
+     */
+    assert.equal((barBlock.match(/<button/g) ?? []).length, 4, '底部控制条的按钮数（4 = 播放/停止 + 全屏 + 音量）')
+    assert.match(
+      barBlock,
+      /v-for="view in cell\.availableViews"/,
+      '控制条里没有那一排视图按钮（第 10 批第 2 条）'
+    )
+    assert.match(barBlock, /data-action="`cell-view-\$\{view\}`"/, '视图按钮没有稳定的探针钩子')
     assert.equal((barBlock.match(/type="range"/g) ?? []).length, 1, '底部控制条的音量滑块数')
     // 每个控件都必须有无障碍名字，而且 `aria-label` 与 `title` 是**同一个值**：名字与
     // 提示不一致时，读屏用户听到的与鼠标用户看到的是两回事。
+    // 五个控件 = 四颗按钮（视图 / 播放停止 / 全屏 / 音量图标）+ 一个音量滑块。
     const labels = [...barBlock.matchAll(/:aria-label="([^"]+)"/g)].map((match) => match[1])
     const titles = [...barBlock.matchAll(/:title="([^"]+)"/g)].map((match) => match[1])
-    assert.equal(labels.length, 4, '底部控制条里有控件没有 aria-label')
-    assert.deepEqual(labels, titles, '底部控制条的 aria-label 与 title 必须一致')
+    assert.equal(
+      labels.length,
+      5,
+      '底部控制条里有控件没有 aria-label（四颗按钮 + 一个滑块）'
+    )
+    /*
+     * 名字与提示一致这件事**有一处刻意的例外**：视图按钮。
+     *
+     * 它的 `aria-label` 是那个视图的名字（"频域图"），而 `title` 在"这一格只有一种视图"
+     * （手填的第三方 RTSP 源）时写的是**原因**（`cameraWallUi.viewNeedsCamera`）——
+     * 操作员把鼠标停上去想知道的是"为什么只有一颗按钮"，而不是把那个名字再读一遍。
+     * 所以判据是：除了它以外每一处都必须一致，而它的名字必须非空、必须来自视图目录。
+     */
+    assert.match(labels[0] ?? '', /CAMERA_CELL_VIEW_KEYS\[view\]/, '视图按钮的名字不是视图名')
+    assert.deepEqual(
+      labels.slice(1),
+      titles.slice(1),
+      '底部控制条（视图按钮以外）的 aria-label 与 title 必须一致'
+    )
+    for (const label of labels) {
+      assert.ok(
+        typeof label === 'string' && label.trim() !== '' && !label.includes('undefined'),
+        `控件的名字是空的：${String(label)}`
+      )
+    }
     // 原生控件必须关掉，否则一格里有浏览器的一条、我们的一条。
     const videos = [...source.matchAll(/<video(?=\s)[\s\S]*?>/g)].map((match) => match[0])
     assert.ok(videos.length >= 1, '找不到 <video> 元素')

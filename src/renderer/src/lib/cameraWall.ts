@@ -37,6 +37,13 @@ import {
   parseManualRtspUrl,
   type ManualRtspSource
 } from '@shared/domain/rtsp-source'
+import {
+  DEFAULT_CAMERA_CELL_VIEW,
+  availableCellViews,
+  isCameraCellViewMode,
+  type CameraCellSourceKind,
+  type CameraCellViewMode
+} from '@shared/domain/camera-cell-view'
 
 // ---------------------------------------------------------------------------
 // 分屏档位
@@ -342,6 +349,13 @@ export interface CameraWallModel {
    * 做成必填会迫使每一处都写一个空数组，收益只是"显式"。
    */
   manualSources?: readonly ManualRtspSource[]
+  /**
+   * 每一格的**视图**（业主 2026-09-18 第 10 批第 2 条：播放 / 1 秒时域图 / 频域图 / 时频谱图）。
+   *
+   * 与 `slots` 一样是"逐格"的数组：`null` = 默认（播放）。做成可选（缺席 = 全部播放）的
+   * 理由与 `manualSources` 相同：既有代码与测试大量构造模型字面量。
+   */
+  views?: readonly (CameraCellViewMode | null)[]
 }
 
 /** 一格的渲染模型（`buildCameraCells()` 的产物）
@@ -374,6 +388,16 @@ export interface CameraCellView {
   url?: string
   /** 这一格此刻是不是**真的在出声**（不只是「被标成出声格」，见 `audibleAt()`） */
   audio: boolean
+  /**
+   * 这一格此刻的**视图**（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
+   *
+   * 由模型逐格给出（缺席 = 播放）；界面的按钮与"画什么"都只看它。
+   */
+  view: CameraCellViewMode
+  /** 这一格**支持**哪些视图（手填 RTSP 只有画面 —— 界面据此把那三个按钮藏起来并说明原因）。 */
+  availableViews: readonly CameraCellViewMode[]
+  /** 这一格的源是什么（`empty` / `camera` / `manual-rtsp`），按钮与提示共用。 */
+  sourceKind: CameraCellSourceKind
 }
 
 export function createCameraWallModel(layout: CameraWallLayout = DEFAULT_CAMERA_WALL_LAYOUT): CameraWallModel {
@@ -420,8 +444,7 @@ export function normaliseCameraWallModel(input: unknown): CameraWallModel {
   const activeCandidate = typeof raw.activeSlot === 'number' ? Math.floor(raw.activeSlot) : 0
   const activeSlot = activeCandidate >= 0 && activeCandidate < size ? activeCandidate : 0
 
-  const manualSources = normaliseManualRtspSources(raw.manualSources)
-  /**
+  const manualSources = normaliseManualRtspSources(raw.manualSources)  /**
    * 槽位里那些**指向不存在的手填源**的 id 必须清掉。
    *
    * 与"设备被删掉"同一条规矩：一个指向已经不在列表里的手填源的槽位，只会在墙上得到
@@ -435,7 +458,26 @@ export function normaliseCameraWallModel(input: unknown): CameraWallModel {
   const audioSlotFinal =
     audioSlot !== null && cleanSlots[audioSlot] !== null ? audioSlot : null
 
-  return { layout, slots: cleanSlots, audioSlot: audioSlotFinal, activeSlot, manualSources }
+  /**
+   * 视图逐格规范化：只认四个取值之一，其余（旧状态、手改过的对象）当默认（`null` = 播放）。
+   * 长度按当前格数补齐/截断；**空格上的视图一律清成 `null`** —— 一个没有源的格子
+   * 记着"时频图"毫无意义，而且换了源之后那个模式会莫名其妙地生效。
+   */
+  const rawViews = Array.isArray(raw.views) ? raw.views : []
+  const views: (CameraCellViewMode | null)[] = Array.from({ length: size }, (_, index) => {
+    if (cleanSlots[index] === null) return null
+    const value = rawViews[index]
+    return isCameraCellViewMode(value) && value !== DEFAULT_CAMERA_CELL_VIEW ? value : null
+  })
+
+  return {
+    layout,
+    slots: cleanSlots,
+    audioSlot: audioSlotFinal,
+    activeSlot,
+    manualSources,
+    views
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +567,18 @@ export function setCameraWallLayout(
       : null
   const activeSlot = model.activeSlot < size ? model.activeSlot : 0
 
-  return { model: { layout, slots, audioSlot, activeSlot, manualSources: model.manualSources }, evictedDeviceIds }
+  /**
+   * 视图跟着格子一起裁剪/补齐（换档位时被挤掉的格子的视图必须一起消失，
+   * 否则它们会在下一次放大档位时"复活"到别的格上）。
+   */
+  const views: (CameraCellViewMode | null)[] = Array.from({ length: size }, (_, index) =>
+    slots[index] === null ? null : (model.views?.[index] ?? null)
+  )
+
+  return {
+    model: { layout, slots, audioSlot, activeSlot, manualSources: model.manualSources, views },
+    evictedDeviceIds
+  }
 }
 
 /**
@@ -560,8 +613,16 @@ export function assignCamera(
       ? model.audioSlot
       : null
 
+  /**
+   * 视图**跟着源走的是"清空"而不是"搬家"**：一格换成另一台设备之后，原来那个"时频图"
+   * 是**上一台的**画法选择，新那一台不一定支持（比如换成了手填 RTSP，它只有画面）。
+   * 所以换进来的那一格一律回默认（播放）。
+   */
+  let views = resetViewAt(model.views ?? [], index, size)
+  if (previous >= 0) views = resetViewAt(views, previous, size)
+
   return {
-    model: { ...model, slots, audioSlot, activeSlot: index },
+    model: { ...model, slots, audioSlot, activeSlot: index, views },
     movedFrom: previous >= 0 ? previous : null,
     changed: true
   }
@@ -574,7 +635,9 @@ export function clearCameraCell(model: CameraWallModel, index: number): CameraWa
   const slots = [...model.slots]
   slots[index] = null
   const audioSlot = model.audioSlot === index ? null : model.audioSlot
-  return { ...model, slots, audioSlot }
+  // 清格时视图一起回默认：留着一个"时频图"在空格上，下次放进来一台设备会莫名其妙地生效。
+  const views = resetViewAt(model.views ?? [], index, model.slots.length)
+  return { ...model, slots, audioSlot, views }
 }
 
 /** 清空某一台相机出现的**所有格**（设备被删除时用；正常情况下只有一格） */
@@ -590,7 +653,11 @@ export function clearCameraDevice(model: CameraWallModel, deviceId: string): Cam
   // 用槽位判断而不 `findCameraSlot(model,  `：上面那一步还没生效
   const stillShown = slots.some((slot) => slot === deviceId)
   const audioSlot = stillShown ? model.audioSlot : null
-  return { ...model, slots, audioSlot }
+  let views = model.views ?? []
+  slots.forEach((slot, index) => {
+    if (slot === null) views = resetViewAt(views, index, model.slots.length)
+  })
+  return { ...model, slots, audioSlot, views }
 }
 
 /**
@@ -629,6 +696,66 @@ export function setAudioSlot(model: CameraWallModel, index: number | null): Came
 */
 export function toggleAudioSlot(model: CameraWallModel, index: number): CameraWallModel {
   return setAudioSlot(model, model.audioSlot === index ? null : index)
+}
+
+// ---------------------------------------------------------------------------
+// 每一格的视图（业主 2026-09-18 第 10 批第 2 条）
+// ---------------------------------------------------------------------------
+
+/** 每一格的视图（缺席 = 播放），长度与格数一致。 */
+export function cellViewsOf(model: CameraWallModel): CameraCellViewMode[] {
+  const size = wallCellCount(model)
+  const views = model.views ?? []
+  return Array.from({ length: size }, (_, index) => {
+    const value = views[index]
+    return isCameraCellViewMode(value) ? value : DEFAULT_CAMERA_CELL_VIEW
+  })
+}
+
+/** 这一格的源是什么（决定它支持哪些视图；手填 RTSP 只有画面）。 */
+export function cellSourceKind(model: CameraWallModel, index: number): CameraCellSourceKind {
+  const slot = model.slots[index]
+  if (slot === null || slot === undefined) return 'empty'
+  if (isManualRtspId(slot)) return 'manual-rtsp'
+  return 'camera'
+}
+
+/** 这一格支持哪些视图。 */
+export function cellViewsFor(model: CameraWallModel, index: number): readonly CameraCellViewMode[] {
+  return availableCellViews(cellSourceKind(model, index))
+}
+
+/**
+ * 设置某一格的视图。
+ *
+ * 两条拒绝：**空格**（没有源，切了没有意义）与**这一格不支持的视图**
+ * （手填 RTSP 只有画面）。静默接受会让界面显示一个永远不动的图。
+ */
+export function setCameraCellView(
+  model: CameraWallModel,
+  index: number,
+  mode: CameraCellViewMode
+): CameraWallModel {
+  const size = wallCellCount(model)
+  if (index < 0 || index >= size) return model
+  if (!isCameraCellViewMode(mode)) return model
+  if (model.slots[index] === null) return model
+  if (!cellViewsFor(model, index).includes(mode)) return model
+
+  const views = cellViewsOf(model)
+  views[index] = mode
+  return { ...model, views }
+}
+
+/** 把某一格的视图恢复成默认（换源 / 清格时用；`null` 表示"没设过"）。 */
+function resetViewAt(
+  views: readonly (CameraCellViewMode | null)[],
+  index: number,
+  size: number
+): (CameraCellViewMode | null)[] {
+  const next = Array.from({ length: size }, (_, at) => views[at] ?? null)
+  if (index >= 0 && index < size) next[index] = null
+  return next
 }
 
 // ---------------------------------------------------------------------------
@@ -774,18 +901,27 @@ export function buildCameraCells(
 ): CameraCellView[] {
   const byId = new Map(input.devices.map((device) => [device.id, device]))
   const size = wallCellCount(model)
+  const views = cellViewsOf(model)
 
   return Array.from({ length: size }, (_, index) => {
     const deviceId = model.slots[index] ?? null
     /** `key` / `index` 每一格都有；`audio` 要等状态定下来才算（见 `audibleAt()`）
 */
     const base = { key: `camera-cell:${wallGeometryToken(model)}:${index}`, index }
+    /** 视图那三项每一格都要有（空格也要：界面靠它决定画不画那一排按钮）。 */
+    const sourceKind = cellSourceKind(model, index)
+    const viewBase = {
+      view: views[index] ?? DEFAULT_CAMERA_CELL_VIEW,
+      availableViews: availableCellViews(sourceKind),
+      sourceKind
+    }
 
     // 空格子：这一格在界面上只有右侧一个大 `+`，一个字都不写（产品要求），
     // 所以它**没有** messageKey — 目录里也没有「空格子」这条词条。
     if (deviceId === null) {
       return {
         ...base,
+        ...viewBase,
         deviceId: null,
         deviceName: '',
         kind: null,
@@ -809,6 +945,7 @@ export function buildCameraCells(
         if (!source) {
           return {
             ...base,
+            ...viewBase,
             deviceId,
             deviceName: '',
             kind: null,
@@ -820,6 +957,7 @@ export function buildCameraCells(
         }
         const manualCommon = {
           ...base,
+          ...viewBase,
           deviceId,
           deviceName: source.name,
           kind: null,
@@ -850,6 +988,7 @@ export function buildCameraCells(
       }
       return {
         ...base,
+        ...viewBase,
         deviceId,
         deviceName: '',
         kind: null,
@@ -864,6 +1003,7 @@ export function buildCameraCells(
 
     const common = {
       ...base,
+      ...viewBase,
       deviceId,
       deviceName: device.name,
       kind: device.kind,

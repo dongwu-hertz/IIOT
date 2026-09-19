@@ -1218,6 +1218,183 @@ async function runManualRtspDrill(win, layout) {
   }
 }
 
+/**
+ * 视频墙的四种视图（业主 2026-09-18 第 10 批第 2 条）。
+ *
+ * WHY THIS DRILL
+ * 现场那台相机是**离线**的，所以这里验不到"图画得对不对"（那由
+ * `tests/camera-cell-views.test.ts` 用已知输入逐条断言）。这里验的是**界面上那四颗按钮
+ * 与"画什么"真的连在一起**：
+ *   1. 一台相机占的那一格有四颗视图按钮（播放 / 1 秒时域图 / 频域图 / 时频谱图）；
+ *   2. 点"频域图"之后那一格渲染的是**图**（`[data-cell-chart]`），`<video>` 不在；
+ *   3. 没有数据时图上有一句「等待数据…」（离线相机收不到任何一帧，这句必须出现 ——
+ *      一张空画布与"设备还没推上来"看起来一模一样）；
+ *   4. 点回"播放"之后图消失（这一格回到画面那一条路）；
+ *   5. 手填 RTSP 那一格**只有一颗**视图按钮，而且它的说明写着「第三方 RTSP 源只有画面」。
+ *
+ * 因为它会往墙上放一台相机（写），所以与其余写探针一样排在最后。
+ */
+async function runCameraViewDrill(win, layout) {
+  const drill = await layout('/', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const emptyCells = () => document.querySelectorAll(".camera-wall__cell--empty").length;' +
+    'const out = {};' +
+    'out.emptyBefore = emptyCells();' +
+    // 找一台声学相机。
+    'const listed = await window.api.devices.list();' +
+    'const cameras = (listed && listed.success ? listed.data : []).filter((d) => d.kind === "acousticCamera");' +
+    'out.cameraCount = cameras.length;' +
+    'if (cameras.length === 0) return JSON.stringify(Object.assign(out, { reason: "no-camera" }));' +
+    'const findCell = (name) => [...document.querySelectorAll(".camera-wall__cell")]' +
+    '  .find((node) => (node.textContent || "").includes(name));' +
+    /*
+     * 先看这一格**是不是已经在墙上**：总览页的「默认开启视频流」会把相机自动放进一格
+     * （第 10 批第 1 条），所以多数时候它已经在那儿了 —— 这时选择器里反而**没有**它
+     * （已经占着的那台不在候选项里，见 `optionsForCell()`）。第一版探针就栽在这里：
+     * 去找候选项，找不到相机，于是整段探针没法开始。
+     */
+    'let cell = findCell(cameras[0].name);' +
+    'out.placedByAutoPlay = !!cell;' +
+    'if (!cell) {' +
+    '  const emptyCell = document.querySelector(".camera-wall__cell--empty");' +
+    '  if (!emptyCell) return JSON.stringify(Object.assign(out, { reason: "no-empty-cell" }));' +
+    '  const add = emptyCell.querySelector(".camera-wall__add");' +
+    '  if (!add) return JSON.stringify(Object.assign(out, { reason: "no-add-button" }));' +
+    '  add.click();' +
+    '  await sleep(600);' +
+    '  const item = document.querySelector("[data-camera-picker-item][data-device-id=\\"" + cameras[0].id + "\\"]");' +
+    '  out.pickerHasCamera = !!item;' +
+    '  if (!item) return JSON.stringify(Object.assign(out, { reason: "picker-missing-camera" }));' +
+    '  item.click();' +
+    '  await sleep(900);' +
+    '  cell = findCell(cameras[0].name);' +
+    '}' +
+    'out.cellFound = !!cell;' +
+    'if (!cell) return JSON.stringify(Object.assign(out, { reason: "cell-not-placed" }));' +
+    'const buttons = () => [...cell.querySelectorAll("[data-action^=cell-view-]")];' +
+    'out.viewButtons = buttons().map((b) => b.getAttribute("data-action"));' +
+    'out.pressedInitially = buttons().filter((b) => b.getAttribute("aria-pressed") === "true").length;' +
+    // 逐个点那三张图：点完必须出现对应模式的图，而且没有 `<video>`。
+    'out.perMode = {};' +
+    'for (const mode of ["timedomain", "spectrum", "spectrogram"]) {' +
+    '  const button = cell.querySelector("[data-action=cell-view-" + mode + "]");' +
+    '  if (!button) { out.perMode[mode] = "no-button"; continue; }' +
+    '  button.click();' +
+    '  await sleep(500);' +
+    '  const chart = cell.querySelector("[data-cell-chart]");' +
+    '  out.perMode[mode] = {' +
+    '    chart: chart ? chart.getAttribute("data-cell-chart") : null,' +
+    '    empty: !!cell.querySelector("[data-cell-chart-empty]"),' +
+    '    video: !!cell.querySelector("video"),' +
+    '    axis: text(cell.querySelector("[data-cell-chart-axis]")),' +
+    '    note: text(cell.querySelector("[data-cell-chart-note]"))' +
+    '  };' +
+    '}' +
+    // 回到播放：图应当消失（这一格回到画面那一条路）。
+    'const play = cell.querySelector("[data-action=cell-view-play]");' +
+    'if (play) { play.click(); await sleep(500); }' +
+    'out.chartAfterPlay = !!cell.querySelector("[data-cell-chart]");' +
+    'out.playPressed = play ? play.getAttribute("aria-pressed") : null;' +
+    /*
+     * 手填 RTSP 那一格只有一颗视图按钮（它连设备都不是，拿不到任何声学通道）。
+     * 这里临时加一条手填源来验，验完删掉 —— 与"手填 RTSP"那条探针同一条路。
+     */
+    'const openBtn = document.querySelector("[data-action=manual-rtsp-open]");' +
+    'if (openBtn) {' +
+    '  openBtn.click();' +
+    '  await sleep(500);' +
+    '  const urlInput = document.querySelector("[data-manual-rtsp-url]");' +
+    '  urlInput.value = "rtsp://127.0.0.1:8554/view-probe";' +
+    '  urlInput.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  document.querySelector("[data-action=manual-rtsp-save]").click();' +
+    '  await sleep(1000);' +
+    '  const manualCell = [...document.querySelectorAll(".camera-wall__cell")]' +
+    '    .find((node) => text(node).includes("127.0.0.1:8554"));' +
+    '  out.manualCellFound = !!manualCell;' +
+    '  if (manualCell) {' +
+    '    const manualButtons = [...manualCell.querySelectorAll("[data-action^=cell-view-]")];' +
+    '    out.manualViewButtons = manualButtons.length;' +
+    '    out.manualViewTitle = manualButtons[0] ? manualButtons[0].getAttribute("title") : null;' +
+    '  }' +
+    '  const remove = document.querySelector("[data-action=manual-rtsp-remove]");' +
+    '  if (remove) { remove.click(); await sleep(800); }' +
+    '  const modal = document.querySelector("[data-manual-rtsp-dialog]");' +
+    '  const closeBtn = modal ? modal.closest("[role=dialog]").querySelector(".btn--icon") : null;' +
+    '  if (closeBtn) { closeBtn.click(); await sleep(300); }' +
+    '  out.manualRowsLeft = document.querySelectorAll("[data-manual-rtsp-row]").length;' +
+    '}' +
+    'return JSON.stringify(out);' +
+    '})()', 120_000)
+  log('camera views  : ' + JSON.stringify(drill))
+
+  if (drill.reason === 'no-camera') {
+    log('camera views  : 这一份数据里没有声学相机，跳过（如实说明，不当成通过）')
+    return
+  }
+  if (drill.reason) {
+    problems.push('四种视图探针没法开始：' + drill.reason)
+    return
+  }
+
+  const expectedButtons = [
+    'cell-view-play',
+    'cell-view-timedomain',
+    'cell-view-spectrum',
+    'cell-view-spectrogram'
+  ]
+  if (JSON.stringify(drill.viewButtons) !== JSON.stringify(expectedButtons)) {
+    problems.push('相机那一格的视图按钮不是那四个：' + JSON.stringify(drill.viewButtons))
+  }
+  if (drill.pressedInitially !== 1) {
+    problems.push('视图按钮里恰好应有一颗是按下态，实际 ' + drill.pressedInitially)
+  }
+  for (const mode of ['timedomain', 'spectrum', 'spectrogram']) {
+    const state = drill.perMode?.[mode]
+    if (!state || state === 'no-button') {
+      problems.push('点不到「' + mode + '」那颗视图按钮')
+      continue
+    }
+    if (state.chart !== mode) {
+      problems.push('点了「' + mode + '」之后那一格画的不是这张图：' + JSON.stringify(state.chart))
+    }
+    if (state.video) {
+      problems.push('点了「' + mode + '」之后那一格里还留着 <video>（两种画法同时在）')
+    }
+    if (!state.empty) {
+      problems.push('「' + mode + '」在没有数据时没有说「等待数据…」')
+    }
+    if (mode === 'spectrogram' && !String(state.note || '').includes('相对强弱')) {
+      problems.push('时频谱图没有写清"颜色只表示相对强弱"：' + JSON.stringify(state.note))
+    }
+    /*
+     * 轴只在**频域**那两张图上：时域图的横轴是时间（没有可标的"第 N 根谱线"），
+     * 所以它那一格**不该**有轴 —— 第一版探针把"没有轴"当成问题报了，错的是探针。
+     */
+    if (mode === 'timedomain') {
+      if (state.axis !== '') problems.push('时域图不该有频率轴：' + JSON.stringify(state.axis))
+    } else if (state.axis === '') {
+      problems.push('「' + mode + '」没有频率轴（哪怕只是"第 N 根谱线"）')
+    }
+  }
+  if (drill.chartAfterPlay) problems.push('点回「播放」之后那一格还在画图')
+  if (drill.playPressed !== 'true') problems.push('点回「播放」之后那颗按钮不是按下态')
+
+  if (!drill.manualCellFound) {
+    problems.push('手填源那一格没找到，没法验"第三方源只有画面"')
+  } else {
+    if (drill.manualViewButtons !== 1) {
+      problems.push('手填 RTSP 那一格的视图按钮不是 1 颗：' + drill.manualViewButtons)
+    }
+    if (!String(drill.manualViewTitle || '').includes('第三方')) {
+      problems.push('手填 RTSP 那颗按钮没有说明"只有画面"：' + JSON.stringify(drill.manualViewTitle))
+    }
+  }
+  if (drill.manualRowsLeft !== 0) {
+    problems.push('视图探针加的手填源没有删掉：' + drill.manualRowsLeft)
+  }
+}
+
 async function run() {
   await sleep(3500) // let the app create its window and finish loading
   const win = BrowserWindow.getAllWindows()[0]
@@ -6344,6 +6521,13 @@ async function run() {
    * 排在所有只读探针之后，读到的每个数字才是探针动手之前的样子。
    */
   await runManualRtspDrill(win, layout)
+
+  /**
+   * 四种视图（业主 2026-09-18 第 10 批第 2 条）。
+   *
+   * 也排在最后：它会往墙上放一台相机、切三次视图、再放一条手填源验"只有画面"，最后都收掉。
+   */
+  await runCameraViewDrill(win, layout)
 
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)

@@ -191,9 +191,18 @@ describe('视频墙的格子是 16:9，空白格的 + 在正中', () => {
 
   it('每一格 <video> 仍然被地址与状态双重守卫（空地址时不存在播放器）', () => {
     // 这是整个视频墙最硬的一条不变量：没有地址的 `<video>` 等于一块黑矩形。
-    const guard = /<video\s+v-if="cell\.url && isCameraCellLive\(cell\.status\)"/
+    // 2026-09-19 又加了**一层**条件：只有"这一格现在画的是播放"（`cell.view === 'play'`）
+    // 才画播放器 —— 切到那三种图的时候画的是 canvas（第 10 批第 2 条）。
+    // 条件变多了，但"地址是唯一开关"这条**没有放松**（它仍在 `&&` 链里），所以判据跟着改。
+    const guard = /<video\s+v-if="cell\.view === 'play' && cell\.url && isCameraCellLive\(cell\.status\)"/
     assert.match(template, guard)
     assert.match(template, /:src="cell\.url"/)
+    // 另一条路（三种图）也必须被视图条件门住，否则两种画法会同时在那一格里。
+    assert.match(
+      template,
+      /v-else-if="cell\.view !== 'play' && cell\.deviceId"/,
+      '图表格没有按视图门住'
+    )
   })
 
   it('档位控件仍然在标题行里、并且是标题行最右的元素（产品要求右对齐）', () => {
