@@ -145,6 +145,32 @@ describe('地图右上角的半透明状态栏（第 11 批第 4 条）', () => 
     }
   })
 
+  it('地图卡片上下那两条线已删，上下间距收到 8px（业主 2026-09-19 追加第 2 条）', () => {
+    /*
+     * 原话：「地图显示卡片的上下有两个线条， 这个线条可以删除， 重新调整下地图卡片上下的间距」。
+     *
+     * 那两条线是 `.map-panel` 的 `border-top` / `border-bottom`（当时与设备管理页那张扁平表
+     * 是同一套做法）；删掉之后内边距从 `--space-4`（16px，按"线 + 16px = 别页卡片那一档"配的）
+     * 收到 `--space-2`（8px）。
+     *
+     * 反向断言必须读**去注释**的源码：这一轮的注释里点名写了 `border-top` / `border-bottom`。
+     */
+    const rule = mapCode.slice(mapCode.indexOf('.map-panel {'))
+    const block = rule.slice(0, rule.indexOf('}'))
+    assert.equal(
+      /border-(top|bottom)\s*:/.test(block),
+      false,
+      '地图那一块又加回了上下边线（业主第 2 条要求删掉）'
+    )
+    // 显式写 `border: none` 是允许的（去掉边线的另一种写法），但任何带宽度/颜色的边框都不行。
+    const shorthand = /border\s*:\s*([^;]+);/.exec(block)
+    if (shorthand) {
+      assert.equal(shorthand[1]?.trim(), 'none', `地图那一块还有边框：${shorthand[1]}`)
+    }
+    assert.match(block, /padding-block: var\(--space-2\);/, '上下间距不是 8px')
+    assert.match(mapCode, /data-map-panel/, '找不到地图那一块')
+  })
+
   it('状态栏在画布**里面**的右上角，半透明、不吃鼠标事件', () => {
     // 位置：在那一层定比例的画布容器之内，而不是地图上面另起一行。
     const frame = mapCode.indexOf('data-map-canvas-frame')
