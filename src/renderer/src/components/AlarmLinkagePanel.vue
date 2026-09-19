@@ -15,17 +15,21 @@
  * 面板只做**呈现与派发**：排序、过滤、格式化都在这里，任何判断（比如
  * 「这条为什么没有录像」）读的都是主进程给的 `actions[]`，界面不重新推断。
  */
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
 import { useAppNoticesStore } from '@renderer/stores/appNotices'
-import { formatDateTime } from '@renderer/lib/format'
+import { useDevicesStore } from '@renderer/stores/devices'
+import { callApi, unwrap } from '@renderer/lib/result'
+import { formatDateTime, formatNumber } from '@renderer/lib/format'
+import type { AlarmEvent } from '@shared/domain/models'
 import type { LinkageActionRecord, PendingAlarmRecord } from '@shared/ipc/contract'
 
 const { t } = useI18n()
 const router = useRouter()
 const linkage = useAlarmLinkageStore()
+const devices = useDevicesStore()
 /**
  * 应用级的失败与提示（「认证失败，请检查用户名与密码」这一类）。
  *
@@ -38,16 +42,88 @@ const open = ref(false)
 const acknowledging = ref(false)
 
 /**
+ * **设备推送过来的告警**（业主 2026-09-19 第 2 条：「告警条目是指其他设备推送到来的告警
+ * 都应该显示在右上方那个告警图标按钮上」）。
+ *
+ * 来源是**告警表**（`alarms`，`ALARM_SOURCES = ['fa8','e2']`）里还没有确认的那些行 ——
+ * 也就是设备自己推上来的告警。**不是**联动那一份：联动记录说的是"我们为这条告警做了什么"
+ * （见下面那个分区），两者不是同一种东西，所以角标只数这一份。
+ *
+ * 为什么角标从"待处理联动告警"换成"未确认的设备告警"：原来那颗角标数的是**联动引擎的**
+ * 待处理项，而操作员看到设备推来一条告警时，角标一动不动 —— 那正是业主报的这条。
+ * 一份数字配一份列表：角标数 = 这个分区里列出的条数（`total`，不受下面 20 条上限影响）。
+ */
+const deviceAlarms = ref<AlarmEvent[]>([])
+const deviceAlarmTotal = ref(0)
+const deviceAlarmsLoading = ref(false)
+
+async function loadDeviceAlarms(): Promise<void> {
+  deviceAlarmsLoading.value = true
+  const result = await callApi(() => window.api.alarms.query({ acknowledged: false, limit: 20 }))
+  deviceAlarmsLoading.value = false
+  if (!result.success) {
+    // 读不到就**不动**上一次的数字与列表：把失败显示成"没有告警"是本仓库最反对的那种假话。
+    return
+  }
+  const page = unwrap(result)
+  deviceAlarms.value = page?.items ?? []
+  deviceAlarmTotal.value = page?.total ?? 0
+}
+
+/** 角标上的数：未确认的**设备告警**条数。 */
+const bellCount = computed(() => deviceAlarmTotal.value)
+
+async function acknowledgeDeviceAlarm(id: string): Promise<void> {
+  acknowledging.value = true
+  const result = await callApi(() => window.api.alarms.acknowledge([id], true))
+  acknowledging.value = false
+  if (!result.success) return
+  await loadDeviceAlarms()
+  await linkage.load()
+}
+
+async function acknowledgeAllDeviceAlarms(): Promise<void> {
+  acknowledging.value = true
+  const ids = deviceAlarms.value.map((alarm) => alarm.id)
+  const result = await callApi(() => window.api.alarms.acknowledge(ids, true))
+  acknowledging.value = false
+  if (!result.success) return
+  await loadDeviceAlarms()
+  await linkage.load()
+}
+
+/** 面板打开那一刻重读一次（角标与列表都要是**此刻**的事实）。 */
+function toggle(): void {
+  open.value = !open.value
+  if (open.value) void loadDeviceAlarms()
+}
+
+let unsubscribe: (() => void) | undefined
+
+onMounted(() => {
+  void loadDeviceAlarms()
+  /*
+   * 联动引擎推来一条待处理时也重读一次设备告警：设备推来的那条告警很可能就是这同一条事件
+   * 引起的，早一次读到，角标就早一格正确。
+   */
+  unsubscribe = linkage.subscribe()
+})
+
+onUnmounted(() => {
+  unsubscribe?.()
+})
+
+/**
  * 图标按钮的无障碍名字。
  *
- * 两颗数字不能混：角标里的数是**待处理告警**（`linkage.unacknowledgedCount`，与面板里的
- * 列表同源），系统消息只用一个**点**表示"有东西要看"。把两者加起来写进同一个数字，就是
+ * 角标里的数是**未确认的设备告警条数**（`bellCount`，与面板里那个分区同源），
+ * 系统消息只用一个**点**表示"有东西要看"。把两者加起来写进同一个数字，就是
  * 本仓库最反对的"一个数字配一份别的列表"。
  */
 const bellLabel = computed(() =>
   notices.count > 0
     ? t('noticesUi.bellWithProblems', { count: notices.count })
-    : t('linkage.pendingTitle')
+    : t('linkage.bellTitle', { count: bellCount.value })
 )
 
 /**
@@ -97,10 +173,6 @@ async function acknowledgeAll(): Promise<void> {
   acknowledging.value = false
 }
 
-function toggle(): void {
-  open.value = !open.value
-}
-
 /** 面板底部的出口：去告警记录页看全部记录。关掉面板，否则它会留在新页面顶上。 */
 function goToAlarms(): void {
   open.value = false
@@ -120,7 +192,7 @@ function goToAlarms(): void {
     <button
       type="button"
       class="alarm-badge__button"
-      :class="{ 'alarm-badge__button--active': linkage.unacknowledgedCount > 0 }"
+      :class="{ 'alarm-badge__button--active': bellCount > 0 }"
       :title="t('linkage.pendingShow')"
       :aria-label="bellLabel"
       :aria-expanded="open"
@@ -151,8 +223,8 @@ function goToAlarms(): void {
         data-bell-problem
         aria-hidden="true"
       ></span>
-      <span v-if="linkage.unacknowledgedCount > 0" class="alarm-badge__count">
-        {{ linkage.unacknowledgedCount }}
+      <span v-if="bellCount > 0" class="alarm-badge__count" data-bell-count>
+        {{ bellCount }}
       </span>
     </button>
 
@@ -193,6 +265,66 @@ function goToAlarms(): void {
         </ul>
       </section>
 
+      <div class="alarm-panel__head">
+        <strong>{{ t('linkage.deviceAlarmsTitle') }}</strong>
+        <button
+          v-if="deviceAlarms.length > 0"
+          type="button"
+          class="btn btn--sm"
+          :disabled="acknowledging"
+          @click="acknowledgeAllDeviceAlarms"
+        >
+          {{ t('linkage.pendingAcknowledgeAll') }}
+        </button>
+      </div>
+
+      <!--
+        设备推送过来的告警（业主 2026-09-19 第 2 条）。**这一段的条数就是角标上的数**
+        （角标读 `total`，这里最多列 20 条；超过时下面那句写明"还有多少条"）。
+      -->
+      <p v-if="deviceAlarmsLoading" class="muted alarm-panel__empty">
+        {{ t('common.loading') }}
+      </p>
+      <p v-else-if="deviceAlarms.length === 0" class="alarm-panel__empty" data-bell-device-empty>
+        {{ t('linkage.deviceAlarmsEmpty') }}
+      </p>
+      <ul v-else class="alarm-list" data-bell-device-alarms>
+        <li
+          v-for="alarm in deviceAlarms"
+          :key="alarm.id"
+          class="alarm-item"
+          :data-bell-alarm-id="alarm.id"
+        >
+          <div class="alarm-item__head">
+            <span class="alarm-item__device">{{ devices.nameById(alarm.deviceId) }}</span>
+            <span class="alarm-item__time">{{ formatDateTime(alarm.timestamp) }}</span>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="acknowledging"
+              :data-action="`bell-ack-${alarm.id}`"
+              @click="acknowledgeDeviceAlarm(alarm.id)"
+            >
+              {{ t('linkage.deviceAlarmAcknowledge') }}
+            </button>
+          </div>
+          <div class="alarm-item__meta">
+            <span v-if="alarm.spl !== undefined">{{ formatNumber(alarm.spl, 1) }} dB</span>
+            <span v-if="alarm.deviceReason">{{ alarm.deviceReason }}</span>
+            <span v-else-if="alarm.alarmTypes.length > 0">
+              {{ alarm.alarmTypes.map((type) => t(`alarmType.${type}`)).join(' · ') }}
+            </span>
+          </div>
+        </li>
+      </ul>
+      <p v-if="deviceAlarmTotal > deviceAlarms.length" class="muted alarm-panel__empty">
+        {{ t('linkage.deviceAlarmsMore', { count: deviceAlarmTotal - deviceAlarms.length }) }}
+      </p>
+
+      <!--
+        联动那一份**单独一段**：它说的是"我们为这些告警做了什么"（录像 / 抓帧 / 声光…），
+        不是告警本身 —— 所以它**不进角标**（角标只数设备推来的告警）。
+      -->
       <div class="alarm-panel__head">
         <strong>{{ t('linkage.pendingTitle') }}</strong>
         <button

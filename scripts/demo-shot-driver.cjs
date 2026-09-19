@@ -2285,8 +2285,13 @@ async function run() {
     '  deviceRows: deviceRows,' +
     '  liveHeadings: liveHeadings,' +
     '  liveRowCount: liveRows.length,' +
-    // 稳定度那一列（第 3 列）逐行都必须是「—」：这一列没有数据源，见文件头。
-    '  stabilityColumn: liveRows.map((cells) => cells[2]),' +
+    /*
+     * 第 3 列 = **平稳度**（业主 2026-09-19 澄清之后取最近一条告警的 `smoothness`）。
+     * `stabilityHint` 保留但含义反了：它现在读的是"没有数据源"那个钩子，**应当为空**。
+     */
+    '  smoothnessColumn: liveRows.map((cells) => cells[2]),' +
+    '  smoothnessCells: [...document.querySelectorAll("[data-live-smoothness]")]' +
+    '    .map((el) => el.getAttribute("data-live-smoothness")),' +
     '  stabilityHint: (() => {' +
     '    const el = document.querySelector("[data-live-no-source]");' +
     '    return el ? (el.getAttribute("title") || "").slice(0, 120) : null;' +
@@ -2389,15 +2394,17 @@ async function run() {
         '实时数据列表的行数与设备列表不一致：' + mapLayout.liveRowCount + ' vs ' + mapLayout.deviceRows
       )
     }
-    const stability = mapLayout.stabilityColumn || []
-    if (stability.length > 0 && stability.some((value) => value !== '—')) {
-      problems.push(
-        '「稳定度」那一列出现了值（这一列没有数据源，见 mapUi.stabilityNoSourceHint）：' +
-        JSON.stringify(stability)
-      )
+    /*
+     * 「平稳度」那一列（业主 2026-09-19 澄清「用平稳度表示」之后**不再是空列**）：
+     * 它取最近一条告警的 `smoothness`，所以这里要求那一格**有一个真实的值或「—」**，
+     * 并且**不许**再有"没有数据源"那套写法（`data-live-no-source`）。
+     */
+    const smoothness = mapLayout.smoothnessColumn || []
+    if (smoothness.length > 0 && smoothness.some((value) => value === undefined || value === '')) {
+      problems.push('「平稳度」那一列有空单元格：' + JSON.stringify(smoothness))
     }
-    if (!mapLayout.stabilityHint || mapLayout.stabilityHint.length < 10) {
-      problems.push('「稳定度」表头没有那句"没有数据源"的说明')
+    if (mapLayout.stabilityHint !== null) {
+      problems.push('「平稳度」表头还挂着"没有数据源"那句说明（业主已澄清这一列取 smoothness）')
     }
     /*
      * 第 15、16 条：悬停浮层。**必须在有标记时断言**；operator 库那三台都没录点位时
@@ -2696,6 +2703,17 @@ async function run() {
     '  out.text = panel ? panel.textContent.replace(/\\s+/g, " ").trim().slice(0, 160) : "";' +
     '  out.itemCount = panel ? panel.querySelectorAll(".alarm-item").length : -1;' +
     '  out.badge = badge ? badge.textContent.trim() : "";' +
+    /*
+     * 业主 2026-09-19 第 2 条：**设备推送过来的告警要显示在告警图标上**。
+     * 所以这里量那个新分区的条数，并且要求它**读的是主进程的告警表**
+     * （同一时刻用同一路 IPC 问一次未确认条数，两者必须对得上）。
+     */
+    '  const deviceBlock = panel ? panel.querySelector("[data-bell-device-alarms]") : null;' +
+    '  out.deviceAlarmRows = deviceBlock ? deviceBlock.querySelectorAll("[data-bell-alarm-id]").length : 0;' +
+    '  out.deviceAlarmEmpty = !!(panel && panel.querySelector("[data-bell-device-empty]"));' +
+    '  const direct = await window.api.alarms.query({ acknowledged: false, limit: 20 });' +
+    '  out.ipcUnacknowledged = direct && direct.success ? (direct.data ? direct.data.total : null) : null;' +
+    '  out.ipcRows = direct && direct.success && direct.data ? direct.data.items.length : null;' +
     '  out.bellDot = !!document.querySelector("[data-bell-problem]");' +
     '  out.bellLabel = bell.getAttribute("aria-label") || "";' +
     '  out.noticeSection = !!problemsBlock;' +
@@ -2726,11 +2744,32 @@ async function run() {
     if (alarmPanel.itemCount === 0 && !alarmPanel.text.includes('当前无告警')) {
       problems.push('没有待处理告警时，面板没有写「当前无告警」：' + JSON.stringify(alarmPanel.text))
     }
-    // 角标与列表同源：有角标就必须有对应条数，没有条数就不许有角标。
+    /*
+     * 角标与列表同源：角标数 = **设备告警**那一分区的总条数（`total`，可能多于列出的行）。
+     * 所以判据是「角标数 == 同一路 IPC 报的未确认总数」，而不是「== 面板里 `.alarm-item` 的条数」
+     * —— 面板里现在有**两段**列表（设备告警 + 联动），把两段加起来的数才是原先那条断言的口径。
+     */
     const badgeCount = alarmPanel.badge === '' ? 0 : Number(alarmPanel.badge)
-    if (badgeCount !== alarmPanel.itemCount) {
+    if (alarmPanel.ipcUnacknowledged !== null && badgeCount !== alarmPanel.ipcUnacknowledged) {
       problems.push(
-        '角标数（' + alarmPanel.badge + '）与面板列出的条数（' + alarmPanel.itemCount + '）不一致'
+        '角标数（' + alarmPanel.badge + '）与主进程报的未确认设备告警数（' +
+          alarmPanel.ipcUnacknowledged + '）不一致 —— 角标必须数"设备推来的告警"'
+      )
+    }
+    // 面板里那个分区必须与同一路 IPC 同一时刻的读数对得上。
+    if (alarmPanel.ipcRows !== null && alarmPanel.deviceAlarmRows !== alarmPanel.ipcRows) {
+      problems.push(
+        '面板里的设备告警条数（' + alarmPanel.deviceAlarmRows + '）与主进程的读数（' +
+          alarmPanel.ipcRows + '）不一致'
+      )
+    }
+    if (alarmPanel.ipcUnacknowledged === 0 && !alarmPanel.deviceAlarmEmpty) {
+      problems.push('没有未确认的设备告警时，那一分区没有那句空态')
+    }
+    if (alarmPanel.ipcUnacknowledged > 0 && alarmPanel.deviceAlarmRows === 0) {
+      problems.push(
+        '主进程报有 ' + alarmPanel.ipcUnacknowledged + ' 条未确认设备告警，面板里却一条都没列出来 ' +
+          '（业主 2026-09-19 第 2 条）'
       )
     }
     // ① 那条挂在每一页顶上的浮动横幅必须真的没了。

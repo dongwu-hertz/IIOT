@@ -420,7 +420,7 @@ export const es: MessageSchema = {
   metrics: {
     spl: 'Nivel de presión sonora',
     mainFrequency: 'Frecuencia principal',
-    smoothness: 'Suavidad',
+    smoothness: 'Estabilidad',
     bandEnergyRatio: 'Relación de energía de banda',
     oddEvenHarmonicRatio: 'Relación armónica par/impar',
     spectralComplexity: 'Complejidad espectral',
@@ -1096,19 +1096,17 @@ export const es: MessageSchema = {
     colDb: 'dB',
     colStability: 'Estabilidad',
     colAzimuth: 'Azimut',
-    liveHint: 'Los dB son el nivel de presión sonora de la última alarma de ese equipo (— si no hay ninguna); el azimut es el de instalación registrado, no el de la fuente en el fotograma actual.',
+    liveHint: 'Los dB y la estabilidad proceden de la alarma más reciente de ese equipo (— si no hay ninguna); el azimut es el de instalación registrado, no el de la fuente en el fotograma actual.',
     /**
-     * Por qué la columna «estabilidad» nunca tiene valor. NO ESTÁ EN EL MANUAL: docs/reference/
-     * no describe esa magnitud, y lo único llamado «estabilidad» en el producto es un umbral de
-     * regla de alarma (un criterio, no una medida). La magnitud real de la vía de descarga
-     * parcial se llama «suavidad» y no es la misma, así que no se sustituye.
+     * De dónde sale cada columna, escrito tras fijar el propietario la terminología (2026-09-19:
+     * «usar 平稳度»). Eso resolvió la ambigüedad: lo que él llamaba «estabilidad» ES el
+     * `smoothness` de este repositorio (un valor real que el equipo reporta con cada alarma), así
+     * que la columna tiene origen y la nota «no está en el manual, por eso siempre —» desaparece.
      */
     hoverStream: 'Flujo de vídeo actual',
     hoverAlarm: '{count} alarma(s) sin confirmar',
     hoverNoAlarm: 'Sin alarmas sin confirmar',
     hoverHint: 'Doble clic para abrir este equipo.',
-    stabilityNoSourceHint:
-      'Esta columna no tiene origen de datos: el manual no describe una medida de «estabilidad» y esta máquina no tiene lectura de ella (el producto solo tiene una regla de alarma «umbral de estabilidad del nivel de presión sonora», que es un criterio, no una medida). La magnitud real de la vía de descarga parcial se llama «suavidad» y no es la misma, así que no se usa como sustituto.',
     /** «No se pudo leer» y «no hay» deben seguir siendo distinguibles (misma regla que la tabla de equipos). */
     notRead: '—',
     none: '—',
@@ -2370,6 +2368,11 @@ export const es: MessageSchema = {
     cooldownPerInterface: 'Límite por franja de tiempo',
     windowUsage: '{used} de {limit} usados en esta ventana',
 
+    bellTitle: 'Alarmas: {count} sin confirmar',
+    deviceAlarmsTitle: 'Alarmas de equipos',
+    deviceAlarmsEmpty: 'No hay alarmas de equipos sin confirmar',
+    deviceAlarmAcknowledge: 'Confirmar',
+    deviceAlarmsMore: 'Hay {count} más sin listar (vea Registro de alarmas)',
     pendingTitle: 'Alarmas pendientes',
     pendingEmpty: 'No hay alarmas en este momento',
     pendingAcknowledge: 'Confirmar',

@@ -428,7 +428,7 @@ export const en: MessageSchema = {
   metrics: {
     spl: 'Sound pressure level',
     mainFrequency: 'Main frequency',
-    smoothness: 'Smoothness',
+    smoothness: 'Steadiness',
     bandEnergyRatio: 'Band energy ratio',
     oddEvenHarmonicRatio: 'Odd/even harmonic ratio',
     spectralComplexity: 'Spectral complexity',
@@ -1111,21 +1111,19 @@ export const en: MessageSchema = {
     /** Live data list (third). */
     liveTitle: 'Live data',
     colDb: 'dB',
-    colStability: 'Stability',
+    colStability: 'Steadiness',
     colAzimuth: 'Azimuth',
-    liveHint: 'dB is the sound pressure level on that device\u2019s most recent alarm (— when there is none); azimuth is the recorded installation azimuth, not the current frame\u2019s source bearing.',
     /**
-     * Why the "stability" column never has a value. NOT IN THE MANUAL: docs/reference/ has no
-     * such quantity, and the only "stability" in this product is an alarm-rule threshold (a
-     * criterion, not a reading). The real measured value for the partial-discharge path is
-     * "smoothness", which is a different quantity, so it is not substituted here.
+     * Where each of the three columns comes from, written after the owner settled the wording
+     * (2026-09-19: "use 平稳度"). That settled the ambiguity: what he called "stability" IS this
+     * repo's `smoothness` (a real value the device reports with each alarm), so the column has a
+     * source and the old "not in the manual, therefore always —" note is gone.
      */
+    liveHint: 'dB and steadiness both come from that device\u2019s most recent alarm (— when there is none); azimuth is the recorded installation azimuth, not the current frame\u2019s source bearing.',
     hoverStream: 'Current video stream',
     hoverAlarm: '{count} unacknowledged alarm(s)',
     hoverNoAlarm: 'No unacknowledged alarms',
     hoverHint: 'Double-click to open this device.',
-    stabilityNoSourceHint:
-      'This column has no data source: the manual does not describe a "stability" measurement and this machine has no reading for it (the product only has an "SPL stability threshold" alarm rule, which is a criterion rather than a measurement). The partial-discharge path\u2019s real measured value is called "smoothness" and is not the same quantity, so it is not used as a substitute.',
     /** "Could not be read" and "there is none" must stay distinguishable (same rule as the device table). */
     notRead: '—',
     none: '—',
@@ -2399,6 +2397,11 @@ export const en: MessageSchema = {
     cooldownPerInterface: 'Cap per time slice',
     windowUsage: '{used} of {limit} used in this window',
 
+    bellTitle: 'Alarms: {count} unacknowledged',
+    deviceAlarmsTitle: 'Device alarms',
+    deviceAlarmsEmpty: 'No unacknowledged device alarms',
+    deviceAlarmAcknowledge: 'Acknowledge',
+    deviceAlarmsMore: '{count} more not listed (see Alarm records for all)',
     pendingTitle: 'Pending alarms',
     pendingEmpty: 'No alarms right now',
     pendingAcknowledge: 'Acknowledge',

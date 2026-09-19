@@ -423,23 +423,41 @@ describe('地图下方依次三张列表（第 17 条）', () => {
     }
   })
 
-  it('「稳定度」那一列恒为「—」，而且写明**没有数据源**（手册未说明）', () => {
-    // 这一列不能悄悄填一个别的量（平滑度）—— 那是编造。
+  it('「平稳度」那一列**有数据源**了：取最近一条告警上报的 smoothness（业主 2026-09-19 澄清）', () => {
+    /*
+     * 这一条原来是「恒为 — + 写明没有数据源」。业主 2026-09-19 说「用**平稳度**表示」之后，
+     * 他说的「稳定度」就是本仓库的 `smoothness` —— 一个有真实来源的测量值。
+     * 所以断言**翻了过来**：不许再有"恒为 —"的写法，而且必须真的去读那个值。
+     */
     const block = mapTemplate.slice(mapTemplate.indexOf('data-map-live'))
-    assert.ok(block.includes("t('mapUi.none')"), '稳定度那一格没有固定的「—」')
-    assert.ok(block.includes('data-live-no-source'), '稳定度表头没有"没有数据源"的钩子')
-    assert.ok(block.includes('mapUi.stabilityNoSourceHint'), '没有写明为什么这一列没有值')
-    // 说明文字必须点明"手册未说明"与"不拿别的量顶替"两件事。
-    const hint = String(messageAt('zh-CN', 'mapUi.stabilityNoSourceHint'))
-    assert.match(hint, /手册未说明/, '说明里没有「手册未说明」')
-    assert.match(hint, /平滑度/, '说明里没有交代"平滑度不是同一个量"，下一个人会直接拿它顶替')
-    for (const locale of ['en', 'es', 'tr']) {
-      assert.match(
-        String(messageAt(locale, 'mapUi.stabilityNoSourceHint')),
-        /manual|kılavuz/i,
-        `${locale} 的说明没有交代"手册里没有"`
-      )
-    }
+    assert.equal(
+      /stabilityNoSourceHint/.test(mapView),
+      false,
+      '「没有数据源」那段说明还在（业主已澄清这一列取 smoothness）'
+    )
+    assert.ok(block.includes('data-live-smoothness'), '平稳度那一格没有稳定的探针钩子')
+    assert.match(
+      mapView,
+      /function liveSmoothness\([\s\S]*?facts\.latestSmoothness/,
+      '平稳度不是取最近一条告警的 smoothness'
+    )
+    assert.match(
+      mapView,
+      /latest\?\.smoothness !== undefined\) facts\.latestSmoothness = latest\.smoothness/,
+      'facts 里没有把 smoothness 从最近一条告警里取出来'
+    )
+    // 与分贝**同源同刻**：两个字段都从同一条 `latest` 上取。
+    assert.match(
+      mapView,
+      /facts\.latestSpl = latest\.spl[\s\S]{0,200}facts\.latestSmoothness = latest\.smoothness/,
+      '分贝与平稳度不是从同一条告警上取的（两列会对不上同一时刻）'
+    )
+    // 读不到与"没有"必须分得开（与分贝那一列同一条口径）。
+    assert.match(
+      mapView,
+      /function liveSmoothness\([\s\S]*?facts\.total < 0[\s\S]*?mapUi\.notRead/,
+      '平稳度那一列没有区分"没读到"'
+    )
   })
 
   it('分贝取最近一条告警的声压级，方位取**录入的**方位角（各有出处）', () => {
@@ -467,7 +485,6 @@ describe('地图下方依次三张列表（第 17 条）', () => {
       'mapUi.colStability',
       'mapUi.colAzimuth',
       'mapUi.liveHint',
-      'mapUi.stabilityNoSourceHint',
       'mapUi.notRead',
       'mapUi.none'
     ]

@@ -38,13 +38,15 @@
  * 三个颜色都配一句文字（图例 + 每一行的状态列），不靠颜色单独承载信息。
  *
  * ---------------------------------------------------------------------------
- * 实时数据列表里那一列「稳定度」（业主第 17 条）—— **手册未说明**
+ * 实时数据列表里那一列「平稳度」（业主第 17 条给的三列之一）
  * ---------------------------------------------------------------------------
- * 业主给的三列是 分贝 / 稳定度 / 方位。前两列与第四列有真实来源，**「稳定度」没有**：
- * `docs/reference/` 里没有这个量，本仓库里唯一的"稳定性"是告警规则里的一个**阈值设置**
- * （`device-config.ts` 的 `splStabilityThreshold`），那是"超过多少算异常"的判据，不是读数；
- * 另一个真实测量值叫**平滑度**（`AlarmEvent.smoothness`），它与"稳定度"不是同一个量，
- * 所以**不拿它顶替**。这一列因此恒为「—」，并在表下写明原因（`mapUi.stabilityNoSourceHint`）。
+ * 业主给的三列是 分贝 / 稳定度 / 方位。**用词在 2026-09-19 定下来了**：他说「用**平稳度**表示」，
+ * 也就是这一列取本仓库的 `smoothness`（设备随每条告警上报的一个真实测量值，
+ * `AlarmEvent.smoothness`）。
+ *
+ * 所以这一列**不再是空的**：它与分贝取自**同一条告警**，两列永远对应同一时刻。
+ * 在此之前这里恒为「—」，并写着"手册未说明这个量"—— 那段说明随这次澄清一起下架
+ * （当时的判断没错，是当时的用词没定）。
  */
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -111,6 +113,8 @@ interface DeviceAlarmFacts {
   pending: number
   /** 最近一条告警上报的声压级（没有告警、或那条没有 spl 时缺席）。 */
   latestSpl?: number
+  /** 同一条告警上报的平稳度（`smoothness`）；与 `latestSpl` 同源同时刻。 */
+  latestSmoothness?: number
 }
 const alarmFacts = ref<Record<string, DeviceAlarmFacts>>({})
 
@@ -235,6 +239,22 @@ function liveDb(deviceId: string): string {
 }
 
 /**
+ * 实时数据那一行的**平稳度**：最近一条告警上报的 `smoothness`。
+ *
+ * 业主 2026-09-19 澄清「用平稳度表示」之后，这一列**不再是恒为「—」的空列** ——
+ * 他说的「稳定度」就是本仓库的 `smoothness`（设备随每条告警上报的一个真实测量值）。
+ * 它与分贝取自**同一条告警**，所以两列永远对应同一时刻（这也是把它们放在同一行、
+ * 同一句 `mapUi.liveHint` 里的原因）。
+ */
+function liveSmoothness(deviceId: string): string {
+  const facts = alarmFacts.value[deviceId]
+  if (!facts || facts.total < 0) return t('mapUi.notRead')
+  return facts.latestSmoothness === undefined
+    ? t('mapUi.none')
+    : formatNumber(facts.latestSmoothness, 3)
+}
+
+/**
  * 实时数据那一行的方位角：**录入的方位角**（`installation.azimuthDeg`）。
  *
  * 空气声呐的实时帧里还有一个 `energyAzimuth`（当前帧声源的方位），那是"此刻朝哪"，
@@ -260,6 +280,7 @@ async function loadDeviceAlarmFacts(): Promise<void> {
       pending: pending.success ? (unwrap(pending)?.total ?? 0) : -1
     }
     if (latest?.spl !== undefined) facts.latestSpl = latest.spl
+    if (latest?.smoothness !== undefined) facts.latestSmoothness = latest.smoothness
     next[device.id] = facts
   }
   alarmFacts.value = next
@@ -822,15 +843,7 @@ onUnmounted(() => {
             <tr>
               <th scope="col">{{ t('devices.name') }}</th>
               <th scope="col" class="map-table__num">{{ t('mapUi.colDb') }}</th>
-              <th scope="col" class="map-table__num">
-                <!--
-                  这一列表头带一个"为什么永远是 —"的悬停说明，因为**手册未说明**这个量：
-                  见文件头与 `mapUi.stabilityNoSourceHint`。
-                -->
-                <span :title="t('mapUi.stabilityNoSourceHint')" data-live-no-source>
-                  {{ t('mapUi.colStability') }}
-                </span>
-              </th>
+              <th scope="col" class="map-table__num">{{ t('mapUi.colStability') }}</th>
               <th scope="col" class="map-table__num">{{ t('mapUi.colAzimuth') }}</th>
             </tr>
           </thead>
@@ -842,8 +855,9 @@ onUnmounted(() => {
                 {{ device.name }}
               </td>
               <td class="map-table__num">{{ liveDb(device.id) }}</td>
-              <td class="map-table__num muted" :title="t('mapUi.stabilityNoSourceHint')">
-                {{ t('mapUi.none') }}
+              <!-- 平稳度：最近一条告警上报的 `smoothness`（业主 2026-09-19 澄清「用平稳度表示」）。 -->
+              <td class="map-table__num" :data-live-smoothness="liveSmoothness(device.id)">
+                {{ liveSmoothness(device.id) }}
               </td>
               <td class="map-table__num">{{ liveAzimuth(device) }}</td>
             </tr>

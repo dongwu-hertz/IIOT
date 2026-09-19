@@ -428,7 +428,7 @@ export const tr: MessageSchema = {
   metrics: {
     spl: 'Ses basıncı düzeyi',
     mainFrequency: 'Ana frekans',
-    smoothness: 'Düzgünlük',
+    smoothness: 'Durağanlık',
     bandEnergyRatio: 'Bant enerji oranı',
     oddEvenHarmonicRatio: 'Tek/çift harmonik oranı',
     spectralComplexity: 'Spektral karmaşıklık',
@@ -1099,21 +1099,19 @@ export const tr: MessageSchema = {
     /** Canlı veri listesi (üçüncü). */
     liveTitle: 'Canlı veriler',
     colDb: 'dB',
-    colStability: 'Kararlılık',
+    colStability: 'Durağanlık',
     colAzimuth: 'Azimut',
-    liveHint: 'dB, o cihazın en son alarmındaki ses basıncı düzeyidir (yoksa —); azimut, kayıtlı kurulum azimutudur, geçerli karenin kaynak yönü değildir.',
+    liveHint: 'dB ve durağanlık, o cihazın en son alarmından gelir (yoksa —); azimut, kayıtlı kurulum azimutudur, geçerli karenin kaynak yönü değildir.',
     /**
-     * «Kararlılık» sütununun neden hiç değer taşımadığı. KILAVUZDA YOK: docs/reference/ böyle bir
-     * büyüklük tanımlamıyor ve üründe «kararlılık» adını taşıyan tek şey bir alarm kuralı eşiğidir
-     * (ölçüm değil, ölçüt). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük
-     * değildir; bu yüzden onun yerine konmaz.
+     * Sütunların nereden geldiği; sahibi terminolojiyi netleştirdikten sonra yazıldı
+     * (2026-09-19: «用平稳度表示»). Bu belirsizliği çözdü: onun «kararlılık» dediği şey bu
+     * depodaki `smoothness`tır (cihazın her alarmla bildirdiği gerçek bir değer), yani sütunun
+     * kaynağı var ve «kılavuzda yok, bu yüzden hep —» notu kalktı.
      */
     hoverStream: 'Geçerli video akışı',
     hoverAlarm: '{count} onaylanmamış alarm',
     hoverNoAlarm: 'Onaylanmamış alarm yok',
     hoverHint: 'Bu cihazı açmak için çift tıklayın.',
-    stabilityNoSourceHint:
-      'Bu sütunun veri kaynağı yok: kılavuz «kararlılık» diye bir ölçüm tanımlamıyor ve bu makinede onun okuması yok (üründe yalnızca «ses basıncı düzeyi kararlılık eşiği» alarm kuralı var; o bir ölçüt, ölçüm değil). Kısmi deşarj yolunun gerçek ölçümü «pürüzsüzlük»tür ve aynı büyüklük değildir, bu yüzden onun yerine kullanılmaz.',
     /** «Okunamadı» ile «hiç yok» ayrılabilir kalmalı (cihaz tablosundaki kuralın aynısı). */
     notRead: '—',
     none: '—',
@@ -2372,6 +2370,11 @@ export const tr: MessageSchema = {
     cooldownPerInterface: 'Zaman dilimi başına üst sınır',
     windowUsage: 'Bu pencerede {used} / {limit} kullanıldı',
 
+    bellTitle: 'Alarmlar: {count} onaylanmamış',
+    deviceAlarmsTitle: 'Cihaz alarmları',
+    deviceAlarmsEmpty: 'Onaylanmamış cihaz alarmı yok',
+    deviceAlarmAcknowledge: 'Onayla',
+    deviceAlarmsMore: 'Listelenmeyen {count} kayıt daha var (tümü için Alarm kayıtları)',
     pendingTitle: 'Bekleyen alarmlar',
     pendingEmpty: 'Şu anda alarm yok',
     pendingAcknowledge: 'Onayla',

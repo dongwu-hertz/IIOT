@@ -526,7 +526,7 @@ export const zhCN = {
   metrics: {
     spl: '声压级',
     mainFrequency: '主频',
-    smoothness: '平滑度',
+    smoothness: '平稳度',
     bandEnergyRatio: '频带能量比',
     oddEvenHarmonicRatio: '奇偶谐波比',
     spectralComplexity: '频谱复杂度',
@@ -1267,20 +1267,20 @@ export const zhCN = {
     /** 实时数据列表（第三张）。 */
     liveTitle: '实时数据列表',
     colDb: '分贝',
-    colStability: '稳定度',
+    colStability: '平稳度',
     colAzimuth: '方位',
-    liveHint: '分贝取该设备最近一条告警上报的声压级，没有告警时是「—」；方位取录入的方位角（不是当前帧的声源方位）。',
     /**
-     * 「稳定度」那一列永远没有值的原因。**手册未说明**：`docs/reference/` 里没有这个量，
-     * 本仓库里唯一的"稳定性"是告警规则的阈值设置，而另一个真实测量值叫**平滑度**
-     * （`AlarmEvent.smoothness`），与它不是一个量 —— 不拿它顶替。
+     * 三列各取自哪里（业主 2026-09-19 澄清「用平稳度表示」之后写的）。
+     *
+     * 那句澄清解掉了原先的歧义：他说的「稳定度」就是本仓库的 `smoothness`
+     * （告警上报的一个真实测量值，`AlarmEvent.smoothness`）。所以这一列**有数据源**了 ——
+     * 原来那句"手册未说明、所以这一列恒为 —"的说明随之下架。
      */
+    liveHint: '分贝与平稳度都取该设备最近一条告警上报的声压级与平稳度，没有告警时是「—」；方位取录入的方位角（不是当前帧的声源方位）。',
     hoverStream: '当前视频流',
     hoverAlarm: '{count} 条未确认告警',
     hoverNoAlarm: '没有未确认告警',
     hoverHint: '双击进这一台的详情页。',
-    stabilityNoSourceHint:
-      '这一列没有数据源：手册未说明「稳定度」这个量，本机也没有它的读数（产品里只有一条「声压级稳定性阈值」的告警规则，那是判据不是测量值）。局放那一路的真实测量值叫「平滑度」，与它不是同一个量，所以没有拿它顶替。',
     /** 一个读数「没读到」与「就是没有」必须分得开（与设备表那边同一条口径）。 */
     notRead: '—',
     none: '—',
@@ -2642,6 +2642,11 @@ export const zhCN = {
     cooldownPerInterface: '每个时间片上限（次）',
     windowUsage: '本窗口已用 {used} / {limit}',
 
+    bellTitle: '告警：{count} 条未确认',
+    deviceAlarmsTitle: '设备告警',
+    deviceAlarmsEmpty: '当前没有未确认的设备告警',
+    deviceAlarmAcknowledge: '确认',
+    deviceAlarmsMore: '另有 {count} 条未列出（到「告警记录」看全部）',
     pendingTitle: '待处理告警',
     pendingEmpty: '当前无告警',
     pendingAcknowledge: '确认',
