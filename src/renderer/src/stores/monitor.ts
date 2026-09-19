@@ -26,7 +26,6 @@ import { computed, ref, type Ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { DeviceStatus, RealtimeFeature } from '@shared/domain/models'
 import {
-  monitorSourceMessageKey,
   monitorSourceState,
   monitorStaleBadgeKey,
   monitorUsesLastContent,
@@ -305,8 +304,13 @@ export const useMonitorStore = defineStore('monitor', () => {
     })
   )
 
-  /** 提示条与角标的目录键（`null` = 这一档不需要说话）。 */
-  const sourceMessageKey = computed(() => monitorSourceMessageKey(sourceState.value))
+  /**
+   * 图表角标的目录键（`null` = 不必标"这不是实时数据"）。
+   *
+   * **提示条那个键（`sourceMessageKey`）在 2026-09-19 第 13 批第 1 条删掉了**：
+   * 业主说那条弹窗「这个内容不用显示」，提示条整个撤掉（见 `monitor-offline.ts` 的注释）。
+   * `sourceState` 留着：它是六档状态机的**唯一入口**，角标就是照它算出来的。
+   */
   const staleBadgeKey = computed(() => monitorStaleBadgeKey(sourceState.value))
 
   /** Magnitudes of the latest sweep; empty until the spectrum stream delivers. */
@@ -729,7 +733,6 @@ export const useMonitorStore = defineStore('monitor', () => {
     content,
     /** 六档状态（没有设备 / 离线 / 等待 / 实时 / 已停止更新 / 已停止）。 */
     sourceState,
-    sourceMessageKey,
     staleBadgeKey,
     lastFrameAt,
     /** 判"数据停了多久"的阈值（界面说明里要用同一个数）。 */

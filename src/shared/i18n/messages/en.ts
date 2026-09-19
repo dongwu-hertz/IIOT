@@ -538,13 +538,7 @@ export const en: MessageSchema = {
     playbackEmpty:
       'No recordings for this device on this machine yet (manual recordings and detection videos downloaded from the device show up here)',
     sampleRate: 'Sample rate',
-    offlineBanner: '{ip} is offline',
-    offlineNoIp: 'The selected device is offline',
-    offlineLastContent: 'Below is the last content received ({time})',
-    offlineNoContent: 'No data has ever been received from this device',
-    waitingBanner: 'The device is online; waiting for it to push data…',
-    staleBanner: 'Data has stopped updating (last frame {time})',
-    stoppedBanner: 'Stopped (last frame {time})',
+    // The "no live data" banner keys were removed by owner batch 13 item 1 (see §15.78).
     staleBadge: 'Last content',
     waitingFeatures: 'Waiting for live feature frames…',
     waitingSpectrum: 'Waiting for spectrum frames…',
@@ -1001,6 +995,10 @@ export const en: MessageSchema = {
     errPassword: 'Enter the login password',
     errAddFailed: 'Could not add the device',
     defaultPort: 'Usually 80',
+    // "Address information" collapsed by default (owner batch 13, item 2).
+    installationEmpty: 'Not filled in',
+    installationPoint: 'Point {latitude}, {longitude}',
+    installationPartial: 'Only partly filled in',
     noResponseTitle: 'The device did not answer',
     noResponseBody: 'The address is reachable but did not return device information this system recognises. Check the IP, the port and the device model.',
     probeSuccess: 'Connected',

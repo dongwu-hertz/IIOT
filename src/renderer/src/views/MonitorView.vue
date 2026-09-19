@@ -1507,48 +1507,25 @@ const sessionLabel = computed(() => {
 
     <template v-else>
       <!--
-        「没有活数据」这一条提示（业主 2026-09-18 第 10 批第 18 条）。
+        **这一块原来是一条"没有活数据"的提示条**（第 10 批第 18 条要的），
+        业主 2026-09-19 第 13 批第 1 条把它去掉了：
 
-        为什么单独一条、而且**必须带 IP**：操作员看到空白画面时第一个问题是"哪一台不通"；
-        设备名在标题栏里已经有，而排查要的是**地址**（他要去 ping 它、去它的 Web 界面看）。
-        状态机在 `@shared/domain/monitor-offline.ts`（六档，含"数据停了"与"操作员自己停的"）。
+          「实时监测里面如果有告警弹窗（192.168.110.90 离线 还没有收到过这台设备的任何数据）
+            这个内容不用显示」
 
-        下面那两条补充说明是**分开的**：一台离线的设备可能"有上次内容"也可能"从来没收到过"，
-        这两句话对操作员意味着完全不同的下一步。
+        括号里那两句就是这条提示条在**离线且从来没收到过数据**时的正文（`offlineBanner` +
+        `offlineNoContent`）。所以这里是**按他的原话撤掉整条**，不是换一句话 ——
+        设备在不在线由设备下拉旁边那个绿/灰点回答（第 10 批第 19 条），
+        而"数据停在哪一刻"由图上那个「上次内容」角标回答。
+
+        **没有动的两件事**（他点名的是"这个内容"，不是这一整套行为）：
+          · 六档状态机（`@shared/domain/monitor-offline.ts`）仍在，`stale` / `stopped`
+            仍然决定角标出不出来；
+          · 「上次内容」仍然保留并继续画（`monitor.content`）。
+        它那四个词条（`offlineBanner` / `offlineNoIp` / `offlineLastContent` /
+        `offlineNoContent`）与"提示条正文"那两个键（`staleBanner` / `stoppedBanner`）
+        一起从四本目录里删掉了 —— 留着就是死键。冲突与取舍见 §15.78。
       -->
-      <div
-        v-if="monitor.sourceMessageKey"
-        class="alert"
-        :class="monitor.sourceState === 'device-offline' ? 'alert--danger' : 'alert--warning'"
-        role="alert"
-        data-monitor-source-banner
-        :data-monitor-source-state="monitor.sourceState"
-        :data-monitor-content="monitor.content.fromLastContent ? 'last' : 'live'"
-      >
-        <span class="alert__body">
-          <span class="alert__title" data-monitor-source-title>
-            {{
-              monitor.sourceState === 'device-offline'
-                ? selectedDevice?.ip
-                  ? t('monitorUi.offlineBanner', { ip: selectedDevice.ip })
-                  : t('monitorUi.offlineNoIp')
-                : t(monitor.sourceMessageKey, {
-                    time: monitor.lastFrameAt ? formatDateTime(monitor.lastFrameAt) : '—'
-                  })
-            }}
-          </span>
-          <br />
-          <span v-if="monitor.sourceState === 'device-offline'" data-monitor-source-detail>
-            {{
-              monitor.content.fromLastContent
-                ? t('monitorUi.offlineLastContent', {
-                    time: formatDateTime(monitor.content.at ?? monitor.lastFrameAt ?? Date.now())
-                  })
-                : t('monitorUi.offlineNoContent')
-            }}
-          </span>
-        </span>
-      </div>
 
       <div class="camera-board">
       <!--

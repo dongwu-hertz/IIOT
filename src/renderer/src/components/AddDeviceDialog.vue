@@ -81,6 +81,27 @@ const probeResult = ref<ProbeResult | null>(null)
 const probeError = ref('')
 
 /**
+ * 「地址信息」展开着吗？**默认收起**（业主 2026-09-19 第 13 批第 2 条）。
+ *
+ * 收起时那一行仍要说清"填了没有"（见 `installationSummary`）：一个纯标题的折叠行会让
+ * 操作员要么每次点开看一眼、要么永远不知道里面有没有东西。
+ */
+const installationOpen = ref(false)
+
+/** 收起状态下那一行小结：没填 / 填了什么（只报"有没有点位"，不在这里堆坐标）。 */
+const installationSummary = computed(() => {
+  const parsed = parseInstallation(form.installation)
+  if (!hasInstallation(parsed.installation)) return t('addDeviceUi.installationEmpty')
+  if (parsed.installation.gisLatitude !== undefined && parsed.installation.gisLongitude !== undefined) {
+    return t('addDeviceUi.installationPoint', {
+      latitude: parsed.installation.gisLatitude,
+      longitude: parsed.installation.gisLongitude
+    })
+  }
+  return t('addDeviceUi.installationPartial')
+})
+
+/**
  * 刚添加成功的那台设备（业主 2026-09-18 第 10 批第 5 条：「添加设备支持 HTTP 推流
  * （秘钥 + 推流地址）」）。
  *
@@ -138,6 +159,8 @@ function resetForm(): void {
   Object.assign(form, emptyForm())
   formError.value = ''
   addedDevice.value = null
+  // 收起状态也回到出厂默认（业主第 13 批第 2 条：默认收起）。
+  installationOpen.value = false
   resetProbe()
 }
 
@@ -331,52 +354,72 @@ const probeChannelCount = computed(() =>
 
       <!--
         **地址信息**（业主 2026-09-18 第 7 / 10 条）：原「安装信息」，去掉基准声压级。
-        **与机型无关地一直显示**：机型是自动识别的，而"探活之前不让填点位"会让没有凭据时
+        **与机型无关地一直存在**：机型是自动识别的，而"探活之前不让填点位"会让没有凭据时
         完全录不进地址信息。经纬度与方位角都可空；声源定位设备（Air Sonar / SN-16）才需要填。
+
+        **默认收起**（业主 2026-09-19 第 13 批第 2 条：「添加设备里面， 地址信息这个按钮
+        默认是收起来的」）：它是一件**可选**的事（只有声源定位设备才需要点位），
+        摊开会把"添加设备"这条主路径（地址 + 凭据）挤下去。收起时那一行仍然说得清
+        "这是什么、现在填没填"，展开靠那颗按钮（`aria-expanded` / `aria-controls`）。
       -->
-      <fieldset class="install">
-        <legend class="field-label">{{ t('installUi.section') }}</legend>
-        <p class="field-hint">{{ t('installUi.sectionHint') }}</p>
-        <div class="form-grid">
-          <label class="field">
-            <span class="field-label">{{ t('installUi.latitude') }}</span>
-            <input
-              v-model="form.installation.gisLatitude"
-              class="input mono"
-              type="text"
-              inputmode="decimal"
-              placeholder="31.2304"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('installUi.longitude') }}</span>
-            <input
-              v-model="form.installation.gisLongitude"
-              class="input mono"
-              type="text"
-              inputmode="decimal"
-              placeholder="121.4737"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-          <label class="field">
-            <span class="field-label">{{ t('installUi.azimuth') }}</span>
-            <input
-              v-model="form.installation.azimuthDeg"
-              class="input mono"
-              type="text"
-              inputmode="decimal"
-              placeholder="0"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
-          </label>
+      <section class="collapse" data-add-installation>
+        <button
+          type="button"
+          class="collapse__head"
+          data-action="toggle-add-installation"
+          :aria-expanded="installationOpen"
+          aria-controls="add-installation-body"
+          @click="installationOpen = !installationOpen"
+        >
+          <span class="collapse__caret" aria-hidden="true">{{ installationOpen ? '▾' : '▸' }}</span>
+          <span class="field-label">{{ t('installUi.section') }}</span>
+          <span class="muted collapse__summary">
+            {{ installationSummary }}
+          </span>
+        </button>
+        <div v-if="installationOpen" id="add-installation-body" class="install">
+          <p class="field-hint">{{ t('installUi.sectionHint') }}</p>
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">{{ t('installUi.latitude') }}</span>
+              <input
+                v-model="form.installation.gisLatitude"
+                class="input mono"
+                type="text"
+                inputmode="decimal"
+                placeholder="31.2304"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('installUi.longitude') }}</span>
+              <input
+                v-model="form.installation.gisLongitude"
+                class="input mono"
+                type="text"
+                inputmode="decimal"
+                placeholder="121.4737"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('installUi.azimuth') }}</span>
+              <input
+                v-model="form.installation.azimuthDeg"
+                class="input mono"
+                type="text"
+                inputmode="decimal"
+                placeholder="0"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
+            </label>
+          </div>
         </div>
-      </fieldset>
+      </section>
 
       <p v-if="formError" class="alert alert--danger" role="alert">{{ formError }}</p>
 
@@ -505,6 +548,53 @@ const probeChannelCount = computed(() =>
 
 .field-hint--warning {
   color: var(--color-warning);
+}
+
+/*
+ * 可折叠的一段（业主第 13 批第 2 条：地址信息默认收起）。
+ *
+ * 用的是 `button` + `v-if` + `aria-expanded`/`aria-controls` 那一套（与告警中心的
+ * 「更多筛选」同一做法）：原生 `<details>` 的展开状态没法用探针稳定地读，而且它会把
+ * 内容留在 DOM 里 —— 收起时那条路径上的输入框仍然会被 Tab 走到。
+ */
+.collapse {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.collapse__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collapse__head:hover {
+  background: var(--color-bg-muted);
+}
+
+.collapse__caret {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.collapse__summary {
+  margin-left: auto;
+  font-size: 11.5px;
+}
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 10px 10px;
 }
 
 .probe {

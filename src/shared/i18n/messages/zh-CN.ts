@@ -655,13 +655,12 @@ export const zhCN = {
      * 名字带 `monitorUi` 是历史原因，四语言必须一致，所以它留在这里而不是新开一个键。
      */
     sampleRate: '采样率',
-    offlineBanner: '{ip} 离线',
-    offlineNoIp: '所选设备离线',
-    offlineLastContent: '以下是最后一次收到的内容（{time}）',
-    offlineNoContent: '还没有收到过这台设备的任何数据',
-    waitingBanner: '设备在线，正在等待它推数据…',
-    staleBanner: '数据已停止更新（最后一帧 {time}）',
-    stoppedBanner: '已停止（最后一帧 {time}）',
+    /*
+     * 这一组（`offlineBanner` / `offlineNoIp` / `offlineLastContent` / `offlineNoContent` /
+     * `waitingBanner` / `staleBanner` / `stoppedBanner`）**在 2026-09-19 第 13 批第 1 条删掉了**：
+     * 业主说「实时监测里面如果有告警弹窗（192.168.110.90 离线 还没有收到过这台设备的任何数据）
+     * 这个内容不用显示」—— 那几句就是那条提示条的正文。四本目录同时删，理由见 §15.78。
+     */
     staleBadge: '上次内容',
     waitingFeatures: '等待实时特征帧…',
     waitingSpectrum: '等待频谱帧…',
@@ -1124,6 +1123,13 @@ export const zhCN = {
     errPassword: '请输入登录密码',
     errAddFailed: '添加设备失败',
     defaultPort: '默认 80',
+    /**
+     * 「地址信息」收起时那一行小结（业主 2026-09-19 第 13 批第 2 条：默认收起）。
+     * 三档分开说，因为"没填"与"只填了一半"对操作员的下一步完全不同。
+     */
+    installationEmpty: '未填写',
+    installationPoint: '点位 {latitude}, {longitude}',
+    installationPartial: '只填了一部分',
     noResponseTitle: '设备无响应',
     noResponseBody: '目标地址可以访问，但未返回本系统可识别的设备信息。请确认 IP、端口与设备型号。',
     probeSuccess: '连接成功',

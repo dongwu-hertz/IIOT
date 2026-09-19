@@ -86,25 +86,15 @@ export function monitorShowsLastContent(state: MonitorSourceState): boolean {
   return state !== 'no-device' && state !== 'live' && state !== 'waiting'
 }
 
-/** 提示条的目录键；`live` 与 `no-device` 没有提示条（前者不需要，后者用空态那一屏）。 */
-export const MONITOR_SOURCE_MESSAGE_KEYS: Readonly<Record<MonitorSourceState, string | null>> = {
-  'no-device': null,
-  'device-offline': 'monitorUi.offlineBanner',
-  waiting: 'monitorUi.waitingBanner',
-  live: null,
-  stale: 'monitorUi.staleBanner',
-  stopped: 'monitorUi.stoppedBanner'
-}
-
-export function monitorSourceMessageKey(state: MonitorSourceState): string | null {
-  return MONITOR_SOURCE_MESSAGE_KEYS[state]
-}
-
 /**
  * 上图表的角标文案（`live` 之外都要标"这些不是实时数据"）。
  *
- * 与提示条分开：提示条说的是"为什么没有活数据"，角标说的是"你正在看的这份数据是什么"。
- * 两者同时出现是有意的 —— 截图发出去时角标还在图上，那句话才是跟着数据走的。
+ * **提示条那一组键（`MONITOR_SOURCE_MESSAGE_KEYS` / `monitorSourceMessageKey()`）在
+ * 2026-09-19 第 13 批第 1 条被删掉了**：业主说「实时监测里面如果有告警弹窗
+ * （192.168.110.90 离线 还没有收到过这台设备的任何数据）这个内容不用显示」——
+ * 那条提示条整个撤掉，它的正文键（`offlineBanner` / `waitingBanner` / `staleBanner` /
+ * `stoppedBanner`）也跟着从四本目录里删了。角标留着：它说的是另一件事
+ * （"你正在看的这份数据不是实时的"），而那句话**跟着数据走**（截图发出去时还在图上）。
  */
 export function monitorStaleBadgeKey(state: MonitorSourceState): string | null {
   if (state === 'device-offline' || state === 'stopped') return 'monitorUi.staleBadge'

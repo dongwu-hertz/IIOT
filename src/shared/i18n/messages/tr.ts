@@ -530,13 +530,7 @@ export const tr: MessageSchema = {
     playbackEmpty:
       'Bu cihaz için bu bilgisayarda henüz kayıt yok (elle alınan kayıtlar ve cihazdan indirilen algılama videoları burada görünür)',
     sampleRate: 'Örnekleme hızı',
-    offlineBanner: '{ip} çevrimdışı',
-    offlineNoIp: 'Seçili cihaz çevrimdışı',
-    offlineLastContent: 'Aşağıda en son alınan içerik var ({time})',
-    offlineNoContent: 'Bu cihazdan hiç veri alınmadı',
-    waitingBanner: 'Cihaz çevrimiçi; veri göndermesi bekleniyor…',
-    staleBanner: 'Veri güncellenmeyi durdurdu (son kare {time})',
-    stoppedBanner: 'Durduruldu (son kare {time})',
+    // «Canlı veri yok» uyarı anahtarları 13. parti 1. madde ile kaldırıldı (bkz. §15.78).
     staleBadge: 'Son içerik',
     waitingFeatures: 'Canlı özellik çerçeveleri bekleniyor…',
     waitingSpectrum: 'Spektrum çerçeveleri bekleniyor…',
@@ -993,6 +987,10 @@ export const tr: MessageSchema = {
     errPassword: 'Oturum açma parolasını girin',
     errAddFailed: 'Cihaz eklenemedi',
     defaultPort: 'Genellikle 80',
+    // «Adres bilgisi» varsayılan olarak kapalı (13. parti, 2. madde).
+    installationEmpty: 'Doldurulmadı',
+    installationPoint: 'Nokta {latitude}, {longitude}',
+    installationPartial: 'Yalnızca bir kısmı dolduruldu',
     noResponseTitle: 'Cihaz yanıt vermedi',
     noResponseBody: 'Adrese erişilebiliyor ancak bu sistemin tanıdığı cihaz bilgisi döndürülmedi. IP’yi, bağlantı noktasını ve cihaz modelini kontrol edin.',
     probeSuccess: 'Bağlantı başarılı',

@@ -37,6 +37,192 @@
 /** 秘钥的字节数（16 字节 ⇒ 32 个十六进制字符）。 */
 export const PUSH_SECRET_BYTES = 16
 
+/**
+ * 设备的**接入方式**（业主 2026-09-19 第 13 批第 1 条：「增加通过 HTTP， MQTT 方式接入」）。
+ *
+ * 三种取值，而且**每台设备只选一种**：
+ *   - `none`（默认）：这台设备不走推流接入 —— 它由我们主动去连（既有的那几族协议）。
+ *   - `http`：设备往本机的 `POST /api/v1/<秘钥>/telemetry` 推。
+ *   - `mqtt`：设备连本机的 MQTT broker，往 `v1/devices/me/telemetry` 发。
+ *
+ * 为什么是"一种"而不是"两种都开"：接入方式是**设备侧固件决定**的（现场那台要么会发 HTTP、
+ * 要么会发 MQTT）。让操作员两个都勾，界面就在暗示"两条路都通"，而设备只会走其中一条 ——
+ * 另一条的监听会一直是"开了但没人连"。要换方式就再选一次，不是多加一条。
+ *
+ * 它也决定**监听什么时候开**：本机不为没人用的协议开着端口（离线优先），
+ * 所以"有没有设备声明了 http/mqtt"就是那个总开关（见 `IotIngestService.syncFromDevices()`）。
+ */
+export const INGEST_PROTOCOLS = ['none', 'http', 'mqtt'] as const
+
+export type IngestProtocol = (typeof INGEST_PROTOCOLS)[number]
+
+export function isIngestProtocol(value: unknown): value is IngestProtocol {
+  return typeof value === 'string' && (INGEST_PROTOCOLS as readonly string[]).includes(value)
+}
+
+/**
+ * 把来路不明的值修成一个合法的接入方式。
+ *
+ * 坏值（`undefined`、旧库里的空串、被人手改过的 JSON）一律归 `none` —— 那是**最保守**的一档：
+ * 归成 http/mqtt 会让一台根本没配过的设备在界面上显示"已接入"，而本机会为它开一个端口。
+ */
+export function normaliseIngestProtocol(value: unknown): IngestProtocol {
+  return isIngestProtocol(value) ? value : 'none'
+}
+
+/** 这台设备是不是**走推流接入**（`none` 之外都算）。 */
+export function usesIngest(protocol: IngestProtocol): boolean {
+  return protocol !== 'none'
+}
+
+// ---------------------------------------------------------------------------
+// 接入方案：数据流接口 + 视频流接口（业主 2026-09-19 第 13 批第 4 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * **能显示出来**的四个指标。
+ *
+ * 它们与 `RealtimeFeature` 的四个量、趋势页那四条曲线、实时监测页那四张卡一一对应 ——
+ * 也就是说：数据流接口只能声明"哪个键送的是这四个量里的哪一个"，**不是**让操作员随便加一个
+ * 我们画不出来的键。这是有意的：
+ *
+ *   - 本机的趋势表（Parquet）列是**固定 7 个量**（`RealtimeFeature`），声明一个表里没有的键，
+ *     除了"收下了但画不出来"之外什么都得不到；
+ *   - 一句"支持增加不同的遥测值"如果落成"随便填"，界面就在承诺一件做不到的事。
+ *
+ * 想加**第五个量**需要的是趋势表的列 + 一条曲线 + 一个单位，那是另一件事（见 §15.77 的说明）。
+ */
+export const INGEST_DISPLAY_METRICS = ['spl', 'mainFrequency', 'smoothness', 'bandEnergyRatio'] as const
+
+export type IngestDisplayMetric = (typeof INGEST_DISPLAY_METRICS)[number]
+
+/** 数据流接口的一行：**这个指标**由载荷里的**哪个键**送来。 */
+export interface IngestMetricKey {
+  metric: IngestDisplayMetric
+  key: string
+}
+
+/**
+ * 出厂默认：别名表（`TELEMETRY_FEATURE_KEYS`）里那几个**规范名**。
+ *
+ * 默认值与别名表**不是**两份规则：别名表说的是"收到这些写法都认"，这一份说的是"这台设备
+ * 声明它将用哪一个规范名"。默认给出规范名，所以"不改就是能用的"。
+ */
+export function defaultIngestMetricKeys(): IngestMetricKey[] {
+  return [
+    { metric: 'spl', key: 'sound_pressure_level' },
+    { metric: 'mainFrequency', key: 'main_freq' },
+    { metric: 'smoothness', key: 'smoothness' },
+    { metric: 'bandEnergyRatio', key: 'freq_band_energy_ratio' }
+  ]
+}
+
+/** 视频流接口的默认键：设备推一个 RTSP / HTTP 地址过来。 */
+export const DEFAULT_INGEST_VIDEO_KEY = 'video_url'
+
+/**
+ * 键名的形状：`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`。
+ *
+ * 与 ThingsBoard 的遥测键同一个形状（它也是"一段不含空白与引号的短名字"），而且与我们的
+ * 别名表里的写法一致。**不允许空白与逗号**：界面上那几个键是以逗号拼给设备的示例，
+ * 一个带空格的键会让示例变成一个能被读成两个键的东西。
+ */
+const INGEST_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
+
+export function isIngestKey(value: unknown): value is string {
+  return typeof value === 'string' && INGEST_KEY_PATTERN.test(value)
+}
+
+/** 数据流接口最多这么多行（四个指标各一条已经够用，留出改名的余地）。 */
+export const MAX_INGEST_METRIC_KEYS = 12
+
+/**
+ * 一台设备的**接入方案**（业主第 13 批第 3、4 条）。
+ *
+ * 它回答三件事，而且都在**添加/编辑设备**那一个对话框里：
+ *   1. 用哪种协议接（`protocol`）；
+ *   2. **数据流接口**：四个可显示的指标各由哪个键送来（`metricKeys`）；
+ *   3. **视频流接口**：哪个键装的是视频地址（`videoKey`，空串 = 不要这一路）。
+ *
+ * 参考 ThingsBoard：那边"设备"与"它会上报哪些键"是两件事（`Device profile` + 遥测键），
+ * 遥测本身是**无模式**的（任何键都能发，能不能显示由仪表盘决定）。我们没有仪表盘，
+ * 所以把"这台设备会发哪几个键"显式记下来 —— 它就是那份"仪表盘配置"，也是现场与设备之间
+ * 唯一一份可以核对的清单。
+ */
+export interface DeviceIngestPlan {
+  protocol: IngestProtocol
+  /** 数据流接口：指标 ← 键。 */
+  metricKeys: IngestMetricKey[]
+  /** 视频流接口：哪一个键装的是视频地址（空串 = 这台设备不推视频）。 */
+  videoKey: string
+}
+
+export function defaultDeviceIngestPlan(): DeviceIngestPlan {
+  return {
+    protocol: 'none',
+    metricKeys: defaultIngestMetricKeys(),
+    videoKey: DEFAULT_INGEST_VIDEO_KEY
+  }
+}
+
+/**
+ * 把来路不明的值修成一个合法的接入方案（旧库、手改过的 JSON、IPC 传进来的坏对象）。
+ *
+ * 三条规则：
+ *   1. 协议坏值 → `none`（最保守，见 `normaliseIngestProtocol()`）；
+ *   2. 指标行逐条校验（指标名必须在四个里、键名必须合法），**同一个指标只留最后一条**
+ *      （两条抢同一个指标时，"哪一条生效"必须只有一个答案）；
+ *   3. 一整行都没有 → 回默认那四行（`none` 的设备也带着默认清单：操作员切到 http 时
+ *      不必先把四个键敲一遍）。
+ */
+export function normaliseDeviceIngestPlan(value: unknown): DeviceIngestPlan {
+  const raw = (value ?? {}) as Partial<DeviceIngestPlan>
+  const protocol = normaliseIngestProtocol(raw.protocol)
+
+  const byMetric = new Map<IngestDisplayMetric, string>()
+  const input = Array.isArray(raw.metricKeys) ? raw.metricKeys : []
+  for (const entry of input.slice(0, MAX_INGEST_METRIC_KEYS * 2)) {
+    const row = (entry ?? {}) as Partial<IngestMetricKey>
+    if (!(INGEST_DISPLAY_METRICS as readonly string[]).includes(String(row.metric))) continue
+    if (!isIngestKey(row.key)) continue
+    // 同一个指标后写的赢（界面上的编辑顺序就是覆盖顺序），同一个键只留第一次出现的指标。
+    byMetric.set(row.metric as IngestDisplayMetric, row.key)
+  }
+  const metricKeys =
+    byMetric.size > 0
+      ? [...byMetric.entries()].map(([metric, key]) => ({ metric, key }))
+      : defaultIngestMetricKeys()
+
+  const videoKey = isIngestKey(raw.videoKey) ? raw.videoKey : raw.videoKey === '' ? '' : DEFAULT_INGEST_VIDEO_KEY
+
+  return { protocol, metricKeys, videoKey }
+}
+
+/**
+ * 界面上的即时校验：返回**问题**（空数组 = 没问题）。
+ *
+ * 与 `normaliseDeviceIngestPlan()` 是两件事：那个负责"把坏值修好"，这个负责"说出来哪里不对"。
+ * 只留前者，操作员会看到自己填的键被悄悄改掉。
+ */
+export function deviceIngestPlanProblems(plan: DeviceIngestPlan): string[] {
+  const problems: string[] = []
+  if (!isIngestProtocol(plan.protocol)) problems.push('protocol')
+  if (plan.metricKeys.length === 0) problems.push('metric-keys-empty')
+  if (plan.metricKeys.length > MAX_INGEST_METRIC_KEYS) problems.push('metric-keys-too-many')
+  const seenMetrics = new Set<string>()
+  const seenKeys = new Set<string>()
+  for (const row of plan.metricKeys) {
+    if (!(INGEST_DISPLAY_METRICS as readonly string[]).includes(row.metric)) problems.push('metric-unknown')
+    if (!isIngestKey(row.key)) problems.push('key-invalid')
+    if (seenMetrics.has(row.metric)) problems.push('metric-duplicate')
+    if (seenKeys.has(row.key)) problems.push('key-duplicate')
+    seenMetrics.add(row.metric)
+    seenKeys.add(row.key)
+  }
+  if (plan.videoKey !== '' && !isIngestKey(plan.videoKey)) problems.push('video-key-invalid')
+  return problems
+}
+
 /** 秘钥的字符长度。 */
 export const PUSH_SECRET_LENGTH = PUSH_SECRET_BYTES * 2
 

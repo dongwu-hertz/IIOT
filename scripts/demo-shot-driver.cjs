@@ -3755,14 +3755,30 @@ async function run() {
     'add.click();' +
     'return new Promise((resolve) => setTimeout(() => {' +
     '  const dialog = document.querySelector("[data-add-device-dialog]");' +
-    '  resolve(JSON.stringify({' +
+    /*
+     * 第 13 批第 2 条：「地址信息」**默认收起**。所以这里先量收起时的样子
+     * （那三个输入框**不在 DOM 里**），再点一下那颗按钮量展开后的样子。
+     */
+    '  const toggle = dialog ? dialog.querySelector("[data-action=toggle-add-installation]") : null;' +
+    '  const out = {' +
     '    opened: !!dialog,' +
     '    kindControls: dialog ? dialog.querySelectorAll(".kind__radio, .kind__name, select[name=kind]").length : -1,' +
     '    hasLead: !!(dialog && dialog.querySelector(".add__lead")),' +
-    '    installInputs: dialog ? dialog.querySelectorAll("fieldset.install input.input").length : -1,' +
-    '    installPoints: dialog ? [...dialog.querySelectorAll("fieldset.install .field-label")]' +
-    '      .map((n) => n.textContent.trim()) : []' +
-    '  }));' +
+    '    collapsePresent: !!toggle,' +
+    '    expandedInitially: toggle ? toggle.getAttribute("aria-expanded") : null,' +
+    '    inputsWhenCollapsed: dialog ? dialog.querySelectorAll(".install input.input").length : -1,' +
+    '    summaryWhenCollapsed: (function(){ const s = dialog ? dialog.querySelector(".collapse__summary") : null;' +
+    '      return s ? s.textContent.trim() : null; })()' +
+    '  };' +
+    '  if (toggle) toggle.click();' +
+    '  resolve(new Promise((done) => setTimeout(() => {' +
+    '    out.expandedAfterClick = toggle ? toggle.getAttribute("aria-expanded") : null;' +
+    '    out.installInputs = dialog ? dialog.querySelectorAll(".install input.input").length : -1;' +
+    '    out.installPoints = dialog ? [...dialog.querySelectorAll(".install .field-label")]' +
+    '      .map((n) => n.textContent.trim()) : [];' +
+    '    out.inputsStillThere = dialog ? dialog.querySelectorAll(".install input.input").length : -1;' +
+    '    done(JSON.stringify(out));' +
+    '  }, 250)));' +
     '}, 300));})()')
   log('add dialog    : ' + JSON.stringify(addDialog))
   if (!addDialog.opened) {
@@ -3774,10 +3790,32 @@ async function run() {
       )
     }
     if (!addDialog.hasLead) problems.push('添加设备对话框里没有那句"不用选机型"的说明')
+    /*
+     * 第 13 批第 2 条：「地址信息」默认收起 —— 收起时那三个输入框**不在 DOM 里**，
+     * 点一下那颗按钮之后才出现（而且点名要"真的不在"，不是 CSS 藏起来：后者会让
+     * 键盘用户 Tab 进一段看不见的表单）。
+     */
+    if (!addDialog.collapsePresent) {
+      problems.push('「地址信息」没有那颗展开/收起按钮（[data-action=toggle-add-installation]）')
+    }
+    if (addDialog.expandedInitially !== 'false') {
+      problems.push('「地址信息」默认不是收起的：aria-expanded=' + JSON.stringify(addDialog.expandedInitially))
+    }
+    if (addDialog.inputsWhenCollapsed !== 0) {
+      problems.push(
+        '「地址信息」收起时输入框仍然在 DOM 里（' + addDialog.inputsWhenCollapsed + ' 个）'
+      )
+    }
+    if (!String(addDialog.summaryWhenCollapsed || '').trim()) {
+      problems.push('收起时那一行没有说"填了没有"')
+    }
+    if (addDialog.expandedAfterClick !== 'true') {
+      problems.push('点了那颗按钮之后「地址信息」没有展开：' + JSON.stringify(addDialog.expandedAfterClick))
+    }
     // 业主 2026-09-18 第 10 条删掉了基准声压级，所以是**三个**输入框（经纬度 + 方位角）。
     if (addDialog.installInputs !== 3) {
       problems.push(
-        '添加设备对话框里的地址信息输入不是三个（第 10 条删掉了基准声压级）：' + addDialog.installInputs
+        '展开之后地址信息输入不是三个（第 10 条删掉了基准声压级）：' + addDialog.installInputs
       )
     }
     for (const label of ['纬度', '经度', '方位角']) {
@@ -5721,7 +5759,9 @@ async function run() {
      * 经纬度与方位角都填上，加完之后要从**库里读回来**逐项相等 ——
      * 业主的硬规矩是"每个写设备的操作必须读回验证"，所以这一段不是可选的。
      */
-    '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
+    '  const toggle = dlg.querySelector("[data-action=toggle-add-installation]");' +
+    '  if (toggle && toggle.getAttribute("aria-expanded") === "false") { toggle.click(); await wait(300); }' +
+    '  const install = [...dlg.querySelectorAll(".install input.input")];' +
     '  out.installInputs = install.length;' +
     '  if (install.length === 3) {' +
     '    setInput(install[0], "31.2304");' +
@@ -6052,7 +6092,11 @@ async function run() {
     '  setInput(creds[3], "admin123");' +
     // 点位图要有点位才有得画：这一台按业主的流程录入**地址信息**（第 1 条；
     // 2026-09-18 第 10 条删掉基准声压级之后只剩经纬度与方位角）。
-    '  const install = [...dlg.querySelectorAll("fieldset.install input.input")];' +
+    // 第 13 批第 2 条之后这一块**默认收起**，所以先点一下那颗展开按钮。
+    '  const installToggle = dlg.querySelector("[data-action=toggle-add-installation]");' +
+    '  if (installToggle && installToggle.getAttribute("aria-expanded") === "false") {' +
+    '    installToggle.click(); await wait(300); }' +
+    '  const install = [...dlg.querySelectorAll(".install input.input")];' +
     '  setInput(install[0], "31.2304");' +
     '  setInput(install[1], "121.4737");' +
     '  setInput(install[2], "135");' +
@@ -6989,55 +7033,84 @@ async function run() {
     'const devices = listed && listed.success ? listed.data : [];' +
     'out.devices = devices.map((d) => ({ name: d.name, ip: d.ip, status: d.status }));' +
     'if (devices.length === 0) return JSON.stringify(Object.assign(out, { reason: "no-device" }));' +
-    // 等提示条出现（页面挂载 + 设备状态注入 + 一次渲染）。
-    'for (let i = 0; i < 40 && !document.querySelector("[data-monitor-source-banner]"); i += 1) await sleep(250);' +
-    'const banner = document.querySelector("[data-monitor-source-banner]");' +
-    'out.bannerPresent = !!banner;' +
-    'out.state = banner ? banner.getAttribute("data-monitor-source-state") : null;' +
-    'out.title = text(document.querySelector("[data-monitor-source-title]"));' +
-    'out.detail = text(document.querySelector("[data-monitor-source-detail]"));' +
-    // 不猜"页面选了哪一台"：断言**某一个**设备的 IP 出现在提示条里就够了
-    // （库里那几台都离线，选哪一台都该走"离线"那一档）。
-    'const ips = devices.map((d) => d.ip).filter((value) => typeof value === "string" && value !== "");' +
-    'out.ips = ips;' +
-    'out.titleHasAnIp = ips.some((ip) => out.title.indexOf(ip) >= 0);' +
-    'out.allOffline = devices.every((d) => d.status !== "ONLINE");' +
+    /*
+     * 业主 2026-09-19 第 13 批第 1 条：「实时监测里面如果有告警弹窗（192.168.110.90 离线
+     * 还没有收到过这台设备的任何数据）这个内容不用显示」。
+     *
+     * 所以这一段**反过来量**：给页面足够的时间把该画的东西都画出来，然后断言那条提示条
+     * **一个都不在**（`[data-monitor-source-banner]` 计数为 0），而且它那几句正文也没漏到别处
+     * （按文本找「离线 / 还没有收到过」那两句在中文目录里的原文）。
+     * 「上次内容」角标是另一件事，留着 —— 它只在**真的有那份内容**时才出现。
+     */
+    'for (let i = 0; i < 20; i += 1) await sleep(250);' +
+    'out.bannerCount = document.querySelectorAll("[data-monitor-source-banner]").length;' +
+    'out.bannerTexts = ["data-monitor-source-title", "data-monitor-source-detail"]' +
+    '  .map((name) => text(document.querySelector("[" + name + "]")));' +
+    'const bodyText = (document.body.innerText || "");' +
+    /*
+     * **不能只找「离线」两个字**：设备状态那一列本来就会写「离线」（`devices.status.offline`），
+     * 而这一条要守的是**那条弹窗的正文**。所以逐个找那几句被删掉的整句，
+     * 外加"某个 IP + 离线"这种形状（弹窗的第一句是 `{ip} 离线`）。
+     */
+    'out.bodyBannedSentences = [' +
+    '  "还没有收到过这台设备的任何数据",' +
+    '  "以下是最后一次收到的内容",' +
+    '  "设备在线，正在等待它推数据",' +
+    '  "数据已停止更新",' +
+    '  "已停止（最后一帧"' +
+    '].filter((sentence) => bodyText.indexOf(sentence) >= 0);' +
+    'out.bodyHasIpOffline = /(\\d{1,3}\\.){3}\\d{1,3}\\s*离线/.test(bodyText);' +
+    'out.bodyHasOfflineSentence = out.bodyBannedSentences.length > 0 || out.bodyHasIpOffline;' +
     'out.badgePresent = !!document.querySelector("[data-monitor-stale-badge]");' +
     'out.badgeText = text(document.querySelector("[data-monitor-stale-badge]"));' +
-    'out.contentFlag = banner ? banner.getAttribute("data-monitor-content") : null;' +
+    'out.allOffline = devices.every((d) => d.status !== "ONLINE");' +
+    // 页面本身照常在（"撤掉那条提示"不该顺手把这一页弄坏）。
+    'out.pageAlive = !!document.querySelector(".page");' +
+    'out.hasTrendPanel = document.querySelectorAll(".trend-panel").length > 0;' +
     'return JSON.stringify(out);' +
     '})()', 90_000)
   log('monitor offline: ' + JSON.stringify(monitorOffline))
 
   if (monitorOffline.reason === 'no-device') {
     problems.push('监测页离线提示探针：库里一台设备都没有，这一条没验证到')
-  } else if (!monitorOffline.bannerPresent) {
-    problems.push('监测页没有"没有活数据"的提示条（[data-monitor-source-banner]）')
   } else {
-    if (monitorOffline.allOffline && monitorOffline.state !== 'device-offline') {
+    /*
+     * 这一条现在是**反向断言**（第 13 批第 1 条把那条弹窗撤掉了）。
+     * `allOffline` 用来证明"这一条不是因为没有离线设备才过的"：库里那几台确实都离线，
+     * 而屏幕上就是不该有那条提示。
+     */
+    if (monitorOffline.bannerCount !== 0) {
       problems.push(
-        '设备离线时提示条的状态不是 device-offline：' + JSON.stringify(monitorOffline.state)
+        '监测页又出现了那条"没有活数据"的弹窗（' + monitorOffline.bannerCount +
+          ' 个）—— 业主第 13 批第 1 条说这个内容不用显示'
       )
     }
-    if (!monitorOffline.titleHasAnIp) {
+    if (String(monitorOffline.bannerTexts?.[0] || '').trim() !== '' ||
+        String(monitorOffline.bannerTexts?.[1] || '').trim() !== '') {
+      problems.push('那条弹窗的正文还在页面上：' + JSON.stringify(monitorOffline.bannerTexts))
+    }
+    if (monitorOffline.bodyHasOfflineSentence) {
       problems.push(
-        '离线提示条里没有任何一台设备的 IP：原文 ' + JSON.stringify(monitorOffline.title) +
-          '，库里的地址 ' + JSON.stringify(monitorOffline.ips)
+        '页面正文里仍然找得到那条弹窗的正文（换了个地方显示也算没撤掉）：' +
+          JSON.stringify({
+            sentences: monitorOffline.bodyBannedSentences,
+            ipOffline: monitorOffline.bodyHasIpOffline
+          })
       )
     }
-    if (!String(monitorOffline.detail || '').trim()) {
-      problems.push('离线提示条没有说明"有没有上次内容"')
+    if (monitorOffline.pageAlive !== true) {
+      problems.push('撤掉那条提示之后页面本身没渲染出来')
+    }
+    if (monitorOffline.allOffline !== true) {
+      log('monitor offline: 注意 —— 库里不全是离线设备，这一条只验了"没有那条弹窗"')
     }
     /*
-     * 角标与那一份内容**必须一致**：有上次内容时必须有角标，没有时**不许有**
-     * （一台从没推过数据的设备上挂着「上次内容」就是在说一件不存在的事）。
+     * 角标与内容一致这条断言随提示条一起撤了：那个内容标记（`data-monitor-content`）
+     * 原来挂在提示条上，提示条没了它也没了。角标本身留了一条弱断言：
+     * 从没推过数据时不许出现（这一份 operator 库里那几台都没推过）。
      */
-    const showsLast = monitorOffline.contentFlag === 'last'
-    if (showsLast !== monitorOffline.badgePresent) {
-      problems.push(
-        '「上次内容」角标与屏幕上的内容对不上：内容标记 ' +
-          JSON.stringify(monitorOffline.contentFlag) + '，角标 ' + monitorOffline.badgePresent
-      )
+    if (monitorOffline.badgePresent && !String(monitorOffline.badgeText || '').includes('上次')) {
+      problems.push('「上次内容」角标上的字不对：' + JSON.stringify(monitorOffline.badgeText))
     }
   }
 

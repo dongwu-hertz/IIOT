@@ -20,9 +20,7 @@ import { describe, it } from 'node:test'
 
 import {
   MONITOR_STALE_AFTER_MS,
-  MONITOR_SOURCE_MESSAGE_KEYS,
   monitorShowsLastContent,
-  monitorSourceMessageKey,
   monitorSourceState,
   monitorStaleBadgeKey,
   monitorUsesLastContent,
@@ -37,6 +35,21 @@ const projectRoot = path.resolve(__dirname, '..', '..')
 
 function read(relative: string): string {
   return fs.readFileSync(path.join(projectRoot, relative), 'utf8')
+}
+
+/**
+ * 去注释那一份源码（HTML 注释 / 块注释 / 整行 `//`）。
+ *
+ * 反向断言（"某个键还在不在"）必须读它：这一轮的注释里**点名写了被删掉的键**
+ * （"提示条那个键（sourceMessageKey）在……删掉了"），第一版就是被自己的注释绊红的。
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n')
 }
 
 const CATALOGUES: Record<string, { monitorUi: Record<string, unknown> }> = {
@@ -169,17 +182,13 @@ describe('六档状态：没有活数据时到底在说什么', () => {
     }
   })
 
-  it('每一档的提示条与角标键：实时/无设备不说话，其余都要说', () => {
-    for (const state of ALL_STATES) {
-      const key = monitorSourceMessageKey(state)
-      assert.equal(key, MONITOR_SOURCE_MESSAGE_KEYS[state])
-      if (state === 'live' || state === 'no-device') {
-        assert.equal(key, null, `${state} 不该有提示条`)
-      } else {
-        assert.ok(String(key).startsWith('monitorUi.'), `${state} 的提示条键不对：${key}`)
-      }
-    }
-    // 角标只有"不是实时"的那三档才有。
+  it('角标键：只有"不是实时"的那三档才标"上次内容"', () => {
+    /*
+     * **提示条那一组断言在 2026-09-19 第 13 批第 1 条删掉了**：业主说那条弹窗
+     * 「（192.168.110.90 离线 还没有收到过这台设备的任何数据）这个内容不用显示」，
+     * 提示条整个撤掉，它的正文键（`offlineBanner` / `waitingBanner` / `staleBanner` /
+     * `stoppedBanner`）也从四本目录里删了。角标留着并继续断言 —— 它说的是另一件事。
+     */
     assert.equal(monitorStaleBadgeKey('live'), null)
     assert.equal(monitorStaleBadgeKey('waiting'), null)
     assert.equal(monitorStaleBadgeKey('no-device'), null)
@@ -249,12 +258,24 @@ describe('上次内容：只对**同一个来源**、而且只在没有活数据
  */
 describe('监测 store：接线（源码守卫）', () => {
   const store = read('src/renderer/src/stores/monitor.ts')
+  /*
+   * 两份读法：`store` 原样（要看到全文件），`storeCode` 去注释。
+   * 「某个键还在不在」这类**反向**断言必须读去注释那一份 —— 我在注释里点名写了
+   * 被删掉的键（"提示条那个键（sourceMessageKey）在……删掉了"），第一版就是被自己的
+   * 注释绊红的。
+   */
+  const storeCode = stripComments(store)
 
   it('状态判据只有一处：用的是共享层那两个纯函数', () => {
     assert.match(store, /monitorSourceState\(\{/, '没有用共享层的状态机')
     assert.match(store, /monitorUsesLastContent\(\{/, '没有用共享层那一句"该不该显示上次内容"')
-    assert.match(store, /monitorSourceMessageKey\(sourceState\.value\)/, '提示条键没有跟状态走')
     assert.match(store, /monitorStaleBadgeKey\(sourceState\.value\)/, '角标键没有跟状态走')
+    // 提示条那个键（`sourceMessageKey`）在第 13 批第 1 条之后不该再出现。
+    assert.equal(
+      /sourceMessageKey/.test(storeCode),
+      false,
+      'store 里还留着已删掉的提示条键'
+    )
   })
 
   it('清缓冲之前先把这一份存成"上次内容"（键是清除那一刻的设备与通道）', () => {
@@ -293,13 +314,25 @@ describe('监测 store：接线（源码守卫）', () => {
 
 describe('界面接线（源码守卫）', () => {
   const view = read('src/renderer/src/views/MonitorView.vue')
+  /** 去注释那一份（反向断言读它，理由同 store 那一节）。 */
+  const viewCode = stripComments(view)
 
-  it('提示条**带 IP**、带状态钩子，而且"有没有上次内容"分两句说', () => {
-    assert.ok(view.includes('data-monitor-source-banner'), '没有提示条')
-    assert.match(view, /t\('monitorUi\.offlineBanner', \{ ip: selectedDevice\.ip \}\)/, '提示条没带 IP')
-    assert.ok(view.includes('data-monitor-source-state'), '提示条上没有状态钩子')
-    assert.ok(view.includes('data-monitor-source-detail'), '提示条没有"上次内容"那一句')
-    assert.match(view, /t\('monitorUi\.offlineNoContent'\)/, '从来没有数据那种情况没有说法')
+  it('那条"没有活数据"的提示条**不在界面上了**（第 13 批第 1 条的原话）', () => {
+    /*
+     * 业主 2026-09-19：「实时监测里面如果有告警弹窗（192.168.110.90 离线 还没有收到过这台设备的
+     * 任何数据）这个内容不用显示」。括号里那两句就是这条提示条在"离线且从来没收到过数据"时的正文，
+     * 所以判据是**整条都不在**，而不是"换一句话"。
+     */
+    assert.equal(
+      viewCode.includes('data-monitor-source-banner'),
+      false,
+      '那条提示条又回到界面上了（第 13 批第 1 条已撤掉）'
+    )
+    for (const key of ['offlineBanner', 'offlineNoContent', 'staleBanner', 'stoppedBanner']) {
+      assert.equal(viewCode.includes(key), false, `视图里还引用着已删掉的 ${key}`)
+    }
+    // 「上次内容」角标留着（它说的是"你正在看的这份数据是什么"，不是那条弹窗）。
+    assert.ok(viewCode.includes('data-monitor-stale-badge'), '"上次内容"角标被顺手删掉了')
   })
 
   it('设备状态是**注入**进 store 的（store 不持有设备列表）', () => {
@@ -326,43 +359,35 @@ describe('界面接线（源码守卫）', () => {
       '角标没有跟"这份内容真的存在"绑在一起'
     )
     assert.match(view, /monitor\.staleBadgeKey/, '角标没有跟状态走')
-    // 提示条上那个内容标记（探针用它断言"角标与内容一致"）。
-    assert.match(
-      view,
-      /:data-monitor-content="monitor\.content\.fromLastContent \? 'last' : 'live'"/,
-      '提示条上没有内容标记'
-    )
   })
 
-  it('八条新文案四语言齐全，占位符一致', () => {
-    const KEYS = [
-      'offlineBanner',
-      'offlineNoIp',
-      'offlineLastContent',
-      'offlineNoContent',
-      'waitingBanner',
-      'staleBanner',
-      'stoppedBanner',
-      'staleBadge'
-    ]
+  it('留下的那条文案四语言齐全（删掉的那七条必须真的不在目录里）', () => {
+    /*
+     * 第 13 批第 1 条之后这一组只剩「上次内容」一条。判据两头都钉：
+     *   ① 留下的那条四语言都在；
+     *   ② 被删掉的那七条**四语言都不在** —— 留着就是死键，而"删了代码忘了删词条"
+     *      会让下一个人以为界面上还有那条提示。
+     */
     for (const locale of Object.keys(CATALOGUES)) {
-      for (const key of KEYS) {
-        const value = CATALOGUES[locale]!.monitorUi[key]
-        assert.equal(typeof value, 'string', `${locale} 缺 monitorUi.${key}`)
-        assert.ok(String(value).trim() !== '', `${locale} 的 ${key} 是空的`)
-      }
-    }
-    for (const locale of ['en', 'es', 'tr']) {
-      for (const key of ['offlineBanner', 'offlineLastContent', 'staleBanner', 'stoppedBanner']) {
-        assert.deepEqual(
-          (String(CATALOGUES[locale]!.monitorUi[key]).match(/\{(\w+)\}/g) ?? []).sort(),
-          (String(CATALOGUES['zh-CN']!.monitorUi[key]).match(/\{(\w+)\}/g) ?? []).sort(),
-          `${locale} 的 ${key} 占位符与中文不一致`
+      const value = CATALOGUES[locale]!.monitorUi.staleBadge
+      assert.equal(typeof value, 'string', `${locale} 缺 monitorUi.staleBadge`)
+      assert.ok(String(value).trim() !== '', `${locale} 的 staleBadge 是空的`)
+      for (const key of [
+        'offlineBanner',
+        'offlineNoIp',
+        'offlineLastContent',
+        'offlineNoContent',
+        'waitingBanner',
+        'staleBanner',
+        'stoppedBanner'
+      ]) {
+        assert.equal(
+          CATALOGUES[locale]!.monitorUi[key],
+          undefined,
+          `${locale} 目录里还留着已删掉的 monitorUi.${key}`
         )
       }
     }
-    // 中文那条提示必须**真的带 IP 占位符**（这一条是业主那句话的落点）。
-    assert.ok(String(CATALOGUES['zh-CN']!.monitorUi.offlineBanner).includes('{ip}'))
     assert.ok(String(CATALOGUES['zh-CN']!.monitorUi.staleBadge).includes('上次'))
   })
 })

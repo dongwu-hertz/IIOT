@@ -524,13 +524,7 @@ export const es: MessageSchema = {
     playbackEmpty:
       'Aún no hay grabaciones de este dispositivo en este equipo (las grabaciones manuales y los vídeos de detección descargados del dispositivo aparecen aquí)',
     sampleRate: 'Frecuencia de muestreo',
-    offlineBanner: '{ip} está desconectado',
-    offlineNoIp: 'El equipo seleccionado está desconectado',
-    offlineLastContent: 'Abajo está el último contenido recibido ({time})',
-    offlineNoContent: 'Nunca se han recibido datos de este equipo',
-    waitingBanner: 'El equipo está en línea; esperando sus datos…',
-    staleBanner: 'Los datos han dejado de actualizarse (última trama {time})',
-    stoppedBanner: 'Detenido (última trama {time})',
+    // Las claves del aviso «sin datos en vivo» se eliminaron en el lote 13, punto 1 (véase §15.78).
     staleBadge: 'Último contenido',
     waitingFeatures: 'Esperando tramas de características en vivo…',
     waitingSpectrum: 'Esperando tramas de espectro…',
@@ -987,6 +981,10 @@ export const es: MessageSchema = {
     errPassword: 'Introduzca la contraseña de acceso',
     errAddFailed: 'No se pudo añadir el equipo',
     defaultPort: 'Normalmente 80',
+    // «Información de dirección» contraída por defecto (lote 13, punto 2).
+    installationEmpty: 'Sin rellenar',
+    installationPoint: 'Punto {latitude}, {longitude}',
+    installationPartial: 'Rellenado solo en parte',
     noResponseTitle: 'El equipo no respondió',
     noResponseBody: 'La dirección es accesible pero no devolvió información de equipo que este sistema reconozca. Compruebe la IP, el puerto y el modelo del equipo.',
     probeSuccess: 'Conexión correcta',
