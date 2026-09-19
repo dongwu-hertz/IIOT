@@ -81,6 +81,11 @@ import {
   type CameraLiveState
 } from '@shared/domain/camera-live'
 import type { Fa371RtspUrlCandidate, Fa371VideoConfig } from '@shared/domain/fa371'
+import {
+  isManualRtspId,
+  maskRtspUrl,
+  parseManualRtspUrl
+} from '@shared/domain/rtsp-source'
 import { buildRtspUrlCandidates } from '../device/fa371/mappers'
 import { deviceLog } from '../logging/logger'
 import {
@@ -146,31 +151,12 @@ export function buildLoopbackUrl(port: number, token: string): string {
 /**
  * Hide any password before an RTSP URL reaches a log file or the UI.
  *
- * `buildRtspUrlCandidates` puts the device account in the URL for its second
- * candidate, and that URL is genuinely useful to display (it is the address the
- * camera answers on) — but the password must not be readable in the app log or on
- * screen. The username is kept: it is not a secret and it is what an operator checks.
- *
- * Parsed rather than regex-replaced because a password may itself contain `@`
- * (`Hz@123456` is the factory password), which makes `user:pass@host` ambiguous to a
- * lazy pattern — an earlier version of this function leaked the tail of the password
- * after the mask. The host boundary is the LAST `@` in the authority, and the user's
- * boundary is the FIRST `:` in the userinfo.
+ * **实现在共享层**（`@shared/domain/rtsp-source.ts`）：手填的第三方 RTSP 源同样要有这一条，
+ * 而它在渲染层显示（列表里那一行）与主进程记日志两条路上都要用。两份实现是这类
+ * "打码"函数最典型的退化方式（改了一处、漏了另一处，而漏的那处就是明文口令）。
+ * 这里**重新导出**，所以既有调用方与测试的 import 路径不变。
  */
-export function maskRtspUrl(url: string): string {
-  const parts = /^(rtsp[s]?:\/\/)([^/]*)([\s\S]*)$/i.exec(url)
-  if (!parts) return url
-  const scheme = parts[1] ?? ''
-  const authority = parts[2] ?? ''
-  const rest = parts[3] ?? ''
-  const at = authority.lastIndexOf('@')
-  if (at < 0) return url
-  const userinfo = authority.slice(0, at)
-  const host = authority.slice(at + 1)
-  const colon = userinfo.indexOf(':')
-  if (colon < 0) return url
-  return `${scheme}${userinfo.slice(0, colon)}:***@${host}${rest}`
-}
+export { maskRtspUrl } from '@shared/domain/rtsp-source'
 
 /**
  * 一台相机当前**可用**的 RTSP 源。
@@ -968,6 +954,95 @@ export class RtspStreamService {
       mode,
       rtspUrl: maskedPrimary
     })
+    return session.snapshot()
+  }
+
+  /**
+   * Start the live view for a **hand-typed** RTSP address (业主 2026-09-19 第 3 条：
+   * 「能手填一个 RTSP 地址给第三方相机」).
+   *
+   * 与 `start(deviceId)` 分开而不是给它加一个分支：两者能问到的**事实**完全不同 ——
+   * `start()` 会问设备要 `GET /system/video`（于是 `rtsp_enabled = 0` 能让它给出
+   * "相机的 RTSP 服务关着"这种可执行的指令），而一个第三方地址我们除了字符串什么都没有。
+   * 合成一个方法就意味着里面每一步都要先判断"这次有没有设备可问"，而那正是最容易漏判的地方。
+   *
+   * 仍然复用同一套会话、并发预算与状态快照：手填源也是本机的一路 ffmpeg，
+   * 不额外占预算才怪。`sourceId` 由界面给（`rtsp:<32 位十六进制>`），它就是会话的键。
+   */
+  async startManual(
+    sourceId: string,
+    url: string,
+    mode: CameraLiveMode = 'remux'
+  ): Promise<CameraLiveState> {
+    if (this.disposed) throw new AppError(ErrorCodes.UNKNOWN, '相机实时视频服务已释放')
+    if (!isManualRtspId(sourceId)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `手填 RTSP 源的 id 形状不对: ${sourceId}`)
+    }
+    const parsed = parseManualRtspUrl(url)
+    if (!parsed.ok) {
+      // 形状错在界面上就已经拦过一次；这里再拦一次是因为这条通道也能被别处调用，
+      // 而"一句可读的拒绝"比 ffmpeg 超时之后那句 Invalid data 有用得多。
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `RTSP 地址不可用（${parsed.issue}）`)
+    }
+
+    const maskedPrimary = maskRtspUrl(parsed.url)
+    const probe = await this.probeImpl()
+    if (!probe.ok) {
+      this.stop(sourceId)
+      return {
+        deviceId: sourceId,
+        status: 'ffmpeg-missing',
+        error: probe.error ?? '内置 ffmpeg 不可用',
+        rtspUrl: maskedPrimary,
+        mode
+      }
+    }
+
+    this.stop(sourceId)
+
+    const maxStreams = this.maxConcurrentStreams()
+    const activeStreams = this.activeStreamCount()
+    if (cameraStreamLimitReached(activeStreams, maxStreams)) {
+      deviceLog().warn('Camera live (manual): refused because the concurrency budget is full', {
+        sourceId,
+        activeStreams,
+        maxStreams,
+        mode
+      })
+      return {
+        deviceId: sourceId,
+        status: 'limit-exceeded',
+        error: cameraStreamLimitMessage(activeStreams, maxStreams),
+        rtspUrl: maskedPrimary,
+        mode
+      }
+    }
+
+    const session = new CameraLiveSession({
+      deviceId: sourceId,
+      attempts: [
+        {
+          index: 1,
+          candidateId: 'manual',
+          url: parsed.url,
+          label: `manual ${maskedPrimary}`,
+          mode
+        }
+      ],
+      spawnFfmpeg: this.spawnImpl,
+      firstByteTimeoutMs: this.firstByteTimeoutMs,
+      rtspUrl: maskedPrimary
+    })
+
+    try {
+      await session.listen()
+    } catch (error) {
+      session.stop()
+      throw AppError.from(error, ErrorCodes.NETWORK_ERROR)
+    }
+
+    this.sessions.set(sourceId, session)
+    deviceLog().info('Camera live (manual): started', { sourceId, mode, rtspUrl: maskedPrimary })
     return session.snapshot()
   }
 

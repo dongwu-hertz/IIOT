@@ -1526,30 +1526,58 @@ export function registerIpcHandlers(): void {
         requireAdministrator()
         requirePermission('controlCameras')
 
-        if (!input || typeof input.deviceId !== 'string' || input.deviceId === '') {
-          throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少设备 ID')
-        }
-        const mode = input.mode ?? 'remux'
+        const mode = input?.mode ?? 'remux'
         if (mode !== 'remux' && mode !== 'transcode') {
-          throw new AppError(ErrorCodes.VALIDATION_ERROR, `未知的视频模式: ${String(input.mode)}`)
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, `未知的视频模式: ${String(input?.mode)}`)
+        }
+
+        /*
+         * 两种来源**恰好给一个**（业主 2026-09-19 第 3 条：手填 RTSP 地址给第三方相机）。
+         *
+         * 两个都给是调用方在猜"以哪个为准"，两个都不给没有可拉的源 —— 两条都要当场拒掉，
+         * 而不是让后面某一步悄悄按其中一个跑。
+         */
+        const wantsManual = typeof input?.url === 'string' && input.url.trim() !== ''
+        const wantsDevice = typeof input?.deviceId === 'string' && input.deviceId.trim() !== ''
+        if (wantsManual === wantsDevice) {
+          throw new AppError(
+            ErrorCodes.VALIDATION_ERROR,
+            wantsManual ? 'deviceId 与 url 只能给一个' : '缺少设备 ID 或手填的 RTSP 地址'
+          )
         }
 
         const services = getServices()
+
+        if (wantsManual) {
+          const sourceId = typeof input?.sourceId === 'string' ? input.sourceId : ''
+          const state = await services.cameraLive.startManual(sourceId, String(input?.url), mode)
+          // 日志里只写打码之后的地址（`state.rtspUrl` 已经由服务打码）。
+          appLog().info('Camera live view requested (manual RTSP source)', {
+            sourceId,
+            mode,
+            status: state.status,
+            rtspUrl: state.rtspUrl,
+            actor: actor()
+          })
+          return state
+        }
+
         // Fail loudly for a box: this handler opens CAMERA video, and a box has no
         // RTSP service at all. Silently retrying an address that cannot exist is the
         // failure mode that looks like a slow stream.
-        const device = services.devices.get(input.deviceId)
+        const deviceId = String(input?.deviceId)
+        const device = services.devices.get(deviceId)
         if (device.kind !== 'acousticCamera') {
           throw new AppError(
             ErrorCodes.VALIDATION_ERROR,
             '该设备不是声学相机，无法查看相机实时视频',
-            input.deviceId
+            deviceId
           )
         }
 
-        const state = await services.cameraLive.start(input.deviceId, mode)
+        const state = await services.cameraLive.start(deviceId, mode)
         appLog().info('Camera live view requested', {
-          deviceId: input.deviceId,
+          deviceId,
           mode,
           status: state.status,
           url: state.url,

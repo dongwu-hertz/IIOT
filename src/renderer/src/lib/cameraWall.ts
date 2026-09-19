@@ -31,6 +31,12 @@ import {
 // 因此这不会把 `@renderer/*` 拖进本模块的依赖图（见文件头的依赖纪律）
 import { channelState, type ChannelState } from './channelState'
 import { createUniformDivision, validateDivision, type CameraDivision } from './cameraViewDivision'
+import {
+  isManualRtspId,
+  normaliseManualRtspSources,
+  parseManualRtspUrl,
+  type ManualRtspSource
+} from '@shared/domain/rtsp-source'
 
 // ---------------------------------------------------------------------------
 // 分屏档位
@@ -325,6 +331,17 @@ export interface CameraWallModel {
    * 大测试覆盖的文件全都要动一遍。缺省即「统一档位」是它真正的语义
    */
   division?: CameraDivision | null
+  /**
+   * 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条：「能手填一个 RTSP 地址给第三方相机」）。
+   *
+   * 与 `slots` 的关系和"设备"完全一样：`slots` 里存的是**源 id**，设备 id 与
+   * `rtsp:<32 位十六进制>` 两种都在同一个数组里 —— 「这一格到底是什么」由 id 的形状
+   * （`isManualRtspId()`）判断，所以 `buildCameraCells()` 不需要把设备表也传进来。
+   *
+   * 可选（`undefined` = 一条都没有）：既有代码与六十多条测试大量构造模型字面量，
+   * 做成必填会迫使每一处都写一个空数组，收益只是"显式"。
+   */
+  manualSources?: readonly ManualRtspSource[]
 }
 
 /** 一格的渲染模型（`buildCameraCells()` 的产物）
@@ -364,7 +381,8 @@ export function createCameraWallModel(layout: CameraWallLayout = DEFAULT_CAMERA_
     layout,
     slots: Array.from({ length: cameraCellCount(layout) }, () => null),
     audioSlot: null,
-    activeSlot: 0
+    activeSlot: 0,
+    manualSources: []
   }
 }
 
@@ -402,7 +420,22 @@ export function normaliseCameraWallModel(input: unknown): CameraWallModel {
   const activeCandidate = typeof raw.activeSlot === 'number' ? Math.floor(raw.activeSlot) : 0
   const activeSlot = activeCandidate >= 0 && activeCandidate < size ? activeCandidate : 0
 
-  return { layout, slots, audioSlot, activeSlot }
+  const manualSources = normaliseManualRtspSources(raw.manualSources)
+  /**
+   * 槽位里那些**指向不存在的手填源**的 id 必须清掉。
+   *
+   * 与"设备被删掉"同一条规矩：一个指向已经不在列表里的手填源的槽位，只会在墙上得到
+   * 一格永远报错的画面（`buildCameraCells()` 找不到它就只能说"源已删除"）。
+   * 坏输入（旧状态、手改过的对象）在这里被修成一个**永远合法**的模型。
+   */
+  const knownManual = new Set(manualSources.map((source) => source.id))
+  const cleanSlots = slots.map((slot) =>
+    slot !== null && isManualRtspId(slot) && !knownManual.has(slot) ? null : slot
+  )
+  const audioSlotFinal =
+    audioSlot !== null && cleanSlots[audioSlot] !== null ? audioSlot : null
+
+  return { layout, slots: cleanSlots, audioSlot: audioSlotFinal, activeSlot, manualSources }
 }
 
 // ---------------------------------------------------------------------------
@@ -492,7 +525,7 @@ export function setCameraWallLayout(
       : null
   const activeSlot = model.activeSlot < size ? model.activeSlot : 0
 
-  return { model: { layout, slots, audioSlot, activeSlot }, evictedDeviceIds }
+  return { model: { layout, slots, audioSlot, activeSlot, manualSources: model.manualSources }, evictedDeviceIds }
 }
 
 /**
@@ -598,6 +631,86 @@ export function toggleAudioSlot(model: CameraWallModel, index: number): CameraWa
   return setAudioSlot(model, model.audioSlot === index ? null : index)
 }
 
+// ---------------------------------------------------------------------------
+// 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 墙上的手填源列表（缺席就是空表）。
+ *
+ * 所有读的地方都走这一个函数：`model.manualSources` 是可选的，直接在模板里写
+ * `model.manualSources.length` 会在它缺席时炸掉 —— 而"缺席"是既有模型字面量的常态。
+ */
+export function manualSourcesOf(model: CameraWallModel): readonly ManualRtspSource[] {
+  return model.manualSources ?? []
+}
+
+export function manualSourceById(
+  model: CameraWallModel,
+  id: string
+): ManualRtspSource | undefined {
+  return manualSourcesOf(model).find((source) => source.id === id)
+}
+
+/** 加一条手填源；id 重复时**替换**（同一条源被编辑两次不该变成两条）。 */
+export function addManualSource(
+  model: CameraWallModel,
+  source: ManualRtspSource
+): CameraWallModel {
+  const existing = manualSourcesOf(model)
+  const index = existing.findIndex((item) => item.id === source.id)
+  const next =
+    index >= 0
+      ? existing.map((item, at) => (at === index ? source : item))
+      : [...existing, source]
+  return { ...model, manualSources: next }
+}
+
+/**
+ * 编辑一条手填源。
+ *
+ * 地址改坏了就**整条拒绝**（返回原模型）：留在列表里的那一条仍然能用旧地址播，
+ * 而"改成一个坏地址"如果生效，墙上那一格会从能播变成永远报错 —— 编辑不该是破坏性的。
+ */
+export function updateManualSource(
+  model: CameraWallModel,
+  id: string,
+  patch: { name?: string; url?: string }
+): CameraWallModel {
+  const current = manualSourceById(model, id)
+  if (!current) return model
+  const url = patch.url === undefined ? current.url : patch.url.trim()
+  if (!parseManualRtspUrl(url).ok) return model
+  const name = (patch.name ?? current.name).trim()
+  return addManualSource(model, {
+    id,
+    name: name === '' ? current.name : name,
+    url
+  })
+}
+
+/**
+ * 删掉一条手填源：**占用它的格子一起清空**。
+ *
+ * 必须一起清：留着那些槽位就是留着几格指向不存在源的画面（`normaliseCameraWallModel()`
+ * 会把它们当坏输入清掉，但用户点"删除"的那一刻界面必须先自洽）。
+ */
+export function removeManualSource(
+  model: CameraWallModel,
+  id: string
+): { model: CameraWallModel; clearedSlots: number[] } {
+  const clearedSlots: number[] = []
+  model.slots.forEach((slot, index) => {
+    if (slot === id) clearedSlots.push(index)
+  })
+  const slots = model.slots.map((slot) => (slot === id ? null : slot))
+  const audioSlot =
+    model.audioSlot !== null && slots[model.audioSlot] === null ? null : model.audioSlot
+  const manualSources = manualSourcesOf(model).filter((source) => source.id !== id)
+  return { model: { ...model, slots, audioSlot, manualSources }, clearedSlots }
+}
+
+
 /** 标记「当前格」
 */
 export function setActiveSlot(model: CameraWallModel, index: number): CameraWallModel {
@@ -684,6 +797,57 @@ export function buildCameraCells(
 
     const device = byId.get(deviceId)
     if (!device) {
+      /**
+       * 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）。
+       *
+       * 它**不是**"设备被删掉"那种情况，虽然它同样不在设备表里 —— 而"这一格到底是哪一类"
+       * 只由 id 的形状决定（`rtsp:` 前缀）。两者的状态词与能不能播都不一样：
+       * 手填源没有"设备离线"这个概念（它连设备都不是），它的状态只来自本机主进程那一路会话。
+       */
+      if (isManualRtspId(deviceId)) {
+        const source = manualSourceById(model, deviceId)
+        if (!source) {
+          return {
+            ...base,
+            deviceId,
+            deviceName: '',
+            kind: null,
+            deviceStatus: null,
+            status: 'device-removed' as CameraCellStatus,
+            messageKey: CAMERA_CELL_STATUS_KEYS['device-removed'],
+            audio: false
+          }
+        }
+        const manualCommon = {
+          ...base,
+          deviceId,
+          deviceName: source.name,
+          kind: null,
+          deviceStatus: null
+        }
+        const manualState = input.states[deviceId]
+        if (!manualState) {
+          return {
+            ...manualCommon,
+            status: 'idle' as CameraCellStatus,
+            messageKey: CAMERA_CELL_STATUS_KEYS.idle,
+            audio: false
+          }
+        }
+        const manualStatus = cellStatusOfLiveState(manualState)
+        return {
+          ...manualCommon,
+          status: manualStatus,
+          messageKey: CAMERA_CELL_STATUS_KEYS[manualStatus as CameraCellTextStatus],
+          ...(isCameraLiveActive(manualState.status) && manualState.url !== undefined
+            ? { url: manualState.url }
+            : {}),
+          ...(manualState.error !== undefined && manualState.error !== ''
+            ? { messageText: manualState.error }
+            : {}),
+          audio: audibleAt(model, index, manualStatus)
+        }
+      }
       return {
         ...base,
         deviceId,

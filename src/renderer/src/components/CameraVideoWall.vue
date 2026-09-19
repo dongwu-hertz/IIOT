@@ -67,6 +67,7 @@ import {
   type CameraLiveState
 } from '@shared/domain/camera-live'
 import type { Device } from '@shared/domain/models'
+import { isManualRtspId } from '@shared/domain/rtsp-source'
 import {
   buildCameraNvrMenu,
   type CameraNvrAction,
@@ -92,6 +93,7 @@ import CameraAlarmDialog from '@renderer/components/CameraAlarmDialog.vue'
 import CameraCellPicker, {
   type CameraPickerItem
 } from '@renderer/components/CameraCellPicker.vue'
+import ManualRtspDialog from '@renderer/components/ManualRtspDialog.vue'
 import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloadDialog.vue'
 import CameraRecordingPlaybackDialog from '@renderer/components/CameraRecordingPlaybackDialog.vue'
 import LayoutGridIcon from '@renderer/components/LayoutGridIcon.vue'
@@ -300,7 +302,24 @@ async function startCell(cell: CameraCellView): Promise<void> {
 
   setBusy(cell.index, true)
   try {
-    const result = await callApi(() => window.api.cameraLive.start({ deviceId }))
+    /*
+     * 手填的第三方 RTSP 源走 `startManual` 那一支（业主 2026-09-19 第 3 条）：
+     * 它没有设备可问（`GET /system/video` / `rtsp_enabled` 都无从谈起），所以给的是
+     * 那串**原样的地址**。地址从 store 的列表里取，不从这里再传一份 —— 否则"界面上显示
+     * 的地址"与"真的交给 ffmpeg 的地址"会成为两份可能不一致的东西。
+     */
+    const manual = isManualRtspId(deviceId)
+      ? wall.manualSources.find((source) => source.id === deviceId)
+      : undefined
+    if (isManualRtspId(deviceId) && !manual) {
+      wall.applyState({ deviceId, status: 'error', error: t('cameraWallUi.manualMissing') })
+      return
+    }
+    const result = await callApi(() =>
+      window.api.cameraLive.start(
+        manual ? { sourceId: manual.id, url: manual.url } : { deviceId }
+      )
+    )
     if (!result.success) {
       // 一次 IPC 失败仍然是一条可以画出来的状态，而不是沉默的黑格。
       wall.applyState({ deviceId, status: 'error', error: resultMessage(result) })
@@ -371,14 +390,64 @@ const pickerAnchor = ref<ViewportRect | null>(null)
 /** 触发浮层的按钮：关掉之后焦点要还给键盘用户，否则焦点会掉到 `<body>`。 */
 let pickerTrigger: HTMLElement | null = null
 
-/** 浮层里的候选项：与旧的下拉框同一份来源（`optionsForCell()`）。 */
+/** 浮层里的候选项：与旧的下拉框同一份来源（`optionsForCell()`），后面接上**手填源**。 */
 const pickerItems = computed<CameraPickerItem[]>(() => {
   const slot = pickerSlot.value
   if (slot === null) return []
   const cell = cells.value.find((item) => item.index === slot)
   if (!cell) return []
-  return optionsForCell(cell).map((device) => ({ id: device.id, name: device.name }))
+  const cameras = optionsForCell(cell).map((device) => ({ id: device.id, name: device.name }))
+  /*
+   * 手填的第三方 RTSP 源也在这个列表里（业主 2026-09-19 第 3 条）：它们与相机一样是
+   * "可以放进这一格的东西"，所以走同一个选择器 —— 界面上不会出现两套"选一个源进来"。
+   * 名字后面缀一个「手填 RTSP」，否则一个叫「大门」的手填源与一台叫「大门」的相机在列表里
+   * 长得一模一样。
+   */
+  const taken = new Set(
+    wall.model.slots.filter((item, index): item is string => item !== null && index !== cell.index)
+  )
+  const manual = wall.manualSources
+    .filter((source) => !taken.has(source.id))
+    .map((source) => ({
+      id: source.id,
+      name: `${source.name}（${t('cameraWallUi.manualSuffix')}）`
+    }))
+  return [...cameras, ...manual]
 })
+
+/** 手填 RTSP 地址对话框的开关。 */
+const manualDialogOpen = ref(false)
+
+/**
+ * 手填源新增/改完之后：把那一格重启一次。
+ *
+ * 不加这一步，"改地址"在屏幕上就是**没有反应**的 —— 主进程里那一路 ffmpeg 还在读旧地址，
+ * 而界面已经显示新地址了（那是界面在说一件没发生的事）。
+ */
+async function onManualApplied(slot: number): Promise<void> {
+  const cell = cells.value.find((item) => item.index === slot)
+  if (!cell || !cell.deviceId) return
+  await stopCell(cell)
+  await startCell(cell)
+  wall.setNotice(null)
+}
+
+/**
+ * 手填源被删掉之后：把那一路会话**停掉**，并清掉它占过的格。
+ *
+ * 「停会话」这一步不能省：源删了、格子清了，而主进程里那个 ffmpeg 还在读那个地址 ——
+ * 那是一个没人看的进程占着相机有限的连接数（实测被探针抓到：删掉之后
+ * `cameraLive.state()` 里还留着一条 `rtsp:` 会话）。
+ */
+async function onManualRemoved(id: string, slots: number[]): Promise<void> {
+  for (const slot of slots) {
+    releaseVideo(slot)
+    if (wall.audioSlot === slot) wall.setAudio(null)
+  }
+  wall.forgetState(id)
+  await callApi(() => window.api.cameraLive.stop(id))
+  await refreshLimits()
+}
 
 /** 浮层的无障碍名字：空白格是「选择相机」，已经有一台的是「更换相机」。 */
 const pickerLabel = computed(() => {
@@ -1464,6 +1533,20 @@ function cellBadgeClass(cell: CameraCellView): string {
       <span class="muted chart-hint">{{ summaryText }}</span>
 
       <!--
+        手填 RTSP 地址（业主 2026-09-19 第 3 条：「能手填一个 RTSP 地址给第三方相机」）。
+        放在标题行里而不是画面格里：它是一个**新建一个源**的动作，与"哪一格放什么"无关
+        （放进去用的是当前格）。选择器列表末尾也有同一个入口，两处指向同一个对话框。
+      -->
+      <button
+        type="button"
+        class="btn btn--sm"
+        data-action="manual-rtsp-open"
+        @click="manualDialogOpen = true"
+      >
+        {{ t('cameraWallUi.manualOpen') }}
+      </button>
+
+      <!--
         档位控件右对齐（产品要求「切换窗口右对齐」），是标题行**最右边**的元素：
         它后面不再渲染任何东西。图标自己就是标签，所以没有「分屏档位」这行字；
         每个按钮的无障碍名字仍然说得出它是几档（aria-label 与 title），组本身也有
@@ -1746,6 +1829,20 @@ function cellBadgeClass(cell: CameraCellView): string {
       @close="closePicker()"
     />
 
+    <!--
+      手填 RTSP 地址的对话框（业主 2026-09-19 第 3 条）。
+
+      它自己持有表单与列表（增 / 改 / 删），本组件只做两件事：
+        · `applied` → 把那一格**重启**一次（改地址之后旧 ffmpeg 还在读旧地址）；
+        · `removed` → 把被清空的那几格的会话停掉。
+      「进去之后干什么」不在对话框里，与 `CameraCellPicker` 同一条规矩。
+    -->
+    <ManualRtspDialog
+      v-model="manualDialogOpen"
+      :target-slot="wall.activeSlot"
+      @applied="onManualApplied"
+      @removed="onManualRemoved"
+    />
     <!--
       右键菜单与三个对话框：挂在**墙级别**，只画一份。
 

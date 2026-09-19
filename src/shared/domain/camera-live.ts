@@ -53,8 +53,24 @@ export type CameraLiveStatus = (typeof CAMERA_LIVE_STATUSES)[number]
  */
 export type CameraLiveMode = 'remux' | 'transcode'
 
+/**
+ * 一次「开始直播」请求。
+ *
+ * 两种来源**二选一**（业主 2026-09-19 第 3 条把第 10 批第 2 条的 RTSP 那一半钉成
+ * "手填地址给第三方相机"）：
+ *   · `deviceId` —— 已登记的相机，地址由 `GET /system/video` 推出来（含 `rtsp_enabled` 这类
+ *     设备事实可以问）；
+ *   · `url` + `sourceId` —— 手填的第三方地址，本机除了这串字符串什么都不知道。
+ *
+ * `deviceId` 因此由必填变成可选，但**两者必须恰好给一个**：两个都给是调用方在猜，
+ * 两个都不给没有可拉的源。这条判据在 IPC 处理器里（`camera-live:start`）显式检查。
+ */
 export interface CameraLiveStartInput {
-  deviceId: string
+  deviceId?: string
+  /** 手填的 RTSP 地址（`rtsp://` 或 `rtsps://`）。 */
+  url?: string
+  /** 手填源在墙上的稳定 id（`rtsp:<32 位十六进制>`）；给了 `url` 就必须给它。 */
+  sourceId?: string
   /** Defaults to `remux`. */
   mode?: CameraLiveMode
 }

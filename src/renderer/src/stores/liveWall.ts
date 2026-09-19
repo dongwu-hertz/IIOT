@@ -28,6 +28,7 @@ import {
 } from '@shared/domain/camera-live'
 import {
   DEFAULT_CAMERA_WALL_LAYOUT,
+  addManualSource as addManualSourceToModel,
   assignCamera,
   buildCameraCells,
   cameraCellCount,
@@ -38,15 +39,20 @@ import {
   focusSlotForDevice,
   isCameraWallLayout,
   isWallCapableDevice,
+  manualSourceById,
+  manualSourcesOf,
   removeDeviceFromWall,
+  removeManualSource as removeManualSourceFromModel,
   setActiveSlot,
   setAudioSlot,
   setCameraWallLayout,
   toggleAudioSlot,
+  updateManualSource as updateManualSourceInModel,
   type CameraCellStatus,
   type CameraWallLayout,
   type CameraWallModel
 } from '@renderer/lib/cameraWall'
+import { isManualRtspId, type ManualRtspSource } from '@shared/domain/rtsp-source'
 import {
   MAX_CUSTOM_VIEWS,
   bindViewToDevices,
@@ -214,11 +220,55 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
    */
   function placeDevice(slot: number, deviceId: string): { ok: boolean; movedFrom: number | null } {
     const device = deviceList.value.find((item) => item.id === deviceId)
-    if (!isWallCapableDevice(device)) return { ok: false, movedFrom: null }
+    /**
+     * 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）不在设备表里，所以它必须**先**判：
+     * `isWallCapableDevice(undefined)` 会把它当成"不是相机"拒掉，而它明明是一条可用的源。
+     */
+    if (!isManualRtspId(deviceId) && !isWallCapableDevice(device)) {
+      return { ok: false, movedFrom: null }
+    }
+    if (isManualRtspId(deviceId) && !manualSourceById(model.value, deviceId)) {
+      return { ok: false, movedFrom: null }
+    }
     const result = assignCamera(model.value, slot, deviceId)
     model.value = result.model
     clearRefusal()
     return { ok: result.changed, movedFrom: result.movedFrom }
+  }
+
+  // -------------------------------------------------------------------------
+  // 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 手填源列表（模板直接读它）。
+   *
+   * **不写盘**：手填地址里常常带设备口令（`rtsp://user:pass@host/...`），把它落到
+   * localStorage 就是一份明文凭据 —— 而设备凭据走的是操作系统加密的凭据库
+   * （spec 14.1）。为了一面墙的便利去开第二套明文凭据，代价与收益完全不成比例。
+   * 于是它与格子分配一样只在内存里（见文件头"格子分配只在内存里"那一段）。
+   */
+  const manualSources = computed(() => manualSourcesOf(model.value))
+
+  function addManualSource(source: ManualRtspSource): void {
+    model.value = addManualSourceToModel(model.value, source)
+  }
+
+  function updateManualSource(id: string, patch: { name?: string; url?: string }): boolean {
+    const next = updateManualSourceInModel(model.value, id, patch)
+    if (next === model.value) return false
+    model.value = next
+    return true
+  }
+
+  /** 删掉一条手填源：占用它的格子一起清空，并交出需要停掉的会话 id。 */
+  function removeManualSource(id: string): { toStop: string[]; clearedSlots: number[] } {
+    const result = removeManualSourceFromModel(model.value, id)
+    model.value = result.model
+    if (result.clearedSlots.length === 0) return { toStop: [], clearedSlots: [] }
+    forgetState(id)
+    if (model.value.audioSlot === null && audioSlot.value !== null) setAudio(null)
+    return { toStop: [id], clearedSlots: result.clearedSlots }
   }
 
   /** 双击设备树的落点：已经在墙上就回到它那一格，否则空格 / 当前格。 */
@@ -282,8 +332,11 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     slot: number,
     deviceId: string
   ): { allowed: boolean; refusal: CameraCellStatus | null } {
-    const device = deviceList.value.find((item) => item.id === deviceId)
-    if (device?.status === 'OFFLINE') return { allowed: false, refusal: 'device-offline' }
+    // 手填源没有"设备离线"这个概念（它连设备都不是）：可达性只能由 ffmpeg 连一次回答。
+    if (!isManualRtspId(deviceId)) {
+      const device = deviceList.value.find((item) => item.id === deviceId)
+      if (device?.status === 'OFFLINE') return { allowed: false, refusal: 'device-offline' }
+    }
 
     const active = reportedActive.value ?? estimatedActive()
     const permission = cameraCellStartPermission(
@@ -322,6 +375,12 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     const snapshot = [...model.value.slots]
     for (const deviceId of snapshot) {
       if (deviceId === null) continue
+      /**
+       * 手填的 RTSP 源不在设备表里，而"不在设备表里"在这里**恰好**是"设备被删了"的判据。
+       * 不先跳过它，一次设备列表刷新就会把墙上所有手填源当成已删设备清掉 ——
+       * 而它们与设备列表毫无关系（业主 2026-09-19 第 3 条）。
+       */
+      if (isManualRtspId(deviceId)) continue
       const device = list.find((item) => item.id === deviceId)
       if (!device) {
         const result = removeDeviceFromWall(model.value, deviceId)
@@ -457,6 +516,8 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     activeSlot,
     cells,
     summary,
+    /** 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）。 */
+    manualSources,
     // actions
     bindDevices,
     applyStates,
@@ -466,6 +527,9 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     setNotice,
     clearRefusal,
     placeDevice,
+    addManualSource,
+    updateManualSource,
+    removeManualSource,
     slotForDevice,
     clearCell,
     setActive,

@@ -5222,6 +5222,30 @@ GUI 探针 **0 problems**。逐页实测：侧栏地图那一项 = 「地图信�
 2099 年 → 命中 0 条；清空 → 回到 200 条。判据写在 `tests/alarm-center-round.test.ts`
 （"每一格必须显式进 query"）与 `tests/alarm-severity-ui.test.ts`（severity 那一格的写法）。
 
+### 15.64 手填 RTSP 地址给第三方相机（2026-09-19 第 16 轮）
+
+业主原话：「② 能手填一个 RTSP 地址给第三方相机」—— 这是第 10 批第 2 条「支持 RTSP 主动取流」
+那半句的**读法确认**：不是"无条件主动去拉我们管理的设备"（那条路本来就走 `GET /system/video`），
+而是给**第三方相机**手填地址。
+
+| 块 | 实现 | 文件 |
+|---|---|---|
+| 纯规则 | id 形状（`rtsp:` + 32 位十六进制）、地址形状（只 `rtsp(s)://`）、口令打码、默认名字取主机名 | `src/shared/domain/rtsp-source.ts` |
+| 主进程 | `RtspStreamService.startManual(sourceId, url)`：**与设备那条路分开**，复用同一套会话 / 并发预算 / 状态快照；`maskRtspUrl` 现在只有这一处定义（主进程那边重新导出） | `src/main/services/media/rtsp-stream.ts` |
+| IPC | `camera-live:start` 的入参改成「`deviceId` 与 `url`+`sourceId` **恰好给一个**」，两个都给 / 都不给都拒 | `src/main/ipc/handlers.ts`、`src/shared/domain/camera-live.ts` |
+| 墙的模型 | 手填源与设备**共用槽位**（`rtsp:` 前缀区分）；增 / 改 / 删 / 占格 / 规范化清悬空槽位 / 换档位不丢源 | `src/renderer/src/lib/cameraWall.ts` |
+| store | `manualSources` + 四个动作；`syncDevices()` 跳过手填 id（否则一次设备列表刷新会把它们当已删设备清掉）；**不写盘**（地址常带口令） | `src/renderer/src/stores/liveWall.ts` |
+| 界面 | 标题行「手填 RTSP 地址…」+ 对话框（表单 / 列表 / 改 / 删 / 放进当前格）；选择器列表里也列出已有手填源（后缀「手填 RTSP」） | `ManualRtspDialog.vue`、`CameraVideoWall.vue` |
+
+**三条口径**：只判形状不判可达性（连不上时那一格显示 ffmpeg 的原文）；地址只在内存里；
+它没有"设备离线"这个概念（状态只来自本机那一路会话）。
+
+**实测**：见 `docs/UI-VERIFY.md` 第 16 轮 —— 其中探针抓到并修掉了一个真缺陷：
+删掉手填源时没有停主进程那一路会话。
+
+**还没做**：每格的 **4 种视图**（播放 / 1 秒时域图 / 频域图 / 时频谱图）在下 一轮。
+
+
 
 
 

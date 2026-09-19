@@ -1081,6 +1081,143 @@ async function runIotIngestDrill(win, layout) {
   }
 }
 
+/**
+ * 手填 RTSP 地址（业主 2026-09-19 第 3 条：「② 能手填一个 RTSP 地址给第三方相机」）。
+ *
+ * WHY THIS DRILL
+ * 这一条把"视频墙的第 2 条要求"落成一个**具体的入站源**：不是"主动去拉我们管理的设备"，
+ * 而是给第三方相机手填一个地址。它有三件事只有在一个跑起来的应用里才成立：
+ *   1. 标题行里那个入口在，点开是一个**真的对话框**（表单 + 列表）；
+ *   2. 地址的形状判断在**输入的那一刻**就说清楚（`http://…` 被拒，而且不产生一条源）；
+ *   3. 保存之后：列表里多一条、**当前格**里出现这个名字、主进程真的为它起了一路会话。
+ *
+ * 最后把它删掉（**探针改过的状态要还回去**），并读回确认格子回到原来的样子。
+ * 因为它是写探针，所以排在所有只读探针之后（与 IoT 那条同一规矩）。
+ */
+async function runManualRtspDrill(win, layout) {
+  const probeName = '探针手填源'
+  const drill = await layout('/', ('(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const setInput = (el, value) => { if (!el) return false;' +
+    '  el.value = value;' +
+    '  el.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  return true; };' +
+    'const emptyCells = () => document.querySelectorAll(".camera-wall__cell--empty").length;' +
+    'const rows = () => document.querySelectorAll("[data-manual-rtsp-row]").length;' +
+    'const cellWithName = (needle) => [...document.querySelectorAll(".camera-wall__cell")]' +
+    '  .find((cell) => text(cell).includes(needle));' +
+    'const out = {};' +
+    'out.emptyBefore = emptyCells();' +
+    /*
+     * 先把一个**空格**点成当前格：对话框把新源放进"当前格"，而当前格可能是操作员那台相机
+     * 占着的那一格 —— 那样探针就会把人家墙上的相机顶掉（第一版就是这么干的：放进去之后
+     * 空格数没变，因为它替换了唯一那个非空格）。点空格之后，放进去与删掉都能逐个数对上。
+     */
+    'const emptyCell = document.querySelector(".camera-wall__cell--empty");' +
+    'if (emptyCell) { emptyCell.click(); await sleep(200); }' +
+    'out.clickedEmptyCell = !!emptyCell;' +
+    'const open = document.querySelector("[data-action=manual-rtsp-open]");' +
+    'out.openButton = !!open;' +
+    'if (!open) return JSON.stringify(Object.assign(out, { reason: "no-open-button" }));' +
+    'open.click();' +
+    'await sleep(500);' +
+    'const dialog = document.querySelector("[data-manual-rtsp-dialog]");' +
+    'out.dialogPresent = !!dialog;' +
+    'if (!dialog) return JSON.stringify(Object.assign(out, { reason: "no-dialog" }));' +
+    // ① 形状判断：`http://` 必须当场被拒，而且**不产生一条源**。
+    'setInput(document.querySelector("[data-manual-rtsp-name]"), __NAME__);' +
+    'setInput(document.querySelector("[data-manual-rtsp-url]"), "http://127.0.0.1/probe");' +
+    'document.querySelector("[data-action=manual-rtsp-save]").click();' +
+    'await sleep(400);' +
+    'out.invalidError = text(document.querySelector("[data-manual-rtsp-error]"));' +
+    'out.rowsAfterInvalid = rows();' +
+    // ② 合法地址：保存 → 列表 + 当前格
+    'setInput(document.querySelector("[data-manual-rtsp-url]"), "rtsp://127.0.0.1:8554/probe");' +
+    'document.querySelector("[data-action=manual-rtsp-save]").click();' +
+    'await sleep(1200);' +
+    'out.rowsAfterSave = rows();' +
+    'out.rowName = text(document.querySelector("[data-manual-rtsp-row] .manual__name"));' +
+    'out.rowUrl = text(document.querySelector("[data-manual-rtsp-row] .manual__url"));' +
+    'out.cellName = text(cellWithName(__NAME__));' +
+    'out.emptyAfterPlace = emptyCells();' +
+    // ③ 主进程真的为它起了一路（状态里 deviceId 就是那条手填源的 id）。
+    'let session = null;' +
+    'for (let attempt = 0; attempt < 24; attempt += 1) {' +
+    '  const states = await window.api.cameraLive.state();' +
+    '  const list = states && states.success ? states.data : [];' +
+    '  session = (list || []).find((item) => String(item.deviceId).startsWith("rtsp:")) || null;' +
+    '  if (session) break;' +
+    '  await sleep(500);' +
+    '}' +
+    'out.session = session;' +
+    // ④ 删掉它：列表少一条、格子回到空的、会话也要收掉
+    'const remove = dialog.querySelector("[data-action=manual-rtsp-remove]");' +
+    'out.removeButton = !!remove;' +
+    'if (remove) remove.click();' +
+    'await sleep(1200);' +
+    'out.rowsAfterRemove = rows();' +
+    'out.emptyAfterRemove = emptyCells();' +
+    'out.cellGone = !cellWithName(__NAME__);' +
+    'const statesAfter = await window.api.cameraLive.state();' +
+    'const listAfter = statesAfter && statesAfter.success ? statesAfter.data : [];' +
+    'out.sessionsLeft = (listAfter || []).filter((item) => String(item.deviceId).startsWith("rtsp:")).length;' +
+    // 关掉对话框（它盖着整页，后面的截图不该带一个探针开着的窗）
+    'const modal = dialog.closest("[role=dialog]");' +
+    'const closeBtn = modal ? modal.querySelector(".btn--icon") : null;' +
+    'if (closeBtn) closeBtn.click();' +
+    'await sleep(300);' +
+    'out.dialogClosed = !document.querySelector("[data-manual-rtsp-dialog]");' +
+    'return JSON.stringify(out);' +
+    '})()').replace(/__NAME__/g, JSON.stringify(probeName)), 120_000)
+  log('manual rtsp   : ' + JSON.stringify(drill))
+
+  if (!drill.openButton) problems.push('视频墙标题行里没有「手填 RTSP 地址…」入口')
+  if (!drill.dialogPresent) problems.push('点了入口之后没有出现手填对话框（[data-manual-rtsp-dialog]）')
+  if (drill.reason) return
+
+  if (!drill.invalidError) {
+    problems.push('填 http:// 开头的地址没有被当场拒绝（形状判断没生效）')
+  }
+  if (drill.rowsAfterInvalid !== 0) {
+    problems.push('被拒的地址还是产生了一条手填源：' + drill.rowsAfterInvalid)
+  }
+  if (drill.rowsAfterSave !== 1) {
+    problems.push('保存之后手填源列表不是 1 条：' + drill.rowsAfterSave)
+  }
+  if (drill.rowName !== probeName) {
+    problems.push('列表里的名字不是填进去的那个：' + JSON.stringify(drill.rowName))
+  }
+  if (!String(drill.rowUrl || '').includes('rtsp://127.0.0.1:8554/probe')) {
+    problems.push('列表里的地址不对：' + JSON.stringify(drill.rowUrl))
+  }
+  if (!String(drill.cellName || '').includes(probeName)) {
+    problems.push('保存之后当前格里没有出现这条手填源：' + JSON.stringify(drill.cellName))
+  }
+  if (!(drill.emptyAfterPlace === drill.emptyBefore - 1)) {
+    problems.push(
+      '放进一格之后空格数没有少一个：' + drill.emptyBefore + ' → ' + drill.emptyAfterPlace
+    )
+  }
+  if (!drill.session) {
+    problems.push('主进程没有为这条手填源起会话（cameraLive.state() 里没有 rtsp: 开头的项）')
+  }
+  // 删掉之后必须**回到原样**。
+  if (!drill.removeButton) problems.push('列表里没有删除按钮')
+  if (drill.rowsAfterRemove !== 0) {
+    problems.push('删掉之后列表里还剩 ' + drill.rowsAfterRemove + ' 条')
+  }
+  if (drill.emptyAfterRemove !== drill.emptyBefore) {
+    problems.push(
+      '删掉之后空格数没有回到原样：' + drill.emptyAfterRemove + ' vs ' + drill.emptyBefore
+    )
+  }
+  if (!drill.cellGone) problems.push('删掉之后那一格上还留着这个名字')
+  if (drill.sessionsLeft !== 0) {
+    problems.push('删掉之后主进程里还留着 ' + drill.sessionsLeft + ' 路手填会话')
+  }
+}
+
 async function run() {
   await sleep(3500) // let the app create its window and finish loading
   const win = BrowserWindow.getAllWindows()[0]
@@ -6199,6 +6336,14 @@ async function run() {
    * 是为了"读到的每个数字都是探针动手之前的样子"。
    */
   await runIotIngestDrill(win, layout)
+
+  /**
+   * 手填 RTSP 地址（业主 2026-09-19 第 3 条）。
+   *
+   * 也排在最后：它会**新建一条源、放进一格、让主进程起一路 ffmpeg，然后删掉它**。
+   * 排在所有只读探针之后，读到的每个数字才是探针动手之前的样子。
+   */
+  await runManualRtspDrill(win, layout)
 
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)
