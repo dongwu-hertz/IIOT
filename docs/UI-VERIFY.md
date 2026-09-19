@@ -2698,6 +2698,26 @@ IP 地址 / **未确认告警**（有就说条数，没有就明说没有 "没�
 加一层写日志（或 `Object.defineProperty` 记写入栈），并且**同时**在主进程 IPC 入口记一行
 （把 `trends.coverage` 之类也覆盖上）。一次运行就能同时回答"是哪个 ref"与"是不是某个 IPC 回包"。
 
+**c. 写侧取栈做到了"是哪几个 ref"，但还差"谁调用了它"。**
+第三次改用**同步 watcher**（`{ flush: 'sync' }`，回调在 setter 里同步跑）+ `new Error().stack`
+（取 22 帧）。`probe-round47/48.log` 的结果很有信息量：
+
+```
+x11  loading     | TrendsView:769 <- index:2024 <- … <- index:1586
+x6   series      | 同一串
+x6   channelSeries | 同一串
+x6   queriedFrom | 同一串
+x6   queriedTo   | 同一串
+x4   queriedCount| 同一串
+```
+
+- **48 次写入 = 8 次 `runQuery`**（每次写 `loading/queriedFrom/queriedTo/channelSeries/series/queriedCount`
+  这 6 个键，正是 `runQuery` 的两端）—— 所以环里那个"store 写入"**就是 `runQuery`**；
+- 但**栈里没有调用方**：最外一帧是 Vue 的 `triggerEffects` 链，说明这些写入发生在
+  **async 续体**里（`runQuery` 是 `async`，V8 默认不追异步调用栈）。
+- 下一步因此非常明确（也只差这一条）：**`query()` 是同步函数** —— 在它的入口打一行栈，
+  就能直接看到"是谁在反复调 `trends.query()`"（`$onAction` 那条路已经被证否，见上）。
+
 
 
 ### 第 33 轮：卡死的机制查到了"它不在主线程死转"，同时修掉一整组探针漂移
@@ -3638,6 +3658,10 @@ Chromium 打印对话框里选"另存为 PDF"就是 PDF —— 不引依赖、�
     ⚠ 第 35 轮又否掉了另一条路：`$onAction` **不能**用来找写入端（setup store 把读函数也当
     action，上限会被一次渲染吃光）；而且"卡死期间没有 IPC"这句**只对查询成立**
     （`trends.coverage` 那类 IPC 不打 `Trend query complete`）。详见上面「第 35 轮补记」。
+    ✅ 第 35 轮**已经点名到 ref 一级**：48 次写入 = **8 次 `runQuery`**（`loading` /
+    `queriedFrom` / `queriedTo` / `channelSeries` / `series` / `queriedCount` 这 6 个键，
+    每次 6 条）。**只差最后一步**：`query()` 是同步函数，在它入口取一次栈就能看到
+    "是谁在反复调 `trends.query()`"（异步续体里取栈看不到调用方，这一点已经实测确认）。
 56. **第 33/34 轮：③「空区间灰显 + 不可勾选」仍然没有真窗口证据** —— 量它要切到 2000 年那一段，
     而那一步就是卡死那一步。源码守卫与单测是绿的，但真窗口里的读数还是没有。
 57. **第 33/34 轮：C⑤ 的「声压级 Y 轴 0–100」与"多条通道画在同一根轴上"仍然验不到** ——
