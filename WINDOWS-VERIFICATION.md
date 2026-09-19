@@ -172,7 +172,11 @@ npm run dev
 npm run dist:win
 ```
 
-产物在 `release\` 下，形如 `HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`。
+产物在 `release\` 下，形如 `HERTZINNO Acoustic Box Manager-1.0.1-2026-09-19-x64-setup.exe`
+（**版本号 + 发布日期 + 架构**，业主 2026-09-19 第 11 批第 1 条；名字由
+`scripts/release-stamp.cjs` 从 `package.json` 的 `version` / `releaseDate` 拼出，
+每次发布递增第三位并把 `releaseDate` 改成当天 —— 见 `BUILD.md` §4 与
+`docs/Ivms4200-UX-REFERENCE.md` §15.71）。
 
 出包后需要验证：
 

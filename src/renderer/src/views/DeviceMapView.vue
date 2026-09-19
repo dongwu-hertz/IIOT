@@ -4,23 +4,30 @@
  * 第 12 条改名并挪到设备管理之前，第 13/14/17 条重排了这一页的版面）。
  *
  * ---------------------------------------------------------------------------
- * 版面（业主第 13、17 条）
+ * 版面（业主第 13、17 条；**第 11 批第 4、5 条重排了地图区与下方列表**）
  * ---------------------------------------------------------------------------
- *   ① 地图区：**16:9、占满内容宽度**，在最上面；
- *   ② 地图**下方依次**三张列表：设备列表 → 告警列表 → 实时数据列表。
+ *   ① 地图区：**16:9、占满内容宽度**，在最上面，右上角浮着一条半透明的**状态栏**
+ *      （图上 N 台 / 共 M 台 / 在线 K / 离线 J / 未确认告警 P）；
+ *   ② 地图**下方**：左**设备列表**（序号 / 设备名称 / 状态，每页 10 台）+
+ *      右**告警列表**（高度与左边那张卡完全一致）；
+ *   ③ 最后是整幅宽的实时数据列表（分贝 / 平稳度 / 方位）。
  *
- * 业主原话是「GIS 页右侧 16:9 占满宽度地图区」。这一页**没有左栏**（第 5 条之后连设备管理
- * 都没有左栏），所以"右侧"只能读成"内容区里那一块主区域"：地图占满整宽、按 16:9 定高。
- * 这与第 17 条的"地图下方依次…"是同一种版面，而"左边一列 + 右边地图"与"下方三张列表"
- * 合不到一起。**这是我们的读法**，若你要的是左栏版式，回一句就改。
+ * 第 11 批第 4 条点名删掉了地图区上面的三样东西（「图上 N 台 / 共 M 台」那一行读数、
+ * 三个色调的图例与计数、「还没有任何设备录入点位…」那一句），并把那些数字搬进了状态栏；
+ * 第 5 条删掉了「未录入点位设备」那张卡、把设备列表收到三列与半幅宽、并加了翻页。
+ * 冲突逐条写在 `docs/Ivms4200-UX-REFERENCE.md` §15.68/§15.69。
+ *
+ * 这一页**没有左栏**（第 5 条之后连设备管理都没有左栏），所以第 13 条那句"GIS 页右侧"
+ * 只能读成"内容区里那一块主区域"：地图占满整宽、按 16:9 定高。**这是我们的读法**，
+ * 若你要的是左栏版式，回一句就改。
  *
  * ---------------------------------------------------------------------------
  * 三件必须说清楚的事
  * ---------------------------------------------------------------------------
  * 1. **底图是我们自己画的**（`shared/domain/device-map.ts`）。渲染层不联网、仓库里也没有
  *    地图库，所以图上只有经纬度网格与落点，没有街道与建筑。业主选的就是这一条。
- * 2. **没录点位的设备不画在图上**，而是单独列出来：它们不是"在图上的某个位置"，
- *    把它们堆在角落比不画更糟（点一下会以为是别人的点位）。补录入口写在那一句下面。
+ * 2. **没录点位的设备画不在图上**，但它们在**设备列表里**（那份列表是设备表的全部，
+ *    不是"图上的那几台"）—— 状态栏里"图上 N 台 / 共 M 台"两个数不相等时，差额就是它们。
  * 3. **抓图有三种状态，界面分开说**：有图 / 设备上本来就没有（`not-captured`）/
  *    库里记着但文件已不在（`files-gone`）。合成一句"没有图"会让操作员以为同步坏了。
  *
@@ -49,7 +56,7 @@
  * （当时的判断没错，是当时的用词没定）。
  */
 
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { AlarmEvent, Device } from '@shared/domain/models'
@@ -63,6 +70,12 @@ import {
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
 import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
+import {
+  DEVICE_MAP_PAGE_SIZE,
+  clampListPage,
+  listPageCount,
+  listPageSlice
+} from '@renderer/lib/listPaging'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
@@ -184,20 +197,6 @@ const pointText = computed(() => {
 })
 
 /**
- * 一台设备的**点位文字**（设备列表那一列）。
- *
- * 只有经纬度成对时才算一个点位 —— 与图上"要不要画"用的是同一个判据（`isPointComplete`），
- * 所以列表里写着点位的那几台，一定就是图上有标记的那几台。
- */
-function devicePointText(device: Device): string {
-  const installation = device.installation
-  if (!installation || !isPointComplete(installation) || installation.gisLatitude === undefined) {
-    return t('installUi.unset')
-  }
-  return `${installation.gisLatitude}, ${installation.gisLongitude}`
-}
-
-/**
  * 落点的三种色调（业主第 14 条）。
  *
  * 优先级 **告警 > 在线 > 离线**：一台设备可能同时"离线"且"有未确认的告警"，而灰色不传达
@@ -220,11 +219,32 @@ const markerTones = computed<Record<string, 'alarm' | 'online' | 'offline'>>(() 
   return out
 })
 
-/** 图上三种色调各有多少台（图例上直接给数，比只有颜色更有用）。 */
-const toneCounts = computed(() => {
-  const counts = { alarm: 0, online: 0, offline: 0 }
-  for (const tone of Object.values(markerTones.value)) counts[tone] += 1
-  return counts
+/**
+ * 状态栏里的**在线 / 离线台数**（业主 2026-09-19 第 11 批第 4 条）。
+ *
+ * 与落点颜色**故意不是同一套判据**：颜色说的是"这个点在图上报什么"（告警优先），
+ * 而这里问的是"有几台设备在线"——一台离线但有未确认告警的设备不该被算进"在线"。
+ * `UNKNOWN` 归离线：与设备下拉旁边那个灰点同一条口径（绿点会被读成"它在工作"）。
+ */
+const onlineCount = computed(() => devices.devices.filter((device) => device.status === 'ONLINE').length)
+const offlineCount = computed(() => devices.devices.length - onlineCount.value)
+
+/**
+ * 状态栏里的**未确认告警合计**。
+ *
+ * `known: false` 有三种来源：还没读过一次（`alarmFacts` 是空的）、某一台设备的计数读失败
+ * （`-1`）。两种情况都显示「—」，不显示 0 —— 一次 IPC 失败在状态栏上变成"没有告警"
+ * 是最坏的那种谎（与设备表、实时数据列表同一条口径）。
+ */
+const alarmStatus = computed<{ known: boolean; pending: number }>(() => {
+  const list = Object.values(alarmFacts.value)
+  if (list.length === 0) return { known: false, pending: 0 }
+  let pending = 0
+  for (const facts of list) {
+    if (facts.pending < 0) return { known: false, pending: 0 }
+    pending += facts.pending
+  }
+  return { known: true, pending }
 })
 
 function alarmCell(deviceId: string): string {
@@ -266,6 +286,36 @@ function liveSmoothness(deviceId: string): string {
 function liveAzimuth(device: Device): string {
   const azimuth = device.installation?.azimuthDeg
   return azimuth === undefined ? t('installUi.unset') : `${azimuth}°`
+}
+
+/**
+ * 设备列表的**翻页**（业主 2026-09-19 第 11 批第 5 条：默认最多 10 台，超过就翻页）。
+ *
+ * 页码不直接信：`devicePageClamped` 每次都夹进合法区间。设备从 23 台删到 3 台之后，
+ * 原来存的第 5 页必须落回第 1 页 —— 否则屏幕上是一张空表，而数据一条不少。
+ * `pageStart` 是"这一页第一台在总表里的序号"，序号列要的是**总表里的序号**（不是 1..10）。
+ */
+const devicePage = ref(1)
+const devicePageClamped = computed(() =>
+  clampListPage(devicePage.value, devices.devices.length, DEVICE_MAP_PAGE_SIZE)
+)
+const devicePages = computed(() => listPageCount(devices.devices.length, DEVICE_MAP_PAGE_SIZE))
+const pagedDevices = computed(() =>
+  listPageSlice(devices.devices, devicePage.value, DEVICE_MAP_PAGE_SIZE)
+)
+const devicePageStart = computed(() => (devicePageClamped.value - 1) * DEVICE_MAP_PAGE_SIZE)
+
+/** 设备表变短（删设备）时把页码拉回合法区间：`clampListPage` 是唯一的判据。 */
+watch(
+  () => devices.devices.length,
+  (total) => {
+    const clamped = clampListPage(devicePage.value, total, DEVICE_MAP_PAGE_SIZE)
+    if (clamped !== devicePage.value) devicePage.value = clamped
+  }
+)
+
+function goToDevicePage(page: number): void {
+  devicePage.value = clampListPage(page, devices.devices.length, DEVICE_MAP_PAGE_SIZE)
 }
 
 async function loadDeviceAlarmFacts(): Promise<void> {
@@ -505,59 +555,26 @@ onUnmounted(() => {
       -->
       <section class="map-panel" data-map-panel :aria-label="t('app.nav.map')">
         <!--
-          **这一块原来还有一个 `<h3>` 写着页面名**，与顶栏那个标题重复（业主 2026-09-19 更正第 2 条：
-          「地图信息出现了两个标题，可以把第一个删除掉」）。删掉的是**页内**那一个：
-          外层框架的标题栏已经写了页面名（这也是全应用从 2026-09-16 起就有的口径 ——
-          页面内不再画标题），所以页内这一个才是多出来的那一个。
-          牌子上的读数（图上 N 台 / 共 M 台）留着：它不是标题，是这一块的内容。
-          删掉标题之后这一块的无障碍名字改挂在 `<section>` 上（见上面的 `aria-label`）——
-          否则读屏走到这里会只剩下一串数字。
+          **这一块上面原来有三样东西，业主 2026-09-19 第 11 批第 4 条点名全删**：
+            ① 「图上 N 台 / 共 M 台」那一行读数（`mapUi.counts`）；
+            ② 三个色调的图例（有未确认告警 0 / 在线 0 / 离线 0）；
+            ③ 「还没有任何设备录入点位。到「设备管理 → 编辑 → 安装信息」里填经纬度…」那一句
+               （`mapUi.noPoints`）。
+          他要的是「直接显示 GIS 地图的信息，在地图右上角的位置做一个半透明的状态栏，
+          显示当前地图上的设备数量信息，告警信息」—— 数字没有消失，它们搬进了下面那条
+          **半透明状态栏**（`.map-status`），而且是"地图上的状态"而不是"地图前面的一段文字"。
+
+          那两句文案键也跟着从四本目录里删掉了（留着就是死键）。本条与第 10 批第 14 条
+          （图例 + 计数）的冲突逐条写进 `docs/Ivms4200-UX-REFERENCE.md` §15.68。
         -->
-        <div class="section-header">
-          <span class="muted" data-map-counts>
-            {{
-              t('mapUi.counts', {
-                withPoint: layout.markers.length,
-                total: devices.devices.length
-              })
-            }}
-          </span>
-        </div>
 
         <!--
-          图例（第 14 条）：三种颜色各配一句文字与一个数。
-          颜色不单独承载信息 —— 色觉差异下这张图仍然读得出来。
+          「一台点位都没有」不再用一句话解释：状态栏里的「图上 0 台 / 共 N 台」说的就是这件事，
+          而**画布本身照旧画出来**（空的经纬度网格）—— 地图区不该在"还没有点位"时整块消失，
+          那看起来像页面坏了。所以画布的条件是"这一页有设备"，而不是"图上有落点"。
         -->
-        <ul class="map-legend" data-map-legend>
-          <li class="map-legend__item" data-legend-tone="alarm">
-            <span class="map-legend__dot map-legend__dot--alarm" aria-hidden="true"></span>
-            {{ t('mapUi.legendAlarm') }}
-            <span class="muted">{{ toneCounts.alarm }}</span>
-          </li>
-          <li class="map-legend__item" data-legend-tone="online">
-            <span class="map-legend__dot map-legend__dot--online" aria-hidden="true"></span>
-            {{ t('devices.status.online') }}
-            <span class="muted">{{ toneCounts.online }}</span>
-          </li>
-          <li class="map-legend__item" data-legend-tone="offline">
-            <span class="map-legend__dot map-legend__dot--offline" aria-hidden="true"></span>
-            {{ t('devices.status.offline') }}
-            <span class="muted">{{ toneCounts.offline }}</span>
-          </li>
-        </ul>
-
-        <!--
-          「一台点位都没有」与「有设备但都没录点位」是两件事：前者说"这一页还没有数据"，
-          后者说"去设备管理补录"。所以空态用的是 `layout.markers`，不是设备表是不是空的。
-        -->
-        <p v-if="layout.markers.length === 0" class="alert alert--warning" data-map-empty>
-          {{ t('mapUi.noPoints') }}
-        </p>
-        <p v-else class="muted map-panel__hint">{{ t('mapUi.selectHint') }}</p>
-
         <div class="map-canvas-frame" data-map-canvas-frame>
           <svg
-            v-if="layout.markers.length > 0"
             class="map-canvas"
             :viewBox="`0 0 ${CANVAS.width} ${CANVAS.height}`"
             preserveAspectRatio="xMidYMid meet"
@@ -566,8 +583,8 @@ onUnmounted(() => {
             data-map-canvas
           >
             <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" />
-            <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。 -->
-            <g class="map-grid">
+            <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。**没有落点时没有视野**，网格随之缺席。 -->
+            <g v-if="project" class="map-grid">
               <line
                 v-for="latitude in grid.lat"
                 :key="`lat-${latitude}`"
@@ -673,69 +690,153 @@ onUnmounted(() => {
             </dl>
             <p class="muted map-hover__hint">{{ t('mapUi.hoverHint') }}</p>
           </div>
-        </div>
 
-        <!--
-          没录点位的设备**单独列出来**：它们不在图上的任何位置，混进图里会被读成"落点在这里"。
-        -->
-        <div v-if="layout.withoutPoint.length > 0" class="map-missing" data-map-without-point>
-          <p class="muted map-missing__title">
-            {{ t('mapUi.withoutPointTitle', { count: layout.withoutPoint.length }) }}
-          </p>
-          <ul class="map-missing__list">
-            <li v-for="device in layout.withoutPoint" :key="device.id">
-              <RouterLink :to="`/devices/${device.id}`">{{ device.name }}</RouterLink>
-            </li>
-          </ul>
-          <p class="muted map-missing__hint">{{ t('mapUi.withoutPointHint') }}</p>
-        </div>
-      </section>
+          <!--
+            地图**右上角**那条半透明状态栏（业主 2026-09-19 第 11 批第 4 条）。
 
-      <!-- ② 设备列表（业主第 17 条的第一张）。点一行 = 选中，双击 = 进详情。 -->
-      <section class="card map-block" data-map-devices>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('mapUi.devicesTitle') }}</h3>
-          <span class="muted">{{ t('mapUi.devicesCount', { count: devices.devices.length }) }}</span>
-        </div>
-        <table class="table map-table">
-          <thead>
-            <tr>
-              <th scope="col">{{ t('devices.name') }}</th>
-              <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
-              <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
-              <th scope="col">{{ t('mapUi.point') }}</th>
-              <th scope="col" class="map-table__num">{{ t('mapUi.colAlarms') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="device in devices.devices"
-              :key="device.id"
-              class="is-clickable"
-              :class="{ 'map-table__row--active': device.id === selectedId }"
-              :data-map-device-row="device.id"
-              @click="selectDevice(device.id)"
-              @dblclick="openDeviceDetail(device.id)"
+            五个读数，两件事：**地图上的设备数量**（图上 N 台 / 共 M 台 / 在线 K / 离线 J）
+            与**告警信息**（未确认 P 条）。两处口径必须说清楚：
+
+              · 「图上 N 台」只数**落点**（经纬度成对的那几台，`layout.markers`），
+                「共 M 台」数设备表全部 —— 两个数不相等时，差额就是还没录点位的设备；
+              · 在线/离线按**设备自己的状态**数（`ONLINE` 才算在线，`UNKNOWN` 归离线/灰），
+                与落点颜色那套（告警 > 在线 > 离线）不同：那是"这个点在图上报什么"，
+                这是"有几台设备在线"；
+              · 告警数读不到时显示「—」而不是 0（`mapUi.notRead`）——
+                把"没读到"写成 0 会让一次 IPC 失败在状态栏上变成"没有告警"。
+          -->
+          <div
+            class="map-status"
+            role="status"
+            :aria-label="t('mapUi.statusLabel')"
+            data-map-statusbar
+          >
+            <span class="map-status__item" data-map-status-mapped>
+              {{ t('mapUi.statusMapped', { count: layout.markers.length }) }}
+            </span>
+            <span class="map-status__item" data-map-status-total>
+              {{ t('mapUi.statusTotal', { count: devices.devices.length }) }}
+            </span>
+            <span class="map-status__item" data-map-status-online>
+              {{ t('mapUi.statusOnline', { count: onlineCount }) }}
+            </span>
+            <span class="map-status__item" data-map-status-offline>
+              {{ t('mapUi.statusOffline', { count: offlineCount }) }}
+            </span>
+            <span
+              class="map-status__item map-status__item--alarm"
+              data-map-status-alarms
+              :data-map-status-alarm-known="alarmStatus.known ? 'yes' : 'no'"
             >
-              <td>
-                <span class="map-table__tone" :class="`map-table__tone--${markerTone(device)}`"
-                  :title="t('mapUi.legendAlarm')" aria-hidden="true"></span>
-                {{ device.name }}
-              </td>
-              <td class="muted">{{ t(`domain.deviceKind.${device.kind}`) }}</td>
-              <td>
-                <StatusBadge :status="device.status" :connection-type="device.connectionType" />
-              </td>
-              <td class="mono muted">{{ devicePointText(device) }}</td>
-              <td class="map-table__num">{{ alarmCell(device.id) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p class="muted map-panel__hint">{{ t('mapUi.devicesHint') }}</p>
+              {{
+                t('mapUi.statusAlarms', {
+                  count: alarmStatus.known ? alarmStatus.pending : t('mapUi.notRead')
+                })
+              }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 「点一个标记查看这台设备…」只在**图上有落点**时才有意义。 -->
+        <p v-if="layout.markers.length > 0" class="muted map-panel__hint">{{ t('mapUi.selectHint') }}</p>
       </section>
 
-      <!-- ③ 告警列表（第二张）。抓图与同步都挂在这一段里（它们是这一页原来的能力）。 -->
-      <section class="card map-block" data-map-alarms>
+      <!--
+        ② 左：设备列表（业主第 17 条的第一张）。
+        ③ 右：告警列表（第二张）。**两张卡的高度必须一致**（业主 2026-09-19 第 11 批第 5 条：
+        「告警列表卡片高度应该始终与左侧设备保持一致」），做法见 `.map-split` 的样式注释。
+
+        列表只有三列（同一条：序号 / 设备名称 / 状态 —— 原来还有 设备类型 / 点位 / 未确认告警），
+        而且**点设备名称进详情**；宽度是内容区的一半（「宽度调整为现在的 50%」）。
+        超过 `DEVICE_MAP_PAGE_SIZE`（10）台就翻页 —— 页码由 `lib/listPaging.ts` 的纯函数夹住。
+      -->
+      <div class="map-split" data-map-split>
+        <section class="card map-block map-block--devices" data-map-devices>
+          <div class="section-header">
+            <h3 class="section-title">{{ t('mapUi.devicesTitle') }}</h3>
+            <span class="muted">{{ t('mapUi.devicesCount', { count: devices.devices.length }) }}</span>
+          </div>
+          <table class="table map-table">
+            <thead>
+              <tr>
+                <th scope="col" class="map-table__index">{{ t('devicesUi.indexColumn') }}</th>
+                <th scope="col">{{ t('devices.name') }}</th>
+                <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(device, index) in pagedDevices"
+                :key="device.id"
+                class="is-clickable"
+                :class="{ 'map-table__row--active': device.id === selectedId }"
+                :data-map-device-row="device.id"
+                @click="selectDevice(device.id)"
+                @dblclick="openDeviceDetail(device.id)"
+              >
+                <td class="map-table__index muted">{{ devicePageStart + index + 1 }}</td>
+                <td>
+                  <!--
+                    名字是一个**入口**（业主：点设备名称进设备详情）。用 `<button>` 而不是
+                    `<RouterLink>`：这一行本身也有点击（选中），链接会让"选中"与"跳走"在同一次
+                    点击里打架，而按钮的 `@click.stop` 说得清这里只做跳转这一件事。
+                  -->
+                  <button
+                    type="button"
+                    class="map-table__name"
+                    :title="t('devicesUi.openDetail')"
+                    data-action="map-device-detail"
+                    @click.stop="openDeviceDetail(device.id)"
+                  >
+                    {{ device.name }}
+                  </button>
+                </td>
+                <td>
+                  <StatusBadge :status="device.status" :connection-type="device.connectionType" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 超过一页才出现：10 台以内显示它只是多一行没有用的控件。 -->
+          <div v-if="devicePages > 1" class="map-pager" data-map-pager>
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-action="map-page-prev"
+              :disabled="devicePageClamped <= 1"
+              @click="goToDevicePage(devicePageClamped - 1)"
+            >
+              {{ t('mapUi.pagePrev') }}
+            </button>
+            <span class="muted" data-map-page-status>
+              {{ t('mapUi.pageStatus', { page: devicePageClamped, pages: devicePages }) }}
+            </span>
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-action="map-page-next"
+              :disabled="devicePageClamped >= devicePages"
+              @click="goToDevicePage(devicePageClamped + 1)"
+            >
+              {{ t('mapUi.pageNext') }}
+            </button>
+          </div>
+
+          <p class="muted map-panel__hint">{{ t('mapUi.devicesHint') }}</p>
+        </section>
+
+      <!--
+        ③ 告警列表（第二张）。业主 2026-09-19 第 11 批第 5 条把它放到设备列表的**右侧**，
+        并要求「告警列表卡片高度应该始终与左侧设备保持一致」。抓图与同步仍挂在这一段里。
+      -->
+      <section class="card map-block map-block--alarms" data-map-alarms>
+        <!--
+          这一层是"高度与左边一致"的实现要点（见 `.map-split` 的样式注释）：它**绝对定位**
+          于卡片内部，因此它的内容**不参与**这一行的高度计算 —— 行高只由左边那张设备卡决定，
+          这一张被 `stretch` 拉成同样的高度，内容再多也只在卡片内部滚动。
+        -->
+        <div class="map-block__fill">
         <div class="section-header">
           <h3 class="section-title">{{ t('mapUi.alarmsTitle') }}</h3>
           <span class="muted">
@@ -843,9 +944,11 @@ onUnmounted(() => {
         </template>
 
         <p v-else class="muted">{{ t('mapUi.pickOne') }}</p>
+        </div>
       </section>
+      </div>
 
-      <!-- ④ 实时数据列表（第三张）：分贝 / 稳定度 / 方位。 -->
+      <!-- ④ 实时数据列表（第三张）：分贝 / 平稳度 / 方位。 -->
       <section class="card map-block" data-map-live>
         <div class="section-header">
           <h3 class="section-title">{{ t('mapUi.liveTitle') }}</h3>
@@ -883,11 +986,13 @@ onUnmounted(() => {
 
 <style scoped>
 /*
- * 版面（第 13、17 条）：地图在上、三张列表在下，都是**一列流式**，没有左右分栏。
+ * 版面：地图在上（16:9 占满宽度），下面**左设备列表 / 右告警列表**并排，最后是整幅宽的实时数据列表。
  *
  * 地图那一块是**扁平**的（上/下各一条线，没有卡片内边距）：第 13 条要的是"占满宽度"，
  * 而 `.card` 的左右内边距会让它各缩进 16px —— 那就只是"差不多占满"。
- * 下面三张列表仍然是卡片：业主点名要扁平化的只有设备管理那张表，这里不动别的既有口径。
+ *
+ * 左右分栏是业主 2026-09-19 第 11 批第 5 条给的：「设备列表…宽度调整为现在的 50%。
+ * 右侧位置应该是告警列表。告警列表卡片高度应该始终与左侧设备保持一致。」
  */
 .map-panel,
 .map-block {
@@ -912,6 +1017,61 @@ onUnmounted(() => {
 }
 
 /*
+ * 左设备列表 / 右告警列表。
+ *
+ * **两栏等宽**（业主："宽度调整为现在的 50%"：那一列原来是整幅宽）。
+ *
+ * 「告警卡片高度与左侧一致」是怎么做到的（纯 CSS，没有量盒子、没有 ResizeObserver）：
+ *   1. 网格项默认 `align-items: stretch`，所以两张卡在同一行里本来就被拉成同一高度；
+ *   2. 问题在于**行高由谁决定** —— 内容是 `auto` 时取两者中更高的那个。告警列表可能比
+ *      设备列表长得多（20 条告警 vs 3 台设备），那样行高会被告警那一侧撑开，
+ *      于是"一样高"变成了"一起变高"。
+ *   3. 所以告警卡的内容被放进 `.map-block__fill`：**绝对定位**的元素不参与父级的内容高度计算
+ *      （`.map-block--alarms` 是 `position: relative`），行高因此只由设备卡决定，
+ *      告警卡被 `stretch` 拉成完全一样的高度，内容超出就在卡片内部滚动（`.map-alarms`）。
+ *   4. `min-height` 写在**两张卡上、同一个值**：只有一台设备时设备卡很矮，
+ *      这一条保证两张都至少这么高（否则告警卡会被压成一条缝）。
+ */
+.map-split {
+  /*
+   * `auto-fit` + `minmax(340px, 1fr)`：宽窗口上两栏**各占一半**（业主："宽度调整为现在的 50%"，
+   * 即设备列表从整幅宽收到半幅），窄到放不下两栏时自动落回上下排列 ——
+   * 不写像素断点，与页面其它自适应板子同一种做法。
+   */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  align-items: stretch;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+/* 分栏之后这一行自己不再叠 `margin-top`：间距由 `.map-split` 的 `gap` 管。 */
+.map-split > .map-block {
+  margin-top: 0;
+}
+
+.map-block--devices,
+.map-block--alarms {
+  min-height: 320px;
+}
+
+.map-block--alarms {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+
+.map-block__fill {
+  position: absolute;
+  inset: 0;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
  * 16:9 的那一层（第 13 条）。**比例只在这一处定义**：SVG 的 `viewBox` 是 1280×720，
  * 两处必须一致。用 `aspect-ratio` 而不是 padding 技巧：它让高度真的由宽度算出来，
  * 而"占满宽度"这句话就落在 `width: 100%` 上。
@@ -932,6 +1092,48 @@ onUnmounted(() => {
    */
   position: relative;
   overflow: visible;
+}
+
+/*
+ * 地图**右上角**的半透明状态栏（业主 2026-09-19 第 11 批第 4 条）。
+ *
+ * 三件事：
+ *   1. **半透明**：`color-mix()` 拿主题里的 `--color-bg` 兑 22% 透明。写成两行是为了
+ *      老引擎兜底（前一行不认识时被丢弃，后一行生效）；两种情况下**文字都压在图上**，
+ *      而画布本身是浅色底，所以即使背景没生效也读得清。
+ *   2. `pointer-events: none`：它压在画布右上角，而标记是可点的 —— 状态栏不该挡住任何落点
+ *      （标记都在画布内部，即使有也不该因为一条读数而点不到）。
+ *   3. `z-index: 4`：低于悬停浮层（5），高于画布。
+ */
+.map-status {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 4;
+  pointer-events: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px var(--space-3);
+  max-width: 46%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.78);
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+  backdrop-filter: blur(2px);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.map-status__item {
+  white-space: nowrap;
+}
+
+/* 告警那一项是这条状态栏里唯一"有事"的数：有未确认告警时用危险色。 */
+.map-status__item--alarm[data-map-status-alarm-known='yes'] {
+  color: var(--color-danger);
 }
 
 /*
@@ -1044,59 +1246,84 @@ onUnmounted(() => {
   fill: var(--color-text);
 }
 
-/* 图例 */
-.map-legend {
-  list-style: none;
-  margin: 0 0 var(--space-2);
-  padding: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: 12px;
-}
-
-.map-legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.map-legend__dot,
+/*
+ * 落点色点在列表里的样子。
+ *
+ * **图例已经删掉**（业主 2026-09-19 第 11 批第 4 条：「有未确认告警0在线0离线0」那一条点名删除），
+ * 所以颜色现在只剩两处：地图上的落点，以及实时数据列表每行前面那个带 `title` 的点
+ * （`mapUi.legendAlarm` =「有未确认告警」）。设备列表按第 5 条只留 序号/名称/状态 三列，
+ * 那里不再放色点 —— 那句话因此仍写在点自己的悬停提示里，颜色没有独自承载信息。
+ */
 .map-table__tone {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   display: inline-block;
   flex: none;
+  margin-right: 6px;
+  vertical-align: middle;
 }
 
-.map-legend__dot--alarm,
 .map-table__tone--alarm {
   background: var(--color-danger);
 }
 
-.map-legend__dot--online,
 .map-table__tone--online {
   background: var(--color-success);
 }
 
-.map-legend__dot--offline,
 .map-table__tone--offline {
   background: var(--color-text-tertiary);
-}
-
-.map-table__tone {
-  margin-right: 6px;
-  vertical-align: middle;
 }
 
 .map-table {
   width: 100%;
 }
 
+/* 序号列：业主 2026-09-19 更正第 3 条（设备管理页同款）——「序号下面的数字应该是居中对齐」。 */
+.map-table .map-table__index {
+  text-align: center;
+  white-space: nowrap;
+}
+
 .map-table__num {
   text-align: right;
   white-space: nowrap;
+}
+
+/*
+ * 设备名称是一个入口（点它进设备详情）：看起来仍是一格文字，但指针与 hover 说得出它是可点的。
+ * 这三条与设备管理页那一套 `.devices-table__name--action` 是同一份读法。
+ */
+.map-table__name {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-table__name:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.map-table__name:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* 翻页（第 5 条）：上一页 / 第 N 页 / 下一页，右对齐在设备卡底部。 */
+.map-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
 }
 
 .map-table__row--active {
@@ -1117,24 +1344,14 @@ onUnmounted(() => {
   margin: 0;
 }
 
-.map-missing {
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-2);
-}
-
-.map-missing__title,
-.map-missing__hint {
-  font-size: 11.5px;
-  margin: 0;
-}
-
-.map-missing__list {
-  margin: 4px 0;
-  padding-left: 18px;
-  font-size: 12.5px;
-}
-
+/*
+ * 告警条目列表。
+ *
+ * 与左边设备卡**同高**之后，这一列的高度是定死的（由设备卡决定），所以这里不再写
+ * `max-height: 260px`：那会在高窗口上留出一段空白、在矮窗口上又把卡片顶高。
+ * 改成"占满剩余高度、超出自己滚"（`flex: 1` + `min-height: 0`），配合
+ * `.map-block__fill` 的 flex 列布局 —— 抓图那一块因此在它下面正常占位。
+ */
 .map-alarms {
   list-style: none;
   margin: 0;
@@ -1142,7 +1359,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 

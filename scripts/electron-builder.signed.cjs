@@ -71,6 +71,8 @@ if (!subject && !sha1) {
 module.exports = {
   extends: 'file:electron-builder.yml',
   win: {
+    /** 与离线包同一个文件名（见 `release-stamp.cjs`）：签名与不签名只差签名，不差名字。 */
+    artifactName: require('./release-stamp.cjs').artifactName,
     signtoolOptions: {
       // Selecting by subject/thumbprint keeps the private key wherever the CA put
       // it. Nothing is imported into a .pfx, which is the point of cloud signing.

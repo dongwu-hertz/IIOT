@@ -1094,127 +1094,192 @@ async function runIotIngestDrill(win, layout) {
  * 最后把它删掉（**探针改过的状态要还回去**），并读回确认格子回到原来的样子。
  * 因为它是写探针，所以排在所有只读探针之后（与 IoT 那条同一规矩）。
  */
+/**
+ * 手填 RTSP 地址（第 10 批第 2 条 / 第 11 批第 2 条：管理界面搬到实时监测页）。
+ *
+ * WHY THIS DRILL
+ * 业主 2026-09-19 第 11 批第 2 条把「手填 RTSP 地址」的入口从画面墙搬到了实时监测页。
+ * 这一趟要验的是"搬过去之后整条路还通"，而且三件事分开量：
+ *   ① **实时监测页**：表单 + 列表在这儿；`http://` 当场被拒且不产生源；合法地址保存成一条；
+ *      地址在列表里是**打码**的（口令不能出现在屏幕上）；
+ *   ② **画面墙**（总览页）**仍然用得上**这些源：它出现在某一格的选择器里（带「手填 RTSP」后缀），
+ *      放进一格之后主进程真的为它起了一路会话 —— 这一条同时验了"源活过了页面切换"
+ *      （`clearAll` 以前会把源一起删掉，那是第 11 批带出来的一个真 bug）；
+ *   ③ 回到实时监测页**删掉**它：列表回到 0，主进程里那一路会话也没了。
+ */
 async function runManualRtspDrill(win, layout) {
   const probeName = '探针手填源'
-  const drill = await layout('/', ('(async () => {' +
+  const url = 'rtsp://127.0.0.1:8554/probe'
+
+  // ---- ① 实时监测页：管理界面 -------------------------------------------------
+  const manage = await layout('/monitor', ('(async () => {' +
     'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
     'const setInput = (el, value) => { if (!el) return false;' +
     '  el.value = value;' +
     '  el.dispatchEvent(new Event("input", { bubbles: true }));' +
     '  return true; };' +
-    'const emptyCells = () => document.querySelectorAll(".camera-wall__cell--empty").length;' +
     'const rows = () => document.querySelectorAll("[data-manual-rtsp-row]").length;' +
-    'const cellWithName = (needle) => [...document.querySelectorAll(".camera-wall__cell")]' +
-    '  .find((cell) => text(cell).includes(needle));' +
     'const out = {};' +
-    'out.emptyBefore = emptyCells();' +
-    /*
-     * 先把一个**空格**点成当前格：对话框把新源放进"当前格"，而当前格可能是操作员那台相机
-     * 占着的那一格 —— 那样探针就会把人家墙上的相机顶掉（第一版就是这么干的：放进去之后
-     * 空格数没变，因为它替换了唯一那个非空格）。点空格之后，放进去与删掉都能逐个数对上。
-     */
-    'const emptyCell = document.querySelector(".camera-wall__cell--empty");' +
-    'if (emptyCell) { emptyCell.click(); await sleep(200); }' +
-    'out.clickedEmptyCell = !!emptyCell;' +
-    'const open = document.querySelector("[data-action=manual-rtsp-open]");' +
-    'out.openButton = !!open;' +
-    'if (!open) return JSON.stringify(Object.assign(out, { reason: "no-open-button" }));' +
-    'open.click();' +
-    'await sleep(500);' +
-    'const dialog = document.querySelector("[data-manual-rtsp-dialog]");' +
-    'out.dialogPresent = !!dialog;' +
-    'if (!dialog) return JSON.stringify(Object.assign(out, { reason: "no-dialog" }));' +
-    // ① 形状判断：`http://` 必须当场被拒，而且**不产生一条源**。
+    'out.cardPresent = !!document.querySelector("[data-manual-rtsp-sources]");' +
+    'out.openEntryOnWall = document.querySelectorAll("[data-action=manual-rtsp-open]").length;' +
+    'out.rowsBefore = rows();' +
+    'if (!out.cardPresent) return JSON.stringify(Object.assign(out, { reason: "no-card" }));' +
+    // ①a 形状判断：`http://` 必须当场被拒，而且**不产生一条源**。
     'setInput(document.querySelector("[data-manual-rtsp-name]"), __NAME__);' +
     'setInput(document.querySelector("[data-manual-rtsp-url]"), "http://127.0.0.1/probe");' +
     'document.querySelector("[data-action=manual-rtsp-save]").click();' +
     'await sleep(400);' +
     'out.invalidError = text(document.querySelector("[data-manual-rtsp-error]"));' +
     'out.rowsAfterInvalid = rows();' +
-    // ② 合法地址：保存 → 列表 + 当前格
-    'setInput(document.querySelector("[data-manual-rtsp-url]"), "rtsp://127.0.0.1:8554/probe");' +
+    // ①b 合法地址：保存 → 列表出现一条，地址打码（这里本来就没有口令）
+    'setInput(document.querySelector("[data-manual-rtsp-url]"), __URL__);' +
     'document.querySelector("[data-action=manual-rtsp-save]").click();' +
-    'await sleep(1200);' +
+    'await sleep(500);' +
     'out.rowsAfterSave = rows();' +
     'out.rowName = text(document.querySelector("[data-manual-rtsp-row] .manual__name"));' +
     'out.rowUrl = text(document.querySelector("[data-manual-rtsp-row] .manual__url"));' +
-    'out.cellName = text(cellWithName(__NAME__));' +
-    'out.emptyAfterPlace = emptyCells();' +
-    // ③ 主进程真的为它起了一路（状态里 deviceId 就是那条手填源的 id）。
+    'out.errorAfterSave = text(document.querySelector("[data-manual-rtsp-error]"));' +
+    'return JSON.stringify(out);' +
+    '})()').replace(/__NAME__/g, JSON.stringify(probeName)).replace(/__URL__/g, JSON.stringify(url)), 120_000)
+  log('manual rtsp ① : ' + JSON.stringify(manage))
+
+  if (manage.reason === 'no-card') {
+    problems.push('实时监测页没有第三方相机（手填 RTSP）那张卡（[data-manual-rtsp-sources]）')
+    return
+  }
+  if (manage.openEntryOnWall !== 0) {
+    problems.push(
+      '画面墙上还留着手填入口（[data-action=manual-rtsp-open] 出现 ' + manage.openEntryOnWall + ' 次）'
+    )
+  }
+  if (!manage.invalidError) {
+    problems.push('填 http:// 开头的地址没有被当场拒绝（形状判断没生效）')
+  }
+  if (manage.rowsAfterInvalid !== manage.rowsBefore) {
+    problems.push('被拒的地址还是产生了一条手填源：' + manage.rowsAfterInvalid)
+  }
+  if (manage.rowsAfterSave !== manage.rowsBefore + 1) {
+    problems.push('保存之后手填源列表不是多一条：' + manage.rowsAfterSave)
+  }
+  if (manage.rowName !== probeName) {
+    problems.push('列表里的名字不是填进去的那个：' + JSON.stringify(manage.rowName))
+  }
+  if (!String(manage.rowUrl || '').includes(url)) {
+    problems.push('列表里的地址不对：' + JSON.stringify(manage.rowUrl))
+  }
+
+  // ---- ② 总览页：画面墙的选择器里能找到它，放进一格真的起流 --------------------
+  const place = await layout('/', ('(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const out = {};' +
+    'const empty = document.querySelector(".camera-wall__cell--empty");' +
+    'out.hadEmptyCell = !!empty;' +
+    'if (!empty) return JSON.stringify(Object.assign(out, { reason: "no-empty-cell" }));' +
+    'const add = empty.querySelector(".camera-wall__add");' +
+    'if (!add) return JSON.stringify(Object.assign(out, { reason: "no-add-button" }));' +
+    'add.click();' +
+    'await sleep(700);' +
+    // 源活过了页面切换：它应当在候选里，而且带「手填 RTSP」后缀。
+    'const item = [...document.querySelectorAll("[data-camera-picker-item]")]' +
+    '  .find((node) => text(node).includes(__NAME__));' +
+    'out.pickerHasSource = !!item;' +
+    'out.pickerLabel = item ? text(item) : "";' +
+    'if (!item) return JSON.stringify(Object.assign(out, { reason: "picker-missing-source" }));' +
+    'item.click();' +
+    'await sleep(1500);' +
+    'const cell = [...document.querySelectorAll(".camera-wall__cell")]' +
+    '  .find((node) => text(node).includes(__NAME__));' +
+    'out.cellFound = !!cell;' +
+    'out.viewButtons = cell ? cell.querySelectorAll("[data-action^=cell-view-]").length : 0;' +
+    'out.viewTitle = cell && cell.querySelector("[data-action^=cell-view-]")' +
+    '  ? cell.querySelector("[data-action^=cell-view-]").getAttribute("title") : null;' +
+    /*
+     * 放进格子只是**分配**（相机也一样）：真正起流要按这一格的播放键。
+     * 业主第 11 批第 2 条把管理界面搬到实时监测页之后，"放进去就自动起流"那条路没有了
+     * （它原来是对话框的 `applied` 事件干的），所以探针与操作员现在都走这一颗按钮。
+     */
+    'const play = cell ? cell.querySelector("[data-cell-play]") : null;' +
+    'out.playButton = !!play;' +
+    'if (play) { play.click(); await sleep(1200); }' +
+    // 主进程真的为它起了一路（手填那一支与设备那一支完全分开）。
     'let session = null;' +
     'for (let attempt = 0; attempt < 24; attempt += 1) {' +
     '  const states = await window.api.cameraLive.state();' +
     '  const list = states && states.success ? states.data : [];' +
-    '  session = (list || []).find((item) => String(item.deviceId).startsWith("rtsp:")) || null;' +
+    '  session = (list || []).find((entry) => String(entry.deviceId).startsWith("rtsp:")) || null;' +
     '  if (session) break;' +
     '  await sleep(500);' +
     '}' +
-    'out.session = session;' +
-    // ④ 删掉它：列表少一条、格子回到空的、会话也要收掉
-    'const remove = dialog.querySelector("[data-action=manual-rtsp-remove]");' +
-    'out.removeButton = !!remove;' +
-    'if (remove) remove.click();' +
-    'await sleep(1200);' +
-    'out.rowsAfterRemove = rows();' +
-    'out.emptyAfterRemove = emptyCells();' +
-    'out.cellGone = !cellWithName(__NAME__);' +
-    'const statesAfter = await window.api.cameraLive.state();' +
-    'const listAfter = statesAfter && statesAfter.success ? statesAfter.data : [];' +
-    'out.sessionsLeft = (listAfter || []).filter((item) => String(item.deviceId).startsWith("rtsp:")).length;' +
-    // 关掉对话框（它盖着整页，后面的截图不该带一个探针开着的窗）
-    'const modal = dialog.closest("[role=dialog]");' +
-    'const closeBtn = modal ? modal.querySelector(".btn--icon") : null;' +
-    'if (closeBtn) closeBtn.click();' +
-    'await sleep(300);' +
-    'out.dialogClosed = !document.querySelector("[data-manual-rtsp-dialog]");' +
+    'out.session = session ? { deviceId: session.deviceId, status: session.status } : null;' +
     'return JSON.stringify(out);' +
     '})()').replace(/__NAME__/g, JSON.stringify(probeName)), 120_000)
-  log('manual rtsp   : ' + JSON.stringify(drill))
+  log('manual rtsp ② : ' + JSON.stringify(place))
 
-  if (!drill.openButton) problems.push('视频墙标题行里没有「手填 RTSP 地址…」入口')
-  if (!drill.dialogPresent) problems.push('点了入口之后没有出现手填对话框（[data-manual-rtsp-dialog]）')
-  if (drill.reason) return
+  if (place.reason) {
+    problems.push('把第三方源放上画面墙这一步没法开始：' + place.reason)
+  } else {
+    if (!place.pickerHasSource) {
+      problems.push('画面墙的选择器里没有那条手填源（它没有活过页面切换？）')
+    } else if (!String(place.pickerLabel || '').includes('手填 RTSP')) {
+      problems.push('选择器里那条手填源没有「手填 RTSP」后缀：' + JSON.stringify(place.pickerLabel))
+    }
+    if (!place.cellFound) {
+      problems.push('选了那条手填源之后那一格没有出现它')
+    }
+    if (!place.playButton) {
+      problems.push('那一格上没有播放键（[data-cell-play]）—— 放进去之后没法起流')
+    }
+    if (place.viewButtons !== 1) {
+      problems.push('第三方 RTSP 那一格的视图按钮不是 1 颗（它只有画面）：' + place.viewButtons)
+    }
+    if (!String(place.viewTitle || '').includes('第三方')) {
+      problems.push('第三方 RTSP 那颗按钮没有说明"只有画面"：' + JSON.stringify(place.viewTitle))
+    }
+    if (!place.session) {
+      problems.push('主进程没有为这条手填源起会话（cameraLive.state() 里没有 rtsp: 开头的项）')
+    }
+  }
 
-  if (!drill.invalidError) {
-    problems.push('填 http:// 开头的地址没有被当场拒绝（形状判断没生效）')
+  // ---- ③ 回实时监测页删掉：列表归零、会话收掉、墙上那一格清空 -------------------
+  const remove = await layout('/monitor', ('(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const out = {};' +
+    'out.rowsBefore = document.querySelectorAll("[data-manual-rtsp-row]").length;' +
+    'const remove = document.querySelector("[data-action=manual-rtsp-remove]");' +
+    'out.removeButton = !!remove;' +
+    'if (remove) { remove.click(); await sleep(1200); }' +
+    'out.rowsAfter = document.querySelectorAll("[data-manual-rtsp-row]").length;' +
+    'const states = await window.api.cameraLive.state();' +
+    'const list = states && states.success ? states.data : [];' +
+    'out.sessionsLeft = (list || []).filter((entry) => String(entry.deviceId).startsWith("rtsp:")).length;' +
+    'return JSON.stringify(out);' +
+    '})()'), 120_000)
+  log('manual rtsp ③ : ' + JSON.stringify(remove))
+
+  if (!remove.removeButton) problems.push('管理界面里没有删除按钮')
+  if (remove.rowsBefore !== 1) {
+    problems.push('删除之前列表里不是 1 条：' + remove.rowsBefore)
   }
-  if (drill.rowsAfterInvalid !== 0) {
-    problems.push('被拒的地址还是产生了一条手填源：' + drill.rowsAfterInvalid)
+  if (remove.rowsAfter !== 0) {
+    problems.push('删掉之后列表里还剩 ' + remove.rowsAfter + ' 条')
   }
-  if (drill.rowsAfterSave !== 1) {
-    problems.push('保存之后手填源列表不是 1 条：' + drill.rowsAfterSave)
+  if (remove.sessionsLeft !== 0) {
+    problems.push('删掉之后主进程里还留着 ' + remove.sessionsLeft + ' 路手填会话')
   }
-  if (drill.rowName !== probeName) {
-    problems.push('列表里的名字不是填进去的那个：' + JSON.stringify(drill.rowName))
-  }
-  if (!String(drill.rowUrl || '').includes('rtsp://127.0.0.1:8554/probe')) {
-    problems.push('列表里的地址不对：' + JSON.stringify(drill.rowUrl))
-  }
-  if (!String(drill.cellName || '').includes(probeName)) {
-    problems.push('保存之后当前格里没有出现这条手填源：' + JSON.stringify(drill.cellName))
-  }
-  if (!(drill.emptyAfterPlace === drill.emptyBefore - 1)) {
-    problems.push(
-      '放进一格之后空格数没有少一个：' + drill.emptyBefore + ' → ' + drill.emptyAfterPlace
-    )
-  }
-  if (!drill.session) {
-    problems.push('主进程没有为这条手填源起会话（cameraLive.state() 里没有 rtsp: 开头的项）')
-  }
-  // 删掉之后必须**回到原样**。
-  if (!drill.removeButton) problems.push('列表里没有删除按钮')
-  if (drill.rowsAfterRemove !== 0) {
-    problems.push('删掉之后列表里还剩 ' + drill.rowsAfterRemove + ' 条')
-  }
-  if (drill.emptyAfterRemove !== drill.emptyBefore) {
-    problems.push(
-      '删掉之后空格数没有回到原样：' + drill.emptyAfterRemove + ' vs ' + drill.emptyBefore
-    )
-  }
-  if (!drill.cellGone) problems.push('删掉之后那一格上还留着这个名字')
-  if (drill.sessionsLeft !== 0) {
-    problems.push('删掉之后主进程里还留着 ' + drill.sessionsLeft + ' 路手填会话')
+
+  // ---- ④ 画面墙上不该再留着它（离开那一页时会话已经被收掉，格子也该干净） --------
+  const cleared = await layout('/', ('(async () => {' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'return JSON.stringify({' +
+    '  cellsWithSource: [...document.querySelectorAll(".camera-wall__cell")]' +
+    '    .filter((node) => text(node).includes(__NAME__)).length' +
+    '})' +
+    '})()').replace(/__NAME__/g, JSON.stringify(probeName)), 60_000)
+  log('manual rtsp ④ : ' + JSON.stringify(cleared))
+  if (cleared.cellsWithSource !== 0) {
+    problems.push('删掉之后画面墙上还留着 ' + cleared.cellsWithSource + ' 格手填源')
   }
 }
 
@@ -1297,33 +1362,11 @@ async function runCameraViewDrill(win, layout) {
     'out.chartAfterPlay = !!cell.querySelector("[data-cell-chart]");' +
     'out.playPressed = play ? play.getAttribute("aria-pressed") : null;' +
     /*
-     * 手填 RTSP 那一格只有一颗视图按钮（它连设备都不是，拿不到任何声学通道）。
-     * 这里临时加一条手填源来验，验完删掉 —— 与"手填 RTSP"那条探针同一条路。
+     * 手填 RTSP 那一格只有一颗视图按钮（它连设备都不是，拿不到任何声学通道）这一条
+     * **搬到 `runManualRtspDrill` 里了**（业主第 11 批第 2 条把管理界面挪到实时监测页之后，
+     * 在这一页已经没有"加一条手填源"的入口了）。那一趟本来就要把源放进一格，顺手量同一件事，
+     * 比在这里再造一条源干净。
      */
-    'const openBtn = document.querySelector("[data-action=manual-rtsp-open]");' +
-    'if (openBtn) {' +
-    '  openBtn.click();' +
-    '  await sleep(500);' +
-    '  const urlInput = document.querySelector("[data-manual-rtsp-url]");' +
-    '  urlInput.value = "rtsp://127.0.0.1:8554/view-probe";' +
-    '  urlInput.dispatchEvent(new Event("input", { bubbles: true }));' +
-    '  document.querySelector("[data-action=manual-rtsp-save]").click();' +
-    '  await sleep(1000);' +
-    '  const manualCell = [...document.querySelectorAll(".camera-wall__cell")]' +
-    '    .find((node) => text(node).includes("127.0.0.1:8554"));' +
-    '  out.manualCellFound = !!manualCell;' +
-    '  if (manualCell) {' +
-    '    const manualButtons = [...manualCell.querySelectorAll("[data-action^=cell-view-]")];' +
-    '    out.manualViewButtons = manualButtons.length;' +
-    '    out.manualViewTitle = manualButtons[0] ? manualButtons[0].getAttribute("title") : null;' +
-    '  }' +
-    '  const remove = document.querySelector("[data-action=manual-rtsp-remove]");' +
-    '  if (remove) { remove.click(); await sleep(800); }' +
-    '  const modal = document.querySelector("[data-manual-rtsp-dialog]");' +
-    '  const closeBtn = modal ? modal.closest("[role=dialog]").querySelector(".btn--icon") : null;' +
-    '  if (closeBtn) { closeBtn.click(); await sleep(300); }' +
-    '  out.manualRowsLeft = document.querySelectorAll("[data-manual-rtsp-row]").length;' +
-    '}' +
     'return JSON.stringify(out);' +
     '})()', 120_000)
   log('camera views  : ' + JSON.stringify(drill))
@@ -1379,20 +1422,6 @@ async function runCameraViewDrill(win, layout) {
   }
   if (drill.chartAfterPlay) problems.push('点回「播放」之后那一格还在画图')
   if (drill.playPressed !== 'true') problems.push('点回「播放」之后那颗按钮不是按下态')
-
-  if (!drill.manualCellFound) {
-    problems.push('手填源那一格没找到，没法验"第三方源只有画面"')
-  } else {
-    if (drill.manualViewButtons !== 1) {
-      problems.push('手填 RTSP 那一格的视图按钮不是 1 颗：' + drill.manualViewButtons)
-    }
-    if (!String(drill.manualViewTitle || '').includes('第三方')) {
-      problems.push('手填 RTSP 那颗按钮没有说明"只有画面"：' + JSON.stringify(drill.manualViewTitle))
-    }
-  }
-  if (drill.manualRowsLeft !== 0) {
-    problems.push('视图探针加的手填源没有删掉：' + drill.manualRowsLeft)
-  }
 }
 
 async function run() {
@@ -1956,7 +1985,7 @@ async function run() {
     'const trees = document.querySelectorAll(".device-tree").length;' +
     'const page = document.querySelector(".page");' +
     'const content = document.querySelector(".app-content");' +
-    'const flat = document.querySelector(".devices-table-flat");' +
+    'const shell = document.querySelector(".devices-table-card");' +
     'const table = document.querySelector("table.devices-table");' +
     'const round = (n) => Math.round(n);' +
     'const rectOf = (el) => { const r = el.getBoundingClientRect();' +
@@ -2017,9 +2046,9 @@ async function run() {
     '  contentBox: contentBox,' +
     '  page: page ? rectOf(page) : null,' +
     // 单列判定（第 5 条）：设备表是 `.page` 的直接子节点，而且真的占满内容宽度。
-    '  flatIsDirectChild: !!(page && flat && flat.parentElement === page),' +
-    '  flat: flat ? rectOf(flat) : null,' +
-    '  flatRightGapPx: (flat && contentBox) ? round(contentBox.right - flat.getBoundingClientRect().right) : null,' +
+    '  shellIsDirectChild: !!(page && shell && shell.parentElement === page),' +
+    '  shell: shell ? rectOf(shell) : null,' +
+    '  shellRightGapPx: (shell && contentBox) ? round(contentBox.right - shell.getBoundingClientRect().right) : null,' +
     '  table: table ? rectOf(table) : null,' +
     '  tableScrollWidth: table ? table.scrollWidth : null,' +
     '  tableClientWidth: table ? table.clientWidth : null,' +
@@ -2039,11 +2068,11 @@ async function run() {
     problems.push('设备管理页出现了设备拓扑（第 5 条已把整棵树下架）：' +
       devicesLayout.treesOnDevices + ' 个 .device-tree')
   }
-  if (!devicesLayout.flatIsDirectChild) {
+  if (!devicesLayout.shellIsDirectChild) {
     problems.push('设备表不是 .page 的直接子节点（第 5 条之后这一页是单列，没有布局容器）')
   }
-  if (devicesLayout.flatRightGapPx === null || devicesLayout.flatRightGapPx > GAP_TOLERANCE_PX) {
-    problems.push('设备表没有占满内容宽度：右边空着 ' + devicesLayout.flatRightGapPx +
+  if (devicesLayout.shellRightGapPx === null || devicesLayout.shellRightGapPx > GAP_TOLERANCE_PX) {
+    problems.push('设备表没有占满内容宽度：右边空着 ' + devicesLayout.shellRightGapPx +
       'px（单列之后不应该再有第二列）')
   }
   if (devicesLayout.tableScrollWidth > devicesLayout.tableClientWidth + 1) {
@@ -2070,14 +2099,14 @@ async function run() {
   if (devicesLayout.cards > 0) {
     problems.push('设备管理页还有卡片版式的节点（.device-card）：' + devicesLayout.cards + ' 个')
   }
-  log('devices flat  : ' + JSON.stringify({
+  log('devices shell : ' + JSON.stringify({
     viewport: devicesLayout.viewport,
     contentBox: devicesLayout.contentBox,
     page: devicesLayout.page,
-    flat: devicesLayout.flat,
+    shell: devicesLayout.shell,
     table: devicesLayout.table,
     columns: devicesLayout.tableHeadings ? devicesLayout.tableHeadings.length : null,
-    rightGapPx: devicesLayout.flatRightGapPx
+    rightGapPx: devicesLayout.shellRightGapPx
   }))
   {
     /**
@@ -2098,20 +2127,20 @@ async function run() {
     const pageTopGap = devicesLayout.page && devicesLayout.contentBox
       ? devicesLayout.page.top - devicesLayout.contentBox.top
       : null
-    const flatLeftGap = devicesLayout.flat && devicesLayout.contentBox
-      ? devicesLayout.flat.left - devicesLayout.contentBox.left
+    const shellLeftGap = devicesLayout.shell && devicesLayout.contentBox
+      ? devicesLayout.shell.left - devicesLayout.contentBox.left
       : null
     log('devices gap   : .page left=' + pageLeftGap + 'px top=' + pageTopGap +
-      'px; table from the content box left=' + flatLeftGap +
-      'px right=' + devicesLayout.flatRightGapPx + 'px (single column)')
+      'px; table from the content box left=' + shellLeftGap +
+      'px right=' + devicesLayout.shellRightGapPx + 'px (single column)')
     if (pageLeftGap === null || pageLeftGap > GAP_TOLERANCE_PX) {
       problems.push('设备管理页的 .page 没有从内容盒左边开始：' + pageLeftGap + 'px（总览页是 0）')
     }
     if (pageTopGap === null || pageTopGap > GAP_TOLERANCE_PX) {
       problems.push('设备管理页的 .page 没有从内容盒上边开始：' + pageTopGap + 'px（总览页是 0）')
     }
-    if (flatLeftGap === null || flatLeftGap > GAP_TOLERANCE_PX) {
-      problems.push('设备表没有贴住内容盒左边：左间距 ' + flatLeftGap + 'px（应为 0）')
+    if (shellLeftGap === null || shellLeftGap > GAP_TOLERANCE_PX) {
+      problems.push('设备表没有贴住内容盒左边：左间距 ' + shellLeftGap + 'px（应为 0）')
     }
     const clipped = devicesLayout.clipped || []
     if (clipped.length > 0) {
@@ -2164,11 +2193,11 @@ async function run() {
     actualContentSizes.push({ w: actualContent[0], h: actualContent[1] })
     const measured = await layout('/devices', '(() => {' +
       'const page = document.querySelector(".page");' +
-      'const flat = document.querySelector(".devices-table-flat");' +
+      'const card = document.querySelector(".devices-table-card");' +
       'const table = document.querySelector("table.devices-table");' +
       'const content = document.querySelector(".app-content");' +
-      'if (!page || !flat || !table || !content) return JSON.stringify({ found: false,' +
-      '  hasPage: !!page, hasFlat: !!flat, hasTable: !!table, hasContent: !!content });' +
+      'if (!page || !card || !table || !content) return JSON.stringify({ found: false,' +
+      '  hasPage: !!page, hasCard: !!card, hasTable: !!table, hasContent: !!content });' +
       'content.scrollTop = 0;' +
       'const round = (n) => Math.round(n);' +
       'const contentStyle = getComputedStyle(content);' +
@@ -2178,7 +2207,7 @@ async function run() {
       '  right: content.getBoundingClientRect().left + content.clientWidth - (parseFloat(contentStyle.paddingRight) || 0)' +
       '};' +
       'const pageRect = page.getBoundingClientRect();' +
-      'const flatRect = flat.getBoundingClientRect();' +
+      'const cardRect = card.getBoundingClientRect();' +
       'const tableRect = table.getBoundingClientRect();' +
       'const interactive = Array.prototype.slice.call(document.querySelectorAll("button, select, input, [role=tab]"))' +
       '  .filter((el) => {' +
@@ -2197,14 +2226,14 @@ async function run() {
       '  viewport: { w: window.innerWidth, h: window.innerHeight },' +
       '  contentBox: { left: round(box.left), top: round(box.top), right: round(box.right) },' +
       '  page: { left: round(pageRect.left), top: round(pageRect.top), width: round(pageRect.width) },' +
-      '  flat: { left: round(flatRect.left), top: round(flatRect.top),' +
-      '    width: round(flatRect.width), right: round(flatRect.right) },' +
+      '  shell: { left: round(cardRect.left), top: round(cardRect.top),' +
+      '    width: round(cardRect.width), right: round(cardRect.right) },' +
       '  table: { left: round(tableRect.left), width: round(tableRect.width), right: round(tableRect.right) },' +
       '  headers: headers,' +
       '  rowCount: table.querySelectorAll("tbody tr").length,' +
       // 单列（第 5 条把拓扑树下架之后，设备表是内容区里唯一一块）：左右都必须贴住内容盒。
       // 两列布局一旦回来，右边距会立刻变成一个非 0 的数。
-      '  flatGapFromContentBoxPx: { left: round(flatRect.left - box.left), right: round(box.right - flatRect.right) },' +
+      '  shellGapFromContentBoxPx: { left: round(cardRect.left - box.left), right: round(box.right - cardRect.right) },' +
       // 十列在每一档都要放得下：表格自身不许横向滚动。
       '  tableScrollWidth: table.scrollWidth,' +
       '  tableClientWidth: table.clientWidth,' +
@@ -2254,13 +2283,13 @@ async function run() {
           pageLeft + 'px / ' + pageTop + 'px')
       }
       // 第 5 条之后这一页是**单列**：设备表的左右两边都要贴住内容盒。
-      if (entry.flatGapFromContentBoxPx.left > GAP_TOLERANCE_PX) {
+      if (entry.shellGapFromContentBoxPx.left > GAP_TOLERANCE_PX) {
         problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 没有贴住内容盒左边：左间距 ' +
-          entry.flatGapFromContentBoxPx.left + 'px')
+          entry.shellGapFromContentBoxPx.left + 'px')
       }
-      if (entry.flatGapFromContentBoxPx.right > GAP_TOLERANCE_PX) {
+      if (entry.shellGapFromContentBoxPx.right > GAP_TOLERANCE_PX) {
         problems.push('设备表在 ' + size[0] + 'x' + size[1] + ' 没有占满内容宽度（第 5 条之后是单列）：' +
-          '右边还空着 ' + entry.flatGapFromContentBoxPx.right + 'px —— 两列布局回来了？')
+          '右边还空着 ' + entry.shellGapFromContentBoxPx.right + 'px —— 两列布局回来了？')
       }
       // 十列（第 8 条的清单）在每一档都放得下：表格自己不横向滚动。
       if (entry.tableScrollWidth > entry.tableClientWidth + 1) {
@@ -2286,8 +2315,8 @@ async function run() {
       }
     }
     // 单列的两条间距在四档之间必须**逐像素相同** —— 与窗口宽度无关。
-    const lefts = found.map((entry) => entry.flatGapFromContentBoxPx.left)
-    const rights = found.map((entry) => entry.flatGapFromContentBoxPx.right)
+    const lefts = found.map((entry) => entry.shellGapFromContentBoxPx.left)
+    const rights = found.map((entry) => entry.shellGapFromContentBoxPx.right)
     if (new Set(lefts).size > 1 || new Set(rights).size > 1) {
       problems.push('设备表相对内容盒的位置在四档窗口尺寸下不是同一个数：left=' +
         JSON.stringify(lefts) + ' right=' + JSON.stringify(rights))
@@ -2325,8 +2354,8 @@ async function run() {
    * 量六件事，每一件都只能靠 DOM：
    *   ① 表头正好是业主重给的那十列、顺序一致（序号 / 设备名称 / IP地址 / 设备类型 / 状态 /
    *      告警数量 / 通道数 / 查看 / 设置 / 删除）；
-   *   ② **扁平化**（第 2b 条）：外壳不是 `.table-wrap` 那张卡片，而是 `.devices-table-flat`
-   *      （上下各一条线）；
+   *   ② **卡片外壳**（第 11 批第 6 条，推翻了第 2b 条的"去卡片"）：外壳是 `.devices-table-card`
+   *      （全局 `.card`），卡片内部保留每列一条浅色竖线；
    *   ③ 序号列是行号（第 1 行就是 1）；
    *   ④ 每一行都有「查看」「设置」「删除」三个**图标**按钮，IP 那一格是一个按钮（双击才开浏览器）；
    *   ⑤ 点「查看」→ 进实时监测页并带上这台设备的 id；点「设置」→ 打开**编辑对话框**
@@ -2345,16 +2374,16 @@ async function run() {
     'const headers = [...table.querySelectorAll("thead th")].map((th) => text(th));' +
     'const rows = [...table.querySelectorAll("tbody tr")];' +
     'const actions = [...table.querySelectorAll("tbody [data-action]")];' +
-    'const flat = document.querySelector(".devices-table-flat");' +
-    'const flatStyle = flat ? getComputedStyle(flat) : null;' +
+    'const card = document.querySelector(".devices-table-card");' +
+    'const cardStyle = card ? getComputedStyle(card) : null;' +
     'const out = {' +
     '  ok: true,' +
     '  headers,' +
     '  rows: rows.length,' +
-    '  flatShell: !!flat,' +
-    '  legacyCardShell: !!document.querySelector(".table-wrap.devices-table-card, .devices-table-card"),' +
-    '  flatTopBorder: flatStyle ? flatStyle.borderTopWidth : null,' +
-    '  flatBottomBorder: flatStyle ? flatStyle.borderBottomWidth : null,' +
+    '  cardShell: !!card,' +
+    '  legacyFlatShell: !!document.querySelector(".devices-table-flat"),' +
+    '  legacyWrapShell: document.querySelectorAll(".table-wrap").length,' +
+    '  cardRadius: cardStyle ? cardStyle.borderTopLeftRadius : null,' +
     '  monitorIcons: table.querySelectorAll("[data-action=device-monitor]").length,' +
     '  configureIcons: table.querySelectorAll("[data-action=device-configure]").length,' +
     '  deleteIcons: table.querySelectorAll("[data-action=device-delete]").length,' +
@@ -2373,6 +2402,24 @@ async function run() {
     '  afterConfigure: null,' +
     '  afterSingleClick: ""' +
     '};' +
+    /*
+     * 第 11 批第 6 条那两件事**只能量**（源码里写了也可能被后面的规则盖掉）：
+     *   · 告警数量 / 通道数 / 查看 / 设置 四列**居中** —— 量表头与表体两侧的 `text-align`；
+     *   · 状态那一栏**不再有**「局域网 / 外网」徽标（`StatusBadge` 的 `.badge`）——
+     *     量那一列里 `.status .badge` 的总数，必须是 0。
+     */
+    'out.centerColumns = (function(){' +
+    '  const align = (node) => (node ? getComputedStyle(node).textAlign : null);' +
+    '  const ths = [...table.querySelectorAll("thead th")];' +
+    '  const tds = rows[0] ? [...rows[0].querySelectorAll("td")] : [];' +
+    '  return {' +
+    '    alarmCountHeader: align(ths[5]), alarmCountCell: align(tds[5]),' +
+    '    channelCountHeader: align(ths[6]), channelCountCell: align(tds[6]),' +
+    '    viewHeader: align(ths[7]), viewCell: align(tds[7]),' +
+    '    settingHeader: align(ths[8]), settingCell: align(tds[8]) }; })();' +
+    'out.statusConnectionBadges = rows.reduce((total, tr) => {' +
+    '  const cell = tr.querySelectorAll("td")[4];' +
+    '  return total + (cell ? cell.querySelectorAll(".status .badge").length : 0); }, 0);' +
     'const firstRow = rows[0];' +
     'const ipButton = firstRow ? firstRow.querySelector("button.devices-table__ip") : null;' +
     'out.firstIp = text(ipButton);' +
@@ -2497,20 +2544,33 @@ async function run() {
           JSON.stringify(devicesTable.headers)
       )
     }
-    // ② 扁平化（第 2b 条）：不再用卡片外壳，而是上下两条线。
-    if (!devicesTable.flatShell) {
-      problems.push('设备表没有扁平化的外壳（.devices-table-flat）—— 第 2b 条要求去卡片')
+    // ② 卡片外壳（第 11 批第 6 条推翻了第 2b 条的"去卡片"：改成"做个卡片做一个小的区分，
+    //    类似于实时监控界面的"）。
+    if (!devicesTable.cardShell) {
+      problems.push('设备表没有卡片外壳（.devices-table-card）—— 第 11 批第 6 条要求做成卡片')
     }
-    if (devicesTable.legacyCardShell) {
-      problems.push('设备表又用回了卡片外壳（.devices-table-card / .table-wrap）')
+    if (devicesTable.legacyFlatShell) {
+      problems.push('设备表还留着扁平外壳（.devices-table-flat）—— 第 6 条已改回卡片')
     }
-    for (const [side, value] of [
-      ['上', devicesTable.flatTopBorder],
-      ['下', devicesTable.flatBottomBorder]
-    ]) {
-      if (!value || value === '0px') {
-        problems.push('扁平外壳没有' + side + '边线（分区只能靠线）：' + JSON.stringify(value))
+    if (devicesTable.legacyWrapShell > 0) {
+      problems.push('设备表用回了 .table-wrap 外壳（它带着自己的内边距，列线会跟着缩）')
+    }
+    if (String(devicesTable.cardRadius) === '0px') {
+      problems.push('卡片外壳没有圆角：' + JSON.stringify(devicesTable.cardRadius))
+    }
+    // 第 6 条：四列居中。
+    for (const [label, value] of Object.entries(devicesTable.centerColumns || {})) {
+      if (value !== 'center') {
+        problems.push(
+          '第 6 条：' + label + ' 没有居中对齐（text-align = ' + JSON.stringify(value) + '）'
+        )
       }
+    }
+    // 第 6 条：状态那一栏不再有「局域网 / 外网」。
+    if (devicesTable.statusConnectionBadges !== 0) {
+      problems.push(
+        '状态那一栏还显示着「局域网 / 外网」徽标：' + devicesTable.statusConnectionBadges + ' 个'
+      )
     }
     if (devicesTable.menuPresent) {
       problems.push('行末的省略号菜单又回来了（第 8 条已把编辑/删除升成两列）')
@@ -3137,11 +3197,31 @@ async function run() {
     'const frameRect = frame.getBoundingClientRect();' +
     'const markers = [...document.querySelectorAll("[data-map-marker]")];' +
     'const tones = markers.map((m) => m.getAttribute("data-marker-tone"));' +
-    'const legend = [...document.querySelectorAll("[data-map-legend] [data-legend-tone]")].map((li) => ({' +
-    '  tone: li.getAttribute("data-legend-tone"),' +
-    '  text: (li.textContent || "").replace(/\\s+/g, " ").trim(),' +
-    '  count: Number(((li.textContent || "").match(/(\\d+)\\s*$/) || [])[1])' +
-    '}));' +
+    /*
+     * 第 11 批第 4 条：地图右上角那条**半透明状态栏**。
+     * 五个读数 + 三条样式（位置、半透明、不吃鼠标事件）—— 样式只能量，源码里写了也可能被盖掉。
+     */
+    'const status = document.querySelector("[data-map-statusbar]");' +
+    'const statusStyle = status ? getComputedStyle(status) : null;' +
+    'const statusRect = status ? status.getBoundingClientRect() : null;' +
+    'const statusItems = status ? [' +
+    '  ["mapped", "[data-map-status-mapped]"], ["total", "[data-map-status-total]"],' +
+    '  ["online", "[data-map-status-online]"], ["offline", "[data-map-status-offline]"],' +
+    '  ["alarms", "[data-map-status-alarms]"]]' +
+    '  .map((pair) => { const el = status.querySelector(pair[1]);' +
+    '    return { key: pair[0], text: (el ? (el.textContent || "") : "").replace(/\\s+/g, " ").trim(),' +
+    '      alarmKnown: el ? el.getAttribute("data-map-status-alarm-known") : null }; }) : [];' +
+    /*
+     * 第 11 批第 5 条：左设备列表 / 右告警列表，两栏等宽、**两张卡一样高**。
+     * 高度只能量（CSS 里那一层绝对定位就是为了这件事），所以这里读两个卡片的矩形。
+     */
+    'const rectFull = (el) => { if (!el) return null; const r = el.getBoundingClientRect();' +
+    '  return { left: round(r.left), top: round(r.top), right: round(r.right), bottom: round(r.bottom),' +
+    '    width: round(r.width), height: round(r.height) }; };' +
+    'const devicesCard = rectFull(document.querySelector("[data-map-devices]"));' +
+    'const alarmsCard = rectFull(document.querySelector("[data-map-alarms]"));' +
+    'const deviceHeadings = [...document.querySelectorAll("[data-map-devices] thead th")]' +
+    '  .map((th) => (th.textContent || "").trim());' +
     // 三张列表：按**屏幕上的纵坐标**排序（DOM 里的顺序可以由 CSS 改掉）。
     'const blocks = ["data-map-devices", "data-map-alarms", "data-map-live"]' +
     '  .map((name) => {' +
@@ -3162,14 +3242,43 @@ async function run() {
     '  contentBoxWidth: round(contentBox.right - contentBox.left),' +
     '  canvasPresent: !!document.querySelector("[data-map-canvas]"),' +
     /*
-     * 「一台点位都没有」与「有设备但都没录点位」是两件事，界面上一句是"去补录"、另一句才是空图。
-     * 这一段探针跑在**加设备之前**，操作员库里那几台可能一台点位都没录 —— 那时的正确答案是
-     * "没有画布 + 有那句提示"，而不是"画布不见了"。两个数一起读才判得出来。
+     * 被业主第 11 批第 4、5 条点名删掉的那几块：**一个都不许剩**。
+     * 数出来的都是 0 才是"删干净了"（渲染出来的元素，不是源码）。
      */
-    '  emptyNotice: !!document.querySelector("[data-map-empty]"),' +
+    '  removedBlocks: {' +
+    '    counts: document.querySelectorAll("[data-map-counts]").length,' +
+    '    legend: document.querySelectorAll("[data-map-legend]").length,' +
+    '    emptyNotice: document.querySelectorAll("[data-map-empty]").length,' +
+    '    withoutPoint: document.querySelectorAll("[data-map-without-point]").length' +
+    '  },' +
+    '  status: {' +
+    '    present: !!status,' +
+    '    items: statusItems,' +
+    '    position: statusStyle ? statusStyle.position : null,' +
+    '    backgroundColor: statusStyle ? statusStyle.backgroundColor : null,' +
+    '    pointerEvents: statusStyle ? statusStyle.pointerEvents : null,' +
+    '    rect: statusRect ? { top: round(statusRect.top), right: round(statusRect.right),' +
+    '      width: round(statusRect.width), height: round(statusRect.height) } : null,' +
+    '    frameRect: { top: round(frameRect.top), right: round(frameRect.right),' +
+    '      left: round(frameRect.left), bottom: round(frameRect.bottom) }' +
+    '  },' +
+    '  split: {' +
+    '    present: !!document.querySelector("[data-map-split]"),' +
+    '    devices: devicesCard,' +
+    '    alarms: alarmsCard,' +
+    '    contentBoxWidth: round(contentBox.right - contentBox.left)' +
+    '  },' +
+    '  deviceHeadings: deviceHeadings,' +
+    /*
+     * 翻页（第 5 条：默认最多 10 台，超过就翻页）。操作员库里只有个位数设备，
+     * 所以这里量到的是"**不该**出现翻页控件"；判据写成"出现 ⇔ 超过 10 台"，
+     * 换一份数据（>10 台）时这条断言自动变成另一头。
+     */
+    '  pagerPresent: !!document.querySelector("[data-map-pager]"),' +
+    '  pageStatusText: (function(){ const el = document.querySelector("[data-map-page-status]");' +
+    '    return el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : null; })(),' +
     '  markerCount: markers.length,' +
     '  tones: tones,' +
-    '  legend: legend,' +
     '  blocks: blocks,' +
     '  deviceRows: deviceRows,' +
     '  liveHeadings: liveHeadings,' +
@@ -3222,49 +3331,128 @@ async function run() {
         '地图区的宽度与内容盒不一致：' + mapLayout.frame.width + ' vs ' + mapLayout.contentBoxWidth
       )
     }
-    if (mapLayout.canvasPresent !== (mapLayout.markerCount > 0)) {
+    // 第 11 批第 4 条：画布**不再**取决于有没有落点（"有设备就画"，空图看起来才不像坏了）。
+    if (mapLayout.deviceRows > 0 && mapLayout.canvasPresent !== true) {
       problems.push(
-        '画布与落点不一致：canvasPresent=' + mapLayout.canvasPresent +
-        ' markerCount=' + mapLayout.markerCount + '（有点位就该有画布，没有点位就该只有那句提示）'
+        '这一页有设备，却没有画布（第 11 批第 4 条之后画布与"有没有落点"无关）：' +
+        JSON.stringify({ deviceRows: mapLayout.deviceRows, canvas: mapLayout.canvasPresent })
       )
     }
-    if (mapLayout.markerCount === 0 && mapLayout.emptyNotice !== true) {
-      problems.push('一台点位都没有时，地图区没有那句"去补录"的提示（data-map-empty）')
-    }
-    if (mapLayout.markerCount > 0 && mapLayout.emptyNotice === true) {
-      problems.push('图上有落点、却同时显示着"还没有任何设备录入点位"')
+    // 被删掉的那四块一个都不许剩。
+    for (const [label, count] of Object.entries(mapLayout.removedBlocks || {})) {
+      if (count > 0) {
+        problems.push(
+          '第 11 批第 4/5 条已删掉的 ' + label + ' 还在页面上（' + count + ' 个）：' +
+          '「图上 N 台 / 共 M 台」读数 / 图例 / "还没有任何设备录入点位" 那句 / 「未录入点位设备」卡片'
+        )
+      }
     }
 
-    // ② 落点配色。
+    // ② 落点配色（图例已删，颜色由落点与实时数据列表那个带 title 的点承载）。
     const allowed = ['alarm', 'online', 'offline']
     const bad = mapLayout.tones.filter((tone) => !allowed.includes(tone))
     if (bad.length > 0) {
       problems.push('有落点的色调不在 在线绿/告警红/离线灰 这三档里：' + JSON.stringify(bad))
     }
-    if (mapLayout.legend.length !== 3) {
-      problems.push('图例不是三条（在线 / 告警 / 离线）：' + JSON.stringify(mapLayout.legend))
-    }
-    for (const tone of allowed) {
-      const entry = mapLayout.legend.find((item) => item.tone === tone)
-      if (!entry) {
-        problems.push('图例缺少 ' + tone + ' 那一档')
-        continue
-      }
-      const onMap = mapLayout.tones.filter((value) => value === tone).length
-      if (!Number.isFinite(entry.count) || entry.count !== onMap) {
-        problems.push(
-          '图例上 ' + tone + ' 的数字与图上的落点数对不上：' + entry.count + ' vs ' + onMap +
-          '（图例是写死的？）'
-        )
+
+    // ②b 地图右上角的半透明状态栏（第 4 条）。
+    /*
+     * 状态栏里的「共 M 台」是**设备总数**（设备列表按 10 台一页，`deviceRows` 只是当前页）。
+     * 下面翻页与实时数据列表两条断言要的都是总数，所以从这里取。
+     */
+    let statusTotalDevices = null
+    {
+      const status = mapLayout.status || {}
+      if (!status.present) {
+        problems.push('地图右上角没有状态栏（[data-map-statusbar]）')
+      } else {
+        const items = status.items || []
+        const expectedKeys = ['mapped', 'total', 'online', 'offline', 'alarms']
+        if (JSON.stringify(items.map((item) => item.key)) !== JSON.stringify(expectedKeys)) {
+          problems.push('状态栏的五个读数不齐：' + JSON.stringify(items.map((item) => item.key)))
+        }
+        for (const item of items) {
+          if (!item.text) problems.push('状态栏的「' + item.key + '」是空的')
+        }
+        // 数字必须是真的：图上 N 台 = 落点数，共 M 台 = 设备表的行数（翻页之后也按总数算）。
+        const byKey = Object.fromEntries(items.map((item) => [item.key, item.text]))
+        const mapped = Number((String(byKey.mapped).match(/(\d+)/) || [])[1])
+        const total = Number((String(byKey.total).match(/(\d+)/) || [])[1])
+        if (mapped !== mapLayout.markerCount) {
+          problems.push('状态栏「图上」的数和落点数不一致：' + byKey.mapped + ' vs ' + mapLayout.markerCount)
+        }
+        if (!Number.isFinite(total) || total < mapLayout.deviceRows) {
+          problems.push('状态栏「共」的数比设备表的行数还小：' + byKey.total + ' vs ' + mapLayout.deviceRows)
+        }
+        if (Number.isFinite(total)) statusTotalDevices = total
+        /*
+         * 告警那一项：读不到时必须是「—」而不是 0（`data-map-status-alarm-known=no`），
+         * 读到时就该与下面告警列表里的条数**方向一致**（这里只判"不是空"）。
+         */
+        const alarmItem = items.find((item) => item.key === 'alarms') || {}
+        if (alarmItem.alarmKnown !== 'yes' && alarmItem.alarmKnown !== 'no') {
+          problems.push('状态栏的告警项没有把"读没读到"暴露出来：' + JSON.stringify(alarmItem))
+        }
+        if (alarmItem.alarmKnown === 'no' && !String(alarmItem.text).includes('—')) {
+          problems.push('告警数没读到，状态栏却没有写「—」：' + JSON.stringify(alarmItem.text))
+        }
+        // 位置：在画布**里面**、贴着右上角。
+        if (status.position !== 'absolute') {
+          problems.push('状态栏不是绝对定位（它应当浮在地图右上角）：' + status.position)
+        }
+        const rect = status.rect
+        const frameRect = status.frameRect
+        if (!rect || !frameRect) {
+          problems.push('量不到状态栏或画布的位置')
+        } else {
+          if (rect.top < frameRect.top || rect.top > frameRect.top + 60) {
+            problems.push('状态栏不在画布上边附近：top=' + rect.top + ' 画布 top=' + frameRect.top)
+          }
+          if (Math.abs(rect.right - frameRect.right) > 40 || rect.right > frameRect.right) {
+            problems.push('状态栏不在画布右边附近（或压在画布外面）：right=' + rect.right +
+              ' 画布 right=' + frameRect.right)
+          }
+        }
+        // 半透明：`color-mix()` 在 Chromium 里算出来可能是 `rgba(...)`，也可能是
+        // `color(srgb r g b / a)` —— 两种都要能读出 alpha（第一版只认前一种，于是把
+        // 一个**半透明的**状态栏报成了"背景色读不出来"）。
+        const raw = String(status.backgroundColor || '')
+        const rgbaMatch = /rgba?\(([^)]*)\)/.exec(raw)
+        const srgbMatch = /color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\/\s*([\d.]+)\)/.exec(raw)
+        const alpha = rgbaMatch
+          ? (() => {
+              const parts = rgbaMatch[1].split(',').map((part) => part.trim())
+              return parts.length >= 4 ? Number(parts[3]) : 1
+            })()
+          : srgbMatch
+            ? Number(srgbMatch[4])
+            : Number.NaN
+        if (!Number.isFinite(alpha)) {
+          problems.push('状态栏的背景色读不出来：' + JSON.stringify(status.backgroundColor))
+        } else if (!(alpha > 0 && alpha < 1)) {
+          problems.push('状态栏不是半透明（alpha=' + alpha + '）：' + status.backgroundColor)
+        }
+        // 不吃鼠标事件：它压着画布，而落点是可点的。
+        if (status.pointerEvents !== 'none') {
+          problems.push('状态栏会吃掉鼠标事件（pointer-events=' + status.pointerEvents + '）')
+        }
       }
     }
 
-    // ③ 地图下方依次三张列表。
+    // ③ 地图下方：左设备列表 / 右告警列表（第 5 条，**同一行**），最后是整幅宽的实时数据列表。
     const tops = mapLayout.blocks.map((block) => block.top)
     if (tops.some((top) => top === null)) {
       problems.push('三张列表没有齐：' + JSON.stringify(mapLayout.blocks))
-    } else if (!(tops[0] < tops[1] && tops[1] < tops[2])) {
-      problems.push('三张列表在屏幕上的顺序不对（应为 设备列表 → 告警列表 → 实时数据列表）：' + JSON.stringify(mapLayout.blocks))
+    } else if (Math.abs(tops[0] - tops[1]) > 2) {
+      problems.push(
+        '设备列表与告警列表不在同一行（第 5 条要求"右侧是告警列表"）：' +
+        JSON.stringify(mapLayout.blocks)
+      )
+    } else if (!(tops[1] < tops[2])) {
+      problems.push(
+        '实时数据列表不在那两栏下面（应为 设备列表 + 告警列表 → 实时数据列表）：' +
+        JSON.stringify(mapLayout.blocks)
+      )
     }
     // 它们必须都在地图区**下面**。
     if (tops.every((top) => top !== null) && !(mapLayout.frame.top < tops[0])) {
@@ -3273,14 +3461,63 @@ async function run() {
     if (mapLayout.deviceRows < 1) {
       problems.push('设备列表里一行都没有')
     }
+    // ③a 设备列表只有三列（序号 / 设备名称 / 状态）。
+    {
+      const headings = mapLayout.deviceHeadings || []
+      if (JSON.stringify(headings) !== JSON.stringify(['序号', '设备名称', '状态'])) {
+        problems.push('设备列表不是 序号/设备名称/状态 三列：' + JSON.stringify(headings))
+      }
+    }
+    // ③b 两栏并排、等宽、**一样高**。
+    {
+      const split = mapLayout.split || {}
+      const devices = split.devices
+      const alarms = split.alarms
+      if (!split.present || !devices || !alarms) {
+        problems.push('地图下面不是"左设备列表 + 右告警列表"两栏：' + JSON.stringify(split))
+      } else {
+        if (!(devices.right <= alarms.left + 1)) {
+          problems.push('告警列表不在设备列表右侧：设备 right=' + devices.right + ' 告警 left=' + alarms.left)
+        }
+        if (Math.abs(devices.top - alarms.top) > 2) {
+          problems.push('两张卡的上边缘没对齐：' + JSON.stringify({ devices: devices.top, alarms: alarms.top }))
+        }
+        if (Math.abs(devices.height - alarms.height) > 2) {
+          problems.push(
+            '告警列表卡片的高度与左侧设备列表不一致（第 5 条）：' +
+            devices.height + ' vs ' + alarms.height
+          )
+        }
+        // 半幅宽（业主："宽度调整为现在的 50%"）。
+        const half = split.contentBoxWidth / 2
+        if (Math.abs(devices.width - half) > 8) {
+          problems.push(
+            '设备列表不是内容宽度的一半：' + devices.width + ' vs ' + Math.round(half) +
+            '（内容宽 ' + split.contentBoxWidth + '）'
+          )
+        }
+      }
+    }
+    // ③c 翻页控件：只有**总数**超过 10 台才出现。
+    const totalDevices = statusTotalDevices ?? mapLayout.deviceRows
+    if (totalDevices <= 10 && mapLayout.pagerPresent) {
+      problems.push('设备不超过 10 台，却出现了翻页控件（第 5 条：默认最多 10 台才翻页）')
+    }
+    if (totalDevices > 10 && !mapLayout.pagerPresent) {
+      problems.push('设备超过 10 台，却没有翻页控件：' + totalDevices + ' 台')
+    }
+    if (mapLayout.pagerPresent && !mapLayout.pageStatusText) {
+      problems.push('翻页控件里没有"第 N 页 / 共 M 页"读数')
+    }
 
     // ④ 实时数据列表的四列与「稳定度」那一列。
     if (mapLayout.liveHeadings.length !== 4) {
       problems.push('实时数据列表不是四列：' + JSON.stringify(mapLayout.liveHeadings))
     }
-    if (mapLayout.liveRowCount !== mapLayout.deviceRows) {
+    if (mapLayout.liveRowCount !== totalDevices) {
       problems.push(
-        '实时数据列表的行数与设备列表不一致：' + mapLayout.liveRowCount + ' vs ' + mapLayout.deviceRows
+        '实时数据列表的行数与设备总数不一致：' + mapLayout.liveRowCount + ' vs ' + totalDevices +
+        '（它列的是全部设备，不跟设备列表那一页走）'
       )
     }
     /*
@@ -3297,7 +3534,7 @@ async function run() {
     }
     /*
      * 第 15、16 条：悬停浮层。**必须在有标记时断言**；operator 库那三台都没录点位时
-     * 如实跳过（那时图上是那句"去补录"的提示，没有可悬停的东西）。
+     * 如实跳过（那时图上是空的经纬度网格 + 右上角的状态栏写着"图上 0 台"，没有可悬停的东西）。
      */
     if (mapLayout.markerCount > 0) {
       if (mapLayout.hoverMarker === null || mapLayout.hoverPresent !== true) {
@@ -5712,10 +5949,13 @@ async function run() {
     '  marker.dispatchEvent(new MouseEvent("mouseleave", { bubbles: false }));' +
     '  await wait(200);' +
     '  out.hoverClosed = !document.querySelector("[data-map-hover]");' +
-    '  out.legendCounts = [...document.querySelectorAll("[data-map-legend] [data-legend-tone]")].map((li) => ({' +
-    '    tone: li.getAttribute("data-legend-tone"),' +
-    '    count: Number(((li.textContent || "").match(/(\\d+)\\s*$/) || [])[1])' +
-    '  }));' +
+    /*
+     * 第 11 批第 4 条：**图例已经删掉**（它那三个计数搬进了右上角的状态栏）。
+     * 这里改成读状态栏那五个读数 —— 这一台声呐是探针自己加进去、并且录了点位的，
+     * 所以"图上 N 台"至少要把它算进去。
+     */
+    '  out.statusItems = [...document.querySelectorAll("[data-map-statusbar] span")]' +
+    '    .map((el) => (el.textContent || "").replace(/\\s+/g, " ").trim());' +
     '  const sync = document.querySelector("[data-action=map-sync]");' +
     '  if (!sync) return JSON.stringify({ ok: false, reason: "no-map-sync", steps: out.steps });' +
     '  sync.click(); await wait(4000);' +
@@ -5812,14 +6052,21 @@ async function run() {
       problems.push('鼠标移开之后浮层没有关掉')
     }
     {
-      const counts = sonarFlow.legendCounts || []
-      const total = counts.reduce((sum, entry) => sum + (Number(entry.count) || 0), 0)
-      if (counts.length !== 3) {
-        problems.push('图例不是三条：' + JSON.stringify(counts))
-      } else if (total !== sonarFlow.markerCount) {
+      /*
+       * 第 11 批第 4 条之后这里读的是**状态栏**（图例已删）：五个读数都在，
+       * 而且"图上 N 台"这一台声呐探针自己刚录了点位 —— 它必须至少被数到一次。
+       */
+      const items = sonarFlow.statusItems || []
+      if (items.length !== 5) {
+        problems.push('地图状态栏的读数不是五个：' + JSON.stringify(items))
+      }
+      const mapped = Number(((items[0] || '').match(/(\d+)/) || [])[1])
+      if (!Number.isFinite(mapped) || mapped < 1) {
+        problems.push('状态栏「图上 N 台」没有把这台录了点位的设备数进去：' + JSON.stringify(items))
+      }
+      if (Number.isFinite(mapped) && mapped !== sonarFlow.markerCount) {
         problems.push(
-          '图例三档加起来与图上的落点数对不上：' + total + ' vs ' + sonarFlow.markerCount +
-          '（图例是写死的？）'
+          '状态栏「图上 N 台」与图上落点数对不上：' + mapped + ' vs ' + sonarFlow.markerCount
         )
       }
     }
@@ -6526,17 +6773,19 @@ async function run() {
   await runIotIngestDrill(win, layout)
 
   /**
-   * 手填 RTSP 地址（业主 2026-09-19 第 3 条）。
+   * 手填 RTSP 地址（业主 2026-09-19 第 3 条；**管理界面在第 11 批第 2 条搬到了实时监测页**）。
    *
-   * 也排在最后：它会**新建一条源、放进一格、让主进程起一路 ffmpeg，然后删掉它**。
-   * 排在所有只读探针之后，读到的每个数字才是探针动手之前的样子。
+   * 也排在最后：它会**在实时监测页新建一条源、到总览页把它放进一格、让主进程起一路 ffmpeg，
+   * 再回实时监测页删掉它**。排在所有只读探针之后，读到的每个数字才是探针动手之前的样子。
    */
   await runManualRtspDrill(win, layout)
 
   /**
    * 四种视图（业主 2026-09-18 第 10 批第 2 条）。
    *
-   * 也排在最后：它会往墙上放一台相机、切三次视图、再放一条手填源验"只有画面"，最后都收掉。
+   * 也排在最后：它会往墙上放一台相机、切三次视图、再切回播放。
+   * （"手填 RTSP 那一格只有一颗视图按钮"这一条在 `runManualRtspDrill` 里量 —— 那一趟本来
+   * 就要把源放进一格。）
    */
   await runCameraViewDrill(win, layout)
 

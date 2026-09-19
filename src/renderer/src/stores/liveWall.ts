@@ -35,6 +35,7 @@ import {
   cameraCellStartPermission,
   cameraWallSummary,
   clearCameraCell,
+  clearCameraWallCells,
   createCameraWallModel,
   focusSlotForDevice,
   isCameraWallLayout,
@@ -424,13 +425,17 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
    *
    * 退出页面时用：主进程里的每一个会话都必须被停掉（否则就是若干个没人看的
    * ffmpeg 占着相机那有限的 `rtsp_client_limit`），但档位是用户的偏好，留下。
+   *
+   * **手填的第三方 RTSP 源也留下**（业主 2026-09-19 第 11 批第 2 条）：它们的入口现在在
+   * 实时监测页，而那一页与画面墙不同时挂载 —— 离开画面墙就把源删光，等于"配置只在
+   * 站在这面墙前面时才存在"。清空的是会话，不是配置（见 `clearCameraWallCells`）。
    */
   function clearAll(layoutToKeep: CameraWallLayout = model.value.layout): string[] {
-    const assigned = model.value.slots.filter((slot): slot is string => slot !== null)
-    model.value = createCameraWallModel(layoutToKeep)
+    const cleared = clearCameraWallCells(model.value, layoutToKeep)
+    model.value = cleared.model
     states.value = {}
     refusal.value = null
-    return assigned
+    return cleared.assigned
   }
 
   // -------------------------------------------------------------------------

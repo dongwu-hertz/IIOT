@@ -409,7 +409,7 @@ function onAdded(deviceId: string): void {
           扁平化（业主 2026-09-18 第 2b 条）：这一页**不再用 `.table-wrap` 那张卡片**，
           改成一条上边线 + 每行一条分隔线（`.devices-table-flat`，见下面样式）。
         -->
-    <section v-else class="devices-table-flat">
+    <section v-else class="card devices-table-card">
       <table class="table devices-table">
         <thead>
           <tr>
@@ -418,11 +418,11 @@ function onAdded(deviceId: string): void {
             <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
             <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
             <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
-            <th scope="col" class="devices-table__num">{{ t('devicesUi.alarmCountColumn') }}</th>
-            <th scope="col" class="devices-table__num">{{ t('devicesUi.channelColumn') }}</th>
-            <th scope="col" class="devices-table__actions">{{ t('devicesUi.viewColumn') }}</th>
-            <th scope="col" class="devices-table__actions">{{ t('devicesUi.settingColumn') }}</th>
-            <th scope="col" class="devices-table__actions">{{ t('devicesUi.deleteColumn') }}</th>
+            <th scope="col" class="devices-table__num devices-table__center">{{ t('devicesUi.alarmCountColumn') }}</th>
+            <th scope="col" class="devices-table__num devices-table__center">{{ t('devicesUi.channelColumn') }}</th>
+            <th scope="col" class="devices-table__actions devices-table__center">{{ t('devicesUi.viewColumn') }}</th>
+            <th scope="col" class="devices-table__actions devices-table__center">{{ t('devicesUi.settingColumn') }}</th>
+            <th scope="col" class="devices-table__actions devices-table__center">{{ t('devicesUi.deleteColumn') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -488,9 +488,16 @@ function onAdded(deviceId: string): void {
               </button>
             </td>
             <td>{{ t(`domain.deviceKind.${device.kind}`) }}</td>
-            <td><StatusBadge :status="device.status" :connection-type="device.connectionType" /></td>
-            <td class="devices-table__num">{{ alarmCount(device.id) ?? '—' }}</td>
-            <td class="devices-table__num">
+            <!--
+              **不带 `connection-type`**（业主 2026-09-19 第 11 批第 6 条：「状态这一栏 把局域网
+              或者外网这个内容删除」）。局域网/外网是"我们怎么够到它"，不是"它现在在不在"，
+              而这一列问的是后者；渠道信息在设备详情里仍然查得到。
+            -->
+            <td class="devices-table__center">
+              <StatusBadge :status="device.status" />
+            </td>
+            <td class="devices-table__num devices-table__center">{{ alarmCount(device.id) ?? '—' }}</td>
+            <td class="devices-table__num devices-table__center">
               {{ channelCount(device.id) ?? '—' }}
               <!--
                 通道数的**明细**（几路在用）挪进 `title`：这一列现在有十列，1280×720 下
@@ -503,7 +510,7 @@ function onAdded(deviceId: string): void {
                 aria-hidden="true"
               ></span>
             </td>
-            <td class="devices-table__actions">
+            <td class="devices-table__actions devices-table__center">
               <!-- 「查看」= 按机型进入对应的实时检测界面（三个不同的内容）。 -->
               <button
                 type="button"
@@ -524,7 +531,7 @@ function onAdded(deviceId: string): void {
               要的那个对话框。它原来是 `⋮` 菜单里的"编辑" —— 第 8 条的列清单把
               编辑与删除升成了两列，菜单因此删掉（一个入口胜过两个）。
             -->
-            <td class="devices-table__actions">
+            <td class="devices-table__actions devices-table__center">
               <button
                 v-if="session.isAdmin"
                 type="button"
@@ -540,7 +547,7 @@ function onAdded(deviceId: string): void {
                 </svg>
               </button>
             </td>
-            <td class="devices-table__actions">
+            <td class="devices-table__actions devices-table__center">
               <button
                 v-if="session.isAdmin"
                 type="button"
@@ -746,31 +753,41 @@ function onAdded(deviceId: string): void {
 /*
  * 设备表（业主 2026-09-17 第 3 条；列清单在 2026-09-18 第 8 条重给）。
  *
- * **扁平化（第 2b 条）**：这一页不再用 `.table-wrap` 那张卡片（它是全应用共用的外壳，
- * 告警/事件中心/录音/样本库都靠它），改成只留一条上边线与每行的分隔线 —— 页面上没有
- * 圆角、没有卡片边框、没有卡片底色，分区靠线。
+ * **又变回一张卡片了**（业主 2026-09-19 第 11 批第 6 条：「做个卡片做一个小的区分…
+ * 类似于实时监控界面的」）。第 10 批第 2b 条要的是"去卡片、扁平化、线条分区"，
+ * 所以这一页当时用的是只留上下两条线的 `.devices-table-flat`；现在要的是**卡片**，
+ * 而且点名要像实时监测页那一套 —— 于是这里直接用全局的 `.card`（实时监测页每一块用的就是它），
+ * 卡片内部仍然保留第 10 批更正第 3 条要的**每列一条浅色竖线**与行分隔线。
+ * 两批要求前后相反，逐条写进 `docs/Ivms4200-UX-REFERENCE.md` §15.70。
  *
  * 表本身的外观仍然来自全局 `.table`（表头吸顶、行分隔线、单元格内边距），这一页只加
  * 这张表特有的几件事：
- *   ① 数字列（序号 / 告警数量 / 通道数）右对齐 —— 位数不同的两行才读得成一列；
+ *   ① 数字列（告警数量 / 通道数）与三个图标列**居中对齐**（第 11 批第 6 条：「告警数量，
+ *      通道数，查看，设置这些内容都应该居中对齐」）——「删除」也是同一类图标列，一起居中，
+ *      否则这一行会有两个不同的对齐方式；
  *   ② 最后三列是图标按钮，宽度收到内容宽，不参与分配剩余宽度（否则图标会被甩到很右边）；
  *   ③ IP 那一格是 `<button>`（双击开设备 Web 界面），要看起来像一格文字而不是一个按钮；
  *   ④ 被选中的那一行加底色 —— 选中态由本页自己拿着（`activeRowId`），不再与任何左侧面板共享。
  */
-.devices-table-flat {
-  /* 只有上下两条线，没有卡片：上边线是这一段的起点，下边线把它与页脚内容分开。 */
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.devices-table-flat .devices-table {
-  /* `.table` 自己带表头底色与行线；这里只把"卡片内边距"那套去掉。 */
+.devices-table-card .devices-table {
+  /* `.table` 自己带表头底色与行线；这里只把"卡片内边距之外"的多余底色去掉。 */
   background: transparent;
 }
 
 .devices-table .devices-table__num {
   text-align: right;
   white-space: nowrap;
+}
+
+/*
+ * 居中（业主 2026-09-19 第 11 批第 6 条）。
+ *
+ * 放在 `__num` 之后：两者特异性相同（都是 0,2,0），靠**顺序**决定胜负 —— 告警数量与通道数
+ * 这两列同时带着 `__num` 与 `__center`，后者要赢。三个图标列本来就不是 `__num`，
+ * 这里只是把列标题与图标放在这一格的正中（原来靠 `width: 1%` + 左对齐）。
+ */
+.devices-table .devices-table__center {
+  text-align: center;
 }
 
 /*

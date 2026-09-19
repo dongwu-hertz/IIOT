@@ -176,7 +176,7 @@ node scripts/patch-native-deps.cjs --revert    # 还原备份
 | `@duckdb/node-api` | ✅ 预编译，真实 Parquet + `time_bucket()` 查询通过 |
 | DPAPI 凭据加密 | ✅ 加解密往返一致 |
 | 未打包目录（`pack:dir`） | ✅ **已产出并验证**：`npm run verify:packaged` 20 项 |
-| NSIS 安装包（`dist:win` / `dist:win:signed`） | ✅ **已产出**：`HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe · 120.9 MB`（`npm run dist:win`，**未签名**——按产品决定先不签，见第 8 节） |
+| NSIS 安装包（`dist:win` / `dist:win:signed`） | ✅ **已产出**：`HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe · 120.9 MB`（`npm run dist:win`，**未签名**——按产品决定先不签，见第 8 节）。**2026-09-19 起文件名带发布日期**：`…-<版本>-<发布日期>-x64-setup.exe`（见第 4 节与 §第 5 节） |
 | 静默安装 → 运行 → 卸载 | ✅ 已实测：安装后应用 25 项验证全通过；卸载后安装目录与注册表项清除，**用户数据保留** |
 | 代码签名 | ⏸ **本轮按产品要求不签**：`npm run dist:win` 产出 NotSigned 安装包。签名链路（CA 云端签名 / SimplySign + RFC3161 时间戳）已在早前版本验通，`npm run dist:win:signed` 与 `scripts/sign-preflight.cjs` 保持可用。见第 8 节 |
 
@@ -300,6 +300,36 @@ node scripts/camera-load.cjs --streams 1,2,4 --seconds 10
 > 发布正式版本时用 `dist:win:signed`，并用
 > `$env:HERTZINNO_REQUIRE_SIGNATURE='1'; npm run verify:packaged`
 > 把"签名"从提示变成硬性失败条件（见第 8 节）。
+
+### 发布版本号与安装包文件名（业主 2026-09-19 第 11 批第 1 条）
+
+业主的要求：「每个发布的软件 应该后缀发布日期，以及小版本号的变动。」落法是**每次发布改两处
+`package.json` 字段**，其余全自动：
+
+```jsonc
+{
+  "version": "1.0.1",          // 每次发布把第三位 +1（"小版本号"按 patch 读）
+  "releaseDate": "2026-09-19"  // 改成发布当天；它同时是界面上"发布日期"那个读数
+}
+```
+
+安装包的名字由 `scripts/release-stamp.cjs` 从这两个字段拼出（产品名取自
+`electron-builder.yml` 的 `productName`，保证与安装向导里的产品名是同一个字符串）：
+
+```
+HERTZINNO Acoustic Box Manager-1.0.1-2026-09-19-x64-setup.exe
+```
+
+| 谁用这个名字 | 怎么拿到 |
+|---|---|
+| `npm run dist:win:offline`（**离线出包，正式发布走这条**） | `scripts/electron-builder.offline.cjs` 覆盖 `win.artifactName` |
+| `npm run dist:win:signed`（签名出包） | `scripts/electron-builder.signed.cjs` 覆盖同一个键 |
+| `npm run dist:win`（不吃独立配置的老路） | `electron-builder.yml` 里那个**不带日期**的兜底名字 |
+
+为什么不让 YAML 自己拼：`electron-builder.yml` 读不到 `package.json` 的 `releaseDate`，
+而 `${env.RELEASE_DATE}` 会让不吃独立配置的 `dist:win` 变成"不设环境变量就构建失败"。
+判据在 `tests/installer-name.test.ts`：文件名里有版本与日期、日期原样可解析、第三位比上一次发布大、
+离线包与签名包名字完全一致。细节与冲突记录见 `docs/Ivms4200-UX-REFERENCE.md` §15.71。
 
 ---
 

@@ -35,6 +35,7 @@ import {
 import {
   addManualSource,
   buildCameraCells,
+  clearCameraWallCells,
   createCameraWallModel,
   findCameraSlot,
   manualSourceById,
@@ -254,6 +255,35 @@ describe('墙的模型：手填源与设备共用槽位', () => {
     assert.deepEqual([...result.model.slots], [SOURCE_A.id])
   })
 
+  it('清空格子（离开画面墙）**不丢手填源** —— 它们是配置，不是会话', () => {
+    /*
+     * 这是第 11 批第 2 条带出来的一个真 bug：管理入口搬到实时监测页之后，"离开画面墙"
+     * 那一趟（`clearAll`）如果照旧用 `createCameraWallModel()` 重建模型，手填源会被**当场删光**
+     * —— 而它们在内存里没有第二份，界面也不会说任何话。清空的是会话（要停 ffmpeg），
+     * 不是操作员刚填进去的地址。
+     */
+    let model = modelWithSources()
+    model = { ...model, slots: [SOURCE_A.id, 'dev-camera-1', null, null], audioSlot: 0, activeSlot: 1 }
+    const cleared = clearCameraWallCells(model, 4)
+
+    // 交出去的是"清空之前占着格的那些 id"（调用方据此停会话）。
+    assert.deepEqual(cleared.assigned, [SOURCE_A.id, 'dev-camera-1'])
+    // 格子/出声格/当前格全归零，档位是调用方给的那一个。
+    assert.deepEqual([...cleared.model.slots], [null, null, null, null])
+    assert.equal(cleared.model.audioSlot, null)
+    assert.equal(cleared.model.activeSlot, 0)
+    assert.equal(cleared.model.layout, 4)
+    // **两条源都还在**（顺序也不变）。
+    assert.deepEqual(
+      manualSourcesOf(cleared.model).map((source) => source.id),
+      [SOURCE_A.id, SOURCE_B.id]
+    )
+    // 传进去的模型没有被就地改掉（纯函数：新对象）。
+    assert.deepEqual([...model.slots], [SOURCE_A.id, 'dev-camera-1', null, null])
+    // 交出去的那一份是**副本**：调用方之后改它不该影响原模型。
+    assert.notEqual(cleared.model.manualSources, model.manualSources)
+  })
+
   it('渲染模型：手填格显示自己的名字，状态只来自主进程那一路会话', () => {
     const model: CameraWallModel = { ...modelWithSources(), slots: [SOURCE_A.id, null, null, null] }
 
@@ -405,46 +435,82 @@ describe('界面接线（源码守卫）', () => {
     assert.match(handlers, /services\.cameraLive\.startManual\(/, '没有接上 startManual')
   })
 
-  it('对话框：表单 + 列表 + 增改删，并且三件事都发得出去', () => {
-    const dialog = read('src/renderer/src/components/ManualRtspDialog.vue')
+  it('管理界面（业主第 11 批第 2 条：在实时监测页）：表单 + 列表 + 增改删，三件事都发得出去', () => {
+    const sources = read('src/renderer/src/components/ManualRtspSources.vue')
     for (const hook of [
-      'data-manual-rtsp-dialog',
+      'data-manual-rtsp-sources',
       'data-manual-rtsp-url',
       'data-manual-rtsp-name',
       'data-action="manual-rtsp-save"',
-      'data-action="manual-rtsp-place"',
       'data-action="manual-rtsp-edit"',
       'data-action="manual-rtsp-remove"',
+      'data-action="manual-rtsp-cancel-edit"',
       'data-manual-rtsp-row',
-      'data-manual-rtsp-empty'
+      'data-manual-rtsp-empty',
+      'data-manual-rtsp-error'
     ]) {
-      assert.ok(dialog.includes(hook), `对话框缺 ${hook}`)
+      assert.ok(sources.includes(hook), `管理界面缺 ${hook}`)
     }
-    assert.match(dialog, /parseManualRtspUrl\(/, '没有用共享层的地址判据')
-    assert.match(dialog, /maskRtspUrl\(/, '列表里的地址没有打码')
-    assert.match(dialog, /crypto\.getRandomValues/, 'id 不是随机生成的')
-    assert.match(dialog, /manualNote/, '没有把"手册未说明"那三条口径写在界面上')
+    assert.match(sources, /parseManualRtspUrl\(/, '没有用共享层的地址判据')
+    assert.match(sources, /maskRtspUrl\(/, '列表里的地址没有打码')
+    assert.match(sources, /crypto\.getRandomValues/, 'id 不是随机生成的')
+    assert.match(sources, /manualNote/, '没有把"手册未说明"那两条口径写在界面上')
+    // 删除之后要**停掉那一路会话**（源没了而 ffmpeg 还在读那个地址是一个没人看的进程）。
+    assert.match(sources, /result\.toStop/, '删除之后没有去停会话')
+    assert.match(sources, /window\.api\.cameraLive\.stop\(/, '没有真的调停流')
+    // 管理界面**不碰画面格**：放进第几格是画面墙的事（两处各写一套迟早分叉）。
+    assert.equal(
+      /placeDevice/.test(sources),
+      false,
+      '管理界面自己往画面格里放东西了（落点规则应当只有画面墙那一处）'
+    )
   })
 
-  it('墙：入口、选择器里的手填源、以及 start 时把 url 传下去', () => {
+  it('这一页真的挂在实时监测页上，而**画面墙那一侧没有入口了**', () => {
+    const monitor = read('src/renderer/src/views/MonitorView.vue')
+    assert.match(monitor, /import ManualRtspSources from '@renderer\/components\/ManualRtspSources\.vue'/, '实时监测页没有引入管理界面')
+    assert.match(monitor, /<ManualRtspSources \/>/, '实时监测页没有挂上管理界面')
+    // 挂在 `v-else` **之外**：一台设备都没有的机器照样能接一路第三方相机。
+    // 判据：它是 `.page` 的**最后一个子节点**（后面只剩 `.page` 的收尾与 SFC 根标签）——
+    // 也就是 `v-else` 那一块已经收完了。写 `lastIndexOf('</template>')` 会踩到根标签那个
+    // （它在组件**之后**），所以这里认的是"后面还剩什么"。
+    const tail = monitor.slice(monitor.indexOf('<ManualRtspSources />'))
+    assert.match(
+      tail,
+      /^<ManualRtspSources \/>\s*<\/div>\s*<\/template>/,
+      '管理界面不是 `.page` 的直接子节点（放进了"有设备才显示"的分支里）'
+    )
+
     const wall = read('src/renderer/src/components/CameraVideoWall.vue')
-    assert.ok(wall.includes('data-action="manual-rtsp-open"'), '标题行里没有手填入口')
-    assert.ok(wall.includes('<ManualRtspDialog'), '没有挂上对话框')
+    assert.equal(wall.includes('data-action="manual-rtsp-open"'), false, '画面墙上还留着手填入口')
+    assert.equal(wall.includes('<ManualRtspDialog'), false, '画面墙还挂着那个对话框')
+    assert.equal(
+      /import ManualRtspDialog/.test(wall),
+      false,
+      '对话框组件已经删掉了，别处不要再引用它'
+    )
+    // 那个组件本身也不该再存在（搬走之后留着就是第二份实现）。
+    assert.equal(
+      fs.existsSync(path.join(projectRoot, 'src/renderer/src/components/ManualRtspDialog.vue')),
+      false,
+      'ManualRtspDialog.vue 还在（它的表单与列表已经搬到 ManualRtspSources.vue）'
+    )
+    // 但墙仍然**用得上**这些源：选择器里要列出它们，start 时要把地址传下去。
     assert.match(wall, /manualSuffix/, '选择器里的手填源没有标记')
     assert.match(
       wall,
       /manual \? \{ sourceId: manual\.id, url: manual\.url \} : \{ deviceId \}/,
       'start 时没有把地址传给主进程'
     )
-    assert.match(wall, /async function onManualApplied/, '改完地址之后没有重启那一格')
-    assert.match(wall, /async function onManualRemoved/, '删掉源之后没有停那几路')
   })
 
-  it('store：手填源不进 localStorage（口令不能落盘）', () => {
+  it('store：手填源不进 localStorage（口令不能落盘），而且清空格子时留着它们', () => {
     const store = read('src/renderer/src/stores/liveWall.ts')
     assert.match(store, /const manualSources = computed\(\(\) => manualSourcesOf\(model\.value\)\)/)
     assert.match(store, /isManualRtspId\(deviceId\)\) continue/, 'syncDevices 会把手填格当已删设备清掉')
     assert.match(store, /manualSourcesOf\(model\.value\)/, '没有从模型里读手填源')
+    // `clearAll` 走的是"保源清格"那一个纯函数，不是重建模型。
+    assert.match(store, /clearCameraWallCells\(model\.value, layoutToKeep\)/, '清空格子会把源一起删掉')
     // 手填源**没有**被写进 localStorage（只有档位与视图对象写盘）。
     assert.equal(
       /localStorage\.setItem\([^)]*manual/i.test(store),

@@ -1320,11 +1320,20 @@ export const zhCN = {
    */
   mapUi: {
     canvasLabel: '设备落点图',
-    counts: '图上 {withPoint} 台 / 共 {total} 台',
-    noPoints: '还没有任何设备录入点位。到「设备管理 → 编辑 → 安装信息」里填经纬度，设备就会落在这张图上。',
+    /**
+     * 地图右上角那条半透明状态栏（业主 2026-09-19 第 11 批第 4 条：删除「图上 N 台 / 共 M 台」、
+     * 图例上的三个计数、以及「还没有任何设备录入点位…」那句，改说「直接显示 GIS 地图的信息，
+     * 在地图右上角的位置做一个半透明的状态栏，显示当前地图上的设备数量信息，告警信息」）。
+     *
+     * 五个数各有各的措辞，不合成一句话：状态栏是**读数**，不是句子（挤在一行里时更读得出来）。
+     */
+    statusLabel: '地图状态',
+    statusMapped: '图上 {count} 台',
+    statusTotal: '共 {count} 台',
+    statusOnline: '在线 {count}',
+    statusOffline: '离线 {count}',
+    statusAlarms: '未确认告警 {count}',
     selectHint: '点一个标记查看这台设备：位置、告警与抓图。',
-    withoutPointTitle: '未录入点位的设备（{count} 台）',
-    withoutPointHint: '它们不在图上：没有点位就没有位置可画。上面点名字可以进那一台去补录。',
     pickOne: '还没有选中设备。',
     point: '点位',
     /**
@@ -1336,7 +1345,18 @@ export const zhCN = {
     /** 设备列表（第 17 条的第一张）。 */
     devicesTitle: '设备列表',
     devicesCount: '{count} 台',
-    devicesHint: '点一行选中它（地图上的标记同时高亮），双击进这一台的详情页。',
+    /**
+     * 列表只有三列（业主 2026-09-19 第 11 批第 5 条：「设备列表只需要显示序号，设备名称，状态这三项」），
+     * 而且「点击设备名称可以进入到设备详情」—— 双击仍然进详情（地图上的标记一直是这么做的）。
+     */
+    devicesHint: '点一行选中它（地图上的标记同时高亮）；点设备名称进这一台的详情页。',
+    /**
+     * 翻页（同一条第 5 条：设备列表默认最多 10 台，超过就翻页）。
+     * `pageStatus` 只写"第几页/共几页"：一页几台是 `DEVICE_MAP_PAGE_SIZE` 那个常量的事。
+     */
+    pagePrev: '上一页',
+    pageNext: '下一页',
+    pageStatus: '第 {page} / {pages} 页',
     colAlarms: '未确认告警',
     /** 告警列表（第二张）。 */
     alarmsTitle: '告警列表',
@@ -2480,26 +2500,22 @@ export const zhCN = {
     viewNeedsCamera: '第三方 RTSP 源只有画面',
     viewSpectrogramNote: '颜色只表示同一帧内谱线的相对强弱',
     viewStreamError: '声学数据这一路打不开',
-    manualOpen: '手填 RTSP 地址…',
-    manualTitle: '手填 RTSP 地址',
-    manualNote: '手册未说明第三方 RTSP 接入：地址按原样交给内置 ffmpeg，本机只判形状、不判能不能连上（连不上时这一格会显示 ffmpeg 的原文）。地址只在本次运行内有效 —— 它常带口令，不写盘。',
+    manualTitle: '第三方相机（手填 RTSP）',
+    manualNote: '手册未说明第三方 RTSP 接入：地址按原样交给内置 ffmpeg，本机只判形状、不判能不能连上（连不上时画面格会显示 ffmpeg 的原文）。地址只在本次运行内有效 —— 它常带口令，不写盘。',
+    manualWhere: '放进画面格在总览页的视频墙里：点一格，在列表里选它。',
     manualName: '名称',
     manualNameHint: '留空就用地址里的主机名',
     manualUrl: 'RTSP 地址',
     manualUrlPlaceholder: 'rtsp://192.168.1.64:554/Streaming/Channels/101',
-    manualSave: '保存并放到当前格',
+    manualSave: '添加',
     manualUpdate: '保存修改',
     manualList: '已添加的手填源',
     manualEmpty: '还没有手填的地址。',
-    manualPlace: '放入当前格',
     manualEdit: '编辑',
     manualDelete: '删除',
-    manualInSlot: '在第 {slots} 格',
     manualAtCapacity: '最多 {max} 条手填源。',
     manualSuffix: '手填 RTSP',
     manualMissing: '这条手填 RTSP 源已经不在列表里了',
-    manualAdded: '已加入第 {slot} 格',
-    manualRemoved: '已删除这条手填源（清空了 {count} 格）',
     manualIssueEmpty: '请填写 RTSP 地址',
     manualIssueScheme: '地址必须以 rtsp:// 或 rtsps:// 开头',
     manualIssueHost: '地址里没有主机名',

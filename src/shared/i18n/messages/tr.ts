@@ -1150,11 +1150,18 @@ export const tr: MessageSchema = {
   /** Çevrimdışı cihaz haritası (8. parti). Arka plan yalnızca kayıtlı WGS84 noktalarından çizilir. */
   mapUi: {
     canvasLabel: 'Cihaz konumları',
-    counts: '{total} cihazdan {withPoint} tanesi haritada',
-    noPoints: 'Henüz hiçbir cihazın noktası kayıtlı değil. Cihazlar → Düzenle → Kurulum bilgisi altında enlem/boylam girin; cihaz burada görünür.',
+    /**
+     * Haritanın sağ üst köşesindeki yarı saydam durum çubuğu (11. parti, 4. madde):
+     * «{withPoint} / {total}» satırı, göstergedeki sayılar ve «henüz hiçbir cihazın noktası
+     * kayıtlı değil» paragrafı adıyla silindi. Beş ayrı okuma, tek cümle değil.
+     */
+    statusLabel: 'Harita durumu',
+    statusMapped: 'Haritada {count}',
+    statusTotal: 'Toplam {count}',
+    statusOnline: 'Çevrimiçi {count}',
+    statusOffline: 'Çevrimdışı {count}',
+    statusAlarms: 'Onaylanmamış {count}',
     selectHint: 'Bir işaretçiye tıklayıp cihazı görün: konum, alarmlar ve görüntüler.',
-    withoutPointTitle: 'Noktası olmayan cihazlar ({count})',
-    withoutPointHint: 'Haritada değiller: nokta yoksa çizilecek konum da yok. Kaydetmek için ada tıklayıp o cihazı açın.',
     pickOne: 'Henüz cihaz seçilmedi.',
     point: 'Nokta',
     /**
@@ -1166,7 +1173,15 @@ export const tr: MessageSchema = {
     /** Cihaz listesi (üç listenin ilki, 17. madde). */
     devicesTitle: 'Cihazlar',
     devicesCount: '{count} cihaz',
-    devicesHint: 'Cihazı seçmek için bir satıra tıklayın (haritadaki işaretçi de vurgulanır); o cihazı açmak için çift tıklayın.',
+    /**
+     * Yalnızca üç sütun (11. parti, 5. madde: sıra / ad / durum) ve cihaz adına tıklamak
+     * ayrıntı sayfasını açar. Çift tıklama da çalışır: harita işaretçileri hep öyle yaptı.
+     */
+    devicesHint: 'Cihazı seçmek için bir satıra tıklayın (haritadaki işaretçi de vurgulanır); cihazı açmak için adına tıklayın.',
+    /** Sayfalama (aynı madde: sayfa başına en fazla 10 cihaz, sonra sayfalar). */
+    pagePrev: 'Önceki',
+    pageNext: 'Sonraki',
+    pageStatus: 'Sayfa {page} / {pages}',
     colAlarms: 'Onaylanmamış',
     /** Alarm listesi (ikinci). */
     alarmsTitle: 'Alarmlar',
@@ -2259,26 +2274,22 @@ export const tr: MessageSchema = {
     viewNeedsCamera: 'Üçüncü taraf RTSP kaynağında yalnızca görüntü var',
     viewSpectrogramNote: 'Renk yalnızca aynı karedeki görece gücü gösterir',
     viewStreamError: 'Bu akustik akış açılamadı',
-    manualOpen: 'RTSP adresi yaz…',
-    manualTitle: 'Elle yazılan RTSP adresi',
+    manualTitle: 'Üçüncü taraf kameralar (elle yazılan RTSP)',
     manualNote: 'Kılavuz üçüncü taraf RTSP bağlantısını açıklamıyor: adres olduğu gibi paketlenmiş ffmpeg’e verilir. Bu uygulama yalnızca biçimi denetler, erişilebilirliği asla (bağlanamazsa hücre ffmpeg’in kendi metnini gösterir). Adres yalnızca bu çalışma sırasında bellekte durur: genellikle parola taşır ve diske yazılmaz.',
+    manualWhere: 'Bir hücreye koymak için genel bakış sayfasındaki video duvarını kullanın: bir hücreye tıklayıp listeden seçin.',
     manualName: 'Ad',
     manualNameHint: 'Boş bırakırsanız adresteki ana makine adı kullanılır',
     manualUrl: 'RTSP adresi',
     manualUrlPlaceholder: 'rtsp://192.168.1.64:554/Streaming/Channels/101',
-    manualSave: 'Kaydet ve geçerli hücreye koy',
+    manualSave: 'Ekle',
     manualUpdate: 'Değişiklikleri kaydet',
     manualList: 'Elle yazılan kaynaklar',
     manualEmpty: 'Henüz elle yazılmış bir adres yok.',
-    manualPlace: 'Geçerli hücreye koy',
     manualEdit: 'Düzenle',
     manualDelete: 'Sil',
-    manualInSlot: '{slots}. hücrede',
     manualAtCapacity: 'En fazla {max} elle yazılan kaynak.',
     manualSuffix: 'elle RTSP',
     manualMissing: 'Bu elle yazılan RTSP kaynağı artık listede değil',
-    manualAdded: '{slot}. hücreye eklendi',
-    manualRemoved: 'Elle yazılan kaynak silindi ({count} hücre boşaltıldı)',
     manualIssueEmpty: 'Bir RTSP adresi girin',
     manualIssueScheme: 'Adres rtsp:// veya rtsps:// ile başlamalı',
     manualIssueHost: 'Adreste ana makine adı yok',

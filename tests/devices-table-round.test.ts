@@ -163,31 +163,28 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     assert.equal(messageAt('zh-CN', 'addDeviceUi.kindLabel'), '设备类型')
   })
 
-  it('扁平化（第 2b 条）：这一页不用卡片外壳，只有线与表', () => {
+  it('第 11 批第 6 条：扁平外壳换成了**卡片**（像实时监测页那一套），内部保留列线', () => {
     /*
-     * 业主 2026-09-18 第 2b 条：「设备管理这个界面里面的内容，不要做成卡片的，而是做成
-     * 扁平化设计，用线条分区」。`.table-wrap` 是**全应用共用**的卡片外壳（告警/事件中心/
-     * 录音/样本库都靠它），所以这一页改成自己的 `.devices-table-flat`（上边线 + 行分隔线）。
+     * 业主 2026-09-19 第 11 批第 6 条的原话是「做个卡片做一个小的区分… 类似于实时监控界面的」，
+     * 与 2026-09-18 第 2b 条（「不要做成卡片的，而是做成扁平化设计，用线条分区」）**正相反**。
+     * 这一轮照最新的一条改：外壳用全局 `.card`（实时监测页每一块用的就是它），
+     * 卡片内部仍然保留第 10 批更正第 3 条要的每列一条浅色竖线。
+     * 两批要求的冲突写进 `docs/Ivms4200-UX-REFERENCE.md` §15.70。
      */
     assert.ok(
-      devicesViewCode.includes('class="devices-table-flat"'),
-      '设备表外壳不是扁平化的 .devices-table-flat'
+      devicesViewCode.includes('class="card devices-table-card"'),
+      '设备表外壳不是卡片（第 11 批第 6 条要的是卡片）'
     )
     assert.equal(
-      devicesViewCode.includes('table-wrap'),
+      devicesViewCode.includes('devices-table-flat'),
       false,
-      '这一页又用回了卡片外壳（.table-wrap）'
+      '扁平外壳的类名还在（第 6 条已经改回卡片）'
     )
-    // 扁平外壳必须靠线分区：至少有一条上边线与一条下边线。
+    // 卡片内部靠线分区：每一列之间仍然有一条浅色竖线（第 10 批更正第 3 条）。
     assert.match(
       devicesView,
-      /\.devices-table-flat\s*\{[^}]*border-top:\s*1px solid/,
-      '扁平外壳没有上边线'
-    )
-    assert.match(
-      devicesView,
-      /\.devices-table-flat\s*\{[^}]*border-bottom:\s*1px solid/,
-      '扁平外壳没有下边线'
+      /\.devices-table th \+ th,\s*\n\s*\.devices-table td \+ td\s*\{[^}]*border-left:\s*1px solid/,
+      '卡片内部没有每列的浅色竖线'
     )
     assert.ok(devicesViewCode.includes('class="table devices-table"'), '表格没有用全局 .table')
     // 卡片版式（上一版的 `device-card*` / `fact__*`）必须连同样式一起删干净。
@@ -195,6 +192,43 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     assert.equal(/\.fact(__|\s*\{)/.test(devicesView), false, '卡片版式的 `.fact*` 样式还在')
     // 行要有可点的手感（全局 `.table tbody tr.is-clickable`）。
     assert.ok(devicesViewCode.includes("'is-clickable'"), '可点击的行没有挂 is-clickable')
+  })
+
+  it('第 11 批第 6 条：告警数量 / 通道数 / 查看 / 设置（以及删除）居中对齐', () => {
+    // 一条规则管住这几列（放在 `__num` 之后，所以它能盖住右对齐）。
+    assert.ok(
+      /\.devices-table \.devices-table__center\s*\{[^}]*text-align: center/.test(devicesView),
+      '没有居中对齐那一条规则'
+    )
+    for (const hook of [
+      'devicesUi.alarmCountColumn',
+      'devicesUi.channelColumn',
+      'devicesUi.viewColumn',
+      'devicesUi.settingColumn'
+    ]) {
+      const at = devicesViewCode.indexOf(hook)
+      assert.ok(at > 0, `表头里找不到 ${hook}`)
+      const tag = devicesViewCode.slice(devicesViewCode.lastIndexOf('<th', at), at)
+      assert.ok(tag.includes('devices-table__center'), `${hook} 那一列没有居中`)
+    }
+    // 三列数据格（表体）也必须带同一个类，否则表头居中、内容还是左对齐。
+    assert.ok(
+      (devicesViewCode.match(/devices-table__center/g) ?? []).length >= 9,
+      '表体与表头的居中类数量不对（表头 5 + 表体 5）'
+    )
+  })
+
+  it('第 11 批第 6 条：状态那一栏不再显示「局域网 / 外网」', () => {
+    const statusCell = devicesViewCode.slice(
+      devicesViewCode.indexOf('<StatusBadge'),
+      devicesViewCode.indexOf('<StatusBadge') + 200
+    )
+    assert.ok(statusCell.includes('<StatusBadge'), '找不到状态徽标')
+    assert.equal(
+      /connection-type/.test(statusCell),
+      false,
+      '状态那一栏还在传 connection-type（就会显示「局域网 / 外网」）'
+    )
   })
 
   it('数字列右对齐、图标列不参与分配宽度（否则图标会被甩到很右边）', () => {

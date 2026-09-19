@@ -99,7 +99,6 @@ import CameraAlarmDialog from '@renderer/components/CameraAlarmDialog.vue'
 import CameraCellPicker, {
   type CameraPickerItem
 } from '@renderer/components/CameraCellPicker.vue'
-import ManualRtspDialog from '@renderer/components/ManualRtspDialog.vue'
 import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloadDialog.vue'
 import CameraRecordingPlaybackDialog from '@renderer/components/CameraRecordingPlaybackDialog.vue'
 import LayoutGridIcon from '@renderer/components/LayoutGridIcon.vue'
@@ -423,9 +422,6 @@ const pickerItems = computed<CameraPickerItem[]>(() => {
   return [...cameras, ...manual]
 })
 
-/** 手填 RTSP 地址对话框的开关。 */
-const manualDialogOpen = ref(false)
-
 /**
  * 视图的图标字形。
  *
@@ -458,35 +454,13 @@ function chooseCellView(cell: CameraCellView, view: CameraCellViewMode): void {
 }
 
 /**
- * 手填源新增/改完之后：把那一格重启一次。
+ * 手填源的**管理**已经不在这一页（业主 2026-09-19 第 11 批第 2 条：挪到实时监测页的
+ * `ManualRtspSources.vue`）。于是"改完地址把那一格重启一次"和"删掉源之后停那几路会话"
+ * 这两件事也跟着搬走了 —— 它们在那边由删除动作自己收尾。
  *
- * 不加这一步，"改地址"在屏幕上就是**没有反应**的 —— 主进程里那一路 ffmpeg 还在读旧地址，
- * 而界面已经显示新地址了（那是界面在说一件没发生的事）。
+ * 这一页留下的只有**使用**：选择器里列出已有的源（`pickerItems`），
+ * `startCell()` 把它们作为 `{ sourceId, url }` 交给主进程。
  */
-async function onManualApplied(slot: number): Promise<void> {
-  const cell = cells.value.find((item) => item.index === slot)
-  if (!cell || !cell.deviceId) return
-  await stopCell(cell)
-  await startCell(cell)
-  wall.setNotice(null)
-}
-
-/**
- * 手填源被删掉之后：把那一路会话**停掉**，并清掉它占过的格。
- *
- * 「停会话」这一步不能省：源删了、格子清了，而主进程里那个 ffmpeg 还在读那个地址 ——
- * 那是一个没人看的进程占着相机有限的连接数（实测被探针抓到：删掉之后
- * `cameraLive.state()` 里还留着一条 `rtsp:` 会话）。
- */
-async function onManualRemoved(id: string, slots: number[]): Promise<void> {
-  for (const slot of slots) {
-    releaseVideo(slot)
-    if (wall.audioSlot === slot) wall.setAudio(null)
-  }
-  wall.forgetState(id)
-  await callApi(() => window.api.cameraLive.stop(id))
-  await refreshLimits()
-}
 
 /** 浮层的无障碍名字：空白格是「选择相机」，已经有一台的是「更换相机」。 */
 const pickerLabel = computed(() => {
@@ -1579,18 +1553,14 @@ function cellBadgeClass(cell: CameraCellView): string {
       <span class="muted chart-hint">{{ summaryText }}</span>
 
       <!--
-        手填 RTSP 地址（业主 2026-09-19 第 3 条：「能手填一个 RTSP 地址给第三方相机」）。
-        放在标题行里而不是画面格里：它是一个**新建一个源**的动作，与"哪一格放什么"无关
-        （放进去用的是当前格）。选择器列表末尾也有同一个入口，两处指向同一个对话框。
+        手填 RTSP 地址的**新建入口不在这里**（业主 2026-09-19 第 11 批第 2 条：
+        「实时视频墙的手填 RTSP 地址应该挪到视频管理界面」→ 实时监测页）。
+
+        这一面墙仍然**用得上**那些源：点某一格时，选择器里会列出
+        「名字（手填 RTSP）」（见 `pickerItems`）。两件事因此各归各的页：
+        新建/改名/改地址/删除在实时监测页（`ManualRtspSources.vue`），
+        把某一条放进第几格在这一页。
       -->
-      <button
-        type="button"
-        class="btn btn--sm"
-        data-action="manual-rtsp-open"
-        @click="manualDialogOpen = true"
-      >
-        {{ t('cameraWallUi.manualOpen') }}
-      </button>
 
       <!--
         档位控件右对齐（产品要求「切换窗口右对齐」），是标题行**最右边**的元素：
@@ -1797,9 +1767,15 @@ function cellBadgeClass(cell: CameraCellView): string {
             <span class="camera-wall__view-glyph" aria-hidden="true">{{ cellViewGlyph(view) }}</span>
           </button>
 
+          <!--
+            这一格的播放/停止（`data-cell-play` 是**给探针用的**钩子：把一条源放进格子只是"分配"，
+            真正起流要按这一颗 —— 相机与手填的第三方源走的是同一条路，业主第 11 批第 2 条
+            把管理界面搬走之后，探针需要能点到它）。
+          -->
           <button
             type="button"
             class="camera-wall__bar-btn"
+            data-cell-play
             :aria-label="playbackLabel(cell)"
             :title="playbackLabel(cell)"
             :aria-busy="isBusy(cell.index)"
@@ -1913,19 +1889,9 @@ function cellBadgeClass(cell: CameraCellView): string {
     />
 
     <!--
-      手填 RTSP 地址的对话框（业主 2026-09-19 第 3 条）。
-
-      它自己持有表单与列表（增 / 改 / 删），本组件只做两件事：
-        · `applied` → 把那一格**重启**一次（改地址之后旧 ffmpeg 还在读旧地址）；
-        · `removed` → 把被清空的那几格的会话停掉。
-      「进去之后干什么」不在对话框里，与 `CameraCellPicker` 同一条规矩。
+      手填 RTSP 地址的**管理界面不在这里**（业主 2026-09-19 第 11 批第 2 条：挪到实时监测页，
+      见 `ManualRtspSources.vue`）。这一页只把已经存在的那些源列进选择器，并把地址交给主进程。
     -->
-    <ManualRtspDialog
-      v-model="manualDialogOpen"
-      :target-slot="wall.activeSlot"
-      @applied="onManualApplied"
-      @removed="onManualRemoved"
-    />
     <!--
       右键菜单与三个对话框：挂在**墙级别**，只画一份。
 

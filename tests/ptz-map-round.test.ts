@@ -64,6 +64,7 @@ const detailView = read('src/renderer/src/views/DeviceDetailView.vue')
 const detailTemplate = stripComments(templateBlock(detailView))
 const ptzPanel = read('src/renderer/src/components/AirSonarPtzPanel.vue')
 const mapView = read('src/renderer/src/views/DeviceMapView.vue')
+const mapFull = stripComments(mapView)
 const mapTemplate = templateBlock(mapView)
 const mapCode = stripComments(mapTemplate)
 const router = read('src/renderer/src/router/index.ts')
@@ -201,9 +202,30 @@ describe('点位图：不联网、点声呐看抓图', () => {
     )
   })
 
-  it('没有点位的设备**单独列出来**，不画在图上', () => {
-    assert.ok(mapTemplate.includes('data-map-without-point'), '没有"未录入点位"那一块')
-    assert.ok(mapCode.includes('layout.withoutPoint'), '视图没有用 withoutPoint（半点位会被画在图上）')
+  it('没点位的设备**不再单独列一张卡**（业主 2026-09-19 第 11 批第 5 条点名删除）', () => {
+    /*
+     * 第 8 批时它们是单独一块（`data-map-without-point`），理由是"混进图里会被读成落点在这里"。
+     * 第 11 批第 5 条把那一块删了（「未录入点位设备这个卡片内容删除」），而它们并没有消失：
+     * **设备列表是设备表的全部**（不是"图上的那几台"），所以没录点位的设备照样在列表里，
+     * 状态栏那两个数（图上 N 台 / 共 M 台）之差就说明有几台没录。
+     */
+    assert.equal(
+      mapTemplate.includes('data-map-without-point'),
+      false,
+      '「未录入点位」那张卡又回来了（第 5 条已删）'
+    )
+    assert.equal(
+      mapCode.includes('layout.withoutPoint'),
+      false,
+      '视图还在读 withoutPoint（那一块已经不在模板里了）'
+    )
+    // 设备列表遍历的是**全部设备**，不是图上那几个落点。
+    assert.match(
+      mapCode,
+      /v-for="\(device, index\) in pagedDevices"/,
+      '设备列表不是从设备表（分页后）来的'
+    )
+    assert.match(mapFull, /listPageSlice\(devices\.devices, devicePage\.value/, '分页的输入不是设备表')
   })
 
   it('抓图三种状态分别渲染（有图 / 设备上本来没有 / 文件已不在）', () => {
@@ -275,8 +297,23 @@ describe('点位图：不联网、点声呐看抓图', () => {
 
   it('四种语言的地图文案齐全，而且名字**不带括号与 GIS**', () => {
     for (const locale of Object.keys(CATALOGUES)) {
-      for (const key of ['app.nav.map', 'mapUi.canvasLabel', 'mapUi.noPoints', 'mapUi.snapshotNotCaptured']) {
+      for (const key of [
+        'app.nav.map',
+        'mapUi.canvasLabel',
+        // 状态栏那五个读数（第 11 批第 4 条）—— 它们顶掉了被删掉的 `mapUi.counts`。
+        'mapUi.statusLabel',
+        'mapUi.statusMapped',
+        'mapUi.statusTotal',
+        'mapUi.statusOnline',
+        'mapUi.statusOffline',
+        'mapUi.statusAlarms',
+        'mapUi.snapshotNotCaptured'
+      ]) {
         assert.ok(messageAt(locale, key), `${locale} 缺 ${key}`)
+      }
+      // 被业主点名删掉的三句必须**从目录里也删掉**（留着就是死键）。
+      for (const key of ['mapUi.counts', 'mapUi.noPoints', 'mapUi.withoutPointTitle', 'mapUi.withoutPointHint']) {
+        assert.equal(messageAt(locale, key), undefined, `${locale} 还留着已删掉的 ${key}`)
       }
     }
     /*
@@ -292,7 +329,11 @@ describe('点位图：不联网、点声呐看抓图', () => {
     }
     assert.equal(String(messageAt('zh-CN', 'app.nav.map')), '地图信息', '中文名不是更正第 1 条给的那一个')
     // 点位图不能把"没有点位"写成"地图加载失败"：那不是网络问题。
-    assert.equal(/加载失败|loading failed/i.test(String(messageAt('zh-CN', 'mapUi.noPoints'))), false)
+    // （那句文案本身已按第 11 批第 4 条删掉，所以这条守的是**状态栏**那些读数。）
+    assert.equal(
+      /加载失败|loading failed/i.test(String(messageAt('zh-CN', 'mapUi.statusMapped'))),
+      false
+    )
   })
 })
 
@@ -382,24 +423,38 @@ describe('落点配色：在线绿 / 告警红 / 离线灰（第 14 条）', () 
     )
   })
 
-  it('颜色不单独承载信息：图例三档各带一个数，设备列表与实时列表也有色点', () => {
-    for (const tone of ['alarm', 'online', 'offline']) {
-      assert.ok(
-        mapTemplate.includes(`data-legend-tone="${tone}"`),
-        `图例缺少 ${tone} 那一档`
-      )
-    }
-    assert.ok(mapTemplate.includes('data-map-legend'), '没有图例')
-    assert.ok(
-      mapTemplate.includes('toneCounts.alarm'),
-      '图例没有给数（只有颜色时色觉差异下读不出来）'
+  it('颜色不单独承载信息：色点仍带一句说明，*计数*搬进了右上角状态栏', () => {
+    /*
+     * 第 10 批第 14 条要的是"图例三档各带一个数"；第 11 批第 4 条把**图例连同计数一起删了**
+     * （「有未确认告警0在线0离线0」），改在地图右上角放一条半透明状态栏。
+     * 所以颜色现在有两处出口，都带着文字或数字：
+     *   · 地图上的落点（悬停浮层里写这一台的名字、状态、告警条数）；
+     *   · 实时数据列表每行前面那个色点，`title` 是 `mapUi.legendAlarm`（「有未确认告警」）。
+     * 设备列表按第 5 条只留 序号/名称/状态，那里不再放色点 —— 于是 `markerTone(device)`
+     * 全页只剩**一处**（实时数据列表）。
+     */
+    assert.equal(mapTemplate.includes('data-map-legend'), false, '图例又回来了（第 4 条已删）')
+    assert.match(
+      mapTemplate,
+      /class="map-table__tone" :class="`map-table__tone--\$\{markerTone\(device\)\}`"[\s\S]{0,120}:title="t\('mapUi\.legendAlarm'\)"/,
+      '实时数据列表里的色点没有带那句说明'
     )
     // 列表里的色点与图上的落点用同一个 `markerTone()`：两处各判一次迟早不一致。
     assert.equal(
       (mapTemplate.match(/markerTone\(device\)/g) ?? []).length,
-      2,
-      '设备列表与实时数据列表没有各用一个色点（或不止两处）'
+      1,
+      '色点不止一处（或一处都没有）：设备列表按第 5 条已经不放色点了'
     )
+    // 三个数在状态栏上：图上 / 共 / 在线 / 离线。
+    for (const hook of [
+      'data-map-status-mapped',
+      'data-map-status-total',
+      'data-map-status-online',
+      'data-map-status-offline',
+      'data-map-status-alarms'
+    ]) {
+      assert.ok(mapTemplate.includes(hook), `状态栏缺少 ${hook}`)
+    }
   })
 })
 

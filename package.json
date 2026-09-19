@@ -1,6 +1,6 @@
 {
   "name": "hertzinno-acoustic-box-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "HERTZINNO Acoustic Box Manager — 面向 Acoustic Box / AE08 系列设备的免费 Windows 桌面管理软件",
   "main": "./out/main/index.js",
   "author": {
@@ -66,6 +66,6 @@
     "vue-router": "4.6.4",
     "vue-tsc": "2.2.10"
   },
-  "releaseDate": "2026-09-16",
+  "releaseDate": "2026-09-19",
   "homepage": "https://www.hertzinno.com"
 }

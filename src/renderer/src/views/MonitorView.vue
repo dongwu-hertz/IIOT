@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Realtime monitoring (spec section 9.1) — REAL device data.
  *
@@ -99,6 +99,7 @@ import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloa
 import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
+import ManualRtspSources from '@renderer/components/ManualRtspSources.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -2359,6 +2360,15 @@ const sessionLabel = computed(() => {
         <MonitorRecordingTimeline :device-id="selectedDeviceId" />
       </template>
     </template>
+
+    <!--
+      第三方相机（手填 RTSP 地址）—— 业主 2026-09-19 第 11 批第 2 条：入口从画面墙挪到这一页。
+
+      **放在 `v-else` 之外**（所以一台设备都没有时它也在）：手填的源与设备表毫无关系 ——
+      一台设备都没注册的机器照样可以接一路第三方相机。放进 `v-else` 会让那一屏只剩「去添加设备」，
+      而"这台机器还没有任何设备"与"能不能看一个第三方地址"是两件事。
+    -->
+    <ManualRtspSources />
   </div>
 </template>
 

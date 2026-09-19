@@ -410,6 +410,31 @@ export function createCameraWallModel(layout: CameraWallLayout = DEFAULT_CAMERA_
   }
 }
 
+/**
+ * 清空所有格子，但**保住手填的第三方 RTSP 源**。
+ *
+ * 为什么单独一个函数：离开画面墙时要释放的是**会话**（每格一条 ffmpeg + 一个回环端口），
+ * 而不是"操作员刚才手填的那些地址"。手填源是**配置**（业主 2026-09-19 第 11 批第 2 条把它们
+ * 的入口挪到了实时监测页，那一页与画面墙不同时挂载），而它们只在内存里、没有第二份 ——
+ * 用 `createCameraWallModel()` 直接重建会把它们**当场删光**：从监测页回到总览，
+ * 墙上就再也选不到那条源了，而界面不会说任何话。
+ *
+ * 档位（`layout`）、格子（`slots`）、出声格与当前格都归 `createCameraWallModel()` 的默认值；
+ * 交出去的 `assigned` 是"清空之前占着格的那些 id"，调用方据此去停会话。
+ */
+export function clearCameraWallCells(
+  model: CameraWallModel,
+  layout: CameraWallLayout = model.layout
+): { model: CameraWallModel; assigned: string[] } {
+  const assigned = model.slots.filter((slot): slot is string => slot !== null)
+  const cleared = createCameraWallModel(layout)
+  return {
+    // 数组也复制一份：调用方后续的变换都返回新对象，共享同一个数组会让"改一处、两处都变"。
+    model: { ...cleared, manualSources: manualSourcesOf(model).slice() },
+    assigned
+  }
+}
+
 /** 把一段来路不明的槽位数组补齐/截断到当前档位（localStorage、旧版本、手工改坏）
 */
 function normaliseSlots(

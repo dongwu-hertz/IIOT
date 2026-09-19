@@ -1162,11 +1162,19 @@ export const en: MessageSchema = {
   /** Offline device map (batch 8). The basemap is drawn from recorded WGS84 points only. */
   mapUi: {
     canvasLabel: 'Device positions',
-    counts: '{withPoint} of {total} devices on the map',
-    noPoints: 'No device has a recorded point yet. Fill in latitude/longitude under Devices → Edit → Installation info and the device appears here.',
+    /**
+     * The translucent status bar in the map's top-right corner (owner batch 11, item 4):
+     * the old "{withPoint} of {total}" line, the legend counts and the
+     * "no device has a recorded point yet" paragraph were all deleted by name.
+     * Five separate readings, not one sentence: it is an instrument read-out.
+     */
+    statusLabel: 'Map status',
+    statusMapped: '{count} on the map',
+    statusTotal: '{count} in total',
+    statusOnline: 'Online {count}',
+    statusOffline: 'Offline {count}',
+    statusAlarms: 'Unacknowledged {count}',
     selectHint: 'Click a marker to see that device: position, alarms and snapshots.',
-    withoutPointTitle: 'Devices without a point ({count})',
-    withoutPointHint: 'They are not on the map: without a point there is no position to draw. Click a name to open that device and record it.',
     pickOne: 'No device selected yet.',
     point: 'Point',
     /**
@@ -1178,7 +1186,16 @@ export const en: MessageSchema = {
     /** Device list (first of the three lists, item 17). */
     devicesTitle: 'Devices',
     devicesCount: '{count} device(s)',
-    devicesHint: 'Click a row to select the device (its marker highlights too); double-click to open that device.',
+    /**
+     * Three columns only (owner batch 11, item 5: index / name / status), and clicking the
+     * device name opens its detail page. Double-click still works too - the map markers
+     * have always done that.
+     */
+    devicesHint: 'Click a row to select the device (its marker highlights too); click the device name to open it.',
+    /** Paging (same item: at most 10 devices per page, then pages). */
+    pagePrev: 'Previous',
+    pageNext: 'Next',
+    pageStatus: 'Page {page} / {pages}',
     colAlarms: 'Unacknowledged',
     /** Alarm list (second). */
     alarmsTitle: 'Alarms',
@@ -2286,26 +2303,22 @@ export const en: MessageSchema = {
     viewNeedsCamera: 'A third-party RTSP source has video only',
     viewSpectrogramNote: 'Colour shows relative strength within one frame only',
     viewStreamError: 'This acoustic stream could not be opened',
-    manualOpen: 'Type an RTSP address…',
-    manualTitle: 'Hand-typed RTSP address',
+    manualTitle: 'Third-party cameras (hand-typed RTSP)',
     manualNote: 'The manual does not describe third-party RTSP: the address goes to the bundled ffmpeg as typed. This app checks the shape only, never reachability (when it cannot connect, the cell shows the ffmpeg text itself). The address lives in memory only for this run — it usually carries a password and is never written to disk.',
+    manualWhere: 'To put one into a cell, use the video wall on the overview page: click a cell and pick it from the list.',
     manualName: 'Name',
     manualNameHint: 'Leave empty to use the host from the address',
     manualUrl: 'RTSP address',
     manualUrlPlaceholder: 'rtsp://192.168.1.64:554/Streaming/Channels/101',
-    manualSave: 'Save and put in the current cell',
+    manualSave: 'Add',
     manualUpdate: 'Save changes',
     manualList: 'Hand-typed sources',
     manualEmpty: 'No hand-typed address yet.',
-    manualPlace: 'Put in the current cell',
     manualEdit: 'Edit',
     manualDelete: 'Delete',
-    manualInSlot: 'In cell {slots}',
     manualAtCapacity: 'At most {max} hand-typed sources.',
     manualSuffix: 'typed RTSP',
     manualMissing: 'This hand-typed RTSP source is no longer in the list',
-    manualAdded: 'Added to cell {slot}',
-    manualRemoved: 'Hand-typed source deleted ({count} cell(s) cleared)',
     manualIssueEmpty: 'Enter an RTSP address',
     manualIssueScheme: 'The address must start with rtsp:// or rtsps://',
     manualIssueHost: 'The address has no host name',

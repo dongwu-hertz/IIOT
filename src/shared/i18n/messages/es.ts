@@ -1145,11 +1145,18 @@ export const es: MessageSchema = {
   /** Mapa de dispositivos sin conexión (lote 8). El fondo se dibuja solo con los puntos WGS84 grabados. */
   mapUi: {
     canvasLabel: 'Posiciones de los equipos',
-    counts: '{withPoint} de {total} equipos en el mapa',
-    noPoints: 'Ningún equipo tiene punto registrado. Rellene latitud/longitud en Equipos → Editar → Información de instalación y el equipo aparecerá aquí.',
+    /**
+     * La barra de estado translúcida de la esquina superior derecha del mapa (lote 11, punto 4):
+     * se eliminaron por su nombre la línea «{withPoint} de {total}», los recuentos de la leyenda
+     * y el párrafo «ningún equipo tiene punto registrado». Cinco lecturas separadas, no una frase.
+     */
+    statusLabel: 'Estado del mapa',
+    statusMapped: '{count} en el mapa',
+    statusTotal: '{count} en total',
+    statusOnline: 'En línea {count}',
+    statusOffline: 'Sin conexión {count}',
+    statusAlarms: 'Sin confirmar {count}',
     selectHint: 'Pulse un marcador para ver ese equipo: posición, alarmas y capturas.',
-    withoutPointTitle: 'Equipos sin punto ({count})',
-    withoutPointHint: 'No están en el mapa: sin punto no hay posición que dibujar. Pulse un nombre para abrir ese equipo y registrarlo.',
     pickOne: 'Todavía no hay equipo seleccionado.',
     point: 'Punto',
     /**
@@ -1161,7 +1168,16 @@ export const es: MessageSchema = {
     /** Lista de equipos (primera de las tres listas, punto 17). */
     devicesTitle: 'Equipos',
     devicesCount: '{count} equipo(s)',
-    devicesHint: 'Pulse una fila para seleccionar el equipo (su marcador también se resalta); doble clic para abrir ese equipo.',
+    /**
+     * Solo tres columnas (lote 11, punto 5: índice / nombre / estado), y pulsar el nombre del
+     * equipo abre su página de detalle. El doble clic sigue funcionando: los marcadores del mapa
+     * siempre lo han hecho.
+     */
+    devicesHint: 'Pulse una fila para seleccionar el equipo (su marcador también se resalta); pulse el nombre del equipo para abrirlo.',
+    /** Paginación (mismo punto: como máximo 10 equipos por página y luego páginas). */
+    pagePrev: 'Anterior',
+    pageNext: 'Siguiente',
+    pageStatus: 'Página {page} / {pages}',
     colAlarms: 'Sin confirmar',
     /** Lista de alarmas (segunda). */
     alarmsTitle: 'Alarmas',
@@ -2254,26 +2270,22 @@ export const es: MessageSchema = {
     viewNeedsCamera: 'Una fuente RTSP de terceros solo tiene vídeo',
     viewSpectrogramNote: 'El color solo indica la fuerza relativa dentro de una misma trama',
     viewStreamError: 'No se pudo abrir este flujo acústico',
-    manualOpen: 'Escribir una dirección RTSP…',
-    manualTitle: 'Dirección RTSP escrita a mano',
+    manualTitle: 'Cámaras de terceros (RTSP escrito a mano)',
     manualNote: 'El manual no describe la conexión RTSP de terceros: la dirección se entrega tal cual al ffmpeg integrado. Esta aplicación solo comprueba la forma, nunca la accesibilidad (si no puede conectar, la celda muestra el texto del propio ffmpeg). La dirección solo existe en memoria durante esta ejecución: suele llevar contraseña y no se escribe en disco.',
+    manualWhere: 'Para poner una en una celda, use el muro de vídeo de la página de resumen: pulse una celda y elíjala en la lista.',
     manualName: 'Nombre',
     manualNameHint: 'Déjelo vacío para usar el host de la dirección',
     manualUrl: 'Dirección RTSP',
     manualUrlPlaceholder: 'rtsp://192.168.1.64:554/Streaming/Channels/101',
-    manualSave: 'Guardar y poner en la celda actual',
+    manualSave: 'Añadir',
     manualUpdate: 'Guardar cambios',
     manualList: 'Fuentes escritas a mano',
     manualEmpty: 'Todavía no hay ninguna dirección escrita a mano.',
-    manualPlace: 'Poner en la celda actual',
     manualEdit: 'Editar',
     manualDelete: 'Eliminar',
-    manualInSlot: 'En la celda {slots}',
     manualAtCapacity: 'Como máximo {max} fuentes escritas a mano.',
     manualSuffix: 'RTSP manual',
     manualMissing: 'Esta fuente RTSP escrita a mano ya no está en la lista',
-    manualAdded: 'Añadida a la celda {slot}',
-    manualRemoved: 'Fuente escrita a mano eliminada ({count} celda(s) vaciada(s))',
     manualIssueEmpty: 'Escriba una dirección RTSP',
     manualIssueScheme: 'La dirección debe empezar por rtsp:// o rtsps://',
     manualIssueHost: 'La dirección no tiene nombre de host',

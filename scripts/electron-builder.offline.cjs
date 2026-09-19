@@ -32,8 +32,21 @@
 
 'use strict'
 
+/**
+ * 安装包文件名（业主 2026-09-19 第 11 批第 1 条：文件名后缀发布日期）。
+ *
+ * 日期与版本只在 `scripts/release-stamp.cjs` 里读一次 `package.json`；这里只是把它
+ * 覆盖到 yml 的 `win.artifactName` 上（`extends` 是深合并，其余 win 选项照旧来自 yml）。
+ * 为什么不让 yml 自己拼日期：yml 读不到 `package.json` 的 `releaseDate`，而用
+ * `${env.*}` 会让不吃这份配置的 `dist:win` 变成"不设环境变量就构建失败"。
+ */
+const stamp = require('./release-stamp.cjs')
+
 /** @type {import('app-builder-lib').Configuration} */
 module.exports = {
   extends: 'file:electron-builder.yml',
-  electronDist: 'node_modules/electron/dist'
+  electronDist: 'node_modules/electron/dist',
+  win: {
+    artifactName: stamp.artifactName
+  }
 }

@@ -217,6 +217,27 @@ function findArtifact(root, suffix) {
   }
 }
 
+/**
+ * 这一版**刚打出来的**那个安装包（业主 2026-09-19 第 11 批第 1 条之后 `release/` 里会同时躺着
+ * 好几个版本：文件名带上了版本与日期）。
+ *
+ * 为什么不能再用"第一个 `-setup.exe`"：`readdirSync` 的顺序不保证，而按字母序 `1.0.0` 排在
+ * `1.0.1` 前面 —— 于是这一步会去**验证上一个版本**的包，报告里却是"安装包 ✓"。
+ * 判据是 `scripts/release-stamp.cjs` 那个名字（它才是打包时写进文件名的那一个），
+ * 展开 `${arch}` / `${ext}` 之后逐字比较；找不到就回落到旧行为并在日志里说清楚。
+ */
+function findCurrentInstaller(root) {
+  try {
+    const stamp = require(path.join(__dirname, 'release-stamp.cjs'))
+    const wanted = stamp.artifactName.replace('${arch}', 'x64').replace('${ext}', 'exe')
+    const hit = fs.readdirSync(root).find((name) => name === wanted)
+    if (hit) return { path: path.join(root, hit), exact: true, wanted }
+    return { path: findArtifact(root, '-setup.exe'), exact: false, wanted }
+  } catch {
+    return { path: findArtifact(root, '-setup.exe'), exact: false, wanted: null }
+  }
+}
+
 async function main() {
   console.log('打包产物验证\n')
   console.log(`目录  ${dir}\n`)
@@ -317,8 +338,21 @@ async function main() {
   // the reputation of each independently). The NSIS installer is only present
   // after `dist:win`, so a `pack:dir` run reports the inner exe alone.
   checkSignature('应用主程序', exe)
-  const setupExe = findArtifact(path.dirname(dir), '-setup.exe')
-  if (setupExe) checkSignature('安装包', setupExe)
+  const installer = findCurrentInstaller(path.dirname(dir))
+  const setupExe = installer.path
+  if (setupExe) {
+    // 名字写进报告：`release/` 里可能同时有多个版本，必须看得见验的是哪一个。
+    console.log(
+      `\n安装包  ${path.basename(setupExe)}` +
+        (installer.exact
+          ? `（与 release-stamp 的当前版本一致）\n`
+          : `（**不是**当前版本 ${installer.wanted} —— 可能还没打包，或者文件名变了）\n`)
+    )
+    if (!installer.exact) {
+      problems.push(`安装包不是当前版本：期望 ${installer.wanted}，实际 ${path.basename(setupExe)}`)
+    }
+    checkSignature('安装包', setupExe)
+  }
 
   if (!exe) {
     report()

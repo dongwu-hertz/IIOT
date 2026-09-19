@@ -227,7 +227,7 @@ describe('「添加设备」在标题栏那一格里', () => {
     const page = template.indexOf('class="page"')
     const teleport = template.indexOf('<Teleport to="#topbar-page-slot">')
     const empty = template.indexOf('<EmptyState')
-    const table = template.indexOf('class="devices-table-flat"')
+    const table = template.indexOf('class="card devices-table-card"')
     assert.ok(page >= 0 && teleport >= 0 && empty >= 0 && table >= 0, '页面里缺了 .page / Teleport / EmptyState / 设备表之一')
     assert.ok(teleport > page, 'Teleport 不在 .page 里面')
     assert.ok(teleport < empty, '「添加设备」排在了空状态之后')
@@ -396,7 +396,7 @@ describe('设备管理页的布局结构', () => {
   it('表格是 `.page` 的直接子节点，中间没有一层布局容器', () => {
     const code = stripHtmlComments(view)
     const page = code.indexOf('class="page"')
-    const section = code.indexOf('class="devices-table-flat"')
+    const section = code.indexOf('class="card devices-table-card"')
     assert.ok(page >= 0, '没有 .page')
     assert.ok(section > page, '设备表不在 .page 里')
     // `.page` 与设备表之间除了 Teleport / 提示行 / 空状态之外，不该再有一层 div 包裹。
