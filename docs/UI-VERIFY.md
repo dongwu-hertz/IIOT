@@ -2590,8 +2590,10 @@ IP 地址 / **未确认告警**（有就说条数，没有就明说没有 "没�
 
 ### 第 22 轮的验证数字
 
-- 单测 **2156 / 0 失败**。这一轮新增 `tests/add-device-round.test.ts`（5 条：默认收起、
-  `aria-expanded`/`aria-controls`、内容是 `v-if`、三档小结、提交路径不看展开状态）；
+- 单测 **2161 / 0 失败**。这一轮新增 `tests/add-device-round.test.ts`（5 条：默认收起、
+  `aria-expanded`/`aria-controls`、内容是 `v-if`、三档小结、提交路径不看展开状态）
+  与 `tests/iot-ingest.test.ts` 里**接入方案那一组纯函数**的 5 条（协议坏值归 none、
+  键名形状、出厂方案、规范化的五条边界、即时校验）；
   改的既有守卫：`tests/monitor-offline.test.ts`（提示条那一组翻成反向断言 + 七条词条
   "四语言都不在"，并把两处反向断言改成读**去注释**的源码 —— 我在注释里点名写了被删掉的键，
   第一版就是被自己的注释绊红的）。
