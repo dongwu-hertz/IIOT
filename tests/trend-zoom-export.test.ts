@@ -28,7 +28,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 
-import { trendDataZoom, trendZoomIsIdentity, trendZoomWindow } from '../src/shared/domain/trend'
+import {
+  trendDataZoom,
+  trendZoomIndexRange,
+  trendZoomIsIdentity,
+  trendZoomWindow
+} from '../src/shared/domain/trend'
 import {
   TREND_CSV_BOM,
   TREND_CSV_HEADER,
@@ -170,6 +175,65 @@ describe('时间轴缩放', () => {
     assert.equal(trendZoomWindow(0, 0, 100), null)
     // 越界的百分比收进范围（拖到两端时 ECharts 会给带小数的值）。
     assert.deepEqual(trendZoomWindow(5, -10, 140), { fromIndex: 0, toIndex: 4 })
+
+    /*
+     * 时间轴（第 31 轮）：业主最新一条第 5 条把 X 轴改成时间轴，`dataZoom` 报的是
+     * `startValue`/`endValue`（时间戳），所以窗口要按**时间**换算成桶下标。
+     */
+    const hour = 3_600_000
+    const stamps = [0, hour, 2 * hour, 3 * hour, 4 * hour].map((n) => 1_700_000_000_000 + n)
+    assert.deepEqual(
+      trendZoomIndexRange(stamps, stamps[1] as number, stamps[3] as number),
+      { fromIndex: 1, toIndex: 3 }
+    )
+    // 窗口比数据宽：收到两端。
+    assert.deepEqual(trendZoomIndexRange(stamps, 0, Number.MAX_SAFE_INTEGER), {
+      fromIndex: 0,
+      toIndex: 4
+    })
+    // 窗口窄到一个桶：没有"一段"可选。
+    assert.equal(trendZoomIndexRange(stamps, stamps[2] as number, stamps[2] as number), null)
+    // 非法输入不猜。
+    assert.equal(trendZoomIndexRange(stamps, Number.NaN, 10), null)
+    assert.equal(trendZoomIndexRange([1], 0, 10), null)
+  })
+
+  it('视图真的用时间轴：`xAxis.type = time` + 数据是 `[时间戳, 值]`', () => {
+    // `chartOptionFor` 的函数体：从签名切到配平的那个 `}`（这个文件里没有通用助手）。
+    const start = viewCode.indexOf('function chartOptionFor(')
+    assert.ok(start > 0, '找不到 chartOptionFor')
+    let depth = 0
+    let seen = false
+    let end = viewCode.length
+    for (let index = start; index < viewCode.length; index += 1) {
+      const char = viewCode[index]
+      if (char === '{') {
+        depth += 1
+        seen = true
+      } else if (char === '}') {
+        depth -= 1
+        if (seen && depth === 0) {
+          end = index + 1
+          break
+        }
+      }
+    }
+    const body = viewCode.slice(start, end)
+    assert.match(body, /xAxis: \{\s*type: 'time'/, 'X 轴不是时间轴')
+    assert.equal(
+      /type: 'category'/.test(body),
+      false,
+      'X 轴还是类目轴（"时间区域选择"在类目轴上只是第几格）'
+    )
+    assert.match(body, /data: bundle\.timestamps\.map/, 'series 数据没有带上时间戳')
+    // 窗口优先按时间戳换算；拿不到时才退回百分比。
+    assert.match(
+      viewCode,
+      /trendZoomIndexRange\(primary\.timestamps, window\.startValue, window\.endValue\)/
+    )
+    // 包装层要把时间戳一起转发出来（时间轴上百分比可能是空的）。
+    assert.match(chartComponent, /startValue: asNumber\(first\.startValue\)/, '没有转发 startValue')
+    assert.match(chartComponent, /endValue: asNumber\(first\.endValue\)/, '没有转发 endValue')
   })
 
   it('"没有缩放"认得出来（两端都在整段上）', () => {

@@ -232,7 +232,15 @@ describe('量可以多选，但至少留一个、最多 4 个', () => {
 
   it('同一个坐标轴：一条通道一条 series，颜色来自调色板', () => {
     const fn = bodyOf(viewCode, 'function chartOptionFor(')
-    assert.match(fn, /data: line\.values/, 'series 的数据不是按通道来的')
+    /*
+     * 第 31 轮：X 轴换成**时间轴**（业主最新一条第 5 条），所以 series 的数据从
+     * "纯数值数组 + 轴上的类目标签"变成 `[时间戳, 值]` 对 —— 判据仍然是"按通道来的"。
+     */
+    assert.match(
+      fn,
+      /data: bundle\.timestamps\.map\(\(stamp, index\) => \[stamp, line\.values\[index\] \?\? null\]\)/,
+      'series 的数据不是按通道 + 时间戳来的'
+    )
     assert.match(fn, /color: line\.color/, 'series 没有用调色板里的颜色')
     // 缺口保持缺口（绝不画成 0）——这一条在叠加之后同样成立。
     assert.match(fn, /connectNulls: false/, '叠加之后把缺口连起来了（会把"没数据"画成有数据）')

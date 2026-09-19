@@ -6132,22 +6132,22 @@ store 的 `state` 直到 `start()` 内部跑起来才变成 `starting`，所以�
   **"点一下通道不重新查库"这一条从"看查询条数"改成纯源码守卫**（`toggleChannel()` 里没有
   `query()`）—— 这一条是**降低**了观测手段，如实记在 UI-VERIFY 的未验证清单里。
 
-#### 15.86.2 第五条：X 轴改成时间轴（**下一轮**）
+#### 15.86.2 第五条：X 轴改成时间轴（**第 31 轮已改**）
 
-现状：`xAxis` 是 `type: 'category'`（刻度是**格式化后的字符串**），`series.data` 是纯数值数组，
-横轴靠 `bundle.labels` 对齐。业主这次点名要"画一个坐标轴、时间轴作为 X 轴"，
-也就是 `type: 'time'`：
+| 项 | 之前 | 现在 |
+|---|---|---|
+| `xAxis` | `type: 'category'`（`data` 是我们格式化好的**字符串**标签） | `type: 'time'`（刻度由 ECharts 按真实跨度排） |
+| `series.data` | 纯数值数组，靠 `labels` 对齐 | `[时间戳, 值]` 对（`connectNulls: false` 仍然让缺口断开） |
+| 缩放窗口 | `dataZoom` 的 `start`/`end` **百分比** → 换算成"第几个点" | 优先用 `startValue`/`endValue`（**时间戳**），拿不到才退回百分比 |
+| 提示行 | 「当前显示第 a–b 个点（共 n 点）：某时刻 ~ 某时刻」 | 同一句话（换算函数换成 `trendZoomIndexRange()`，二分找窗口内的桶） |
 
-- `series.data` 要改成 `[timestamp, value]` 对（或给每个点带 `x`），`xAxis.type = 'time'`，
-  轴标签由 ECharts 自己按时间间隔格式化（不再是我们 `formatTrendTick` 的字符串）；
-- `dataZoom`（已经在了）在 time 轴上才有真正的"时间区域选择"语义：`startValue` / `endValue` 是
-  **时间戳**，不是百分比 —— 缩放提示那一行要跟着改成读 `startValue/endValue`；
-- `filterMode: 'filter'` 仍然保留（Y 轴跟着可见段重算）；
-- 空桶（`NaN`）怎么在 time 轴上断线：仍然是 `connectNulls: false`，但点与点之间要靠时间戳拉开
-  距离（这才是"时间轴"与"类目轴"的实质差别：**没有数据的时段会占它该占的宽度**）。
+**实质差别**：类目轴上"两个相邻的点永远挨在一起"，**没有数据的时段被挤成零宽**；
+时间轴上空档占它该占的宽度 —— 这才是"时间区域选择"能成立的前提。
+`EChart.vue` 因此把 `startValue`/`endValue` 一起转发出来（时间轴上百分比可能是空的）。
 
 **手册未说明**：手册没有趋势图的坐标轴类型这一节（它给的是静态报表），所以"时间轴 + 区域选择"
 是本仓库按业主这句话做的设计。
+
 
 
 

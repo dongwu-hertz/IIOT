@@ -33,7 +33,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
-import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomIsIdentity, trendZoomWindow } from '@shared/domain/trend'
+import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomIndexRange, trendZoomIsIdentity, trendZoomWindow } from '@shared/domain/trend'
 import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
 import {
   buildTrendCsv,
@@ -400,6 +400,8 @@ const coverageText = computed(() => {
 // ---------------------------------------------------------------------------
 
 interface TrendChartRow {
+  /** 这个桶的起点（epoch ms）—— 时间轴上的 X。 */
+  timestamp: number
   /** Short axis tick, chosen from the span. */
   label: string
   /** Full timestamp for the tooltip and the summary tiles. */
@@ -418,6 +420,7 @@ const spanMs = computed(() => {
 
 const chartRows = computed<TrendChartRow[]>(() =>
   trends.points.map((point) => ({
+    timestamp: point.timestamp,
     label: formatTrendTick(point.timestamp, spanMs.value),
     fullLabel: formatDateTime(point.timestamp),
     // Rule 3: NaN means "not reported here" and must become a gap.
@@ -609,10 +612,18 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
     // ECharts 自带的图例在这里**关掉**：图例是页面上的那一列通道（点一下切换
     // 显示/隐藏），两处各画一份的话，用户会看到两个"看起来一样但行为不同"的图例。
     legend: { show: false },
+    /*
+     * **X 轴是时间轴**（业主 2026-09-19 最新一条第 5 条：「曲线需要画一个坐标轴，
+     * 应该是时间轴作为X轴，支持这个轴上的时间区域选择，放大，缩小的操作」）。
+     *
+     * 之前是 `type: 'category'`：刻度是我们把时间戳格式化成的**字符串**，于是
+     * "没有数据的时段"会被挤掉（两个相邻的点永远挨在一起），区域选择也只能按"第几格"。
+     * 换成 `time` 之后：数据点带上时间戳，轴按**真实时间**排布 —— 空桶占它该占的宽度，
+     * `dataZoom` 报的窗口是 `startValue`/`endValue`（时间戳），这才是"时间区域选择"。
+     */
     xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: bundle.labels,
+      type: 'time',
+      // 时间轴的刻度由 ECharts 按跨度自己排（秒/分/时/天），不再用我们的 `formatTrendTick`。
       axisLine: { lineStyle: { color: AXIS_LINE } },
       axisTick: { show: false },
       axisLabel: { color: TEXT_SECONDARY, fontSize: 10, hideOverlap: true }
@@ -644,7 +655,8 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
       symbolSize: 3,
       // Gaps stay gaps: never bridge across a bucket the device did not report.
       connectNulls: false,
-      data: line.values,
+      // 时间轴上每一点是 `[时间戳, 值]`；`null` 仍然是缺口（不画成 0）。
+      data: bundle.timestamps.map((stamp, index) => [stamp, line.values[index] ?? null]),
       lineStyle: { width: 1.6, color: line.color },
       itemStyle: { color: line.color }
     }))
@@ -692,10 +704,9 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
       }
     },
     legend: { show: false },
+    // 回退那张单序列图**同样**是时间轴（"所有折线图"这句话不该有例外）。
     xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: rows.map((row) => row.label),
+      type: 'time',
       axisLine: { lineStyle: { color: AXIS_LINE } },
       axisTick: { show: false },
       axisLabel: { color: TEXT_SECONDARY, fontSize: 10, hideOverlap: true }
@@ -723,7 +734,8 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
         showSymbol: rows.length <= 300,
         symbolSize: 3,
         connectNulls: false,
-        data: rows.map((row) => row.value),
+        // 时间轴：`[时间戳, 值]`（缺口仍然是 null）。
+        data: rows.map((row) => [row.timestamp, row.value]),
         lineStyle: { width: 1.6, color: trendChannelColor(0) },
         itemStyle: { color: trendChannelColor(0) }
       }
@@ -748,7 +760,12 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
  * 多张图的分桶完全相同（同一次查询、同一批时间戳），所以任何一张图上的缩放对整页都成立
  * —— 分别记的话，两张图会显示出两个不同的时间窗口，而它们画的是同一批数据。
  */
-const zoomWindow = ref<{ start: number; end: number } | null>(null)
+const zoomWindow = ref<{
+  start: number
+  end: number
+  startValue: number | null
+  endValue: number | null
+} | null>(null)
 
 /** 正在缩放的是哪一张图（重置时只需要重置这一张：其余的窗口本来就是同一段）。 */
 const zoomedChart = ref<string | null>(null)
@@ -764,12 +781,20 @@ function setChartRef(metric: string, instance: unknown): void {
   chartRefs.value = { ...chartRefs.value, [metric]: typed }
 }
 
-/** 缩放之后可见的时间桶区间（用主量的时间轴：多张图的时间戳是同一批）。 */
+/**
+ * 缩放之后可见的时间桶区间。
+ *
+ * **优先用时间戳**（`startValue`/`endValue`）：时间轴上 ECharts 报的就是时间，
+ * 换算成下标只为了一句"第 a–b 个点"。拿不到时间戳时退回百分比（类目轴/旧版本）。
+ */
 const zoomRange = computed(() => {
   const window = zoomWindow.value
   if (!window) return null
   const primary = chartBundles.value[0]
   if (!primary) return null
+  if (window.startValue !== null && window.endValue !== null) {
+    return trendZoomIndexRange(primary.timestamps, window.startValue, window.endValue)
+  }
   return trendZoomWindow(primary.timestamps.length, window.start, window.end)
 })
 
@@ -797,7 +822,10 @@ const zoomHint = computed(() => {
   })
 })
 
-function onChartZoom(metric: string, window: { start: number; end: number }): void {
+function onChartZoom(
+  metric: string,
+  window: { start: number; end: number; startValue: number | null; endValue: number | null }
+): void {
   const next = trendZoomIsIdentity(window.start, window.end) ? null : window
   /*
    * **同一次缩放只记一次。**

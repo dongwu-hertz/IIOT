@@ -271,3 +271,47 @@ export function trendZoomWindow(
 export function trendZoomIsIdentity(startPercent: number, endPercent: number): boolean {
   return startPercent <= 0.5 && endPercent >= 99.5
 }
+
+// ---------------------------------------------------------------------------
+// 时间轴（业主 2026-09-19 最新一条第 5 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 时间轴上的缩放窗口 → 可见的时间桶下标区间（闭区间）。
+ *
+ * 为什么不用百分比：`xAxis.type = 'time'` 之后，ECharts 报的 `dataZoom` 载荷里带的是
+ * **时间戳**（`startValue` / `endValue`），百分比只是它的派生物。业主这一条要的正是
+ * 「在这个轴上做时间区域选择」—— 那件事的单位是时间，不是"第几格"。
+ *
+ * 边界：桶不足两个、时间戳非法、或窗口窄到一个桶时返回 `null`（没有"一段"可选）；
+ * 窗口比数据宽时收到两端。桶按时间升序，所以用二分找第一个/最后一个落在窗口里的。
+ */
+export function trendZoomIndexRange(
+  timestamps: readonly number[],
+  fromMs: number,
+  toMs: number
+): { fromIndex: number; toIndex: number } | null {
+  if (timestamps.length < 2) return null
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return null
+
+  /** 第一个 `>= value` 的下标。 */
+  const lowerBound = (value: number): number => {
+    let low = 0
+    let high = timestamps.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if ((timestamps[mid] as number) < value) low = mid + 1
+      else high = mid
+    }
+    return low
+  }
+
+  const first = lowerBound(fromMs)
+  // 最后一个 `<= toMs`：找第一个 `> toMs` 再退一格。
+  let last = lowerBound(toMs + 1) - 1
+  if (last < first) last = first
+  const fromIndex = Math.min(timestamps.length - 1, Math.max(0, first))
+  const toIndex = Math.min(timestamps.length - 1, Math.max(fromIndex, last))
+  if (toIndex - fromIndex < 1) return null
+  return { fromIndex, toIndex }
+}

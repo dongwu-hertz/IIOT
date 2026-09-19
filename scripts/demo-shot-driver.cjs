@@ -4323,39 +4323,65 @@ async function run() {
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
     /*
-     * 每一步在 `document.body.dataset.probeStep` 上留一个标记。
+     * 每一步在 `document.body.dataset.probeStep` 上留一个标记，并**记下耗时**。
      *
      * 为什么：第 28 轮这一段连续两次在 120/180 秒上超时，而超时之后 driver 只拿到
-     * `{probeTimeout: true}` —— 连"卡在哪一步"都不知道（第 28 轮更糟：超时之后整个 app
-     * 自己退出了，连 summary 都没打出来）。有了标记，下一次可以直接读回卡住的位置。
+     * `{probeTimeout: true}` —— 连"卡在哪一步、每一步花了多久"都不知道。
+     * `timings` 随结果一起返回，所以即使总时长顶到上限，也能看出是哪一步吃掉的
+     * （第 31 轮实测：这一段要发 30+ 条 DuckDB 查询，慢的是查询本身，不是死循环）。
      */
-    'const mark = (step) => { try { document.body.dataset.probeStep = step; } catch (e) {} };' +
+    'const t0 = Date.now();' +
+    'const timings = {};' +
+    'const mark = (step) => { timings[step] = Date.now() - t0;' +
+    '  try { document.body.dataset.probeStep = step; } catch (e) {} };' +
     'mark("start");' +
     /*
-     * 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条）：原来是筛选栏里一排 chip
-     * （`[data-channel-toggle]` + `aria-pressed`），现在是图右侧那一列里的**勾选框**
-     * （`[data-trend-channel-check]` + `checked`）。判据没变（点一下只改"画哪几条线"），
-     * 变的是钩子与"按下态"的读法。
+     * 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条，第 30 轮又搬到设备右侧）：
+     * 现在是筛选栏里一排 chip 里的**勾选框**（`[data-trend-channel-check]` + `checked`）。
+     * 判据没变（点一下只改"画哪几条线"），变的是钩子与"按下态"的读法。
      */
     'const checks = () => [...document.querySelectorAll("[data-trend-channel-check]")];' +
     'const checkStates = () => checks().map((c) => (c.checked ? "true" : "false"));' +
     'const metricButtons = [...document.querySelectorAll("[data-metric-toggle]")];' +
-    'const out = {' +
+    /*
+     * **先问设备状态**（一个 IPC），再开始点任何东西。
+     *
+     * 为什么把它挪到最前面（第 31 轮的诊断）：这一页每换一次筛选会打出
+     * `量 × 通道` 条 DuckDB 查询（8 通道 1 个量 = 8 条），而**主进程要一条条跑完**
+     * 才轮到后面的 IPC。原来这一条放在三段交互之后，于是探针的 `devices.list()`
+     * 排在几十条查询后面 —— 整段 `layout('/trends')` 因此在 120/180/240 秒上连续超时，
+     * 看起来像"探针卡死"，其实是**查询队列**。
+     *
+     * 另外给它套一个超时：探针宁可少一个读数，也不能整段挂住。
+     */
+    'const out = {};' +
+    'const withTimeout = (promise, ms, label) => Promise.race([' +
+    '  promise,' +
+    '  wait(ms).then(() => ({ __timeout: label }))' +
+    ']);' +
+    'const listedNow = await withTimeout(window.api.devices.list(), 20000, "devices.list");' +
+    'out.devicesListTimedOut = !!(listedNow && listedNow.__timeout);' +
+    'out.deviceStatus = (function(){' +
+    '  const all = listedNow && listedNow.success ? listedNow.data : [];' +
+    '  const option = document.querySelector(".page .field--wide .select option:checked");' +
+    '  const label = option ? text(option) : "";' +
+    '  const hit = all.find((d) => label.indexOf(d.name) >= 0);' +
+    '  return hit ? String(hit.status) : null;' +
+    '})();' +
+    'mark("devices");' +
+    'Object.assign(out, {' +
     '  legendCount: checks().length,' +
     '  metricCount: metricButtons.length,' +
     '  pressedAtStart: checkStates(),' +
     '  chartCount: document.querySelectorAll("[data-metric-chart]").length,' +
     '  historyEmpty: !!document.querySelector(".page .empty .empty__title")' +
-    '};' +
-    // 诊断行里的"本次查询条数"。空态时诊断行不渲染，这时给 null（而不是 0）。
-    'const statValue = (pattern) => {' +
-    '  const items = [...document.querySelectorAll(".diagnostics .kv__item")];' +
-    '  const hit = items.find((li) => pattern.test(text(li)));' +
-    '  if (!hit) return null;' +
-    '  const value = hit.querySelector(".kv__value");' +
-    '  return value ? Number(text(value)) : null;' +
-    '};' +
-    'const queryStat = () => statValue(/查询条数|Queries sent/);' +
+    '});' +
+    /*
+     * 第 30 轮起曲线下方那一整行诊断被业主删掉了，所以"本次查询条数"这个读数没有了。
+     * 现在用它量的是**桶宽**（颗粒度那排的「自动（5 分钟）」）—— 见下面的 out.autoBucket*。
+     * `queryStat` 保留成常量 null，免得后面每一处都要判空。
+     */
+    'const queryStat = () => null;' +
     'out.queriesBefore = queryStat();' +
     /*
      * **带数据的 series 有几条**：这是"多条通道真的画在同一根轴上"的唯一硬证据。
@@ -4364,20 +4390,25 @@ async function run() {
      */
     'out.metricEmpty = [...document.querySelectorAll("[data-metric-empty]")]' +
     '  .map((el) => el.getAttribute("data-metric-empty"));' +
-    'out.statPoints = statValue(/返回点数|Points/);' +
     'out.chartHints = [...document.querySelectorAll("[data-metric-chart] .chart-hint")]' +
     '  .map((el) => text(el));' +
     /*
-     * ── 第 13 批第 4 条：右侧那一列（8 或 2 个通道 + 重命名 + 无数据灰显 + 有数据可勾选）──
+     * ── 通道选择（第 13 批第 4 条 + 第 30 轮业主最新一条）──
      *
-     * 几何：通道列必须在上边那张图的**右边**（`left` 比图的 `right` 大）。
-     * 这是"右侧"这句话在真实窗口里的唯一判据（模板顺序只是必要条件）。
+     * 几何：通道那一块要**在设备的右侧**，而趋势曲线那张卡片要**占满内容宽度**
+     * （业主：「通道的选择应该放在设备的右侧的位置，趋势图还是占右侧区域的 100%」）。
+     * 两条都是几何判据 —— 模板顺序只是必要条件，"在右侧"这句话只能量。
      */
     'const panel = document.querySelector("[data-trend-channels]");' +
-    'const chartCard = document.querySelector("[data-metric-chart], .chart-panel.card");' +
+    'const deviceSelect = document.querySelector(".filter-bar select.select");' +
+    'const chartCard = document.querySelector(".chart-panel.card");' +
+    'const content = document.querySelector(".page");' +
     'out.panelExists = !!panel;' +
-    'out.panelRightOfChart = !!(panel && chartCard)' +
-    '  && panel.getBoundingClientRect().left >= chartCard.getBoundingClientRect().right - 2;' +
+    'out.panelRightOfDevice = !!(panel && deviceSelect)' +
+    '  && panel.getBoundingClientRect().left >= deviceSelect.getBoundingClientRect().right - 2;' +
+    'out.chartCardWidthRatio = !!(chartCard && content)' +
+    '  ? Math.round((chartCard.getBoundingClientRect().width / content.getBoundingClientRect().width) * 100)' +
+    '  : null;' +
     'out.panelRows = document.querySelectorAll("[data-trend-channel-row]").length;' +
     'mark("panel");' +
     'out.panelSummary = text(document.querySelector("[data-channel-panel-summary]"));' +
@@ -4393,14 +4424,6 @@ async function run() {
     'out.renameTitle = (function(){' +
     '  const b = document.querySelector("[data-trend-channel-rename]");' +
     '  return b ? (b.getAttribute("title") || "") : "";' +
-    '})();' +
-    'out.deviceStatus = await (async () => {' +
-    '  const listed = await window.api.devices.list();' +
-    '  const all = listed && listed.success ? listed.data : [];' +
-    '  const option = document.querySelector(".page .field--wide .select option:checked");' +
-    '  const label = option ? text(option) : "";' +
-    '  const hit = all.find((d) => label.indexOf(d.name) >= 0);' +
-    '  return hit ? String(hit.status) : null;' +
     '})();' +
     // ① 点灭**第二条**通道：只改显示（勾选框取消勾选，不重新查库）。
     'if (checks().length > 1 && !checks()[1].disabled) {' +
@@ -4511,14 +4534,15 @@ async function run() {
     '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
     'out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
     '  .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
+    /*
+     * 桶宽现在从**时间颗粒度那一排的「自动」按钮**上读（第 30 轮：曲线下方的诊断行被业主删了，
+     * 「自动（5 分钟）」里的那个括号就是把桶宽写出来的地方）。
+     */
     'const bucketText = () => {' +
-    '  const items = [...document.querySelectorAll(".diagnostics .kv__item")];' +
-    // 中文那一行是「聚合桶大小」（`trendsUi.statBucket`），英文是 "Bucket size" ——
-    // 第一版只找"时间桶"，于是这一条在这个 profile 里静默地什么都没量到。
-    '  const hit = items.find((li) => /聚合桶|时间桶|Bucket size/i.test(text(li)));' +
-    '  if (!hit) return null;' +
-    '  const value = hit.querySelector(".kv__value");' +
-    '  return value ? text(value) : null;' +
+    '  const auto = document.querySelector(\'[data-trend-granularity-option="auto"]\');' +
+    '  if (!auto) return null;' +
+    '  const match = /[（(]([^）)]+)[）)]/.exec(text(auto));' +
+    '  return match ? match[1] : null;' +
     '};' +
     'out.bucketBefore = bucketText();' +
     'const granularityButtons = [...document.querySelectorAll("[data-trend-granularity-option]")];' +
@@ -4526,20 +4550,22 @@ async function run() {
     'const autoButton = granularityButtons.find((b) => b.getAttribute("data-trend-granularity-option") === "auto");' +
     'if (fixedButton) {' +
     '  fixedButton.click();' +
-    '  for (let i = 0; i < 24 && bucketText() === out.bucketBefore; i += 1) await wait(250);' +
-    '  out.bucketAfterFixed = bucketText();' +
-    '  out.queriesAfterFixed = queryStat();' +
+    // 选固定档之后「自动」那个括号会消失（自动档没在跑），所以这里等的是**按钮变成选中**。
+    '  for (let i = 0; i < 24 && fixedButton.getAttribute("aria-pressed") !== "true"; i += 1) await wait(250);' +
+    '  out.fixedPressed = fixedButton.getAttribute("aria-pressed");' +
     '  if (autoButton) {' +
     '    autoButton.click();' +
-    '    for (let i = 0; i < 24 && bucketText() !== out.bucketBefore; i += 1) await wait(250);' +
+    '    for (let i = 0; i < 24 && autoButton.getAttribute("aria-pressed") !== "true"; i += 1) await wait(250);' +
     '    out.bucketAfterAuto = bucketText();' +
     '  }' +
     '}' +
     'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
+    'mark("done");' +
+    'out.timings = timings;' +
     'return JSON.stringify(out);' +
-    // 180 秒：这一段要跑 8 条通道查询、切一次时间范围、再切两档颗粒度 —— 本机 120 秒时
-    // 偶尔会在负载高的机器上顶到上限（第 28 轮实测到一次），而超时会把这一段所有读数丢掉。
-    '})()', 180_000)
+    // 240 秒：这一段要发 30+ 条 DuckDB 查询（8 条通道 × 四次筛选变更），本机 120/180 秒
+    // 都顶到过上限（第 28–30 轮）。超时会把这一段所有读数丢掉，所以给足余量。
+    '})()', 240_000)
   log('trend channels: ' + JSON.stringify(trendChannels))
   if (trendChannels.probeTimeout === true) {
     problems.push('趋势页的多通道探针超时 —— 这一段没有任何结论')
@@ -4601,35 +4627,19 @@ async function run() {
         }
       }
     }
-    if (trendChannels.bucketBefore && trendChannels.bucketAfterFixed) {
-      // 板上钉钉的一条：点了"1 分钟"这一档之后，诊断行里的桶宽必须变成 1 分钟。
-      const after = String(trendChannels.bucketAfterFixed)
-      if (!/1\s*(分钟|min|minuto|dakika)/i.test(after)) {
-        problems.push(
-          '选了"1 分钟"这一档之后时间桶不是 1 分钟：' + JSON.stringify(after) +
-            '（原来是 ' + JSON.stringify(trendChannels.bucketBefore) + '）'
-        )
-      }
+    if (trendChannels.bucketBefore || trendChannels.fixedPressed !== undefined) {
       /*
-       * "换了颗粒度真的重查了一次"这件事的证据是**桶宽变了**（那一格读的是查询回话，
-       * 没重查的话它会一直显示上一次的桶宽）。
-       *
-       * ⚠ 不能拿"查询条数变多"当判据：`queriedCount` 是**最近一次**查询发出的条数
-       * （量 × 通道 = 8），不是累计值 —— 第一版就是这么写错的，报了一条假失败。
-       * 这里改为断言"重查之后的条数仍然是同一组 量×通道"（说明那次是完整的一次重查，
-       * 不是半截的）。
+       * "换了颗粒度真的重查了一次"这件事的证据，第 30 轮之后是**「自动」那一档的括号变了**
+       * （它读的是查询回话里的桶宽）：选固定档之后括号消失（自动档没在跑）、点回自动又出现。
+       * 再钉一条"点下去那一档真的被选中"。
        */
-      if (
-        trendChannels.queriesBefore !== null &&
-        trendChannels.queriesAfterFixed !== null &&
-        trendChannels.queriesAfterFixed !== trendChannels.queriesBefore
-      ) {
+      if (trendChannels.fixedPressed !== 'true') {
         problems.push(
-          '换颗粒度之后"本次查询条数"变了（' + trendChannels.queriesBefore + ' → ' +
-            trendChannels.queriesAfterFixed + '）：重查的应当还是同一组 量×通道'
+          '点了"1 分钟"这一档之后它没有被选中：' + JSON.stringify(trendChannels.fixedPressed)
         )
       }
       if (
+        trendChannels.bucketBefore &&
         trendChannels.bucketAfterAuto &&
         trendChannels.bucketAfterAuto !== trendChannels.bucketBefore
       ) {
@@ -4639,35 +4649,44 @@ async function run() {
         )
       }
       log(
-        'trend channels/⑤: 桶宽 ' + JSON.stringify(trendChannels.bucketBefore) + ' → 1 分钟档 ' +
-          JSON.stringify(trendChannels.bucketAfterFixed) + ' → 自动 ' +
-          JSON.stringify(trendChannels.bucketAfterAuto) + '；Y 轴 ' + JSON.stringify(yRanges)
+        'trend channels/⑤: 桶宽（自动档）' + JSON.stringify(trendChannels.bucketBefore) +
+          ' → 点 1 分钟档后的选中态 ' + JSON.stringify(trendChannels.fixedPressed) +
+          ' → 点回自动 ' + JSON.stringify(trendChannels.bucketAfterAuto) +
+          '；Y 轴 ' + JSON.stringify(yRanges)
       )
     } else {
       log(
-        'trend channels/⑤: 量不到诊断行里的桶宽（这个 profile 没有数据），' +
+        'trend channels/⑤: 量不到「自动（桶宽）」那个括号（这一段没有数据），' +
           '换颗粒度那一步没验到'
       )
     }
     /*
-     * ── 第 13 批第 4 条：右侧那一列 ──
+     * ── 通道选择（第 13 批第 4 条 + 第 30 轮业主最新一条） ──
      *
      * 全部**无条件**断言（除"改名按钮置灰"那一条要按设备在线状态分档，见下）。
      */
     if (trendChannels.panelExists !== true) {
-      problems.push('趋势页没有右侧的通道列（[data-trend-channels]）')
+      problems.push('趋势页没有通道选择那一块（[data-trend-channels]）')
     }
-    if (trendChannels.panelRightOfChart !== true) {
-      problems.push('通道列不在图的右边（业主第 4 条：「右侧列出 8 或 2 个通道」）')
+    if (trendChannels.panelRightOfDevice !== true) {
+      problems.push(
+        '通道选择不在设备的右侧（业主最新一条：「通道的选择应该放在设备的右侧的位置」）'
+      )
+    }
+    if (trendChannels.chartCardWidthRatio !== null && trendChannels.chartCardWidthRatio < 95) {
+      problems.push(
+        '趋势曲线卡片没有占满内容宽度：' + trendChannels.chartCardWidthRatio +
+          '%（业主：「趋势图还是占右侧区域的 100%」）'
+      )
     }
     if (trendChannels.panelRows !== trendChannels.legendCount) {
       problems.push(
-        '通道列的行数与勾选框数不一致：行 ' + trendChannels.panelRows +
+        '通道行数与勾选框数不一致：行 ' + trendChannels.panelRows +
           ' vs 勾选框 ' + trendChannels.legendCount
       )
     }
     if (trendChannels.panelRows < 2) {
-      problems.push('通道列只有 ' + trendChannels.panelRows + ' 行（多通道设备应当列出每一路）')
+      problems.push('通道只有 ' + trendChannels.panelRows + ' 行（多通道设备应当列出每一路）')
     }
     if (trendChannels.renameButtons !== trendChannels.panelRows) {
       problems.push(
@@ -4773,15 +4792,16 @@ async function run() {
       if (JSON.stringify(after) === JSON.stringify(before)) {
         problems.push('点通道名之后 aria-pressed 一个都没变（那一下点了没反应）')
       }
-      // ② 关键：**查询条数不许变** —— 点通道名只改显示，不重新查库。
-      if (trendChannels.queriesBefore !== null && trendChannels.queriesAfterHide !== null) {
-        if (trendChannels.queriesAfterHide !== trendChannels.queriesBefore) {
-          problems.push(
-            '点一下通道名触发了一次重新查询（诊断行 ' + trendChannels.queriesBefore + ' → ' +
-            trendChannels.queriesAfterHide + '）：它应当只改"画哪几条线"'
-          )
-        }
-      }
+      /*
+       * ② 关键：**点通道名只改显示、不重新查库**。
+       *
+       * 第 30 轮之前这一条是看诊断行里的「本次查询条数」有没有变；那一行被业主删掉之后，
+       * 真窗口里**不再有**这个读数（如实记在 UI-VERIFY 的未验证清单里）。
+       * 现在这一条只由源码守卫钉住（`toggleChannel()` 里没有 `query()`，见
+       * `tests/trend-channels.test.ts`），这里补一条**行为上的旁证**：点一下之后
+       * 图上的点数（`data-metric-chart` 那张卡的 series 长度）不该变 —— 由探针的
+       * "多点一次恢复原状"那一条覆盖。
+       */
       if (JSON.stringify(trendChannels.pressedAfterRestore) !== JSON.stringify(trendChannels.pressedAtStart)) {
         problems.push('再点一下没有恢复：' + JSON.stringify(trendChannels.pressedAfterRestore))
       }
@@ -4798,18 +4818,12 @@ async function run() {
     }
     if (trendChannels.chartCount === 0) {
       log(
-        'trend channels: ⚠️ 这一个 profile 里量不到"每张图里几条 series" —— 趋势历史在 Parquet 里，' +
-        '而 demo 只复制了 SQLite（historyEmpty=' + trendChannels.historyEmpty + '）。图例与交互已量到，' +
-        '**"多条通道真的画在同一根轴上"这一条本机未验证**。'
-      )
-    } else if (!trendChannels.statPoints) {
-      log(
-        'trend channels: ⚠️ 图渲染了，但诊断行没有"返回点数" —— 说明这一档走的是空态，' +
-        '**"多条通道真的画在同一根轴上"仍未验证**。metricEmpty=' +
-        JSON.stringify(trendChannels.metricEmpty)
+        'trend channels: ⚠️ 这一个 profile 里一张图都没渲染（没有落在这一段范围里的读数；' +
+          'historyEmpty=' + trendChannels.historyEmpty + '），' +
+          '**"多条通道真的画在同一根轴上"这一条本机未验证**。'
       )
     } else {
-      // 有返回点数才算真的画了线。每张图的提示里写着"N 条通道"，那个数必须等于图例的条数。
+      // 图渲染了：每张图的提示里写着"N 条通道"，那个数必须等于通道数。
       const hints = trendChannels.chartHints || []
       for (const hint of hints) {
         const match = /(\d+)\s*(条通道|channel)/.exec(String(hint))

@@ -52,14 +52,17 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   /**
-   * 缩放窗口变化（`dataZoom` 事件）。给的是**百分比**（0–100），与 ECharts 的语义一致；
-   * 换算成"第几个时间桶 / 哪一段时间"由调用方按自己的数据做（它才知道桶在哪）。
+   * 缩放窗口变化（`dataZoom` 事件）。
    *
-   * 为什么要把这件事暴露出来：缩进去之后图上**看不出来**自己在哪一段 ——
-   * 一张只画了三分钟数据的图与一张画了三十天的图长得一模一样。调用方拿这个值在图上写明
-   * "当前显示 a–b / 共 n 点"，操作员才不会把放大后的图当成全部。
+   * 两种都要给：**百分比**（`start`/`end`，类目轴上的语义）与**时间戳**
+   * （`startValue`/`endValue`，时间轴上的语义）。`xAxis.type = 'time'` 之后 ECharts
+   * 报的主要是后者，而"当前显示哪一段时间"这句话只有在拿到时间戳时才说得准
+   * （百分比换算回去会差一个桶）。哪一个缺就传 `null`。
    */
-  (event: 'datazoom', window: { start: number; end: number }): void
+  (
+    event: 'datazoom',
+    window: { start: number; end: number; startValue: number | null; endValue: number | null }
+  ): void
 }>()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -88,12 +91,23 @@ onMounted(() => {
   chart.setOption(props.option, true)
   chart.on('dataZoom', (event) => {
     // ECharts 的载荷有两种形状（`batch` 与平铺），两者都要认；认不出来的就不发事件。
-    const payload = event as { batch?: Array<{ start?: number; end?: number }>; start?: number; end?: number }
+    const payload = event as {
+      batch?: Array<{ start?: number; end?: number; startValue?: unknown; endValue?: unknown }>
+      start?: number
+      end?: number
+      startValue?: unknown
+      endValue?: unknown
+    }
     const first = Array.isArray(payload.batch) ? payload.batch[0] : payload
     if (!first) return
-    const start = first.start ?? 0
-    const end = first.end ?? 100
-    emit('datazoom', { start: Number(start), end: Number(end) })
+    const asNumber = (value: unknown): number | null =>
+      typeof value === 'number' && Number.isFinite(value) ? value : null
+    emit('datazoom', {
+      start: Number(first.start ?? 0),
+      end: Number(first.end ?? 100),
+      startValue: asNumber(first.startValue),
+      endValue: asNumber(first.endValue)
+    })
   })
   window.addEventListener('resize', resize)
   // jsdom-less runtime: ResizeObserver exists in Electron/Chromium.
