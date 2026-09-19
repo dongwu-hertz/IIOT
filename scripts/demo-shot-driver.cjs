@@ -643,6 +643,39 @@ app.on('browser-window-created', (_event, win) => {
     problems.push('render-process-gone: ' + JSON.stringify(details))
   })
   win.webContents.on('did-fail-load', (_e, code, desc, url) => problems.push('did-fail-load ' + code + ' ' + desc + ' ' + url))
+  /*
+   * ── 第 33 轮：把 V8 调试器挂上，用来在**卡住的时候**取一次 JS 调用栈 ──
+   *
+   * 为什么这一招能行、而 `executeJavaScript` 不行：`executeJavaScript` 要等渲染进程的
+   * **任务队列**，而卡死时那条链不让出宏任务（心跳都停了）—— 所以它永远不 settle。
+   * `Debugger.pause` 走的是 V8 的**中断**（DevTools 那颗暂停按钮就是它），
+   * 它可以在脚本**正在跑**的时候把栈取出来，然后我们 `resume` 放它继续跑。
+   * 拿到的那几帧（函数名 + 行号）就是这条环的答案。
+   *
+   * 只在探针里用，不进产品：它需要 `--remote-debugging` 那种级别的能力（CDP）。
+   */
+  try {
+    win.webContents.debugger.attach('1.3')
+    win.webContents.debugger.on('message', (_event, method, params) => {
+      if (method !== 'Debugger.paused') return
+      const frames = Array.isArray(params && params.callFrames) ? params.callFrames : []
+      log(
+        'DEBUGGER paused: ' +
+          JSON.stringify(
+            frames.slice(0, 22).map((frame) => ({
+              fn: frame.functionName || '(anonymous)',
+              // 我们自己的源码才留文件名（打包后的 chunk 名字能直接对上 `TrendsView` / `EChart`）。
+              where: String(frame.url || '').split('/').pop().split('?')[0] + ':' + frame.location.lineNumber
+            }))
+          )
+      )
+      // 取完就放它继续跑（我们要的是"卡在哪"，不是把它停住）。
+      win.webContents.debugger.sendCommand('Debugger.resume').catch(() => {})
+    })
+    win.webContents.debugger.sendCommand('Debugger.enable').catch(() => {})
+  } catch (error) {
+    log('DEBUGGER attach failed: ' + error.message)
+  }
 })
 
 async function shoot(win, name) {
@@ -862,9 +895,26 @@ async function runIotIngestDrill(win, layout) {
   }
 
   // ---- 3) 写探针：打开接入 → 真推 → 读数 → 关掉并还原 --------------------------
+  /*
+   * ⚠ 第 33 轮修的一段**探针漂移**（它让整个 D③④ 那一组红了四轮）：
+   *
+   * 第 13 批第 1 条把「数据接入」整块搬进「设备管理 → 添加设备 → 本机接入」，设置页那个
+   * 页签删掉了 —— 但这一段探针还在**设置页**上 `clickTab("iot")` + 写
+   * `[data-iot-http-port]`（两个元素都早就不存在了，`setInput(null, …)` 静默返回 false）。
+   * 后果是一条链：端口没写进设置（设置里还是 8080/1883）→ 监听起在 8080 →
+   * driver 却往**它自己挑的高位端口**（20000+/30000+）推 → `ECONNREFUSED` →
+   * 「真 HTTP 推流没有回 200」「MQTT 没有 CONNACK」「计数是 0」「最近收到是空的」
+   * 一共九条问题。**九条红的都是同一个原因**，而且界面本身没问题：
+   * 「本机接入」那一块在 32 轮的只读探针里读出来是逐项正确的（`iot local block: ok=true`）。
+   *
+   * 现在改成走**真正的那条界面路径**（也正是业主要求的"真窗口证据"）：
+   *   `/settings` 只留存储根那一件（那一页没搬走）→ 切到 `/devices` → 打开添加设备对话框 →
+   *   展开「本机接入」→ 填两个端口 → 点「保存」→ 读回保存提示与端口。
+   */
   const openScript = ('(async () => {' +
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
-    'const el = (sel) => document.querySelector(sel);' +
+    'const el = (sel, root) => (root || document).querySelector(sel);' +
+    'const text = (node) => (node ? (node.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
     'const clickTab = async (id) => { const tab = el(".settings-tabs [data-tab=" + id + "]");' +
     '  if (tab) tab.click();' +
     '  await wait(300); };' +
@@ -874,20 +924,48 @@ async function runIotIngestDrill(win, layout) {
     '  return true; };' +
     /*
      * 存储根在**另一页**（存储页签）上，而这台机器的存储根指向操作员真实的目录 ——
-     * 推一条"认得出"的遥测会在 flush 时往那里写一个 Parquet 文件。所以先切到存储页签把它
-     * 换成这一次性 profile 里的目录（与 E2 那条探针同一做法），再回数据接入页签。
+     * 推一条"认得出"的遥测会在 flush 时往那里写一个 Parquet 文件。所以先在设置页把它换成
+     * 这一次性 profile 里的目录（与 E2 那条探针同一做法）。
      */
     'await clickTab("storage");' +
     'setInput(el(".path-row .input"), __PROBE_ROOT__);' +
-    'await clickTab("iot");' +
     'const before = await window.api.settings.get();' +
     'const alarms = await window.api.alarms.query({ acknowledged: false, limit: 1 });' +
-    'setInput(el("[data-iot-http-port]"), __HTTP_PORT__);' +
-    'setInput(el("[data-iot-mqtt-port]"), __MQTT_PORT__);' +
-    'await wait(1800);' +
     /*
-     * **第 13 批第 1 条之后：监听由"设备声明"驱动**（设置页那一格是只读的派生显示）。
-     * 所以这里不再点总开关，而是走界面上同一条 IPC —— 让两台设备分别声明 HTTP 与 MQTT 接入：
+     * 监听设置的**两个端口**现在在「添加设备 → 本机接入」里（业主第 13 批第 1 条）。
+     * 打开对话框 → 展开 details → 填端口 → 点保存（这是这一段唯一的一次界面写操作）。
+     */
+    'const portPlan = { http: __HTTP_PORT__, mqtt: __MQTT_PORT__, dialog: false, saved: false,' +
+    '  notice: "", error: "", readBack: null };' +
+    'const addButton = [...document.querySelectorAll("button")]' +
+    '  .find((b) => text(b) === "添加设备" || /^Add device/.test(text(b)));' +
+    'if (addButton) addButton.click();' +
+    'for (let i = 0; i < 20 && !el("[data-add-iot-local]"); i += 1) await wait(200);' +
+    'const iotDialog = el("[data-add-device-dialog]");' +
+    'const iotLocal = el("[data-add-iot-local]", iotDialog);' +
+    'if (iotLocal) {' +
+    '  portPlan.dialog = true;' +
+    '  iotLocal.open = true;' +
+    '  await wait(200);' +
+    '  setInput(el("[data-add-iot-http-port]", iotDialog), __HTTP_PORT__);' +
+    '  setInput(el("[data-add-iot-mqtt-port]", iotDialog), __MQTT_PORT__);' +
+    '  const save = el("[data-add-iot-save]", iotDialog);' +
+    '  if (save) { save.click(); await wait(1500); portPlan.saved = true; }' +
+    '  portPlan.notice = text(el("[data-add-iot-notice]", iotDialog));' +
+    '  portPlan.error = text(el("[data-add-iot-error]", iotDialog));' +
+    '  portPlan.readBack = {' +
+    '    http: (function(){ const n = el("[data-add-iot-http-port]", iotDialog);' +
+    '      return n ? String(n.value) : null; })(),' +
+    '    mqtt: (function(){ const n = el("[data-add-iot-mqtt-port]", iotDialog);' +
+    '      return n ? String(n.value) : null; })()' +
+    '  };' +
+    '  const close = el(".panel__header button", iotDialog);' +
+    '  if (close) close.click();' +
+    '  await wait(400);' +
+    '}' +
+    /*
+     * **第 13 批第 1 条之后：监听由"设备声明"驱动**（界面上那几格是只读的派生显示）。
+     * 所以这里不点总开关，而是走界面上同一条 IPC —— 让两台设备分别声明 HTTP 与 MQTT 接入：
      *   · 一台声明 http → 本机的 HTTP 监听应当起来；
      *   · 另一台声明 mqtt → MQTT 监听应当起来。
      * 两条都起来之后 `enabled/httpEnabled/mqttEnabled` 三个开关都该是 true（派生出来的）。
@@ -905,6 +983,7 @@ async function runIotIngestDrill(win, layout) {
     'return JSON.stringify({' +
     '  originalRoot: before.success ? before.data.storageRoot : null,' +
     '  alarmTotalBefore: alarms.success ? alarms.data.total : null,' +
+    '  portPlan,' +
     '  declaredOn: [devices[0].id, devices[1].id],' +
     '  plansWritten: {' +
     '    http: setHttp && setHttp.success ? setHttp.data.ingest : null,' +
@@ -922,6 +1001,7 @@ async function runIotIngestDrill(win, layout) {
   log('iot opened    : ' + JSON.stringify({
     originalRoot: opened.originalRoot,
     alarmTotalBefore: opened.alarmTotalBefore,
+    portPlan: opened.portPlan,
     plansWritten: opened.plansWritten,
     config: opened.config,
     http: opened.status && opened.status.http,
@@ -931,6 +1011,30 @@ async function runIotIngestDrill(win, layout) {
   if (opened.reason === 'need-two-devices') {
     problems.push('接入探针：库里不足两台设备，没法分别声明 HTTP 与 MQTT 接入')
     return
+  }
+  /*
+   * **端口是走界面写的**（这是"真窗口证据"的一半）：对话框在、保存点了、提示是成功、
+   * 读回的两个端口就是刚填的。第 33 轮之前这一段在设置页写两个早已不存在的元素，
+   * 于是"端口没写进去"，后面九条推送断言全跟着红（同一个原因）。
+   */
+  const portPlan = opened.portPlan || {}
+  if (portPlan.dialog !== true) {
+    problems.push('写接入端口时没打开「添加设备 → 本机接入」那一块（端口写不进去）')
+  }
+  if (portPlan.saved !== true) {
+    problems.push('「本机接入」里没找到保存按钮（[data-add-iot-save]）')
+  }
+  if (portPlan.error) {
+    problems.push('保存「本机接入」报错：' + JSON.stringify(portPlan.error))
+  }
+  if (!portPlan.notice) {
+    problems.push('在「本机接入」里保存监听设置之后没有任何结果提示')
+  }
+  if (portPlan.readBack && portPlan.readBack.http !== String(httpPort)) {
+    problems.push(
+      '保存之后输入框里的端口不是 ' + httpPort + ' / ' + mqttPort + '：' +
+        JSON.stringify(portPlan.readBack)
+    )
   }
   /*
    * 第 13 批第 1 条的核心断言：**设备声明 → 本机监听**。
@@ -1152,7 +1256,13 @@ async function runIotIngestDrill(win, layout) {
     .replace(/__ORIGINAL_ROOT__/g, JSON.stringify(opened.originalRoot || probeStorageRoot))
     .replace(/__DECLARED_IDS__/g, JSON.stringify(opened.declaredOn ?? []))
 
-  const closed = await layout('/settings', closeScript, 120_000)
+  /*
+   * ⚠ 路由是 `/devices`（第 33 轮改的）：读收数统计那一块现在在「添加设备」对话框里，
+   * 而「添加设备」按钮只在设备管理页上 —— 在 `/settings` 上找它必然找不到，
+   * 于是这一支会报「收尾那一段没找到添加设备对话框里的『本机接入』那一块」。
+   * 脚本自己在最后会 `location.hash = "#/settings"` 回去还原存储根。
+   */
+  const closed = await layout('/devices', closeScript, 120_000)
   log('iot closed    : ' + JSON.stringify(closed))
 
   const before = closed.before
@@ -2051,17 +2161,32 @@ async function run() {
   /** 单次"问一下页面"的上限：超过了就认为渲染进程这一轮不响应。 */
   const LAYOUT_PING_TIMEOUT_MS = 5_000
 
+  /**
+   * **每一次 `executeJavaScript` 都必须有上限**（第 33 轮补的那一层）。
+   *
+   * 为什么：渲染进程卡死时这些 Promise **永远不 settle**，而只要有一处漏了上限，
+   * 整支探针就停在那里 —— 连"超时"都报不出来（第 33 轮 `probe-round37.log` 就是这样：
+   * 趋势页第一支超时之后，driver 停在 `layout()` 里那句**设 hash** 的 `executeJavaScript` 上，
+   * 之后再没有任何输出）。超时就返回 `null`，调用方自己决定怎么说。
+   */
+  const pageEval = async (script, timeoutMs = LAYOUT_PING_TIMEOUT_MS) =>
+    Promise.race([
+      win.webContents.executeJavaScript(script).then(
+        (value) => value,
+        (error) => ({ __error: String(error && error.message) })
+      ),
+      sleep(timeoutMs).then(() => null)
+    ])
+
   const waitForPageRoot = async () => {
     const deadline = Date.now() + LAYOUT_SETTLE_MAX_MS
     for (;;) {
-      const present = await Promise.race([
-        win.webContents.executeJavaScript(
-          '!!document.querySelector(".app-content .page, .app-content .login, .app-content [data-route-root]")'
-        ),
-        sleep(LAYOUT_PING_TIMEOUT_MS).then(() => 'unresponsive')
-      ])
+      const present = await pageEval(
+        '!!document.querySelector(".app-content .page, .app-content .login, .app-content [data-route-root]")',
+        LAYOUT_PING_TIMEOUT_MS
+      )
       if (present === true) return true
-      if (present === 'unresponsive') {
+      if (present === null) {
         log('layout ping : 渲染进程 ' + LAYOUT_PING_TIMEOUT_MS + 'ms 没有应答')
       }
       if (Date.now() >= deadline) return false
@@ -2070,9 +2195,18 @@ async function run() {
   }
 
   const layout = async (route, script, timeoutMs = 60_000) => {
-    await win.webContents.executeJavaScript(
-      'location.hash = ' + JSON.stringify('#' + route) + '; true'
+    /*
+     * ⚠ 这一句**必须**走 `pageEval()`（有上限）。第 33 轮实测：渲染进程卡死之后，
+     * `layout()` 就停在这句设 hash 的 `executeJavaScript` 上，整支探针再也没有任何输出 ——
+     * 后面那些"超时"日志一条都到不了，看起来像"driver 自己挂了"。
+     */
+    const navigated = await pageEval(
+      'location.hash = ' + JSON.stringify('#' + route) + '; true',
+      LAYOUT_PING_TIMEOUT_MS
     )
+    if (navigated === null) {
+      log('layout ' + route.padEnd(9) + ': 切路由就没有应答（渲染进程不响应）')
+    }
     const rooted = await waitForPageRoot()
     if (!rooted) {
       log('layout ' + route.padEnd(9) + ': NO PAGE ROOT after ' + LAYOUT_SETTLE_MAX_MS + 'ms')
@@ -4438,7 +4572,78 @@ async function run() {
     '  const until = Date.now() + ms;' +
     '  for (;;) { if (fn()) return true; if (Date.now() >= until) return false; await wait(200); }' +
     '};' +
-    'const finish = () => { out.timings = timings; return JSON.stringify(out); };'
+    'const finish = () => { out.timings = timings; return JSON.stringify(out); };' +
+    /*
+     * ── 页面侧的"生命体征"（第 33 轮）────────────────────────────────────────
+     *
+     * 趋势页点「自定义」范围会把渲染进程的 JS 线程搞成不再应答，而我们量到的进程画像
+     * 很怪（`probe-round33.log`）：**CPU 只有 4.5%**、内存**每 2 秒涨 22MB**、
+     * 没崩、URL 还在 `/trends`。要分清"主线程被按住、别的线程在干活"与
+     * "主线程在跑一个很轻的循环、不停分配"，需要的读数**必须在页面里**，
+     * 而且必须在卡住之前就装好 —— 所以放在共用开头，每一支都装一遍（幂等）。
+     *
+     * 每秒一行 `console.log`（driver 的 `console-message` 钩子会抄进日志，
+     * **页面卡住之后照样能到**），四个数各有各的用处：
+     *   · `beat`    主线程心跳 —— 停了就说明主线程不再跑 JS；
+     *   · `heap`    JS 堆（`performance.memory`，Chromium 有）—— 涨说明在分配；
+     *   · `mut`     `MutationObserver` 累计的 DOM 变更数 —— 猛涨 = Vue 在反复重渲染；
+     *   · `frame`   上一次 `requestAnimationFrame` 的等待毫秒 —— 一直是 `-` 或很大
+     *               说明**渲染进程不再出帧**（合成器停了）。
+     * 外加一个 Web Worker 心跳（**另一个线程**）：它还在跳就说明整个渲染进程没死。
+     *
+     * 这里**不**装"常驻 rAF 循环"：那本身会让合成器一直忙，会把要观察的现象盖掉。
+     * 每个心跳只申请**一帧**，量它多久才到。
+     */
+    'if (!window.__probeDiag) {' +
+    '  var diag = { beat: 0, mut: 0, frames: 0, frameWaitMs: null, pending: false, timer: null };' +
+    '  window.__probeDiag = diag;' +
+    '  try {' +
+    '    new MutationObserver(function (records) { diag.mut += records.length; })' +
+    '      .observe(document.documentElement, { subtree: true, childList: true,' +
+    '        attributes: true, characterData: true });' +
+    '  } catch (e) { console.log("[trend-probe] diag-mutation-failed " + e.message); }' +
+    '  diag.timer = setInterval(function () {' +
+    '    diag.beat += 1;' +
+    '    var heap = (window.performance && performance.memory)' +
+    '      ? Math.round(performance.memory.usedJSHeapSize / 1048576) + "MB" : "?";' +
+    '    console.log("[trend-probe] heartbeat " + diag.beat + " heap=" + heap +' +
+    '      " mut=" + diag.mut + " frames=" + diag.frames +' +
+    '      " frameWaitMs=" + (diag.frameWaitMs === null ? "-" : diag.frameWaitMs));' +
+    '    if (!diag.pending) {' +
+    '      diag.pending = true;' +
+    '      var asked = Date.now();' +
+    '      requestAnimationFrame(function () {' +
+    '        diag.pending = false;' +
+    '        diag.frames += 1;' +
+    '        diag.frameWaitMs = Date.now() - asked;' +
+    '      });' +
+    '    }' +
+    '  }, 1000);' +
+    '  try {' +
+    '    var beatBlob = new Blob(["setInterval(function(){ postMessage(1); }, 1000);"],' +
+    '      { type: "text/javascript" });' +
+    '    var beatWorker = new Worker(URL.createObjectURL(beatBlob));' +
+    '    beatWorker.onmessage = function () { console.log("[trend-probe] worker-heartbeat"); };' +
+    '  } catch (e) { console.log("[trend-probe] diag-worker-failed " + e.message); }' +
+    '  /*' +
+    '   * 同步原生调用那一族（`window.print()` 的打印对话框、`alert`/`confirm`/`prompt`）：' +
+    '   * 它们会把渲染进程的主线程**同步**按住，直到对话框被关掉 —— 现象与我们的卡死一模一样。' +
+    '   * 换成"记一笔再抛异常"：日志里出现 `native-call xxx` 就是它；一条都没有就是这一族被排除。' +
+    '   * 抛异常是安全的：这几个 API 在趋势页上只有「打印」按钮用，而打印那一段探针自己会再打一次桩。' +
+    '   */' +
+    '  ["print", "alert", "confirm", "prompt"].forEach(function (name) {' +
+    '    try {' +
+    '      Object.defineProperty(window, name, {' +
+    '        configurable: true, writable: true,' +
+    '        value: function () {' +
+    '          console.log("[trend-probe] native-call " + name);' +
+    '          throw new Error("probe blocked " + name);' +
+    '        }' +
+    '      });' +
+    '    } catch (e) { console.log("[trend-probe] diag-native-guard-failed " + name); }' +
+    '  });' +
+    '  console.log("[trend-probe] diag-ready");' +
+    '}'
   /*
    * 第 1 支：**只读**的几何与结构 —— 一次点击都不发。
    *
@@ -4678,7 +4883,62 @@ async function run() {
     // 60 秒：这一支只发两次查询（点 1 分钟档、点回自动），比原来那一整段（30+ 条查询）轻得多。
     '})()', 60_000)
   /*
-   * 第 5 支（**故意排在最后**）：③ 「无数据灰显 + 不可勾选」：把范围切到一段**很久以前**
+   * 第 5 支：跳到"有数据的那个范围"（`[data-trend-use-coverage]`），再看一遍有图的那一屏。
+   *
+   * 为什么要有这一支（第 33 轮）：
+   *   1. 它是**业主真的会点**的按钮 —— 空态里写着"库里有数据的范围是 X ~ Y，点这里跳过去"；
+   *   2. 它落到的状态（`range='custom'` + 两个边界都有值）与"手填两个时间"是**同一个状态**，
+   *      也就是第 32 轮定位到的卡死状态，所以它是那条路径的**另一个入口**（验它 = 验业主的路）；
+   *   3. 它是探针唯一能拿到"真的有读数"那一屏的办法：默认预设是最近 1 小时，而这台设备
+   *      最后一次上报在几天前（`0 / 8 路有数据`）—— 没有它，"声压级 Y 轴 0–100"与
+   *      "多条通道画在同一根轴上"这两条断言永远跑不到（第 28–32 轮一直是"没验到"）。
+   *
+   * ⚠ 它会**故意覆盖** `chartCount` / `yRanges` / `chartHints` / `metricEmpty` 这几个键，
+   * 因为下面断言块里那几条（`yRanges` 必须是 `spl=0-100`、图里的通道数与图例一致）
+   * 问的就是"有图的那一屏"。第 1 支（只读）量到的是"没有图的那一屏"，两屏都要有读数，
+   * 所以第 1 支那份仍然原样保留在日志里（`layout /trends : {...}`）。
+   */
+  const trendCoverageRange = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    'await waitFor(() => document.querySelector("[data-trend-use-coverage]") !== null, 20000);' +
+    'const button = document.querySelector("[data-trend-use-coverage]");' +
+    'out.coverageButton = !!button;' +
+    'if (button) {' +
+    '  out.coverageButtonText = text(button);' +
+    '  mark("coverage:click");' +
+    '  button.click();' +
+    // 跳到有数据的那一段之后要等两件事：查询回来 + 图挂上来（ECharts 还要再画一帧）。
+    '  await waitFor(() => document.querySelectorAll("[data-metric-chart]").length > 0, 20000);' +
+    '  await wait(1200);' +
+    '  mark("coverage:charts");' +
+    '  out.rangeAfterCoverage = (function(){' +
+    '    const chip = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    '    return chip ? chip.getAttribute("data-trend-range-preset") : null;' +
+    '  })();' +
+    '  out.chartCount = document.querySelectorAll("[data-metric-chart]").length;' +
+    '  out.metricEmpty = [...document.querySelectorAll("[data-metric-empty]")]' +
+    '    .map((el) => el.getAttribute("data-metric-empty"));' +
+    '  out.chartHints = [...document.querySelectorAll("[data-metric-chart] .chart-hint")]' +
+    '    .map((el) => text(el));' +
+    '  out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
+    '    .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
+    '  out.panelSummary = text(document.querySelector("[data-channel-panel-summary]"));' +
+    '  out.summaryWithData = out.panelSummary;' +
+    '  out.dataRowsWithData = document.querySelectorAll(' +
+    '    "[data-trend-channel-row]:not([data-trend-channel-nodata])").length;' +
+    '  out.pressedWithData = checkStates();' +
+    /* 图的画布真的画了东西没有：`canvas` 存在 + 宽高 > 0（ECharts 没画出来时是空 div）。 */
+    '  out.chartCanvas = [...document.querySelectorAll("[data-metric-chart] canvas")]' +
+    '    .map((el) => Math.round(el.getBoundingClientRect().width) + "x" +' +
+    '      Math.round(el.getBoundingClientRect().height));' +
+    '  out.zoomBarVisible = !!document.querySelector("[data-trend-zoom-bar]");' +
+    '}' +
+    'mark("done");' +
+    'return finish();' +
+    // 90 秒：跳过去要发 8 条查询，再等 ECharts 画第一帧。
+    '})()', 90_000)
+  /*
+   * 第 6 支（**故意排在最后**）：③ 「无数据灰显 + 不可勾选」：把范围切到一段**很久以前**
    * （2000-01-01 那两天），那一段一定没有读数。判据三条：每一行都有 `data-trend-channel-nodata`、
    * 每个勾选框都 `disabled`、面板小结是 "0 / N 路有数据"。
    * 量完把范围**还原**成原来那个预设（探针不许留下改动）。
@@ -4697,6 +4957,8 @@ async function run() {
    */
   const trendRange = await layout('/trends', '(async () => {' +
     TREND_PROBE_HEAD +
+    // 同步原生调用的守卫、主线程/Worker 心跳、DOM 变更计数都装在共用开头里（见 `TREND_PROBE_HEAD`）。
+    'mark("range:diag-ready");' +
     'await waitFor(() => document.querySelector("[data-trend-range-preset]") !== null, 15000);' +
     // 这一支自己再量一次"起点有几行"：万一第 1 支超时，这里的判据仍然成立。
     'out.panelRowsBeforeRange = document.querySelectorAll("[data-trend-channel-row]").length;' +
@@ -4769,6 +5031,7 @@ async function run() {
     ['toggle', trendToggle],
     ['metrics', trendMetrics],
     ['granularity', trendGranularity],
+    ['coverage', trendCoverageRange],
     ['range', trendRange]
   ]
   const trendChannels = {}
@@ -4817,11 +5080,69 @@ async function run() {
     return answer !== false
   }
   if (await pingPage(5_000)) {
-    log('trend channels: 渲染进程不响应了 —— 先重载窗口，让后面的页面还能验')
+    log('trend channels: 渲染进程不响应了 —— 先取一次 JS 调用栈（V8 中断），再重载窗口')
+    /*
+     * **先取栈**：`Debugger.pause` 是 V8 的中断，卡住的循环里也能把调用栈取出来。
+     * 这一条比"CPU/内存画像"更直接 —— 它会告诉我们到底是哪几帧在转
+     * （第 33 轮：加了它才发现"一个核心被占满"的那条环不止一处）。
+     */
+    try {
+      /*
+       * **多采几次**：单次采样只能看到"卡住时它正在干什么"（第 33 轮第一次采到的是
+       * `flushJobs → componentUpdateFn → renderComponentRoot → renderList → trendAxisName`
+       * —— 一次 Vue 渲染，这说明环在"渲染 → 有人又改了它依赖的状态 → 再渲染"上，
+       * 但**看不出是谁改的**）。连采 6 次（每次间隔约 1 秒）就能看出这条脉冲的**其它相位**：
+       * 如果某一次采到 `setChartRef` / `onChartZoom` / `ResizeObserver` / `setOption`，
+       * 那个就是写状态的那一端。
+       */
+      for (let sample = 0; sample < 6; sample += 1) {
+        const paused = await Promise.race([
+          win.webContents.debugger.sendCommand('Debugger.pause').then(() => true),
+          sleep(4_000).then(() => false)
+        ])
+        if (!paused) {
+          log('trend channels: Debugger.pause 第 ' + (sample + 1) + ' 次没有得到回应')
+          break
+        }
+        await sleep(1_200)
+        await Promise.race([
+          win.webContents.debugger.sendCommand('Debugger.resume'),
+          sleep(3_000)
+        ]).catch(() => {})
+        await sleep(800)
+      }
+      log('trend channels: 调用栈采样结束（每一段见上面的 DEBUGGER paused 行）')
+    } catch (error) {
+      log('trend channels: 取调用栈失败：' + error.message)
+    }
     problems.push(
       '趋势页把**渲染进程**卡死了（点「自定义」时间范围之后页面不再应答，主进程仍在打日志）—— ' +
         '趋势页这一段之后的读数全部作废；驱动已重载窗口继续跑其余页面'
     )
+    /*
+     * ── 卡住的时候，渲染进程到底在干什么？（第 33 轮加的）──
+     *
+     * 这一条能把"到底哪一类卡死"一次分开：
+     *   · CPU 接近 100% + 内存往上涨 → **JS/绘制在死转**（去找循环）；
+     *   · CPU 接近 0、内存平 → 线程**在等**某个东西（同步原生调用、对话框、死锁）；
+     *   · `isCrashed()` 变 true → 是崩了（不是卡）。
+     * 截屏与 `isLoading()`/URL 一起打出来 —— 它们都是**浏览器进程侧**的状态，
+     * 渲染进程不应答时照样读得到。
+     */
+    const rendererPid = win.webContents.getOSProcessId()
+    for (let sample = 0; sample < 8; sample += 1) {
+      const row = app.getAppMetrics().find((item) => item.pid === rendererPid)
+      log(
+        'renderer health: sample=' + sample +
+          ' cpu=' + (row ? row.cpu.percentCPUUsage.toFixed(1) : '?') + '%' +
+          ' mem=' + (row ? Math.round(row.memory.workingSetSize / 1024) : '?') + 'MB' +
+          ' pid=' + rendererPid +
+          ' crashed=' + win.webContents.isCrashed() +
+          ' loading=' + win.webContents.isLoading() +
+          ' url=' + win.webContents.getURL().slice(-40)
+      )
+      await sleep(2_000)
+    }
     /*
      * 卡死时留一张截图：这是"业主会看到什么"的唯一证据（页面停在哪个状态、有没有转圈）。
      * `capturePage()` 也走渲染进程，所以同样套一个上限 —— 拿不到就如实记一句，不假装有。

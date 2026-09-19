@@ -29,9 +29,14 @@ import path from 'node:path'
 import { describe, it } from 'node:test'
 
 import {
+  TREND_ZOOM_BURST_LIMIT,
+  TREND_ZOOM_BURST_WINDOW_MS,
+  TREND_ZOOM_ECHO_SUPPRESS_MS,
   trendDataZoom,
+  trendZoomBurstExceeded,
   trendZoomIndexRange,
   trendZoomIsIdentity,
+  trendZoomShouldRecord,
   trendZoomWindow
 } from '../src/shared/domain/trend'
 import {
@@ -160,8 +165,19 @@ describe('时间轴缩放', () => {
   it('**同一次缩放只记一次**（不然就是 事件→改状态→重画→setOption→事件 的死循环）', () => {
     const fn = viewCode.slice(viewCode.indexOf('function onChartZoom('))
     const body = fn.slice(0, fn.indexOf('\n}\n') + 3)
-    assert.match(body, /Math\.abs\(current\.start - next\.start\) < 0\.01/, '没有判"窗口有没有真的变"')
-    assert.match(body, /if \(current === null\) return/, '同一段"没有缩放"也会再写一次状态')
+    /*
+     * 判据本身搬进了纯函数（`trendZoomShouldRecord()`）—— 它多了一条"刚写过选项"的回声抑制，
+     * 否则断不开"整段 ↔ 非整段"来回跳的那条环（见文件下半部分那一组测试）。
+     */
+    assert.match(body, /trendZoomShouldRecord\(zoomWindow\.value, window, msSinceWrite, zoomWriteTarget\)/, '没有判"窗口有没有真的变"')
+    assert.match(body, /zoomWrittenAt = Date\.now\(\)/, '没有记下"刚写过选项"的时刻（回声抑制就失效了）')
+    // "同一段不重复写"这条规则本身要在纯函数里（源码扫描要能看见那个 0.01）。
+    const domain = read('src/shared/domain/trend.ts')
+    assert.match(
+      domain,
+      /Math\.abs\(current\.start - incoming\.start\) >= 0\.01/,
+      '纯函数里没有"同一段就丢掉"这条规则'
+    )
     // 选项必须是 computed（稳定引用）：模板里直接调函数会让每次重渲染都造一个新选项。
     assert.match(viewCode, /const chartOptions = computed<Record<string, EChartsCoreOption>>/)
     assert.match(viewTemplate, /:option="chartOptions\[bundle\.metric\]/, '模板没有用 computed 的选项')
@@ -431,5 +447,141 @@ describe('四语言词条', () => {
         )
       }
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 缩放回声：那条把渲染进程一个核心占满的死循环（2026-09-20 定位）
+// ---------------------------------------------------------------------------
+
+/**
+ * 现象（第 28–33 轮，一直表现为"趋势页探针超时 / 渲染进程不响应"）：
+ * 图表**第一次真的拿到读数**之后，渲染进程的一个核心被占满（22 核机器上 `percentCPUUsage`
+ * 4.5% ≈ 一个核）、页面里的 `setInterval` 心跳停跳（定时器被饿死）、页面照旧出帧、
+ * 进程内存每 2 秒涨 22MB 而 JS 堆平在 20MB —— `executeJavaScript` 从此不再 settle，
+ * `reload()` 也进不来，只有杀掉渲染进程才回得来。
+ *
+ * 环是这条：我们把缩放窗口写进选项（`setOption(option, true)` 会丢缩放，所以必须写）→
+ * ECharts 应用之后**再发一次 `dataZoom`** → 我们改状态 → 重算选项 → 再 `setOption` → …
+ * 旧的判据（"百分比有没有变"）断不开它：时间轴 + `filterMode: 'filter'` 下，
+ * 写进去的是 `1/99`、回出来的是按**过滤后**的轴重算的"整段"，两者在"整段 ↔ 非整段"之间来回跳。
+ */
+describe('缩放回声：程序写入之后的 dataZoom 事件不许再改状态', () => {
+  const zoomed = { start: 10, end: 90, startValue: null, endValue: null }
+  const identity = { start: 0, end: 100, startValue: null, endValue: null }
+
+  it('刚写过选项 → 一律丢掉（这正是断环的那一条）', () => {
+    assert.equal(trendZoomShouldRecord(null, zoomed, 0), false, '刚写完就回的事件被记下了')
+    assert.equal(
+      trendZoomShouldRecord(null, zoomed, TREND_ZOOM_ECHO_SUPPRESS_MS - 1),
+      false,
+      '抑制窗口之内的事件被记下了 —— 环会继续转'
+    )
+  })
+
+  it('抑制窗口过了之后，真正的缩放照旧记下来', () => {
+    assert.equal(
+      trendZoomShouldRecord(null, zoomed, TREND_ZOOM_ECHO_SUPPRESS_MS + 1),
+      true,
+      '抑制窗口之外的用户缩放被丢掉了'
+    )
+    assert.equal(
+      trendZoomShouldRecord(zoomed, { start: 30, end: 70 }, TREND_ZOOM_ECHO_SUPPRESS_MS + 1),
+      true,
+      '换了一段窗口却没有记下来'
+    )
+  })
+
+  it('"整段"事件：缩放着时才记（记成取消缩放），本来没缩放就不记', () => {
+    assert.equal(
+      trendZoomShouldRecord(zoomed, identity, TREND_ZOOM_ECHO_SUPPRESS_MS + 1),
+      true,
+      '拖回整段之后没有取消缩放状态'
+    )
+    assert.equal(
+      trendZoomShouldRecord(null, identity, TREND_ZOOM_ECHO_SUPPRESS_MS + 1),
+      false,
+      '本来就没有缩放，"整段"又被记了一次（旧判据就是在这里漏的）'
+    )
+  })
+
+  it('同一段再报一次（百分比差 < 0.01）→ 丢掉', () => {
+    assert.equal(
+      trendZoomShouldRecord(zoomed, { start: 10.005, end: 89.995 }, 10_000),
+      false,
+      '同一段重复上报被记下了'
+    )
+  })
+
+  it('与"最后一次写进选项的窗口"相同 → 丢掉（**与时间无关**的那一条）', () => {
+    const writeTarget = { start: 2, end: 98 }
+    assert.equal(
+      trendZoomShouldRecord(null, { start: 2, end: 98 }, 10_000, writeTarget),
+      false,
+      '回声报的就是我们写进去的那一段，却没有被丢掉 —— 时间窗口一过环就又会转起来'
+    )
+    assert.equal(
+      trendZoomShouldRecord(null, { start: 2.005, end: 97.995 }, 10_000, writeTarget),
+      false,
+      '回声只是被 ECharts 归一化了一点点，就当成用户操作收下了'
+    )
+    // 另一段 = 真的换了一段，照旧收下。
+    assert.equal(
+      trendZoomShouldRecord(null, { start: 30, end: 70 }, 10_000, writeTarget),
+      true,
+      '换了窗口却没有记下来'
+    )
+  })
+
+  it('安全阀：2 秒内太多次就停手（残余的环最多转这么多圈）', () => {
+    const now = 100_000
+    assert.equal(trendZoomBurstExceeded([], now), false, '一次都没接受就说超限')
+    const burst = Array.from({ length: TREND_ZOOM_BURST_LIMIT }, (_, index) => now - index * 10)
+    assert.equal(trendZoomBurstExceeded(burst, now), true, '爆发没有被拦住')
+    // 窗口之外的旧记录不算数。
+    const old = Array.from({ length: TREND_ZOOM_BURST_LIMIT }, (_, index) =>
+      now - TREND_ZOOM_BURST_WINDOW_MS - 1 - index * 10
+    )
+    assert.equal(trendZoomBurstExceeded(old, now), false, '窗口之外的记录被算进来了')
+  })
+
+  it('视图里真的用了这个判据，并且在写入之后打时间戳', () => {
+    const view = stripComments(read('src/renderer/src/views/TrendsView.vue'))
+    assert.match(
+      view,
+      /trendZoomShouldRecord\(zoomWindow\.value, window, msSinceWrite, zoomWriteTarget\)/,
+      '`onChartZoom()` 没有把"最后写进去的窗口"传给纯函数 —— 回声环可能又回来了'
+    )
+    assert.match(view, /zoomWrittenAt = Date\.now\(\)/, '没有把"刚写过选项"的时刻记下来')
+    assert.match(view, /zoomWriteTarget = next/, '没有记下"最后写进选项的窗口"')
+    assert.match(
+      view,
+      /trendZoomBurstExceeded\(zoomAcceptedAt, Date\.now\(\)\)/,
+      '没有装安全阀（残余的环会一直转）'
+    )
+    assert.match(
+      view,
+      /let zoomWrittenAt = 0/,
+      '`zoomWrittenAt` 必须是普通变量（放进 `ref` 会自己触发重渲染，反而多一条环）'
+    )
+    // 重置缩放也算"我们改了选项"。
+    const resetBlock = /function resetZoom\(\)[\s\S]*?\n}/.exec(view)
+    assert.ok(resetBlock, '找不到 resetZoom()')
+    assert.match(resetBlock[0], /zoomWrittenAt = Date\.now\(\)/, 'resetZoom() 没有打这个时间戳')
+    assert.match(resetBlock[0], /zoomWriteTarget = null/, 'resetZoom() 没有把写入目标清成"整段"')
+  })
+
+  it('EChart 的 resize 在尺寸没变时是空操作（第二条环：通知 → resize → 通知）', () => {
+    const chart = stripComments(read('src/renderer/src/components/EChart.vue'))
+    assert.match(
+      chart,
+      /if \(width === lastSize\.width && height === lastSize\.height\) return/,
+      '`resize()` 又在无条件 `chart.resize()` —— ResizeObserver 那条环会回来'
+    )
+    assert.match(
+      chart,
+      /const width = Math\.round\(rect\.width\)/,
+      '`resize()` 没有按取整后的像素判断（亚像素抖动会一直触发）'
+    )
   })
 })

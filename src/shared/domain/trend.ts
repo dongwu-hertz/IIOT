@@ -272,6 +272,106 @@ export function trendZoomIsIdentity(startPercent: number, endPercent: number): b
   return startPercent <= 0.5 && endPercent >= 99.5
 }
 
+/** 一次 `dataZoom` 事件的载荷（`EChart.vue` 转发出来的形状）。 */
+export interface TrendZoomWindow {
+  start: number
+  end: number
+  startValue?: number | null
+  endValue?: number | null
+}
+
+/**
+ * "刚把选项交给图表"之后，多久以内的 `dataZoom` 事件算**我们自己写选项的回声**。
+ *
+ * **我们自己的取值**（手册未说明；ECharts 没有 API 能区分"用户缩放"与"程序写入后的回调"）。
+ * 250 毫秒是下面两件事之间的折中：
+ *   · ECharts 应用 `setOption` 里的 `dataZoom` 并在**下一帧**发出 `dataZoom` 事件（≈16ms），
+ *     250ms 足够宽；
+ *   · 操作员连续拨两次滚轮之间通常 ≥ 200–300ms，所以真实操作**不会**被吞掉两次以上。
+ * 这个值只影响"两次缩放之间要隔多久"，不影响单次缩放的正确性。
+ */
+export const TREND_ZOOM_ECHO_SUPPRESS_MS = 250
+
+/**
+ * 这个 `dataZoom` 事件要不要**记进状态**（返回 false = 丢掉）。
+ *
+ * ── 为什么需要它（2026-09-20 定位到的一个真死循环）──
+ *
+ * 这一页把缩放窗口**写进选项**（`trendDataZoom(zoomWindow)`），因为 `EChart.vue` 用的是
+ * `setOption(option, true)`（notMerge）—— 不写进去的话，任何一次重画都会把用户的缩放丢掉。
+ * 代价是：**我们写进去的窗口，ECharts 应用之后会再发一次 `dataZoom` 事件**。于是
+ * "事件 → 改状态 → 重算选项 → `setOption` → 事件"这条环必须有人断开。
+ *
+ * 原来的断法是"窗口有没有真的变"（百分比差 < 0.01 就丢掉），它能断开"同一段重复报"，
+ * 断不开**在"整段"与"非整段"之间来回跳**的那一种 —— 而时间轴 + `filterMode: 'filter'`
+ * 恰好会这样：写进去的是 `1/99`，ECharts 按**过滤之后**的范围重算轴，回出来的是"整段"
+ * （`0/100`），我们于是把状态清成 `null`，选项又变成 `0/100`，它再回 `1/99`……
+ * 真窗口里实测到的现象：**一个核心被占满**（22 核机器上 `percentCPUUsage` 4.5%）、
+ * 定时器全部被饿死（页面里的 `setInterval` 心跳停了）、页面照旧出帧、进程内存每 2 秒涨 22MB、
+ * 而 JS 堆平在 20MB（分配的都在画布/光栅那一侧）。`executeJavaScript` 从此不再 settle ——
+ * 探针看到的就是"渲染进程不响应"，`reload()` 也进不来。**只有杀掉渲染进程才回得来。**
+ *
+ * 所以判据改成三条，按顺序：
+ *   1. **刚写过选项**（`msSinceProgrammaticWrite < suppressMs`）→ 一律丢掉（回声）；
+ *   2. 事件本身是"整段"→ 只有在**当前处于缩放状态**时才需要记（记成 `null` = 取消缩放）；
+ *   3. 与当前窗口同一段（百分比差 < 0.01）→ 丢掉。
+ * 第 1 条是关键：它让"我们写 → 它回 → 我们再写"这条链在**一步之后**就断掉，
+ * 无论 ECharts 回的是什么值。
+ */
+export function trendZoomShouldRecord(
+  current: TrendZoomWindow | null,
+  incoming: TrendZoomWindow,
+  msSinceProgrammaticWrite: number,
+  writeTarget: TrendZoomWindow | null = null,
+  suppressMs: number = TREND_ZOOM_ECHO_SUPPRESS_MS
+): boolean {
+  if (msSinceProgrammaticWrite >= 0 && msSinceProgrammaticWrite < suppressMs) return false
+  /*
+   * **与"我们最后一次写进选项的那个窗口"相同 → 回声**（与时间无关的那一条）。
+   *
+   * 为什么除了时间窗口还要这一条：回声到达的时间不确定（ECharts 有动画/布局，
+   * 实测下一次渲染可能晚于 250ms），只靠时间窗口会漏。而"回声报的就是我们写进去的那一段"
+   * 这件事与时间无关：写 W → 它报 W → 丢掉；用户真的缩放 → 报 X ≠ W → 收下。
+   * 于是无论 ECharts 什么时候回，这条环都只能转**一圈**。
+   */
+  if (
+    writeTarget !== null &&
+    Math.abs(writeTarget.start - incoming.start) < 0.01 &&
+    Math.abs(writeTarget.end - incoming.end) < 0.01
+  ) {
+    return false
+  }
+  if (trendZoomIsIdentity(incoming.start, incoming.end)) return current !== null
+  if (current === null) return true
+  return (
+    Math.abs(current.start - incoming.start) >= 0.01 ||
+    Math.abs(current.end - incoming.end) >= 0.01
+  )
+}
+
+/**
+ * 「接受过多少次缩放」的安全阀：**2 秒内超过 `limit` 次就停止接受**。
+ *
+ * 这是**最后一道**防线（我们自己的取值，手册未说明）：上面几条判据都是"讲得通的因果"，
+ * 而这一条不讲因果 —— 它只保证"任何残余的反馈环最多转 `limit` 圈就停"。
+ * 为什么需要：第 28–33 轮那六轮里，这条环每次都表现为"渲染进程一个核心被占满、
+ * 定时器被饿死、探针再也拿不到读数"，**代价是整整一轮**；而一个操作员在 2 秒内
+ * 主动缩放 8 次以上是极其罕见的（滚轮每一格才发一次）。
+ * 触发时返回 false，调用方应当**报一句**（我们把它当问题报出来，不静默）。
+ */
+export const TREND_ZOOM_BURST_LIMIT = 8
+export const TREND_ZOOM_BURST_WINDOW_MS = 2_000
+
+export function trendZoomBurstExceeded(
+  acceptedTimestamps: readonly number[],
+  now: number,
+  limit: number = TREND_ZOOM_BURST_LIMIT,
+  windowMs: number = TREND_ZOOM_BURST_WINDOW_MS
+): boolean {
+  const recent = acceptedTimestamps.filter((stamp) => now - stamp < windowMs)
+  return recent.length >= limit
+}
+
 // ---------------------------------------------------------------------------
 // 时间轴（业主 2026-09-19 最新一条第 5 条）
 // ---------------------------------------------------------------------------

@@ -68,9 +68,29 @@ const emit = defineEmits<{
 const container = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 let observer: ResizeObserver | null = null
+/** 上一次真正 `resize()` 时容器的像素尺寸（用来把"尺寸没变"的通知变成空操作）。 */
+let lastSize = { width: -1, height: -1 }
 
+/**
+ * 容器尺寸**真的变了**才 `chart.resize()`。
+ *
+ * 为什么加这一道（2026-09-20 定位到的第二次卡死）：`ResizeObserver` 的通知与
+ * `chart.resize()` 之间可以形成一条环 —— ECharts 会按容器尺寸重设画布，而画布尺寸一变，
+ * 容器（没有固定宽度、由内容决定）又可能跟着变，于是"通知 → resize → 通知"一直转。
+ * 它的表现与缩放回声那条环**一模一样**：一个核心占满、页面照旧出帧、进程内存一直涨，
+ * 而 `executeJavaScript` 再也不 settle（探针里就是"渲染进程不响应"）。
+ *
+ * 判据取整到像素：亚像素抖动不触发 resize（那种抖动不会让图变得更好看，只会多画一帧）。
+ */
 function resize(): void {
-  chart?.resize()
+  const element = container.value
+  if (!chart || !element) return
+  const rect = element.getBoundingClientRect()
+  const width = Math.round(rect.width)
+  const height = Math.round(rect.height)
+  if (width === lastSize.width && height === lastSize.height) return
+  lastSize = { width, height }
+  chart.resize()
 }
 
 /**

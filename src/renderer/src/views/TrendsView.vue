@@ -33,7 +33,7 @@ import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
-import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomIndexRange, trendZoomIsIdentity, trendZoomWindow } from '@shared/domain/trend'
+import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomBurstExceeded, trendZoomIndexRange, trendZoomIsIdentity, trendZoomShouldRecord, trendZoomWindow } from '@shared/domain/trend'
 import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
 import {
   buildTrendCsv,
@@ -770,6 +770,20 @@ const zoomWindow = ref<{
 /** 正在缩放的是哪一张图（重置时只需要重置这一张：其余的窗口本来就是同一段）。 */
 const zoomedChart = ref<string | null>(null)
 
+/**
+ * **上一次把缩放窗口写进选项的时刻**（`Date.now()`；不放进 `ref` —— 它不参与渲染）。
+ *
+ * 用途只有一个：`dataZoom` 事件里分辨"用户缩放"与"我们写选项的回声"。
+ * 判据与理由写在 `trendZoomShouldRecord()`（`@shared/domain/trend`）的注释里。
+ */
+let zoomWrittenAt = 0
+
+/** 我们**最后一次写进选项**的那个窗口（`null` = 写的是"整段"）。见 `trendZoomShouldRecord()`。 */
+let zoomWriteTarget: { start: number; end: number } | null = null
+
+/** 最近接受过缩放的时刻（安全阀：2 秒内太多次就停手，见 `trendZoomBurstExceeded()`）。 */
+let zoomAcceptedAt: number[] = []
+
 /** 每个量一张图的 ref（重置缩放时用其中一张的 `resetZoom()`）。 */
 const chartRefs = ref<Record<string, { resetZoom: () => void } | null>>({})
 
@@ -826,26 +840,35 @@ function onChartZoom(
   metric: string,
   window: { start: number; end: number; startValue: number | null; endValue: number | null }
 ): void {
-  const next = trendZoomIsIdentity(window.start, window.end) ? null : window
   /*
-   * **同一次缩放只记一次。**
+   * **同一次缩放只记一次，而且我们自己写选项的回声一律丢掉。**
    *
-   * ECharts 在 `setOption` 之后也会发一次 `dataZoom`，而这一页每次重画都会把选项重新交给
-   * 图表；不判"有没有变"的话就是：事件 → 改状态 → 重画 → setOption → 事件 → …… 一直转下去
-   * （第 27 轮第一次跑探针时整段 `layout('/trends')` 卡到 150 秒超时，就是这个环）。
-   * 判据是**窗口有没有真的变**（同一个窗口再报一次就丢掉）。
+   * 判据在 `trendZoomShouldRecord()` 里（纯函数，四语言之外的那一层单测钉着它），
+   * 三条按顺序：刚写过选项 → 丢掉；"整段" → 只有在缩放着时才记；同一段 → 丢掉。
+   *
+   * 为什么必须有"刚写过选项"这一条：ECharts 应用我们写进选项的窗口之后会**再发一次**
+   * `dataZoom`，而在时间轴 + `filterMode: 'filter'` 下它回出来的窗口与写进去的**不是同一段**
+   * （写 `1/99`、它按过滤后的轴回"整段"）—— 只看"百分比有没有变"是断不开这条环的。
+   * 真窗口里那条环的表现是：**一个核心占满、定时器被饿死、页面照旧出帧、`executeJavaScript`
+   * 不再 settle**（探针看到的就是"渲染进程不响应"，第 28–33 轮都栽在这上面）。
    */
-  const current = zoomWindow.value
-  if (next === null) {
-    if (current === null) return
-  } else if (
-    current !== null &&
-    Math.abs(current.start - next.start) < 0.01 &&
-    Math.abs(current.end - next.end) < 0.01
-  ) {
+  const msSinceWrite = Date.now() - zoomWrittenAt
+  if (!trendZoomShouldRecord(zoomWindow.value, window, msSinceWrite, zoomWriteTarget)) return
+  /*
+   * 安全阀（第 33 轮）：2 秒内接受太多次就不再接受 —— 任何残余的反馈环最多转这么多圈。
+   * 触发时报一句（不静默）：这一句同时也是"环还在"的证据。
+   */
+  if (trendZoomBurstExceeded(zoomAcceptedAt, Date.now())) {
+    // 开发/诊断用的一句（**不是界面文案**，所以不走四语言目录：i18n 扫描器只允许英文）。
+    console.warn('[trends] dataZoom events too dense; ignoring further ones (feedback loop?)')
     return
   }
+  const next = trendZoomIsIdentity(window.start, window.end) ? null : window
   zoomWindow.value = next
+  // 记下"刚刚写过选项"的时刻与目标窗口：接下来那些 `dataZoom` 都是回声（见纯函数的注释）。
+  zoomWrittenAt = Date.now()
+  zoomWriteTarget = next
+  zoomAcceptedAt = [...zoomAcceptedAt.filter((stamp) => Date.now() - stamp < 2_000), Date.now()]
   zoomedChart.value = next === null ? null : metric
 }
 
@@ -860,6 +883,9 @@ function resetZoom(): void {
   fallbackChart.value?.resetZoom()
   zoomWindow.value = null
   zoomedChart.value = null
+  // 清窗口也是一次"我们改了选项"：接下来那几毫秒的 `dataZoom` 同样是回声。
+  zoomWrittenAt = Date.now()
+  zoomWriteTarget = null
 }
 
 // ---------------------------------------------------------------------------
@@ -1437,7 +1463,23 @@ watch(
           v-else-if="rangeEmptyForChannels"
           :title="t('trendsUi.emptyRangeTitle')"
         >
-          <button v-if="coverageText" type="button" class="btn" @click="useCoverageRange">
+          <!--
+            跳到"库里有数据的那个范围"（第 25 轮加的；`useCoverageRange()` 会**同时**把预设
+            切成"自定义"并写进两个边界）。第 33 轮给它加了探针钩子：
+            · 它是**业主真的会点**的一个按钮（"这一段没有数据、跳到有数据的那一段"）；
+            · 它落到的状态（`range='custom'` + 两个边界都有值）与"手填两个时间"是**同一个状态** ——
+              第 32 轮定位到的那个卡死就发生在这个状态上，所以它是那条路径的**另一个入口**；
+            · 它也是探针唯一能拿到"真的有读数"的那一屏的办法（默认预设是最近 1 小时，
+              而这台设备最后一次上报在几天前）—— 没有它，"声压级 Y 轴 0–100"与
+              "多条通道画在同一根轴上"这两条断言永远跑不到。
+          -->
+          <button
+            v-if="coverageText"
+            type="button"
+            class="btn"
+            data-trend-use-coverage
+            @click="useCoverageRange"
+          >
             {{ t('trendsUi.coverageAvailable', { range: coverageText }) }}
           </button>
         </EmptyState>

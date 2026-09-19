@@ -28,18 +28,34 @@ import path from 'node:path'
 import { describe, it } from 'node:test'
 
 const projectRoot = path.resolve(__dirname, '..', '..')
-const driver = fs.readFileSync(
-  path.join(projectRoot, 'scripts', 'demo-shot-driver.cjs'),
-  'utf8'
-)
+
+function read(relative: string): string {
+  return fs.readFileSync(path.join(projectRoot, relative), 'utf8')
+}
+
+const driver = read('scripts/demo-shot-driver.cjs')
 
 /**
- * 五支的名字，顺序与 driver 里的**求值顺序**一致（合并时的报告也用这个顺序）。
+ * 六支的名字，顺序与 driver 里的**求值顺序**一致（合并时的报告也用这个顺序）。
  *
  * 注意：`range`（换时间范围）**故意排在最后** —— 第 32 轮实测它会把渲染进程卡死，
  * 排在它后面的支拿不到任何读数（见下面那条专门的断言）。
+ * `coverage`（跳到有数据的范围）排在它前面：它是唯一能拿到"有图那一屏"的一支，
+ * 而它落到的状态与 `range` 是同一个（`range='custom'` + 两个边界都有值）。
  */
-const STEP_NAMES = ['measure', 'toggle', 'metrics', 'granularity', 'range'] as const
+const STEP_NAMES = ['measure', 'toggle', 'metrics', 'granularity', 'coverage', 'range'] as const
+
+type StepName = (typeof STEP_NAMES)[number]
+
+/** 支名 → driver 里的变量名（`coverage` 那一支叫 `trendCoverageRange`，不是机械拼接出来的）。 */
+const STEP_VARS: Record<StepName, string> = {
+  measure: 'trendMeasure',
+  toggle: 'trendToggle',
+  metrics: 'trendMetrics',
+  granularity: 'trendGranularity',
+  coverage: 'trendCoverageRange',
+  range: 'trendRange'
+}
 
 /**
  * 切出「共用开头 + 五支」那一段源码。
@@ -84,20 +100,18 @@ async function probeScripts(): Promise<ProbeScript[]> {
     'problems',
     'return (async () => {\n' +
       body +
-      '\nreturn { measure: trendMeasure, toggle: trendToggle, range: trendRange,' +
-      ' metrics: trendMetrics, granularity: trendGranularity };\n})()'
+      '\nreturn { measure: trendMeasure, toggle: trendToggle, metrics: trendMetrics,' +
+      ' granularity: trendGranularity, coverage: trendCoverageRange, range: trendRange };\n})()'
   )
   const steps = await factory(layoutStub, () => undefined, [])
   for (const name of STEP_NAMES) {
     assert.ok(steps[name], '第 ' + name + ' 支不存在了（变量名被改过或那一支被删了）')
   }
-  assert.equal(collected.length, STEP_NAMES.length, '注入页面的脚本数不是 5 段')
+  assert.equal(collected.length, STEP_NAMES.length, '注入页面的脚本数不是 ' + STEP_NAMES.length + ' 段')
   return collected
 }
 
-type StepName = (typeof STEP_NAMES)[number]
-
-/** 五支的脚本文本，按名字取（取不到就断言失败，不留 `undefined` 往下传）。 */
+/** 六支的脚本文本，按名字取（取不到就断言失败，不留 `undefined` 往下传）。 */
 async function probeTexts(): Promise<Record<StepName, string>> {
   const scripts = await probeScripts()
   const texts = {} as Record<StepName, string>
@@ -109,17 +123,14 @@ async function probeTexts(): Promise<Record<StepName, string>> {
   return texts
 }
 
-describe('趋势页探针：拆成五支，各有时限', () => {
-  it('五支都在，而且都往 `/trends` 注入', () => {
+describe('趋势页探针：拆成六支，各有时限', () => {
+  it('六支都在，而且都往 `/trends` 注入', () => {
     const body = trendProbeSource()
     for (const name of STEP_NAMES) {
-      assert.ok(
-        body.includes('const trend' + name.charAt(0).toUpperCase() + name.slice(1) + ' ='),
-        '找不到第 ' + name + ' 支的变量声明'
-      )
+      assert.ok(body.includes('const ' + STEP_VARS[name] + ' ='), '找不到第 ' + name + ' 支的变量声明')
     }
     const calls = body.match(/await layout\('\/trends'/g) || []
-    assert.equal(calls.length, STEP_NAMES.length, '`await layout(\'/trends\'` 的次数不是 5')
+    assert.equal(calls.length, STEP_NAMES.length, '`await layout(\'/trends\'` 的次数不是 ' + STEP_NAMES.length)
   })
 
   it('每一支都有自己的上限，而且没有一支又变成"给足余量"的 240 秒', async () => {
@@ -210,8 +221,14 @@ describe('趋势页探针：拆成五支，各有时限', () => {
      * 第 32 轮实测：点「自定义」范围会把**渲染进程**卡死（主进程照常打日志、页面不再应答）。
      * 一旦它卡住，排在它后面的支全部拿不到读数 —— 所以它必须是最后一支。
      */
-    for (const name of ['const trendMeasure =', 'const trendToggle =', 'const trendMetrics =', 'const trendGranularity =']) {
-      const at = body.indexOf(name)
+    for (const name of [
+      'measure',
+      'toggle',
+      'metrics',
+      'granularity',
+      'coverage'
+    ] as const) {
+      const at = body.indexOf('const ' + STEP_VARS[name] + ' =')
       assert.ok(at > 0 && at < rangeAt, '换范围那一支不再排在最后（' + name + ' 跑到它后面去了）')
     }
     const texts = await probeTexts()
@@ -221,10 +238,25 @@ describe('趋势页探针：拆成五支，各有时限', () => {
      * 它的 Promise 永远不 settle，外面那个 `Date.now() >= deadline` 根本轮不到执行 ——
      * 整次运行会停在那里，连"超时"都报不出来（第 32 轮那次跑就是这样停住的）。
      */
+    /*
+     * `waitForPageRoot()` 里那句 `executeJavaScript` 必须**自己**有上限：渲染进程不响应时，
+     * 它的 Promise 永远不 settle，外面那个 `Date.now() >= deadline` 根本轮不到执行 ——
+     * 整次运行会停在那里，连"超时"都报不出来（第 33 轮 `probe-round37.log` 就是这样停住的，
+     * 而且停的地方是 `layout()` 里那句**设 hash** 的调用，比 `waitForPageRoot()` 还早）。
+     */
     assert.ok(driver.includes('LAYOUT_PING_TIMEOUT_MS'), '没有给"问页面"这一步加超时')
     assert.ok(
-      /LAYOUT_PING_TIMEOUT_MS[\s\S]{0,400}?unresponsive/.test(driver),
-      '`waitForPageRoot()` 里没有把"渲染进程不响应"当成一次有界的失败'
+      /const pageEval = async \(script, timeoutMs/.test(driver),
+      '没有 `pageEval()` 这个统一入口 —— 每处 `executeJavaScript` 都可能有上限、也可能漏'
+    )
+    assert.ok(
+      /const pageEval[\s\S]{0,600}?sleep\(timeoutMs\)\.then\(\(\) => null\)/.test(driver),
+      '`pageEval()` 没有把超时当成一次有界的失败（返回 null）'
+    )
+    // 设 hash 那一句也必须走它（第 33 轮就是停在这里的）。
+    assert.ok(
+      /const navigated = await pageEval\(\s*'location\.hash = '/.test(driver),
+      '`layout()` 里设 hash 的 `executeJavaScript` 还是没有上限'
     )
     /*
      * 反过来，页面自己也要在每一步**立刻**报一声（`console.log('[trend-probe] ...')`）：
@@ -238,6 +270,30 @@ describe('趋势页探针：拆成五支，各有时限', () => {
       )
     }
     assert.ok(driver.includes('logProbeTrace'), 'driver 没有把页面报的步骤抄进日志')
+  })
+
+  it('跳到"有数据的范围"那一支：点的是真的按钮，而且量的是有图那一屏', async () => {
+    const texts = await probeTexts()
+    const coverage = texts.coverage
+    assert.ok(
+      coverage.includes('[data-trend-use-coverage]'),
+      'coverage 那一支没有点空态里那个"跳到有数据的范围"按钮'
+    )
+    assert.ok(coverage.includes('waitFor('), 'coverage 那一支没有等图挂上来')
+    /*
+     * 它必须**覆盖**有图那一屏的读数：断言块里"声压级 Y 轴 0–100"和"图里的通道数与图例一致"
+     * 问的就是这一屏（第 1 支量到的是没有图的那一屏，永远验不到这两条）。
+     */
+    for (const key of ['out.chartCount =', 'out.yRanges =', 'out.chartHints =', 'out.chartCanvas =']) {
+      assert.ok(coverage.includes(key), 'coverage 那一支没有量 ' + key)
+    }
+    // 空态那个按钮必须带钩子（否则探针只能按 class 猜，界面一改就静默失效）。
+    const view = read('src/renderer/src/views/TrendsView.vue')
+    assert.match(
+      view,
+      /data-trend-use-coverage[\s\S]{0,140}@click="useCoverageRange"/,
+      '空态那个"跳到有数据的范围"按钮丢了探针钩子，或不再调 useCoverageRange'
+    )
   })
 
   it('合并时跳过超时那一支，并把是哪一支写进问题清单', () => {
