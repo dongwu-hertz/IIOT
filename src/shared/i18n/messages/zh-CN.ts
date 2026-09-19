@@ -2115,6 +2115,12 @@ export const zhCN = {
     menuStopRecording: '停止录像',
     menuSnapshot: '抓图',
     menuAlarmConfig: '告警配置…',
+    /**
+     * 「显示方式」子菜单（业主 2026-09-19 第 12 批把四颗视图按钮从控制条移到这里：
+     * 「播放器窗口应该只有 告警 / 全屏 / 暂停 / 切换录像 / 音量 / 手动录像」）。
+     * 四个子项的文字复用 `cameraWallUi.view*`，所以菜单与控制条从不说两种话。
+     */
+    menuDisplay: '显示方式',
     menuFullscreen: '全屏',
     menuExitFullscreen: '退出全屏',
     menuCopyRtsp: '复制 RTSP 地址',
@@ -2539,15 +2545,30 @@ export const zhCN = {
     statusDeviceOffline: '设备离线',
     start: '开始',
     stop: '停止',
+    /**
+     * 播放器控制条上那一颗（业主 2026-09-19 第 12 批给的控制条清单里有「暂停」）。
+     *
+     * **动作没变**：它仍然是 `toggleCell()` —— 停掉这一路的 RTSP 会话，再按一次重新起流。
+     * RTSP 直播没有真正的"暂停"（流不会等你），所以这里的「暂停」= 停止这一路直播，
+     * 这一点写在 `docs/Ivms4200-UX-REFERENCE.md` §15.74，界面不假装画面停住了而流还在跑。
+     */
+    play: '播放',
+    pause: '暂停',
     retry: '重试',
     fullscreen: '全屏',
     exitFullscreen: '退出全屏',
     audioOn: '开启声音',
     audioOff: '关闭声音',
     audioBadge: '正在出声',
-    // 底面控制条上音量滑块自己的名字。
+    // 控制条上那颗音量按钮自己的名字（点它才弹出竖条）。
     volume: '音量',
-    // 这一格没有画面时音量图标与滑块**禁用**，它们的名字直接说出禁用的原因。
+    // 竖条滑杆的名字：业主说的"音量大小"，上下拖动调节。
+    volumeLevel: '音量大小',
+    // 控制条上那颗「切换录像」（= 右键菜单里的"回放本机录像"，同一个弹窗）。
+    cellPlayback: '切换录像',
+    // 控制条上那颗「告警」（= 右键菜单里的"告警配置"，同一个对话框）。
+    cellAlarm: '告警配置',
+    // 这一格没有画面时音量图标与滑杆**禁用**，它们的名字直接说出禁用的原因。
     volumeNoPicture: '这一格没有画面，无法出声',
     activeBadge: '当前格',
     /*

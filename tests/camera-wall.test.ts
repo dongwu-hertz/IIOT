@@ -759,13 +759,19 @@ describe('哪些设备能进视频墙', () => {
  *      **四种语言**里都真的存在、非空、且是真正翻译过的（不是把中文抄过去）。
  */
 describe('画面格的右键菜单（NVR 式）', () => {
-  /** 画面格声明的能力：五项全开（本组件确实实现了全部五项）。 */
+  /**
+   * 画面格声明的能力：**六项**全开（本组件确实实现了全部六项）。
+   *
+   * 第六项 `cellViews` 是业主 2026-09-19 第 12 批加上的：四颗视图按钮从控制条
+   * 移进了右键菜单的「显示方式」。它是**画面格**的能力 —— 实时监测页不声明它。
+   */
   const WALL_CAPABILITIES = {
     liveVideo: true,
     alarmModel: true,
     localPlayback: true,
     detectDownload: true,
-    tileClose: true
+    tileClose: true,
+    cellViews: true
   }
 
   function wallEnv(overrides: Partial<CameraNvrEnvironment> = {}): CameraNvrEnvironment {
@@ -788,7 +794,7 @@ describe('画面格的右键菜单（NVR 式）', () => {
     })
   }
 
-  it('正在播放的一格：九项按固定顺序给出，本机动作仍然排在设备侧动作之前', () => {
+  it('正在播放的一格：十项按固定顺序给出，本机动作仍然排在设备侧动作之前', () => {
     const menu = buildCameraNvrMenu(playing(), wallEnv())
     assert.deepEqual(
       menu.map((item) => item.action),
@@ -797,6 +803,8 @@ describe('画面格的右键菜单（NVR 式）', () => {
         'toggle-fullscreen',
         'copy-rtsp',
         'open-external',
+        // 第 12 批新增：四颗视图按钮从控制条移进这里（与「叠加信息」同属"怎么画"）。
+        'display',
         'toggle-overlay',
         'playback',
         'download-detect',

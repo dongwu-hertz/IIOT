@@ -1899,6 +1899,8 @@ export const es: MessageSchema = {
     menuStopRecording: 'Detener grabación',
     menuSnapshot: 'Captura',
     menuAlarmConfig: 'Configuración de alarmas…',
+    /** Los cuatro modos de visualización se movieron aquí desde la barra (lote 12). */
+    menuDisplay: 'Modo de visualización',
     menuFullscreen: 'Pantalla completa',
     menuExitFullscreen: 'Salir de pantalla completa',
     menuCopyRtsp: 'Copiar dirección RTSP',
@@ -2309,6 +2311,9 @@ export const es: MessageSchema = {
     statusDeviceOffline: 'Dispositivo sin conexión',
     start: 'Iniciar',
     stop: 'Detener',
+    /** El control de pausa de la barra del reproductor (lote 12). Sigue deteniendo la sesión. */
+    play: 'Reproducir',
+    pause: 'Pausa',
     retry: 'Reintentar',
     fullscreen: 'Pantalla completa',
     exitFullscreen: 'Salir de pantalla completa',
@@ -2316,6 +2321,12 @@ export const es: MessageSchema = {
     audioOff: 'Silenciar',
     audioBadge: 'Con sonido',
     volume: 'Volumen',
+    /** La barra vertical del emergente (lote 12: se muestra al pulsar, se arrastra arriba/abajo). */
+    volumeLevel: 'Nivel de volumen',
+    /** El control «cambiar a grabación» de la barra (= el diálogo de reproducción local del menú). */
+    cellPlayback: 'Cambiar a grabación',
+    /** El control de alarma de la barra (= el diálogo de configuración de alarmas del menú). */
+    cellAlarm: 'Configuración de alarmas',
     volumeNoPicture: 'Esta celda no tiene imagen, así que no puede sonar',
     activeBadge: 'Celda activa',
     limitNotice: 'Máximo {max} flujos simultáneos; {active} en curso. Uno más superaría el límite: detenga otra celda primero.',

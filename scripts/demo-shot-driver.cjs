@@ -669,7 +669,19 @@ async function runIotIngestDrill(win, layout) {
   const probeStorageRoot = path.join(app.getPath('userData'), 'probe-storage')
   const telemetryPath = (secret) => '/api/v1/' + secret + '/telemetry'
 
-  // ---- 1) 设置页：页签 + 出厂默认值（只读） -------------------------------------
+  // ---- 1) 设置页：页签 + 界面与设置一致（只读） ---------------------------------
+  /*
+   * **这里不再断言"出厂默认关着"** —— 那一句话在这一段里是**量不到**的，而它一直是靠
+   * "操作员恰好没动过这个开关"装绿的：探针跑的是**操作员真实 profile 的副本**，里面那个
+   * 值是**设置值**，不是出厂默认。2026-09-19 实测撞上了：操作员在自己的应用里把「数据接入」
+   * 打开了（`enabled: true` + 端口 8080/1883），于是这条断言红着报了一个**并不存在**的产品缺陷
+   * （真库里的设备表与账号都没被探针动过 —— 探针写的是临时 profile）。
+   *
+   * 出厂默认（总开关关闭、0.0.0.0、8080、1883、两个通道打开）由**单测**钉住
+   * （`tests/iot-ingest.test.ts` 里的 `defaultIotIngestConfig()`），那里没有操作员数据参与。
+   * 这一段改做的事情是**界面保真**：界面上那几个控件必须逐项等于 `settings.get()` 里的值 ——
+   * 这才是"这一页有没有如实显示设置"的证据。
+   */
   const view = await layout('/settings', '(async () => {' +
     'const tab = document.querySelector(".settings-tabs [data-tab=iot]");' +
     'if (!tab) return JSON.stringify({ ok: false, reason: "no-iot-tab" });' +
@@ -679,11 +691,16 @@ async function runIotIngestDrill(win, layout) {
     'const value = (sel) => { const node = el(sel); return node ? String(node.value) : null; };' +
     'const text = (sel) => { const node = el(sel); return node ? (node.textContent || "").trim() : ""; };' +
     'const enable = el("[data-iot-enable]");' +
+    'const settings = await window.api.settings.get();' +
+    'const persisted = settings && settings.success ? settings.data.iotIngest : null;' +
     'return JSON.stringify({' +
     '  ok: true,' +
     '  hasSection: !!el("[data-iot-section]"),' +
     '  hasEnable: !!enable,' +
     '  enabled: !!(enable && enable.checked),' +
+    '  persisted: persisted ? { enabled: persisted.enabled, bindAddress: persisted.bindAddress,' +
+    '    httpPort: persisted.httpPort, mqttPort: persisted.mqttPort,' +
+    '    httpEnabled: persisted.httpEnabled, mqttEnabled: persisted.mqttEnabled } : null,' +
     '  bind: value("[data-iot-bind]"),' +
     '  httpPort: value("[data-iot-http-port]"),' +
     '  mqttPort: value("[data-iot-mqtt-port]"),' +
@@ -705,12 +722,42 @@ async function runIotIngestDrill(win, layout) {
   } else {
     if (!view.hasSection) problems.push('数据接入页签里没有那一块内容（[data-iot-section]）')
     if (!view.hasEnable) problems.push('数据接入里没有总开关（[data-iot-enable]）')
-    // 出厂必须是**关闭**的（离线优先：装了软件就开端口是缺陷）。
-    if (view.enabled) problems.push('数据接入出厂默认是打开的（应当默认关闭）')
-    if (view.bind !== '0.0.0.0') problems.push('默认绑定地址不是 0.0.0.0：' + view.bind)
-    if (view.httpPort !== '8080') problems.push('默认 HTTP 端口不是 8080：' + view.httpPort)
-    if (view.mqttPort !== '1883') problems.push('默认 MQTT 端口不是 1883：' + view.mqttPort)
-    if (!view.httpEnable || !view.mqttEnable) problems.push('出厂两个通道应当是打开的（总开关关着即可）')
+    /*
+     * 界面 == 设置（逐项）。这是这一段唯一能在这里证明的事，而它比"出厂默认"更贴界面：
+     * 页面上显示的必须是**存着的那一份**，否则操作员看到的是一个不存在的状态。
+     */
+    const persisted = view.persisted
+    if (!persisted) {
+      problems.push('读不到持久化的数据接入设置（settings.get()）')
+    } else {
+      if (view.enabled !== persisted.enabled) {
+        problems.push('总开关显示的与存的不一致：界面 ' + view.enabled + ' / 设置 ' + persisted.enabled)
+      }
+      if (view.bind !== persisted.bindAddress) {
+        problems.push('绑定地址显示的与存的不一致：' + view.bind + ' / ' + persisted.bindAddress)
+      }
+      if (view.httpPort !== String(persisted.httpPort)) {
+        problems.push('HTTP 端口显示的与存的不一致：' + view.httpPort + ' / ' + persisted.httpPort)
+      }
+      if (view.mqttPort !== String(persisted.mqttPort)) {
+        problems.push('MQTT 端口显示的与存的不一致：' + view.mqttPort + ' / ' + persisted.mqttPort)
+      }
+      if (view.httpEnable !== persisted.httpEnabled) {
+        problems.push('HTTP 通道开关显示的与存的不一致')
+      }
+      if (view.mqttEnable !== persisted.mqttEnabled) {
+        problems.push('MQTT 通道开关显示的与存的不一致')
+      }
+    }
+    /*
+     * 这一台机器上那个开关是开着的（操作员自己开的，探针不动它）：**如实写一行日志**，
+     * 不报成问题 —— 它是一份设置值，不是出厂默认。出厂默认由单测钉住。
+     */
+    if (view.enabled) {
+      log('iot settings  : 注意 —— 这一台 profile 的「数据接入」总开关是**开着**的' +
+        '（设置值 ' + JSON.stringify(persisted && { bind: persisted.bindAddress, http: persisted.httpPort, mqtt: persisted.mqttPort }) +
+        '）。出厂默认是关闭的（由 tests/iot-ingest.test.ts 钉住），这一条不是缺陷，也不由探针改动。')
+    }
     if (!/\/api\/v1\/.+\/telemetry/.test(view.pathSample)) {
       problems.push('推流路径样例不是 ThingsBoard 的形状：' + JSON.stringify(view.pathSample))
     }
@@ -1192,9 +1239,15 @@ async function runManualRtspDrill(win, layout) {
     'const cell = [...document.querySelectorAll(".camera-wall__cell")]' +
     '  .find((node) => text(node).includes(__NAME__));' +
     'out.cellFound = !!cell;' +
-    'out.viewButtons = cell ? cell.querySelectorAll("[data-action^=cell-view-]").length : 0;' +
-    'out.viewTitle = cell && cell.querySelector("[data-action^=cell-view-]")' +
-    '  ? cell.querySelector("[data-action^=cell-view-]").getAttribute("title") : null;' +
+    /*
+     * 第 12 批：控制条上**只有六颗播放器控件**，而手填源不是设备 ——
+     * 告警 / 切换录像 / 手动录像那三颗对它没有意义，所以它这一格只有三颗。
+     * 四颗视图按钮已经不在控制条上（它们进了右键菜单的「显示方式」）。
+     */
+    'out.barActions = cell' +
+    '  ? [...cell.querySelectorAll("[data-action^=cell-]")].map((b) => b.getAttribute("data-action"))' +
+    '  : [];' +
+    'out.viewButtonsOnBar = cell ? cell.querySelectorAll("[data-action^=cell-view-]").length : -1;' +
     /*
      * 放进格子只是**分配**（相机也一样）：真正起流要按这一格的播放键。
      * 业主第 11 批第 2 条把管理界面搬到实时监测页之后，"放进去就自动起流"那条路没有了
@@ -1203,6 +1256,35 @@ async function runManualRtspDrill(win, layout) {
     'const play = cell ? cell.querySelector("[data-cell-play]") : null;' +
     'out.playButton = !!play;' +
     'if (play) { play.click(); await sleep(1200); }' +
+    /*
+     * 音量：**点一下才弹出竖条**（业主第 12 批：「音量大小调整应该做成点击后显示出来，
+     * 上下调节的方式」）。这里量四件事：浮层开没开、滑杆是不是竖的、拖一次真的写进
+     * 这一格的音量（滑杆的 value 是模型回填的）、再点一次收得掉。
+     */
+    'const volumeButton = cell ? cell.querySelector("[data-action=cell-volume]") : null;' +
+    'out.volumeButton = !!volumeButton;' +
+    'if (volumeButton) { volumeButton.click(); await sleep(500); }' +
+    'const pop = cell ? cell.querySelector("[data-cell-volume-pop]") : null;' +
+    'out.volumePopOpen = !!pop;' +
+    'const slider = pop ? pop.querySelector("[data-cell-volume]") : null;' +
+    'if (slider) {' +
+    '  const style = getComputedStyle(slider);' +
+    '  out.slider = { width: slider.offsetWidth, height: slider.offsetHeight,' +
+    '    writingMode: style.writingMode, direction: style.direction };' +
+    '  slider.value = "40";' +
+    '  slider.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  await sleep(400);' +
+    '  out.sliderValueAfter = slider.value;' +
+    '}' +
+    'const video = cell ? cell.querySelector("video") : null;' +
+    'out.videoPresent = !!video;' +
+    'out.videoVolume = video ? video.volume : null;' +
+    'const mute = pop ? pop.querySelector("[data-action=cell-volume-mute]") : null;' +
+    'out.muteButton = !!mute;' +
+    'if (mute) { mute.click(); await sleep(300); }' +
+    'out.audioOnAfterMute = cell ? cell.classList.contains("camera-wall__cell--audio") : null;' +
+    'if (volumeButton) { volumeButton.click(); await sleep(300); }' +
+    'out.volumePopClosed = cell ? !cell.querySelector("[data-cell-volume-pop]") : null;' +
     // 主进程真的为它起了一路（手填那一支与设备那一支完全分开）。
     'let session = null;' +
     'for (let attempt = 0; attempt < 24; attempt += 1) {' +
@@ -1231,11 +1313,55 @@ async function runManualRtspDrill(win, layout) {
     if (!place.playButton) {
       problems.push('那一格上没有播放键（[data-cell-play]）—— 放进去之后没法起流')
     }
-    if (place.viewButtons !== 1) {
-      problems.push('第三方 RTSP 那一格的视图按钮不是 1 颗（它只有画面）：' + place.viewButtons)
+    // 第 12 批：手填源只有三颗控件（它连设备都不是）。
+    if (JSON.stringify(place.barActions) !== JSON.stringify(['cell-fullscreen', 'cell-play', 'cell-volume'])) {
+      problems.push('手填 RTSP 那一格的控制条不是"全屏 / 暂停 / 音量"三颗：' + JSON.stringify(place.barActions))
     }
-    if (!String(place.viewTitle || '').includes('第三方')) {
-      problems.push('第三方 RTSP 那颗按钮没有说明"只有画面"：' + JSON.stringify(place.viewTitle))
+    if (place.viewButtonsOnBar !== 0) {
+      problems.push('控制条上还留着视图按钮（第 12 批已移进菜单）：' + place.viewButtonsOnBar)
+    }
+    /*
+     * 音量浮层：点一下才出现、是竖的、拖一次真的写进模型、再点一下收得掉。
+     * `sliderValueAfter` 是**模型回填**的值（`:value="volumePercent(cell.index)"`），
+     * 所以它等于 40 就说明 `onVolumeInput()` 真的把这一格的音量写进去了。
+     */
+    if (!place.volumeButton) {
+      problems.push('控制条上没有「音量」那一颗')
+    }
+    if (!place.volumePopOpen) {
+      problems.push('点了「音量」之后没有弹出竖条浮层（[data-cell-volume-pop]）')
+    }
+    if (!place.slider) {
+      problems.push('音量浮层里没有竖条滑杆')
+    } else {
+      const { width, height, writingMode, direction } = place.slider
+      if (!(height > width)) {
+        problems.push('音量滑杆不是竖的（' + width + '×' + height + '）')
+      }
+      if (!String(writingMode).startsWith('vertical')) {
+        problems.push('音量滑杆没有用竖直书写模式：' + JSON.stringify(writingMode))
+      }
+      if (direction !== 'rtl') {
+        problems.push('音量滑杆的方向不是"上大下小"：' + JSON.stringify(direction))
+      }
+      if (place.sliderValueAfter !== '40') {
+        problems.push('拖动音量滑杆之后模型没有收下这个值：' + JSON.stringify(place.sliderValueAfter))
+      }
+      // 有 `<video>` 时就顺手核对一次真实元素属性（这一份数据里相机离线，多数时候没有）。
+      if (place.videoPresent === true && typeof place.videoVolume === 'number') {
+        if (Math.abs(place.videoVolume - 0.4) > 0.02) {
+          problems.push('音量没有落到 <video>.volume 上：' + place.videoVolume)
+        }
+      } else {
+        log('manual rtsp ② : 这一格没有 <video>（会话停在 starting / 相机离线），' +
+          '`<video>.volume` 这一次没量到 —— 只验到"模型收下了 40"')
+      }
+    }
+    if (place.muteButton && place.audioOnAfterMute !== false) {
+      problems.push('浮层里那个声音开关没有把这一格的声音关掉：' + JSON.stringify(place.audioOnAfterMute))
+    }
+    if (place.volumePopClosed !== true) {
+      problems.push('再点一次「音量」没有收起浮层：' + JSON.stringify(place.volumePopClosed))
     }
     if (!place.session) {
       problems.push('主进程没有为这条手填源起会话（cameraLive.state() 里没有 rtsp: 开头的项）')
@@ -1337,16 +1463,44 @@ async function runCameraViewDrill(win, layout) {
     '}' +
     'out.cellFound = !!cell;' +
     'if (!cell) return JSON.stringify(Object.assign(out, { reason: "cell-not-placed" }));' +
-    'const buttons = () => [...cell.querySelectorAll("[data-action^=cell-view-]")];' +
-    'out.viewButtons = buttons().map((b) => b.getAttribute("data-action"));' +
-    'out.pressedInitially = buttons().filter((b) => b.getAttribute("aria-pressed") === "true").length;' +
-    // 逐个点那三张图：点完必须出现对应模式的图，而且没有 `<video>`。
+    /*
+     * 第 12 批：控制条上**只有六颗播放器控件**（相机这一格六颗都在），而且四颗视图按钮
+     * **不在控制条上**了 —— 它们搬进了右键菜单的「显示方式」。这一趟把两件事都量了。
+     */
+    'const barActions = () => [...cell.querySelectorAll("[data-action^=cell-]")]' +
+    '  .map((b) => b.getAttribute("data-action"));' +
+    'out.barActions = barActions();' +
+    'out.viewButtonsOnBar = cell.querySelectorAll("[data-action^=cell-view-]").length;' +
+    /*
+     * 逐个切那三张图：**每次都要重新右键**（菜单在派发之后自己关掉）。
+     * 菜单里的稳定钩子是 `data-action`（一级项与二级项都有，见 `VideoContextMenu`）。
+     */
+    'const openDisplay = async () => {' +
+    '  const rect = cell.getBoundingClientRect();' +
+    '  cell.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true,' +
+    '    clientX: Math.round(rect.left + 24), clientY: Math.round(rect.top + 24) }));' +
+    '  await sleep(500);' +
+    '  const parent = document.querySelector(".vmenu [data-action=display]");' +
+    '  if (!parent) return null;' +
+    '  parent.click();' +
+    '  await sleep(400);' +
+    '  return document.querySelector(".vmenu__submenu");' +
+    '};' +
     'out.perMode = {};' +
     'for (const mode of ["timedomain", "spectrum", "spectrogram"]) {' +
-    '  const button = cell.querySelector("[data-action=cell-view-" + mode + "]");' +
-    '  if (!button) { out.perMode[mode] = "no-button"; continue; }' +
+    '  const submenu = await openDisplay();' +
+    '  if (!submenu) { out.perMode[mode] = "no-display-menu"; continue; }' +
+    '  if (mode === "timedomain") {' +
+    '    out.viewItems = [...submenu.querySelectorAll("[data-action^=view-]")].map((b) => ({' +
+    '      action: b.getAttribute("data-action"),' +
+    '      disabled: b.getAttribute("aria-disabled"),' +
+    '      checked: b.getAttribute("aria-checked") }));' +
+    '  }' +
+    '  const button = submenu.querySelector("[data-action=view-" + mode + "]");' +
+    '  if (!button || button.getAttribute("aria-disabled") === "true") {' +
+    '    out.perMode[mode] = "no-button"; continue; }' +
     '  button.click();' +
-    '  await sleep(500);' +
+    '  await sleep(700);' +
     '  const chart = cell.querySelector("[data-cell-chart]");' +
     '  out.perMode[mode] = {' +
     '    chart: chart ? chart.getAttribute("data-cell-chart") : null,' +
@@ -1356,17 +1510,25 @@ async function runCameraViewDrill(win, layout) {
     '    note: text(cell.querySelector("[data-cell-chart-note]"))' +
     '  };' +
     '}' +
-    // 回到播放：图应当消失（这一格回到画面那一条路）。
-    'const play = cell.querySelector("[data-action=cell-view-play]");' +
-    'if (play) { play.click(); await sleep(500); }' +
+    // 回到播放（同样走菜单）：图应当消失（这一格回到画面那一条路）。
+    'const backToPlay = await openDisplay();' +
+    'const playItem = backToPlay ? backToPlay.querySelector("[data-action=view-play]") : null;' +
+    'if (playItem) { playItem.click(); await sleep(700); }' +
     'out.chartAfterPlay = !!cell.querySelector("[data-cell-chart]");' +
-    'out.playPressed = play ? play.getAttribute("aria-pressed") : null;' +
     /*
-     * 手填 RTSP 那一格只有一颗视图按钮（它连设备都不是，拿不到任何声学通道）这一条
-     * **搬到 `runManualRtspDrill` 里了**（业主第 11 批第 2 条把管理界面挪到实时监测页之后，
-     * 在这一页已经没有"加一条手填源"的入口了）。那一趟本来就要把源放进一格，顺手量同一件事，
-     * 比在这里再造一条源干净。
+     * ✓ 要**重新开一次菜单**再读：点完那一项菜单就关掉了，手里那个元素是**上一次渲染**的
+     * 快照（第一版就是读它，读到的是切换之前的状态 —— `aria-checked: "false"`）。
      */
+    'const verify = await openDisplay();' +
+    'const verifiedPlay = verify ? verify.querySelector("[data-action=view-play]") : null;' +
+    'out.playChecked = verifiedPlay ? verifiedPlay.getAttribute("aria-checked") : null;' +
+    'if (verify) {' +
+    '  const rect = cell.getBoundingClientRect();' +
+    '  document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true,' +
+    '    clientX: Math.round(rect.left + 4), clientY: Math.round(rect.top + 4) }));' +
+    '  await sleep(250);' +
+    '}' +
+    'out.menuClosed = !document.querySelector(".vmenu");' +
     'return JSON.stringify(out);' +
     '})()', 120_000)
   log('camera views  : ' + JSON.stringify(drill))
@@ -1380,17 +1542,31 @@ async function runCameraViewDrill(win, layout) {
     return
   }
 
-  const expectedButtons = [
-    'cell-view-play',
-    'cell-view-timedomain',
-    'cell-view-spectrum',
-    'cell-view-spectrogram'
+  // 第 12 批：控制条上就是业主给的那六颗，一颗不多一颗不少。
+  const expectedBar = [
+    'cell-alarm',
+    'cell-fullscreen',
+    'cell-play',
+    'cell-playback',
+    'cell-volume',
+    'cell-record'
   ]
-  if (JSON.stringify(drill.viewButtons) !== JSON.stringify(expectedButtons)) {
-    problems.push('相机那一格的视图按钮不是那四个：' + JSON.stringify(drill.viewButtons))
+  if (JSON.stringify(drill.barActions) !== JSON.stringify(expectedBar)) {
+    problems.push(
+      '相机那一格的控制条不是业主第 12 批给的那六颗：' + JSON.stringify(drill.barActions)
+    )
   }
-  if (drill.pressedInitially !== 1) {
-    problems.push('视图按钮里恰好应有一颗是按下态，实际 ' + drill.pressedInitially)
+  if (drill.viewButtonsOnBar !== 0) {
+    problems.push('控制条上还留着 ' + drill.viewButtonsOnBar + ' 颗视图按钮（第 12 批已移进菜单）')
+  }
+  // 显示方式那四项都在菜单里，而且"播放"是当前值。
+  if (!Array.isArray(drill.viewItems) || drill.viewItems.length !== 4) {
+    problems.push('右键菜单的「显示方式」里不是四项：' + JSON.stringify(drill.viewItems))
+  } else {
+    const checked = drill.viewItems.filter((item) => item.checked === 'true')
+    if (checked.length !== 1 || checked[0].action !== 'view-play') {
+      problems.push('「显示方式」里的 ✓ 不在"播放"上：' + JSON.stringify(drill.viewItems))
+    }
   }
   for (const mode of ['timedomain', 'spectrum', 'spectrogram']) {
     const state = drill.perMode?.[mode]
@@ -1420,8 +1596,13 @@ async function runCameraViewDrill(win, layout) {
       problems.push('「' + mode + '」没有频率轴（哪怕只是"第 N 根谱线"）')
     }
   }
-  if (drill.chartAfterPlay) problems.push('点回「播放」之后那一格还在画图')
-  if (drill.playPressed !== 'true') problems.push('点回「播放」之后那颗按钮不是按下态')
+  if (drill.chartAfterPlay) problems.push('切回「播放」之后那一格还在画图')
+  if (drill.playChecked !== 'true') {
+    problems.push('切回「播放」之后菜单里的 ✓ 不在"播放"上：' + JSON.stringify(drill.playChecked))
+  }
+  if (drill.menuClosed !== true) {
+    problems.push('点外面之后右键菜单没有关掉')
+  }
 }
 
 async function run() {

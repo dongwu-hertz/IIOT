@@ -111,7 +111,7 @@ describe('⑤ 右键菜单与总览一致（同一份模型 + 同一批能力）
     assert.equal(capabilities.detectDownload, true)
   })
 
-  it('同一台正在播放的相机：两处的菜单只差「清空这一格」', () => {
+  it('同一台正在播放的相机：两处的菜单只差「清空这一格」与「显示方式」', () => {
     const monitorActions = buildCameraNvrMenu(
       playing(),
       envWith(assertMonitorCapabilities(MONITOR))
@@ -123,14 +123,30 @@ describe('⑤ 右键菜单与总览一致（同一份模型 + 同一批能力）
         alarmModel: true,
         localPlayback: true,
         detectDownload: true,
-        tileClose: true
+        tileClose: true,
+        // 画面墙比这一页多声明的一项（见下一条断言）。
+        cellViews: true
       })
     ).map((item) => item.action)
 
+    /*
+     * 两处刻意不同的两项：
+     *   · `close-tile` —— 这一页只有一路画面，停止它是页头那颗按钮的事；
+     *   · `display`    —— 四种视图（播放 / 时域图 / 频域图 / 时频谱图）是**画面格**的东西
+     *                     （业主 2026-09-18 第 10 批第 2 条要的是"视频墙"上的四种画法），
+     *                     这一页有它自己的一套声学面板，没有"这一格画什么"。第 12 批把
+     *                     那四颗按钮从控制条移进这个子菜单之后，它仍然是画面墙独有的。
+     */
     assert.deepEqual(
-      wallActions.filter((action) => action !== 'close-tile'),
+      wallActions.filter((action) => action !== 'close-tile' && action !== 'display'),
       monitorActions,
-      '实时监测页的右键项与画面墙不一致（除了刻意不做的「清空这一格」）'
+      '实时监测页的右键项与画面墙不一致（除了刻意不同的「清空这一格」与「显示方式」）'
+    )
+    assert.equal(wallActions.includes('display'), true, '画面墙的菜单里没有「显示方式」')
+    assert.equal(
+      monitorActions.includes('display'),
+      false,
+      '实时监测页声明了「显示方式」：这一页没有画面格，那四项点了不会有反应'
     )
     assert.equal(monitorActions.includes('playback'), true, '菜单里没有本机回放')
     assert.equal(monitorActions.includes('download-detect'), true, '菜单里没有检测记录下载')

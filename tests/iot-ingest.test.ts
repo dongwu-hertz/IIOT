@@ -336,6 +336,16 @@ describe('接入配置的归一化（界面与主进程共用同一份判据）'
     assert.equal(defaults.httpPort, 8080)
     assert.equal(defaults.mqttPort, 1883)
     assert.equal(defaults.bindAddress, '0.0.0.0')
+    /*
+     * 两个通道**出厂是开的**，总开关才是那一道闸：装完软件不开端口（离线优先），
+     * 但操作员一旦打开总开关，两个监听应当都在，而不是"打开了却什么都没监听"。
+     *
+     * 2026-09-19 加这两条断言的原因：GUI 探针里那一组"出厂默认"的断言是**量不到**的
+     * （探针跑在操作员真实 profile 的副本上，读到的是**设置值**，不是出厂值）——
+     * 它一直是靠"操作员恰好没动过那个开关"装绿的。出厂值只在这里钉。
+     */
+    assert.equal(defaults.httpEnabled, true, 'HTTP 通道出厂应当是开的')
+    assert.equal(defaults.mqttEnabled, true, 'MQTT 通道出厂应当是开的')
   })
 
   it('绑定地址只认 0.0.0.0 / 127.0.0.1 / 一个 IPv4 字面量', () => {

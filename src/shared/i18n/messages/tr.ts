@@ -1903,6 +1903,8 @@ export const tr: MessageSchema = {
     menuStopRecording: 'Kaydı durdur',
     menuSnapshot: 'Ekran görüntüsü',
     menuAlarmConfig: 'Alarm yapılandırması…',
+    /** Dört görüntüleme modu çubuktan buraya taşındı (12. parti). */
+    menuDisplay: 'Görüntüleme modu',
     menuFullscreen: 'Tam ekran',
     menuExitFullscreen: 'Tam ekrandan çık',
     menuCopyRtsp: 'RTSP adresini kopyala',
@@ -2313,13 +2315,22 @@ export const tr: MessageSchema = {
     statusDeviceOffline: 'Cihaz çevrimdışı',
     start: 'Başlat',
     stop: 'Durdur',
+    /** Oynatıcı çubuğundaki duraklatma denetimi (12. parti). Yine canlı oturumu durdurur. */
+    play: 'Oynat',
+    pause: 'Duraklat',
     retry: 'Yeniden dene',
     fullscreen: 'Tam ekran',
     exitFullscreen: 'Tam ekrandan çık',
     audioOn: 'Sesi aç',
     audioOff: 'Sesi kapat',
     audioBadge: 'Ses açık',
-    volume: 'Ses düzeyi',
+    volume: 'Ses',
+    /** Açılır kutudaki dikey çubuk (12. parti: tıklayınca görünür, yukarı/aşağı sürüklenir). */
+    volumeLevel: 'Ses düzeyi',
+    /** Çubuktaki «kayda geç» denetimi (= menüdeki yerel kayıt oynatma penceresi). */
+    cellPlayback: 'Kayda geç',
+    /** Çubuktaki alarm denetimi (= menüdeki alarm yapılandırması penceresi). */
+    cellAlarm: 'Alarm yapılandırması',
     volumeNoPicture: 'Bu hücrede görüntü yok, ses çıkaramaz',
     activeBadge: 'Etkin hücre',
     limitNotice: 'Aynı anda en fazla {max} akış; şu anda {active}. Bir tane daha sınırı aşar: önce başka bir hücreyi durdurun.',

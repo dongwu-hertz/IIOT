@@ -336,6 +336,7 @@ const style = computed(() => ({
             'vmenu__item--disabled': !item.enabled
           }"
           :data-index="index"
+          :data-action="item.action"
           role="menuitem"
           :aria-disabled="!item.enabled"
           :aria-checked="item.checked"
@@ -379,17 +380,29 @@ const style = computed(() => ({
           :key="child.action"
           type="button"
           class="vmenu__item"
+          :data-action="child.action"
           :class="{
             'vmenu__item--active': childIndex === subActiveIndex,
             'vmenu__item--disabled': !child.enabled
           }"
           role="menuitem"
           :aria-disabled="!child.enabled"
+          :aria-checked="child.checked"
           :title="child.enabled ? labelOf(child) : reasonOf(child)"
           @mouseenter="subActiveIndex = childIndex"
           @click="activate(child)"
         >
-          <span class="vmenu__label">{{ labelOf(child) }}</span>
+          <span class="vmenu__label">
+            <!--
+              二级项也要能打 ✓（第 12 批的「显示方式」四个子项靠它表示当前画法）。
+              一级项一直有这个 span，二级项第一版漏了 —— 探针读到 `aria-checked: null`
+              才发现"菜单里根本没有勾"。
+            -->
+            <span v-if="child.checked !== undefined" class="vmenu__check" aria-hidden="true">
+              {{ child.checked ? '✓' : '' }}
+            </span>
+            {{ labelOf(child) }}
+          </span>
           <span v-if="!child.enabled" class="vmenu__reason">{{ reasonOf(child) }}</span>
         </button>
       </div>

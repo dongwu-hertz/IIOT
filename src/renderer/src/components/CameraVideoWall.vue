@@ -68,14 +68,12 @@ import {
 } from '@shared/domain/camera-live'
 import type { Device } from '@shared/domain/models'
 import { isManualRtspId } from '@shared/domain/rtsp-source'
-import {
-  CAMERA_CELL_VIEW_KEYS,
-  type CameraCellViewMode
-} from '@shared/domain/camera-cell-view'
+import type { CameraCellViewMode } from '@shared/domain/camera-cell-view'
 import { useCameraCellChartsStore } from '@renderer/stores/cameraCellCharts'
 import CameraCellChart from '@renderer/components/CameraCellChart.vue'
 import {
   buildCameraNvrMenu,
+  cameraCaptureReadiness,
   type CameraNvrAction,
   type CameraNvrEnvironment,
   type CameraNvrMenuItem
@@ -423,26 +421,15 @@ const pickerItems = computed<CameraPickerItem[]>(() => {
 })
 
 /**
- * 视图的图标字形。
- *
- * 用字符而不是四条 SVG 路径：这一排按钮最多四颗、一遍就看得懂（▶ 播放、∿ 时域、
- * ▥ 频域、▦ 时频），而 SVG 会让每一格多出四段路径（16 格 = 64 段）。字形都在
- * `aria-hidden` 的容器里，读屏拿到的是 `aria-label`（目录里的那四个名字）。
- */
-function cellViewGlyph(view: CameraCellViewMode): string {
-  if (view === 'play') return '▶'
-  if (view === 'timedomain') return '∿'
-  if (view === 'spectrum') return '▥'
-  return '▦'
-}
-
-/**
  * 切某一格的视图。
  *
  * 两件事一起做：模型换视图（`setCameraCellView` 会拒绝空格与不支持的视图），
  * 以及**停止/保留画面** —— 切到"图"的时候不能把 RTSP 会话停掉（切回来要立刻有画面），
  * 但要把 `<video>` 从 DOM 上摘下来吗？不用：模板里那个 `v-if` 已经按 `cell.view` 判了，
  * 元素会被卸载，`releaseVideo()` 的清理由 Vue 的卸载完成（`src` 随元素一起消失）。
+ *
+ * **入口只有一个地方**：右键菜单的「显示方式」（业主 2026-09-19 第 12 批把四颗视图按钮
+ * 从控制条移走了），所以这里不再有第二份"哪几颗按钮"的判断。
  */
 function chooseCellView(cell: CameraCellView, view: CameraCellViewMode): void {
   if (cell.view === view) return
@@ -770,8 +757,14 @@ function cellNvrEnvironment(cell: CameraCellView): CameraNvrEnvironment {
       alarmModel: isCamera,
       localPlayback: true,
       detectDownload: true,
-      tileClose: true
-    }
+      tileClose: true,
+      // 四种视图（播放 / 时域 / 频域 / 时频）是**画面格**的东西，只有这一面墙声明它。
+      cellViews: true
+    },
+    // 显示方式（第 12 批把四颗视图按钮从控制条移到了菜单里）：给的是**这一格此刻**的视图
+    // 与它**支持**的视图，两者都由 `buildCameraCells()` 算好（`cell.view` / `cell.availableViews`）。
+    cellView: cell.view,
+    availableViews: cell.availableViews
   }
 }
 
@@ -1018,6 +1011,35 @@ function openDownloadDialog(deviceId: string, deviceName: string): void {
 }
 
 /**
+ * 控制条上那两颗"打开发电机"的按钮（第 12 批新增的入口）。
+ *
+ * 它们与右键菜单里的同名项**调的是同一段代码** —— `openPlaybackDialog` 与
+ * 告警对话框的状态本来就是按格打开的，所以这里只是给它们一个更近的入口，
+ * 不存在第二份实现（菜单项与按钮不会漂移）。
+ */
+function openCellPlayback(cell: CameraCellView): void {
+  if (!cellHasDevice(cell)) return
+  openPlaybackDialog(cell.deviceId as string, cell.deviceName)
+}
+
+function openCellAlarm(cell: CameraCellView): void {
+  if (!cellHasDevice(cell)) return
+  alarmTarget.value = { deviceId: cell.deviceId as string, deviceName: cell.deviceName }
+  alarmDialogOpen.value = true
+}
+
+/**
+ * 控制条上那颗「手动录像 / 停止录像」。
+ *
+ * 单独包一层是为了**把设备 id 的判空留在脚本里**：模板里的 `@click` 表达式是 JS，
+ * 写不了 `as string` 这类 TS 断言（写进去会在编译模板时炸）。判据与按钮的 `v-if` 同一份。
+ */
+async function onCellRecord(cell: CameraCellView): Promise<void> {
+  if (!cellHasDevice(cell)) return
+  await toggleCellRecording(cell, cell.deviceId as string)
+}
+
+/**
  * 下载完成后回放刚拿到的那一段。
  *
  * 下载下来的检测录像会被登记进**同一张录像表**（`recordingType: 'manual'`），
@@ -1080,6 +1102,23 @@ async function onCellMenuSelect(action: CameraNvrAction): Promise<void> {
     case 'toggle-overlay':
       toggleCellOverlay(cell)
       return
+    /*
+     * 显示方式（业主 2026-09-19 第 12 批把四颗视图按钮从控制条移到菜单里）。
+     * 派发与灰显分开：这里只调 `chooseCellView()`，它自己会拒绝"这一格不支持的视图"
+     * （菜单项因此在那种情况下是灰的，两层判据来自同一份 `cell.availableViews`）。
+     */
+    case 'view-play':
+      chooseCellView(cell, 'play')
+      return
+    case 'view-timedomain':
+      chooseCellView(cell, 'timedomain')
+      return
+    case 'view-spectrum':
+      chooseCellView(cell, 'spectrum')
+      return
+    case 'view-spectrogram':
+      chooseCellView(cell, 'spectrogram')
+      return
     case 'playback':
       openPlaybackDialog(deviceId, deviceName)
       return
@@ -1112,20 +1151,24 @@ function playbackIconPath(cell: CameraCellView): string {
 }
 
 /**
- * 播放/停止按钮此刻的无障碍名字。
+ * 播放/暂停按钮此刻的无障碍名字。
  *
  * 它是这一格**真实状态**的翻译，而不是一个固定的按钮标题：
- *   - 正在拉流 -> 「停止」；
+ *   - 正在拉流 -> 「暂停」（业主 2026-09-19 第 12 批给这一颗的词）；
  *   - 流失败   -> 「重试」（这时候按钮真的会再起一路，说到做到）；
- *   - 其余能开始的状态 -> 「开始」；
+ *   - 其余能开始的状态 -> 「播放」；
  *   - 做不到的状态（离线 / 已删除 / 已在另一格）-> 直接用那一格的短状态词当名字，
  *     于是禁用**自带原因**，操作员不用去猜为什么按钮是灰的。
+ *
+ * **"暂停"在这里等于"停掉这一路直播"**（RTSP 直播没有真正的暂停：流不会等你）。
+ * 这一点写在 `docs/Ivms4200-UX-REFERENCE.md` §15.74：词是业主给的，动作是原本那个
+ * （`toggleCell()` -> `stopCell()`），界面不假装画面停住了而流还在跑。
  */
 function playbackLabel(cell: CameraCellView): string {
-  if (isCameraCellLive(cell.status)) return t('cameraWallUi.stop')
+  if (isCameraCellLive(cell.status)) return t('cameraWallUi.pause')
   if (!canStartCell(cell)) return cellStatusLabel(cell)
   if (cell.status === 'error') return t('cameraWallUi.retry')
-  return t('cameraWallUi.start')
+  return t('cameraWallUi.play')
 }
 
 /** 全屏按钮的名字：已经在全屏就是「退出全屏」，说得出按下去会发生什么。 */
@@ -1135,17 +1178,100 @@ function fullscreenLabel(cell: CameraCellView): string {
     : t('cameraWallUi.fullscreen')
 }
 
-/** 音量图标按钮的名字：没有画面的格子不可能出声，此时名字直接说出这个事实。 */
+// ---------------------------------------------------------------------------
+// 音量：点一下弹出来的**竖条**（业主 2026-09-19 第 12 批）
+// ---------------------------------------------------------------------------
+
+/**
+ * 哪一格的音量浮层开着（`null` = 都关着）。
+ *
+ * 业主的原话是「音量大小调整应该做成点击后显示出来，上下调节的方式」：
+ * 所以控制条上不再常驻一条横滑杆，只留一颗「音量」按钮，点它才出现一条**竖直**的滑杆
+ * （CSS `writing-mode: vertical-lr` + `direction: rtl`，0 在下面、100 在上面）。
+ *
+ * 全墙同时只开一个：两条竖滑杆一起开着，操作员分不清自己在调哪一格。
+ */
+const volumeOpenSlot = ref<number | null>(null)
+
+/** 点外面关掉音量浮层（`mousedown` 捕获阶段，与相机选择器、右键菜单同一条做法）。 */
+function onVolumeDocumentMouseDown(event: MouseEvent): void {
+  const target = event.target
+  // 触发它的那颗按钮不算「外面」：算的话"再点一次收起"会变成"先关再开"。
+  if (target instanceof Element && target.closest('[data-cell-volume-trigger]')) return
+  if (target instanceof Element && target.closest('[data-cell-volume-pop]')) return
+  volumeOpenSlot.value = null
+}
+
+watch(volumeOpenSlot, (slot) => {
+  if (slot === null) {
+    document.removeEventListener('mousedown', onVolumeDocumentMouseDown, true)
+    return
+  }
+  document.addEventListener('mousedown', onVolumeDocumentMouseDown, true)
+})
+
+/**
+ * 点「音量」按钮。
+ *
+ * 两件事一起做，而且顺序重要：
+ *   1. 把这一格设为**唯一出声的那一格**（`toggleAudio()` 是开关，所以在开之前先判一下 ——
+ *      开着的时候再点它应当是"收起浮层"，而不是把声音关掉，那正是业主不要的那种惊扰）；
+ *   2. 开/收浮层。
+ * 「关掉声音」这件事仍然做得到，但它在浮层里那一个按钮上（`cell-volume-mute`），
+ * 不在"点音量按钮"这个动作上 —— 一个按钮只做一件事。
+ */
+function openVolumePopover(cell: CameraCellView): void {
+  if (volumeOpenSlot.value === cell.index) {
+    volumeOpenSlot.value = null
+    return
+  }
+  volumeOpenSlot.value = cell.index
+  if (!cell.audio) toggleAudio(cell)
+}
+
+/** 音量按钮的名字：没有画面的格子不可能出声，此时名字直接说出这个事实。 */
 function volumeLabel(cell: CameraCellView): string {
+  if (!isCameraCellLive(cell.status)) return t('cameraWallUi.volumeNoPicture')
+  return t('cameraWallUi.volume')
+}
+
+/** 竖滑杆的名字（业主说的"音量大小"），禁用时说出原因。 */
+function volumeSliderLabel(cell: CameraCellView): string {
+  return isCameraCellLive(cell.status)
+    ? t('cameraWallUi.volumeLevel')
+    : t('cameraWallUi.volumeNoPicture')
+}
+
+/** 浮层里那个声音开关的名字（原来挂在音量图标上的那个开关语义搬到了这里）。 */
+function volumeMuteLabel(cell: CameraCellView): string {
   if (!isCameraCellLive(cell.status)) return t('cameraWallUi.volumeNoPicture')
   return cell.audio ? t('cameraWallUi.audioOff') : t('cameraWallUi.audioOn')
 }
 
-/** 音量滑块的名字：与音量图标同一个道理，禁用时说出原因。 */
-function volumeSliderLabel(cell: CameraCellView): string {
-  return isCameraCellLive(cell.status)
-    ? t('cameraWallUi.volume')
-    : t('cameraWallUi.volumeNoPicture')
+/** 手填的第三方 RTSP 源只有画面：控制条上那三颗需要**设备**的控件因此不渲染。 */
+function cellHasDevice(cell: CameraCellView): boolean {
+  return cell.deviceId !== null && cell.kind === 'acousticCamera'
+}
+
+/**
+ * 「手动录像」那一颗的名字与可用性。
+ *
+ * 判据直接用共享层的 `cameraCaptureReadiness()` —— 菜单里那一项读的是同一个函数，
+ * 两处各判一次迟早会出现"菜单能点、按钮灰着"。禁用时名字就是原因（本文件的既有规矩：
+ * 做不到的控件，名字直接说出为什么）。
+ */
+function recordLabel(cell: CameraCellView): string {
+  const nvr = nvrOf(cell.index)
+  if (nvr.recording) return t('cameraNvrUi.menuStopRecording')
+  const readiness = cameraCaptureReadiness(liveStateOf(cell))
+  if (!readiness.ready) return readiness.reasonText || t(readiness.reasonKey)
+  return t('cameraNvrUi.menuStartRecording')
+}
+
+function canRecord(cell: CameraCellView): boolean {
+  const nvr = nvrOf(cell.index)
+  // 录像中永远可以停（录制过程中状态变成 error 也必须能收尾，与菜单同一判据）。
+  return nvr.recording || cameraCaptureReadiness(liveStateOf(cell)).ready
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,6 +1547,8 @@ onBeforeUnmount(() => {
     if (!video) continue
     releaseVideo(Number(index))
   }
+  // 音量浮层那个"点外面关掉"的监听器也要摘掉（它在 `watch(volumeOpenSlot)` 里挂上）。
+  document.removeEventListener('mousedown', onVolumeDocumentMouseDown, true)
 })
 
 /**
@@ -1475,8 +1603,19 @@ watch(
       stopRecordingTimer(index)
       clearNvr(index)
     }
-    if (next.length !== before.length || next.some((slot, index) => slot !== before[index])) {
+    const changed =
+      next.length !== before.length || next.some((slot, index) => slot !== before[index])
+    if (changed) {
       void refreshRecordingStates()
+      /*
+       * 格子里的来源真的变了（放进 / 移走 / 清空）：音量浮层跟着收起 —— 它说的是上一格的事。
+       *
+       * **判据必须是"内容变了"而不是"watch 触发了"**：这个 getter 每次求值都返回一个新数组，
+       * 所以模型上一有风吹草动（例如 `toggleAudio()` 改的是 `audioSlot`）它就会触发；
+       * 按触发关浮层的话，"点音量 → 顺手把这一格设为出声格"会把刚打开的浮层当场关掉
+       * （探针第一版就是这么抓到它的：`volumePopOpen: false`）。
+       */
+      volumeOpenSlot.value = null
     }
   }
 )
@@ -1736,60 +1875,47 @@ function cellBadgeClass(cell: CameraCellView): string {
         </div>
 
         <!--
-          底部控制条：一格**唯一**的一条，常规播放器的那几个控件。
+          底部控制条（业主 2026-09-19 第 12 批）：
+          **只有六颗播放器控件** —— 告警 / 全屏 / 暂停 / 切换录像 / 音量 / 手动录像，
+          顺序就是业主给的那个顺序。四颗视图按钮**不在这里了**（它们搬进了右键菜单的
+          「显示方式」，见 `camera-nvr.ts`）：那四颗问的是"这一格画什么"，不是播放器动作。
+          音量也不再是一条常驻的横滑杆 —— 点「音量」才弹出**竖条**（下面那一块）。
+
           每个控件的无障碍名字都来自目录（`aria-label` 与 `title` 是同一个值），做不到
           的控件一律禁用，而且禁用时它的名字就是原因（见 `playbackLabel()` /
-          `volumeLabel()`）。控制条随格子一起进入全屏，所以全屏之后它仍然在。
+          `recordLabel()` / `volumeLabel()`）。控制条随格子一起进入全屏。
+
+          手填的第三方 RTSP 源**不是设备**：告警 / 切换录像 / 手动录像这三颗对它没有意义
+          （它连设备 id 都没有），所以那一格只有 暂停 / 全屏 / 音量 三颗。
         -->
         <div v-if="cell.status !== 'empty'" class="camera-wall__bar">
-          <!--
-            四种视图的切换（业主 2026-09-18 第 10 批第 2 条）。
-            手填的第三方 RTSP 源只有画面，所以它那一格只渲染一个按钮（`cell.availableViews`）——
-            「藏起来并说明原因」比"给一个点了没反应的按钮"诚实，说明在
-            `cameraWallUi.viewNeedsCamera` 那句话里（鼠标悬停与读屏都能拿到）。
-          -->
+          <!-- ① 告警（打开这一台相机的告警配置对话框；与右键菜单里那一项是同一个动作）。 -->
           <button
-            v-for="view in cell.availableViews"
-            :key="view"
+            v-if="cellHasDevice(cell)"
             type="button"
             class="camera-wall__bar-btn"
-            :class="{ 'camera-wall__bar-btn--on': cell.view === view }"
-            :aria-pressed="cell.view === view"
-            :aria-label="t(CAMERA_CELL_VIEW_KEYS[view])"
-            :title="
-              cell.availableViews.length === 1
-                ? t('cameraWallUi.viewNeedsCamera')
-                : t(CAMERA_CELL_VIEW_KEYS[view])
-            "
-            :data-action="`cell-view-${view}`"
-            @click.stop="chooseCellView(cell, view)"
-          >
-            <span class="camera-wall__view-glyph" aria-hidden="true">{{ cellViewGlyph(view) }}</span>
-          </button>
-
-          <!--
-            这一格的播放/停止（`data-cell-play` 是**给探针用的**钩子：把一条源放进格子只是"分配"，
-            真正起流要按这一颗 —— 相机与手填的第三方源走的是同一条路，业主第 11 批第 2 条
-            把管理界面搬走之后，探针需要能点到它）。
-          -->
-          <button
-            type="button"
-            class="camera-wall__bar-btn"
-            data-cell-play
-            :aria-label="playbackLabel(cell)"
-            :title="playbackLabel(cell)"
-            :aria-busy="isBusy(cell.index)"
-            :disabled="isBusy(cell.index) || !canStartCell(cell)"
-            @click.stop="toggleCell(cell)"
+            data-action="cell-alarm"
+            :aria-label="t('cameraWallUi.cellAlarm')"
+            :title="t('cameraWallUi.cellAlarm')"
+            @click.stop="openCellAlarm(cell)"
           >
             <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path :d="playbackIconPath(cell)" fill="currentColor" />
+              <path
+                d="M8 2.2a3.4 3.4 0 0 0-3.4 3.4c0 2.9-1 3.9-1 3.9h8.8s-1-1-1-3.9A3.4 3.4 0 0 0 8 2.2Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linejoin="round"
+              />
+              <path d="M6.8 12.4a1.4 1.4 0 0 0 2.4 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
             </svg>
           </button>
 
+          <!-- ② 全屏。 -->
           <button
             type="button"
             class="camera-wall__bar-btn"
+            data-action="cell-fullscreen"
             :aria-label="fullscreenLabel(cell)"
             :title="fullscreenLabel(cell)"
             @click.stop="toggleFullscreen(cell)"
@@ -1805,13 +1931,134 @@ function cellBadgeClass(cell: CameraCellView): string {
             </svg>
           </button>
 
+          <!--
+            ③ 暂停 / 播放（`data-cell-play` 是**给探针用的**钩子：把一条源放进格子只是"分配"，
+            真正起流要按这一颗 —— 相机与手填的第三方源走的是同一条路）。
+          -->
+          <button
+            type="button"
+            class="camera-wall__bar-btn"
+            data-cell-play
+            data-action="cell-play"
+            :aria-label="playbackLabel(cell)"
+            :title="playbackLabel(cell)"
+            :aria-busy="isBusy(cell.index)"
+            :disabled="isBusy(cell.index) || !canStartCell(cell)"
+            @click.stop="toggleCell(cell)"
+          >
+            <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path :d="playbackIconPath(cell)" fill="currentColor" />
+            </svg>
+          </button>
+
+          <!-- ④ 切换录像（= 右键菜单里那一项「回放本机录像」，同一个动作、同一个弹窗）。 -->
+          <button
+            v-if="cellHasDevice(cell)"
+            type="button"
+            class="camera-wall__bar-btn"
+            data-action="cell-playback"
+            :aria-label="t('cameraWallUi.cellPlayback')"
+            :title="t('cameraWallUi.cellPlayback')"
+            @click.stop="openCellPlayback(cell)"
+          >
+            <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M2.4 4.2h11.2v7.6H2.4z" fill="none" stroke="currentColor" stroke-width="1.3" />
+              <path d="M6.6 6.3 10 8l-3.4 1.7z" fill="currentColor" />
+              <path d="M4.6 13.8h6.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            </svg>
+          </button>
+
+          <!--
+            ⑤ 音量：点一下弹出竖条（见下面 `data-cell-volume-pop`）。按钮本身也是"这一格出声"
+            的状态指示（`--on` 就是正在出声的那一格）。
+          -->
           <button
             type="button"
             class="camera-wall__bar-btn"
             :class="{ 'camera-wall__bar-btn--on': cell.audio }"
-            :aria-pressed="cell.audio"
+            data-cell-volume-trigger
+            data-action="cell-volume"
+            :aria-expanded="volumeOpenSlot === cell.index"
             :aria-label="volumeLabel(cell)"
             :title="volumeLabel(cell)"
+            :disabled="!isCameraCellLive(cell.status)"
+            @click.stop="openVolumePopover(cell)"
+          >
+            <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
+              <path
+                v-if="cell.audio"
+                d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+              />
+              <path
+                v-else
+                d="M11 6 L14 10 M14 6 L11 10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+
+          <!-- ⑥ 手动录像 / 停止录像（与右键菜单里那一项同一个动作）。 -->
+          <button
+            v-if="cellHasDevice(cell)"
+            type="button"
+            class="camera-wall__bar-btn"
+            :class="{ 'camera-wall__bar-btn--rec': nvrOf(cell.index).recording }"
+            data-action="cell-record"
+            :aria-pressed="nvrOf(cell.index).recording"
+            :aria-label="recordLabel(cell)"
+            :title="recordLabel(cell)"
+            :disabled="!canRecord(cell)"
+            @click.stop="onCellRecord(cell)"
+          >
+            <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <circle cx="8" cy="8" r="4.2" :fill="nvrOf(cell.index).recording ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.3" />
+            </svg>
+          </button>
+        </div>
+
+        <!--
+          音量浮层（业主第 12 批：「音量大小调整应该做成点击后显示出来，上下调节的方式」）。
+          一条**竖直**的滑杆 + 一个声音开关（开关原来挂在音量图标上，搬进来之后
+          "点音量 = 收起浮层"与"关掉声音"就不再是同一个动作）。
+
+          `writing-mode: vertical-lr` + `direction: rtl` 让原生 range 变成竖的，
+          0 在下面、100 在上面（见 `.camera-wall__volume-slider` 的注释）。
+        -->
+        <div
+          v-if="volumeOpenSlot === cell.index"
+          class="camera-wall__volume-pop"
+          data-cell-volume-pop
+        >
+          <input
+            class="camera-wall__volume-slider"
+            data-cell-volume
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            :value="volumePercent(cell.index)"
+            :aria-label="volumeSliderLabel(cell)"
+            :title="volumeSliderLabel(cell)"
+            :disabled="!isCameraCellLive(cell.status)"
+            @click.stop
+            @input="onVolumeInput(cell, $event)"
+          />
+          <button
+            type="button"
+            class="camera-wall__bar-btn"
+            :class="{ 'camera-wall__bar-btn--on': cell.audio }"
+            data-action="cell-volume-mute"
+            :aria-pressed="cell.audio"
+            :aria-label="volumeMuteLabel(cell)"
+            :title="volumeMuteLabel(cell)"
             :disabled="!isCameraCellLive(cell.status)"
             @click.stop="toggleAudio(cell)"
           >
@@ -1835,20 +2082,6 @@ function cellBadgeClass(cell: CameraCellView): string {
               />
             </svg>
           </button>
-
-          <input
-            class="camera-wall__volume"
-            type="range"
-            min="0"
-            max="100"
-            step="1"
-            :value="volumePercent(cell.index)"
-            :aria-label="volumeSliderLabel(cell)"
-            :title="volumeSliderLabel(cell)"
-            :disabled="!isCameraCellLive(cell.status)"
-            @click.stop
-            @input="onVolumeInput(cell, $event)"
-          />
         </div>
 
         <!--
@@ -2286,16 +2519,47 @@ function cellBadgeClass(cell: CameraCellView): string {
   height: 15px;
 }
 
-.camera-wall__volume {
-  flex: 0 1 auto;
-  width: 96px;
-  min-width: 48px;
-  height: 4px;
-  accent-color: var(--color-accent);
-  cursor: pointer;
+/* 正在录像：与叠加条上那个红点同一个危险色，一眼看得出这一路在写盘。 */
+.camera-wall__bar-btn--rec {
+  background: rgba(185, 28, 28, 0.9);
 }
 
-.camera-wall__volume:disabled {
+/*
+ * --- 音量浮层（业主 2026-09-19 第 12 批） ----------------------------------
+ * 贴在这一格右下角、压在画面之上；`bottom: 34px` 是"让开控制条那一行"（条高 30px + 4px）。
+ * 它**在格子里面**，而格子是 `overflow: hidden` —— 所以竖条的高度不能超过一格：
+ * 16 分屏（约 285×160 的格子）下 96px 的滑杆 + 上下内边距刚好放得下（见 §15.75 的边界）。
+ */
+.camera-wall__volume-pop {
+  position: absolute;
+  right: 8px;
+  bottom: 34px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.68);
+  color: #f9fafb;
+}
+
+/*
+ * 竖条：`writing-mode: vertical-lr` 让原生 `input[type=range]` 自己转成竖向，
+ * `direction: rtl` 把 100 放到**上面**（业主说的"上下调节"：往上拖 = 调大）。
+ * 宽度给 22px 是因为竖向 range 的"轨道粗细"是它的**宽度**，太窄点不中。
+ */
+.camera-wall__volume-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  height: 96px;
+  accent-color: var(--color-accent);
+  cursor: ns-resize;
+}
+
+.camera-wall__volume-slider:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

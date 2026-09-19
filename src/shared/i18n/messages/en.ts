@@ -1921,6 +1921,8 @@ export const en: MessageSchema = {
     menuStopRecording: 'Stop recording',
     menuSnapshot: 'Snapshot',
     menuAlarmConfig: 'Alarm configuration…',
+    /** The four display modes moved here from the player bar (owner batch 12). */
+    menuDisplay: 'Display mode',
     menuFullscreen: 'Full screen',
     menuExitFullscreen: 'Exit full screen',
     menuCopyRtsp: 'Copy RTSP address',
@@ -2342,6 +2344,9 @@ export const en: MessageSchema = {
     statusDeviceOffline: 'Device offline',
     start: 'Start',
     stop: 'Stop',
+    /** The player bar's pause control (owner batch 12). It still stops the live session. */
+    play: 'Play',
+    pause: 'Pause',
     retry: 'Retry',
     fullscreen: 'Fullscreen',
     exitFullscreen: 'Exit fullscreen',
@@ -2349,6 +2354,12 @@ export const en: MessageSchema = {
     audioOff: 'Mute',
     audioBadge: 'Sound on',
     volume: 'Volume',
+    /** The vertical slider inside the popover (owner batch 12: click to reveal, drag up/down). */
+    volumeLevel: 'Volume level',
+    /** The bar's "switch to recording" control (= the menu's local playback dialog). */
+    cellPlayback: 'Switch to recording',
+    /** The bar's alarm control (= the menu's alarm configuration dialog). */
+    cellAlarm: 'Alarm configuration',
     volumeNoPicture: 'No picture in this cell, so it cannot play sound',
     activeBadge: 'Active cell',
     limitNotice: 'Up to {max} live streams at once; {active} running. Starting one more would exceed the limit — stop another cell first.',

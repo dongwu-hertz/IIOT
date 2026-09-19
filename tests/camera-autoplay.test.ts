@@ -468,44 +468,44 @@ describe('CameraVideoWall template', () => {
     assert.ok(bar.length > 0, '没有底部控制条（.camera-wall__bar）')
     const barBlock = bar.slice(0, bar.indexOf('</div>'))
     /*
-     * 控制条里的按钮：**四颗视图按钮**（播放 / 1 秒时域图 / 频域图 / 时频谱图，
-     * 业主 2026-09-18 第 10 批第 2 条，一道 `v-for` 渲染）+ 播放/停止 + 全屏 + 音量图标。
-     * 原来这里写死"恰好 3 颗"，加视图按钮之后它红了 —— 而它要守的东西（**一格只有一条
-     * 控制条**、每个控件都说得出名字）一条都没坏，所以判据换成"那四颗视图按钮确实在，
-     * 而且总数对得上"，而不是把一个数字改大。
+     * 控制条里**只有六颗播放器控件**（业主 2026-09-19 第 12 批：
+     * 「播放器窗口应该只有告警，全屏，暂停，切换录像，音量，手动录像」），顺序就是他给的顺序。
+     *
+     * 四颗视图按钮**不在这里了**（第 12 批把它们移进右键菜单的「显示方式」），
+     * 音量也不再是一条常驻的横滑杆（点音量才弹出竖条，那一块在控制条**外面**）。
+     * 这一条守的两件事没变：一格只有一条控制条、每个控件都说得出自己的名字。
      */
-    assert.equal((barBlock.match(/<button/g) ?? []).length, 4, '底部控制条的按钮数（4 = 播放/停止 + 全屏 + 音量）')
-    assert.match(
-      barBlock,
-      /v-for="view in cell\.availableViews"/,
-      '控制条里没有那一排视图按钮（第 10 批第 2 条）'
+    const actions = [...barBlock.matchAll(/data-action="(cell-[a-z-]+)"/g)].map((match) => match[1])
+    assert.deepEqual(
+      actions,
+      ['cell-alarm', 'cell-fullscreen', 'cell-play', 'cell-playback', 'cell-volume', 'cell-record'],
+      '底部控制条的六颗控件不是业主第 12 批给的那六颗（或顺序不对）'
     )
-    assert.match(barBlock, /data-action="`cell-view-\$\{view\}`"/, '视图按钮没有稳定的探针钩子')
-    assert.equal((barBlock.match(/type="range"/g) ?? []).length, 1, '底部控制条的音量滑块数')
+    assert.equal((barBlock.match(/<button/g) ?? []).length, 6, '底部控制条的按钮数（应为 6）')
+    assert.equal(
+      barBlock.includes('cell-view-'),
+      false,
+      '控制条上又出现了视图按钮（第 12 批已把它们移进「显示方式」菜单）'
+    )
+    assert.equal((barBlock.match(/type="range"/g) ?? []).length, 0, '控制条上不该再有滑杆')
+    // 音量浮层（点音量按钮才出现的那一条**竖**滑杆）在控制条外面、格子里。
+    assert.match(source, /data-cell-volume-pop/, '没有音量浮层')
+    assert.match(source, /class="camera-wall__volume-slider"/, '音量浮层里没有滑杆')
     // 每个控件都必须有无障碍名字，而且 `aria-label` 与 `title` 是**同一个值**：名字与
     // 提示不一致时，读屏用户听到的与鼠标用户看到的是两回事。
-    // 五个控件 = 四颗按钮（视图 / 播放停止 / 全屏 / 音量图标）+ 一个音量滑块。
     const labels = [...barBlock.matchAll(/:aria-label="([^"]+)"/g)].map((match) => match[1])
     const titles = [...barBlock.matchAll(/:title="([^"]+)"/g)].map((match) => match[1])
     assert.equal(
       labels.length,
-      5,
-      '底部控制条里有控件没有 aria-label（四颗按钮 + 一个滑块）'
+      6,
+      '底部控制条里有控件没有 aria-label（六颗按钮）'
     )
     /*
-     * 名字与提示一致这件事**有一处刻意的例外**：视图按钮。
-     *
-     * 它的 `aria-label` 是那个视图的名字（"频域图"），而 `title` 在"这一格只有一种视图"
-     * （手填的第三方 RTSP 源）时写的是**原因**（`cameraWallUi.viewNeedsCamera`）——
-     * 操作员把鼠标停上去想知道的是"为什么只有一颗按钮"，而不是把那个名字再读一遍。
-     * 所以判据是：除了它以外每一处都必须一致，而它的名字必须非空、必须来自视图目录。
+     * 六颗控件的名字与提示**必须逐字相同**（第 12 批之后不再有例外：视图按钮从控制条上
+     * 移走之后，那个"名字是视图名、提示是原因"的特例跟着进了菜单 —— 菜单自己就是用
+     * `title` 显示禁用原因的，`VideoContextMenu` 的既有做法）。
      */
-    assert.match(labels[0] ?? '', /CAMERA_CELL_VIEW_KEYS\[view\]/, '视图按钮的名字不是视图名')
-    assert.deepEqual(
-      labels.slice(1),
-      titles.slice(1),
-      '底部控制条（视图按钮以外）的 aria-label 与 title 必须一致'
-    )
+    assert.deepEqual(labels, titles, '底部控制条的 aria-label 与 title 必须一致')
     for (const label of labels) {
       assert.ok(
         typeof label === 'string' && label.trim() !== '' && !label.includes('undefined'),

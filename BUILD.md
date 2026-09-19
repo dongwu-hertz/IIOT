@@ -308,7 +308,7 @@ node scripts/camera-load.cjs --streams 1,2,4 --seconds 10
 
 ```jsonc
 {
-  "version": "1.0.1",          // 每次发布把第三位 +1（"小版本号"按 patch 读）
+  "version": "1.0.2",          // 每次发布把第三位 +1（"小版本号"按 patch 读）
   "releaseDate": "2026-09-19"  // 改成发布当天；它同时是界面上"发布日期"那个读数
 }
 ```
@@ -317,7 +317,7 @@ node scripts/camera-load.cjs --streams 1,2,4 --seconds 10
 `electron-builder.yml` 的 `productName`，保证与安装向导里的产品名是同一个字符串）：
 
 ```
-HERTZINNO Acoustic Box Manager-1.0.1-2026-09-19-x64-setup.exe
+HERTZINNO Acoustic Box Manager-1.0.2-2026-09-19-x64-setup.exe
 ```
 
 | 谁用这个名字 | 怎么拿到 |

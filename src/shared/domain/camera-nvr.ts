@@ -15,6 +15,7 @@
  */
 
 import type { CameraLiveState, CameraLiveStatus } from './camera-live'
+import { CAMERA_CELL_VIEW_MODES, type CameraCellViewMode } from './camera-cell-view'
 
 // ---------------------------------------------------------------------------
 // 右键菜单
@@ -29,6 +30,18 @@ export const CAMERA_NVR_ACTIONS = [
   'copy-rtsp',
   'open-external',
   'toggle-overlay',
+  /**
+   * 四种显示方式（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
+   *
+   * 业主 2026-09-19 第 12 批把播放器控制条收成六颗播放器控件
+   * （告警 / 全屏 / 暂停 / 切换录像 / 音量 / 手动录像），四颗视图按钮**从控制条移到了这里**:
+   * 它们是"这一格画什么"，不是播放器动作。移走而不是删掉（第 10 批第 2 条要的四种视图仍然可达），
+   * 也仍然只有一处实现（`CAMERA_CELL_VIEW_MODES`）。
+   */
+  'view-play',
+  'view-timedomain',
+  'view-spectrum',
+  'view-spectrogram',
   // 本机录像回放（不是回看设备录像计划，语义见 `buildCameraNvrMenu()`）。
   'playback',
   // 下载设备侧生成的检测结果文件。
@@ -74,6 +87,23 @@ export interface CameraNvrEnvironment {
    *                  声纹设备的告警档位是另一套接口，与本模型不通用）。
    */
   capabilities: CameraNvrCapabilities
+  /**
+   * 这一格**此刻**画的是哪一种视图（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
+   *
+   * 缺省 = `play`。菜单里「显示方式」那四个子项要打一个 ✓，所以它必须是**当前值**，
+   * 而不是"这一格支持什么"（那是下面那个）。
+   */
+  cellView?: CameraCellViewMode
+  /**
+   * 这一格**支持**哪些视图。
+   *
+   * 缺省 = 全部四种（一台真实的相机）。手填的第三方 RTSP 源只有画面，所以它那一格
+   * 传 `['play']`：另外三种在这张菜单里**灰显并写出原因**（`cameraWallUi.viewNeedsCamera`
+   * = "第三方 RTSP 源只有画面"）。按本文件的老规矩，设备族做不到的功能不出现 ——
+   * 而这里"做不到"的是**这一格的来源**，不是设备族，所以给一句原因比整项消失更有用
+   * （操作员会问"为什么只有播放"，菜单必须答得上来）。
+   */
+  availableViews?: readonly CameraCellViewMode[]
 }
 
 export interface CameraNvrCapabilities {
@@ -105,6 +135,15 @@ export interface CameraNvrCapabilities {
    * 实现。灰显/存在的判据同样按「界面声明了才有」处理。
    */
   tileClose?: boolean
+  /**
+   * 「显示方式」入口（播放 / 1 秒时域图 / 频域图 / 时频谱图）。**可选，缺省即「没有」**。
+   *
+   * 与 `localPlayback` / `detectDownload` 同一类：这是**界面实现**的能力，不是设备族的。
+   * 四种视图是**画面格**的东西（业主 2026-09-18 第 10 批第 2 条要的是"视频墙"上的四种画法），
+   * 实时监测页那一屏有它自己的一套声学面板，没有"这一格画什么"这回事 —— 所以那一页不声明，
+   * 菜单里也就不会出现一个点了没反应的「显示方式」。
+   */
+  cellViews?: boolean
 }
 
 export interface CameraNvrMenuItem {
@@ -138,8 +177,28 @@ export interface CameraNvrMenuItem {
 }
 
 /** 只有分组用的「父项」，点击它只展开子菜单，不派发任何动作。 */
-export const CAMERA_NVR_SUBMENU_ACTIONS = ['capture'] as const
+export const CAMERA_NVR_SUBMENU_ACTIONS = ['capture', 'display'] as const
 export type CameraNvrSubmenuAction = (typeof CAMERA_NVR_SUBMENU_ACTIONS)[number]
+
+/**
+ * 四种显示方式在菜单里的动作 id 与文案键（顺序就是 `CAMERA_CELL_VIEW_MODES` 的顺序）。
+ *
+ * 文案复用 `cameraWallUi.view*` —— 这四个名字在控制条上是它们、在菜单里也是它们，
+ * 「一件事只有一处措辞」。
+ */
+const VIEW_ACTION_BY_MODE: Record<CameraCellViewMode, CameraNvrAction> = {
+  play: 'view-play',
+  timedomain: 'view-timedomain',
+  spectrum: 'view-spectrum',
+  spectrogram: 'view-spectrogram'
+}
+
+const VIEW_LABEL_BY_MODE: Record<CameraCellViewMode, string> = {
+  play: 'cameraWallUi.viewPlay',
+  timedomain: 'cameraWallUi.viewTimedomain',
+  spectrum: 'cameraWallUi.viewSpectrum',
+  spectrogram: 'cameraWallUi.viewSpectrogram'
+}
 
 /**
  * 抓图 / 手动录像的准备状态 —— **唯一**的可用性判断。
@@ -210,6 +269,28 @@ export function buildCameraNvrMenu(
   const hasAddress = (state?.rtspUrl ?? '').trim() !== ''
   const { liveVideo, alarmModel } = env.capabilities
 
+  /**
+   * 「显示方式」那四个子项（业主 2026-09-19 第 12 批把视图按钮从控制条移到这里）。
+   *
+   * `enabled` 只由**这一格的来源**决定：一台相机的四种都能画，手填的第三方 RTSP 源只有画面。
+   * 不可用的那几种**照旧列出并写出原因**（`cameraWallUi.viewNeedsCamera`）—— 这是本文件
+   * 里"做不到的不出现"那条规则的一处**有意的例外**：四颗按钮刚刚从控制条上被移走，
+   * 操作员点开菜单就是来问"那几张图去哪了"的，整项消失等于拒绝回答。
+   */
+  const availableViews = env.availableViews ?? CAMERA_CELL_VIEW_MODES
+  const currentView: CameraCellViewMode = env.cellView ?? 'play'
+  const displayItems: CameraNvrMenuItem[] = CAMERA_CELL_VIEW_MODES.map((mode) => {
+    const usable = availableViews.includes(mode)
+    return {
+      action: VIEW_ACTION_BY_MODE[mode],
+      labelKey: VIEW_LABEL_BY_MODE[mode],
+      visible: liveVideo,
+      enabled: usable,
+      ...(usable ? {} : { disabledReasonKey: 'cameraWallUi.viewNeedsCamera' }),
+      checked: currentView === mode
+    }
+  })
+
   const captureItems: CameraNvrMenuItem[] = [
     {
       action: 'toggle-recording',
@@ -260,6 +341,23 @@ export function buildCameraNvrMenu(
       // 交给播放器也打不开，所以宁可禁用并说明。
       enabled: env.hasUsableSource,
       ...(env.hasUsableSource ? {} : { disabledReasonKey: 'cameraNvrUi.reasonNoSource' })
+    },
+    {
+      /*
+       * 显示方式（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
+       *
+       * 它紧挨着「叠加信息」摆在一起、**不带分隔线**：两项都是"这一格怎么画"，
+       * 而不是"对相机做什么"。业主第 12 批把四颗视图按钮从控制条上撤走之后，
+       * 这里是它们唯一的入口。
+       */
+      action: 'display',
+      labelKey: 'cameraNvrUi.menuDisplay',
+      visible: liveVideo && env.capabilities.cellViews === true,
+      enabled: displayItems.some((item) => item.enabled),
+      ...(displayItems.some((item) => item.enabled)
+        ? {}
+        : { disabledReasonKey: 'cameraWallUi.viewNeedsCamera' }),
+      submenu: displayItems
     },
     {
       action: 'toggle-overlay',

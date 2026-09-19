@@ -41,7 +41,8 @@ import {
   CAMERA_NVR_SUBMENU_ACTIONS,
   buildCameraNvrMenu,
   cameraCaptureReadiness,
-  cameraMediaFileName
+  cameraMediaFileName,
+  type CameraNvrEnvironment
 } from '../src/shared/domain/camera-nvr'
 import { VideoFileServer } from '../src/main/services/media/video-file-server'
 import type { CameraLiveState } from '../src/shared/domain/camera-live'
@@ -113,7 +114,7 @@ function liveState(overrides: Partial<CameraLiveState> = {}): CameraLiveState {
   }
 }
 
-const ENV = {
+const ENV: CameraNvrEnvironment = {
   deviceName: 'camera 1',
   recording: false,
   fullscreen: false,
@@ -123,7 +124,11 @@ const ENV = {
   capabilities: { liveVideo: true, alarmModel: true }
 }
 
-function itemFor(state: CameraLiveState | null, action: string, env = ENV) {
+function itemFor(
+  state: CameraLiveState | null,
+  action: string,
+  env: CameraNvrEnvironment = ENV
+) {
   const item = buildCameraNvrMenu(state, env).find((candidate) => candidate.action === action)
   assert.ok(item, `menu must contain ${action}`)
   return item
@@ -200,6 +205,8 @@ describe('context menu enablement (the single rule)', () => {
     ])
     assert.ok(!actions.includes('playback'))
     assert.ok(!actions.includes('download-detect'))
+    // 「显示方式」同理：它是画面格的能力，这一组能力里没有声明，整项不出现。
+    assert.ok(!actions.includes('display'))
   })
 
   it('exposes playback and detect-download only where the screen declares them', () => {
@@ -260,7 +267,9 @@ describe('context menu enablement (the single rule)', () => {
         alarmModel: true,
         localPlayback: true,
         detectDownload: true,
-        tileClose: true
+        tileClose: true,
+        // 画面墙那一组：把「显示方式」也点亮，否则词表里那五个 action 谁也不产出。
+        cellViews: true
       }
     }
     const seen = new Set<string>()
@@ -373,6 +382,77 @@ describe('context menu enablement (the single rule)', () => {
       menu.filter((item) => item.separatorBefore).map((item) => item.action),
       ['toggle-overlay', 'alarm-config']
     )
+    /*
+     * 声明了 `cellViews` 之后（画面墙就是这一组），「显示方式」出现在**全屏与叠加信息之间**、
+     * **不带分隔线** —— 它与叠加信息都是"这一格怎么画"，与"对相机做什么"分开。
+     */
+    const wallMenu = buildCameraNvrMenu(liveState(), {
+      ...ENV,
+      capabilities: { ...ENV.capabilities, cellViews: true }
+    })
+    assert.deepEqual(
+      wallMenu.map((item) => item.action),
+      [
+        'capture',
+        'toggle-fullscreen',
+        'copy-rtsp',
+        'open-external',
+        'display',
+        'toggle-overlay',
+        'alarm-config'
+      ]
+    )
+    assert.deepEqual(
+      wallMenu.filter((item) => item.separatorBefore).map((item) => item.action),
+      ['toggle-overlay', 'alarm-config']
+    )
+  })
+
+  it('「显示方式」：四种视图各一项，当前那一种打 ✓，不支持的灰显并写出原因', () => {
+    // 一台相机（画面墙那一组能力）：四种都能画，当前是"播放"。
+    const wallEnv: CameraNvrEnvironment = {
+      ...ENV,
+      capabilities: { ...ENV.capabilities, cellViews: true }
+    }
+    const camera = itemFor(liveState(), 'display', wallEnv)
+    assert.deepEqual(
+      (camera.submenu ?? []).map((child) => child.action),
+      ['view-play', 'view-timedomain', 'view-spectrum', 'view-spectrogram']
+    )
+    assert.deepEqual(
+      (camera.submenu ?? []).map((child) => child.labelKey),
+      [
+        'cameraWallUi.viewPlay',
+        'cameraWallUi.viewTimedomain',
+        'cameraWallUi.viewSpectrum',
+        'cameraWallUi.viewSpectrogram'
+      ]
+    )
+    assert.equal(camera.submenu?.every((child) => child.enabled), true, '相机的四种视图都该能点')
+    assert.deepEqual(
+      (camera.submenu ?? []).map((child) => child.checked),
+      [true, false, false, false],
+      '当前视图（播放）没有打 ✓'
+    )
+    // 切到频域图之后 ✓ 跟着走。
+    const spectrum = itemFor(liveState(), 'display', { ...wallEnv, cellView: 'spectrum' })
+    assert.deepEqual(
+      (spectrum.submenu ?? []).map((child) => child.checked),
+      [false, false, true, false]
+    )
+    /*
+     * 手填的第三方 RTSP 源只有画面：另外三种**照旧列出、灰显、写出原因** ——
+     * 这是本文件里"做不到的不出现"那条规则的一处**有意的例外**：四颗按钮刚从控制条上
+     * 被移走，操作员点开菜单就是来问"那几张图去哪了"的，整项消失等于拒绝回答。
+     */
+    const manual = itemFor(liveState(), 'display', { ...wallEnv, availableViews: ['play'] })
+    assert.deepEqual(
+      (manual.submenu ?? []).map((child) => child.enabled),
+      [true, false, false, false]
+    )
+    for (const child of (manual.submenu ?? []).slice(1)) {
+      assert.equal(child.disabledReasonKey, 'cameraWallUi.viewNeedsCamera')
+    }
   })
 })
 

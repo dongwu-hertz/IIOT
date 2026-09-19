@@ -366,11 +366,14 @@ describe('接线（源码守卫）', () => {
       '图表格没有接上 CameraCellChart'
     )
     /*
-     * 探针钩子是**动态拼**的（`:data-action="`cell-view-${view}`"`）：四颗按钮共用一段
-     * 模板，逐一写成字面量只会让"加一种视图"变成四处修改。所以守卫匹配的是那个模板。
+     * 四颗视图按钮的入口**在第 12 批之后是右键菜单的「显示方式」**（业主：
+     * 「播放器窗口应该只有告警，全屏，暂停，切换录像，音量，手动录像」）。
+     * 所以这里守的是：菜单模型的四个动作都在，而墙对它们**各有一条派发分支**
+     * （少一条就是"点了没反应"）。
      */
-    assert.match(wall, /:data-action="`cell-view-\$\{view\}`"/, '控制条上没有视图按钮的探针钩子')
-    assert.match(wall, /availableViews/, '按钮没有按"这一格支持哪些视图"渲染')
+    assert.match(wall, /case 'view-spectrum':\s*\n\s*chooseCellView\(cell, 'spectrum'\)/, '菜单里的「频域图」没有派发分支')
+    assert.match(wall, /cellView: cell\.view/, '菜单环境里没有这一格此刻的视图（✓ 打不出来）')
+    assert.match(wall, /availableViews: cell\.availableViews/, '菜单环境里没有"这一格支持哪些视图"')
     assert.match(wall, /charts\.dispose\(\)/, '离开页面没有停掉声学预览订阅')
   })
 
@@ -400,7 +403,19 @@ describe('接线（源码守卫）', () => {
   })
 
   it('手填 RTSP 那一格只有画面，而且原因写在界面上', () => {
+    /*
+     * 第 12 批之后这句话在**菜单**里：`buildCameraNvrMenu()` 为"这一格不支持的那几种视图"
+     * 给出 `disabledReasonKey: cameraWallUi.viewNeedsCamera`，菜单把它渲染成灰项下面那行原因
+     * （`VideoContextMenu` 的 `.vmenu__reason`）。控制条上不再有视图按钮，所以墙里那句
+     * `t('cameraWallUi.viewNeedsCamera')` 也跟着搬进了共享层的菜单模型。
+     */
+    const nvr = read('src/shared/domain/camera-nvr.ts')
+    assert.match(
+      nvr,
+      /disabledReasonKey: 'cameraWallUi\.viewNeedsCamera'/,
+      '手填源的"只有画面"没有在「显示方式」菜单里说明'
+    )
     const wall = read('src/renderer/src/components/CameraVideoWall.vue')
-    assert.match(wall, /viewNeedsCamera/, '手填源的"只有画面"没有在界面上说明')
+    assert.match(wall, /availableViews: cell\.availableViews/, '墙没有把"这一格支持哪些视图"告诉菜单')
   })
 })
