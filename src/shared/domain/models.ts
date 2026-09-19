@@ -21,6 +21,7 @@ import type { EventSeverity } from './event-center'
  * 端点表与判据。这里**只导入类型** —— `e2.ts` 不反向依赖本文件，所以运行时没有环。
  */
 import type { E2Variant } from './e2'
+import type { DeviceIngestPlan } from './iot-ingest'
 
 // ---------------------------------------------------------------------------
 // Device identity & connection
@@ -130,6 +131,18 @@ export interface Device {
    * 那一组；现问一次设备意味着页签会先渲染错、再变一次。缺席 = 还没读到过（不是"2023 版"）。
    */
   e2Variant?: E2Variant
+  /**
+   * **接入方案**（业主 2026-09-19 第 13 批第 3、4 条）：这台设备用哪种协议把数据推进来
+   * （`none` / `http` / `mqtt`），以及它会推哪些遥测值（数据流接口的四个指标 ← 键，
+   * 视频流接口的那一个键）。
+   *
+   * 可选：旧库里的行没有它（读出时由 `normaliseDeviceIngestPlan()` 补成出厂方案），
+   * 而设备表、设备详情、悬停卡片都不需要它 —— 只有"添加/编辑设备"那个对话框与
+   * 接入同步（决定本机要不要开监听）读它。
+   *
+   * **不含秘钥**：秘钥仍然只在 `devices.ingestEndpoint(id)` 那一条路上出现（v15 的口径）。
+   */
+  ingest?: DeviceIngestPlan
   createdAt: number
   updatedAt: number
 }
@@ -200,6 +213,14 @@ export interface AddDeviceInput {
    * 其他机型留空。校验规则见 `@shared/domain/device-installation`。
    */
   installation?: DeviceInstallation
+  /**
+   * 接入方案（业主 2026-09-19 第 13 批第 3、4 条）。
+   *
+   * 添加设备时一起定下来（选 HTTP / MQTT + 声明这台设备会推哪些遥测值）。
+   * **省略 = 不动这一项**（与 `installation` 同一条规矩）：重新添加一台已知设备只是刷新地址，
+   * 不该把已配好的协议与键抹回出厂值。
+   */
+  ingest?: DeviceIngestPlan
 }
 
 export interface UpdateDeviceInput {
@@ -218,6 +239,8 @@ export interface UpdateDeviceInput {
   password?: string
   /** 安装信息：**部分更新**（`undefined` = 不动这一项，`null` = 清空这一项）。 */
   installation?: Partial<Record<keyof DeviceInstallation, number | null>>
+  /** 接入方案：**省略 = 不动这一项**（见 `AddDeviceInput.ingest`）。 */
+  ingest?: DeviceIngestPlan
 }
 
 // ---------------------------------------------------------------------------

@@ -367,11 +367,22 @@ export async function initServices(): Promise<AppServices> {
     recordings: recordingRepo
   })
 
+  /**
+   * 设备声明 → 本机监听（业主 2026-09-19 第 13 批第 1 条：把"数据接入"的开关搬进添加设备）。
+   *
+   * **为什么是 late-bound 的**：`DeviceService` 在接入服务**之前**构造，而"加了一台声明
+   * HTTP 的设备要不要开端口"这件事只有接入服务存在之后才答得上来。所以这里先给一个空实现，
+   * 接入服务建好之后再把它接上（下面那一段）。缺省实现什么都不做，所以中间那一段窗口里
+   * 加设备也不会崩。
+   */
+  let syncIngestFromDevices: (need: { http: boolean; mqtt: boolean }) => void = () => {}
+
   const deviceService = new DeviceService({
     devices: deviceRepo,
     channels: channelRepo,
     credentials: credentialResult.store,
     transport,
+    syncIngest: (need) => syncIngestFromDevices(need),
     settings: () => ({
       requestTimeoutMs: settings.get().requestTimeoutMs,
       healthCheckIntervalMs: settings.get().healthCheckIntervalMs,
@@ -506,6 +517,41 @@ export async function initServices(): Promise<AppServices> {
   settings.on('changed', () => {
     void iotIngest.applyConfig()
   })
+
+  /**
+   * 把"设备声明"翻译成设置里那三个开关，然后让接入服务对账（第 13 批第 1 条）。
+   *
+   * 三条口径：
+   *   1. **操作员不再管总开关**：`enabled` = 有没有任何设备声明了 http/mqtt；
+   *      `httpEnabled` / `mqttEnabled` = 有没有设备声明**那一种**。于是"给一台设备选了 HTTP 接入"
+   *      就等于"本机在 8080 上听着"，而"把最后一台这样的设备删掉"就等于"关掉端口"
+   *      （离线优先：本机不为没人用的协议开着监听）。
+   *   2. **端口与绑定地址仍然是设置**（在这一版里由添加设备那个对话框编辑）：
+   *      它们说的是"怎么听"，与"谁在推"是两件事。
+   *   3. 只在**真的变了**的时候写设置：`settings.update()` 会广播 `changed`，而每一次广播
+   *      都会让接入服务重新对账（停旧监听再起新的）—— 一次多余的广播就是一次无谓的抖动。
+   */
+  syncIngestFromDevices = (need: { http: boolean; mqtt: boolean }): void => {
+    const current = settings.get().iotIngest
+    const enabled = need.http || need.mqtt
+    if (
+      current.enabled === enabled &&
+      current.httpEnabled === need.http &&
+      current.mqttEnabled === need.mqtt
+    ) {
+      // 开关没变，但监听可能还没起来（启动那一刻）—— 对账一次是幂等的。
+      void iotIngest.applyConfig()
+      return
+    }
+    settings.update({
+      iotIngest: { ...current, enabled, httpEnabled: need.http, mqttEnabled: need.mqtt }
+    })
+    appLog().info('本机接入监听跟着设备声明走', {
+      enabled,
+      http: need.http,
+      mqtt: need.mqtt
+    })
+  }
 
   /**
    * 样本库 → 外部训练数据集。与 `SampleLibraryService` 分开：那一个只管"库里有什么"，
@@ -786,15 +832,23 @@ export async function initServices(): Promise<AppServices> {
   deviceService.startMonitor()
 
   /**
-   * IoT 接入：把设置里那份配置**当场应用一次**。
+   * IoT 接入：启动时按**库里那几台设备的声明**对齐一次。
    *
-   * 无论开关是开是关都调一次：关着的时候它什么都不做（`reconcile()` 里那条分支），
-   * 开着的时候监听必须在 IPC 处理器注册**之前**就绪 —— 否则设置页第一次打开会读到
-   * "配置说开着、服务说没监听"这种自相矛盾的状态。
+   * 为什么不是"读设置里那个开关"：第 13 批第 1 条之后那个开关是**派生**的
+   * （`syncIngestFromDevices()` 写的）。应用上一次退出时留下的值可能与库里的设备对不上
+   * （例如上一次是在加完设备之后被强杀的），而库里的声明才是真相。所以这里从设备表算一遍，
+   * 再对账 —— 磁盘上那个开关只会被这一次计算覆盖。
    *
    * **不 await**：`listen()` 失败（端口被占/地址不属于本机）不该拦住应用启动，
    * 而状态里的 `error` 就是给界面看的。
    */
+  {
+    const declared = deviceRepo.listIngestProtocols()
+    syncIngestFromDevices({
+      http: declared.includes('http'),
+      mqtt: declared.includes('mqtt')
+    })
+  }
   void iotIngest.applyConfig()
 
   /**

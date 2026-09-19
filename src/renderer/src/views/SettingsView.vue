@@ -943,11 +943,28 @@ async function confirmRestore(): Promise<void> {
           <span class="settings-group__title">{{ t('settingsUi.tabIot') }}</span>
 
           <div class="field">
+            <!--
+              **总开关不再是操作员拨的**（业主 2026-09-19 第 13 批第 1 条：把数据接入搬进
+              「添加设备」）。它现在由**设备声明**派生：库里有没有设备声明 http / mqtt
+              （`DeviceService.syncIngest()` → `syncIngestFromDevices()`），
+              所以这一格是**只读显示**，勾没勾说的是事实而不是一个可以被改掉的选项。
+
+              为什么留着这一格而不是删掉：这一页还要显示端口、监听状态与收数统计 ——
+              那些说的是"怎么听"和"收到了什么"，与"谁在推"是两件不同的事。
+              下一轮把端口也搬进添加设备那个对话框（见 §15.77 的落地顺序）。
+            -->
             <label class="toggle">
-              <input v-model="draft.iotEnabled" type="checkbox" data-iot-enable />
+              <input
+                v-model="draft.iotEnabled"
+                type="checkbox"
+                disabled
+                data-iot-enable
+                :data-iot-enable-derived="ingest.status?.config.enabled ? 'on' : 'off'"
+              />
               <span>{{ t('iotUi.enableLabel') }}</span>
             </label>
             <span class="field-hint">{{ t('iotUi.enableHint') }}</span>
+            <span class="field-hint" data-iot-enable-derived-hint>{{ t('iotUi.enableDerived') }}</span>
           </div>
         </div>
 

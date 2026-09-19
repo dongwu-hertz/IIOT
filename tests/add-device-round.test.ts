@@ -105,3 +105,94 @@ describe('添加设备：「地址信息」默认收起（第 13 批第 2 条）
     )
   })
 })
+
+describe('添加设备：「协议接入方式」（第 13 批第 3、4 条）', () => {
+  it('三档单选，默认不接入；选了 HTTP/MQTT 才出现接口清单', () => {
+    assert.match(dialog, /data-add-protocol/, '没有「协议接入方式」那一块')
+    assert.match(dialog, /const PROTOCOL_OPTIONS: readonly IngestProtocol\[\] = \['none', 'http', 'mqtt'\]/, '三档不是 none/http/mqtt')
+    assert.match(dialog, /const ingestProtocol = ref<IngestProtocol>\('none'\)/, '默认不是"不接入"')
+    assert.match(dialog, /:data-iot-protocol="option"/, '单选项没有探针钩子')
+    // 接口清单只在选了协议之后渲染（不接入时不显示四个键）。
+    assert.match(dialog, /<template v-if="ingestProtocol !== 'none'">/, '接口清单没有按协议门住')
+  })
+
+  it('数据流接口：四个可显示的指标各一行，行上有键名输入与探针钩子', () => {
+    assert.match(dialog, /const metricKeys = ref<IngestMetricKey\[\]>\(defaultIngestMetricKeys\(\)\)/, '没有那四行的草稿')
+    assert.match(dialog, /:data-iot-metric-key="row\.metric"/, '键名输入没有探针钩子')
+    assert.match(dialog, /METRIC_LABEL_KEYS\[row\.metric\]/, '行的标签不是指标名字')
+    // 四个指标的名字复用目录里既有的那四条（趋势页/实时监测页用的是同一批）。
+    for (const key of ['metrics.spl', 'metrics.mainFrequency', 'metrics.smoothness', 'metrics.bandEnergyRatio']) {
+      assert.ok(dialog.includes(key), `指标标签没有复用 ${key}`)
+    }
+  })
+
+  it('视频流接口：一个键名输入，默认 video_url，留空表示不推视频', () => {
+    assert.match(dialog, /const videoKey = ref\(DEFAULT_INGEST_VIDEO_KEY\)/, '没有视频键的草稿')
+    assert.match(dialog, /data-iot-video-key/, '视频键没有探针钩子')
+    assert.match(dialog, /t\('addDeviceUi\.videoKeyHint'\)/, '没有"留空表示不推视频"那句说明')
+  })
+
+  it('方案由共享层的纯函数校验，不合法就**不提交**', () => {
+    assert.match(dialog, /deviceIngestPlanProblems\(ingestPlan\.value\)/, '没有用共享层的校验')
+    assert.match(
+      dialog,
+      /if \(ingestProtocol\.value !== 'none' && planProblems\.value\.length > 0\)/,
+      '不合法时没有拦住提交'
+    )
+    assert.match(dialog, /data-iot-plan-problem/, '没有把问题显示出来')
+    // 提交时规范化（库里只存一种写法）。
+    assert.match(dialog, /ingest: normaliseDeviceIngestPlan\(ingestPlan\.value\)/, '提交时没有规范化')
+    // 不接入就**不发**这一项（库里那一列的出厂值本来就是 none）。
+    assert.match(dialog, /ingestProtocol\.value === 'none'\s*\n\s*\?\s*\{\}/, '"不接入"时仍然发了方案')
+  })
+
+  it('关窗之后接入方式与接口清单回到出厂默认', () => {
+    const reset = dialog.slice(dialog.indexOf('function resetForm'), dialog.indexOf('function resetForm') + 700)
+    assert.match(reset, /ingestProtocol\.value = 'none'/, '没有重置协议')
+    assert.match(reset, /metricKeys\.value = defaultIngestMetricKeys\(\)/, '没有重置遥测键')
+    assert.match(reset, /videoKey\.value = DEFAULT_INGEST_VIDEO_KEY/, '没有重置视频键')
+  })
+
+  it('监听状态是**只读的读数**：读一次 ingest 读数，不在这一屏改端口', () => {
+    assert.match(dialog, /void ingest\.load\(\)/, '没有读接入读数')
+    assert.match(dialog, /data-iot-listen-status/, '没有监听状态那一段')
+    assert.match(dialog, /t\('addDeviceUi\.protocolListening', \{ port:/, '监听中那句话没有带端口')
+    // 端口在系统设置里（这一轮只显示状态，不改端口）。
+    assert.equal(/iotHttpPort|iotMqttPort/.test(dialog), false, '这一屏出现端口输入框了（端口还没搬过来）')
+  })
+
+  it('十条新文案四语言齐全', () => {
+    const KEYS = [
+      'protocolSection',
+      'protocolHint',
+      'protocolNone',
+      'protocolHttp',
+      'protocolMqtt',
+      'protocolListening',
+      'protocolNotListening',
+      'protocolNotListeningReason',
+      'protocolListenUnknown',
+      'metricKeysTitle',
+      'metricKeysHint',
+      'videoKeyTitle',
+      'videoKeyHint',
+      'protocolPlanInvalid'
+    ]
+    for (const [locale, catalogue] of Object.entries(CATALOGUES)) {
+      for (const key of KEYS) {
+        const value = catalogue.addDeviceUi[key]
+        assert.equal(typeof value, 'string', `${locale} 缺 addDeviceUi.${key}`)
+        assert.ok(String(value).trim() !== '', `${locale} 的 ${key} 是空的`)
+      }
+    }
+    for (const locale of ['en', 'es', 'tr']) {
+      for (const key of ['protocolListening', 'protocolNotListeningReason']) {
+        assert.deepEqual(
+          (String(CATALOGUES[locale]!.addDeviceUi[key]).match(/\{(\w+)\}/g) ?? []).sort(),
+          (String(CATALOGUES['zh-CN']!.addDeviceUi[key]).match(/\{(\w+)\}/g) ?? []).sort(),
+          `${locale} 的 ${key} 占位符与中文不一致`
+        )
+      }
+    }
+  })
+})

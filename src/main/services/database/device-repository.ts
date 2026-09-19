@@ -29,7 +29,12 @@ import type {
 import { CHANNEL_COUNT, SensorType as SensorTypeEnum, isDeviceKind } from '@shared/domain/models'
 import { hasInstallation } from '@shared/domain/device-installation'
 import { isE2Variant, type E2Variant } from '@shared/domain/e2'
-import { isPushSecret } from '@shared/domain/iot-ingest'
+import {
+  isPushSecret,
+  normaliseDeviceIngestPlan,
+  type DeviceIngestPlan,
+  type IngestProtocol
+} from '@shared/domain/iot-ingest'
 
 // ---------------------------------------------------------------------------
 // Row shape + mapping
@@ -67,6 +72,13 @@ interface DeviceRow {
    * 出现一次的凭据没有理由到处走。界面要它的时候走 `devices.ingestEndpoint(id)`。
    */
   push_secret: string | null
+  /**
+   * v16：接入方案（协议 + 数据流接口的键 + 视频流接口的键），JSON；`''` = 还没配过。
+   *
+   * 列里存的是**不可信输入**（旧库、手改过的 JSON），读出时一律过
+   * `normaliseDeviceIngestPlan()`。
+   */
+  ingest_plan: string
 }
 
 interface ChannelRow {
@@ -118,7 +130,37 @@ function toDevice(row: DeviceRow): Device {
    * 以后多出来的一代）当"没读到过"处理 —— 界面据此不会给一台认不出的设备套上 PTZ 配置页。
    */
   if (isE2Variant(row.e2_variant)) device.e2Variant = row.e2_variant
+  /*
+   * 接入方案（v16）：**总是给**（不像安装信息那样"全空就不给"）。
+   *
+   * 理由：界面要拿它回答"这台设备走哪种协议"（`none` 是一个有意义的答案，不是"没读到"），
+   * 而"没配过"（`''`）与"配成 none"在读出时本来就该是同一件事 ——
+   * 出厂方案（none + 四个规范键 + video_url）由共享层的 `normaliseDeviceIngestPlan()` 给出，
+   * 所以这里不需要第二份默认值。
+   */
+  device.ingest = parseIngestPlanColumn(row.ingest_plan)
   return device
+}
+
+/**
+ * 把 `ingest_plan` 那一列解析成一份合法方案。
+ *
+ * 坏 JSON（手改过的库、写到一半的进程）**不抛**：它是**一台设备的配置**，
+ * 为它让整张设备表读不出来（`devices.list()` 是每一页都要走的）代价完全不成比例 ——
+ * 解析不出来就回出厂方案，界面上显示成"还没配过"。
+ */
+function parseIngestPlanColumn(raw: unknown): DeviceIngestPlan {
+  if (typeof raw !== 'string' || raw.trim() === '') return normaliseDeviceIngestPlan(undefined)
+  try {
+    return normaliseDeviceIngestPlan(JSON.parse(raw))
+  } catch {
+    return normaliseDeviceIngestPlan(undefined)
+  }
+}
+
+/** 方案 → 那一列的值（存的是规范化之后的结果，所以库里永远只有一种写法）。 */
+function serialiseIngestPlan(plan: unknown): string {
+  return JSON.stringify(normaliseDeviceIngestPlan(plan))
 }
 
 /** Fallback label per family, so a camera is never named "Acoustic Box". */
@@ -290,7 +332,7 @@ export class DeviceRepository {
           `UPDATE devices
               SET kind = ?, name = ?, ip_address = ?, http_port = ?, mac_address = ?,
                   firmware_version = ?, fpga_version = ?, web_version = ?,
-                  status = 'ONLINE', last_seen = ?, updated_at = ?
+                  ingest_plan = ?, status = 'ONLINE', last_seen = ?, updated_at = ?
             WHERE id = ?`
         )
         .run(
@@ -302,6 +344,17 @@ export class DeviceRepository {
           identity.firmwareVersion ?? existing.firmwareVersion ?? null,
           identity.fpgaVersion ?? existing.fpgaVersion ?? null,
           identity.webVersion ?? existing.webVersion ?? null,
+          /*
+           * 接入方案：**没给就保留库里那一份**。
+           *
+           * "重新添加一台已知设备"（刷新地址）不应当把操作员配好的协议与遥测键抹掉 ——
+           * 那是一次地址刷新，不是重新配置。要改方案就走编辑对话框（`update()` 里给 ingest）。
+           */
+          input.ingest !== undefined
+            ? serialiseIngestPlan(input.ingest)
+            : (existing.ingest !== undefined
+              ? serialiseIngestPlan(existing.ingest)
+              : serialiseIngestPlan(undefined)),
           timestamp,
           timestamp,
           existing.id
@@ -331,8 +384,8 @@ export class DeviceRepository {
              id, device_uid, kind, name, ip_address, http_port, mac_address,
              connection_type, firmware_version, fpga_version, web_version,
              status, last_seen, created_at, updated_at,
-             gis_latitude, gis_longitude, azimuth_deg, sound_level_db
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?)`
+             gis_latitude, gis_longitude, azimuth_deg, sound_level_db, ingest_plan
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -352,7 +405,8 @@ export class DeviceRepository {
           installation.gisLatitude ?? null,
           installation.gisLongitude ?? null,
           installation.azimuthDeg ?? null,
-          installation.soundLevelDb ?? null
+          installation.soundLevelDb ?? null,
+          serialiseIngestPlan(input.ingest)
         )
       if (kind === 'acousticBox') this.seedChannels(id, identity.channelCount ?? CHANNEL_COUNT, timestamp)
       if (kind === 'auscultationBox') {
@@ -414,11 +468,19 @@ export class DeviceRepository {
       return value === undefined ? current[key] ?? null : value
     }
 
+    /*
+     * 接入方案：与安装信息同一条规则 —— **缺席 = 不动**（`undefined` 表示"这次没改它"）。
+     * 编辑对话框里改名字不该顺手把协议与遥测键抹回出厂值。
+     */
+    const nextIngest =
+      input.ingest === undefined ? serialiseIngestPlan(existing.ingest) : serialiseIngestPlan(input.ingest)
+
     this.db
       .prepare(
         `UPDATE devices
             SET name = ?, ip_address = ?, http_port = ?, updated_at = ?,
-                gis_latitude = ?, gis_longitude = ?, azimuth_deg = ?, sound_level_db = ?
+                gis_latitude = ?, gis_longitude = ?, azimuth_deg = ?, sound_level_db = ?,
+                ingest_plan = ?
           WHERE id = ?`
       )
       .run(
@@ -430,10 +492,61 @@ export class DeviceRepository {
         pick('gisLongitude'),
         pick('azimuthDeg'),
         pick('soundLevelDb'),
+        nextIngest,
         input.id
       )
 
     return this.findById(input.id)
+  }
+
+  /**
+   * 读一台设备的接入方案（始终是一份合法方案，没配过就是出厂方案）。
+   *
+   * 与 `getPushSecret()` 一样走单独一条查询：方案在设备行上已经有了，但"读一份配置"这件事
+   * 不该逼调用方先把整行读出来再自己挑字段（挑错字段的后果是协议悄悄变回 none）。
+   */
+  getIngestPlan(id: string): DeviceIngestPlan | undefined {
+    const row = this.db
+      .prepare<[string], { ingest_plan: string }>(`SELECT ingest_plan FROM devices WHERE id = ?`)
+      .get(id)
+    if (row === undefined) return undefined
+    return parseIngestPlanColumn(row.ingest_plan)
+  }
+
+  /**
+   * 写一台设备的接入方案，**写回之后读回来核对**（业主的硬规矩）。
+   *
+   * 读回来的值才是返回值：写错列、老库缺列被静默忽略，调用方会看到不一致 —— 那才是要报出来的事。
+   * 值没变就不写（界面每次打开编辑对话框都会读一次）。
+   */
+  setIngestPlan(id: string, plan: unknown): DeviceIngestPlan | undefined {
+    const existing = this.getIngestPlan(id)
+    if (existing === undefined) return undefined
+    const next = normaliseDeviceIngestPlan(plan)
+    const serialised = serialiseIngestPlan(next)
+    const current = this.db
+      .prepare<[string], { ingest_plan: string }>(`SELECT ingest_plan FROM devices WHERE id = ?`)
+      .get(id)
+    if ((current?.ingest_plan ?? '') !== serialised) {
+      this.db
+        .prepare(`UPDATE devices SET ingest_plan = ?, updated_at = ? WHERE id = ?`)
+        .run(serialised, now(), id)
+    }
+    return this.getIngestPlan(id)
+  }
+
+  /**
+   * 每台设备声明了哪种接入方式（本机监听的**唯一**依据）。
+   *
+   * 只读两列、不建 `Device` 对象：设备表在同步路径上会被整表读一遍，而这里只需要
+   * "有没有人声明 http / mqtt"这一个结论（见 `main/services/device/device-service.ts`
+   * 的 `syncIngestFromDevices()`）。
+   */
+  listIngestProtocols(): IngestProtocol[] {
+    const rows = this.db
+      .prepare<[], { ingest_plan: string }>(`SELECT ingest_plan FROM devices`)
+      .all()
+    return rows.map((row) => parseIngestPlanColumn(row.ingest_plan).protocol)
   }
 
   /**

@@ -62,8 +62,11 @@ import {
   MQTT_TELEMETRY_TOPIC,
   PUSH_SECRET_BYTES,
   defaultIotIngestConfig,
+  deviceIngestPlanProblems,
+  normaliseDeviceIngestPlan,
   pushSecretFromBytes,
   type DeviceIngestEndpoint,
+  type DeviceIngestPlan,
   type IotIngestConfig,
   type IotIngestLocalAddress
 } from '@shared/domain/iot-ingest'
@@ -134,6 +137,17 @@ export interface DeviceServiceOptions {
    * 地址怎么拼"无关，而写死成真实网卡会让断言变成"跑在什么机器上"的函数。
    */
   listLocalAddresses?: () => IotIngestLocalAddress[]
+  /**
+   * 设备声明变了之后，**由设备集决定本机要不要开监听**（业主 2026-09-19 第 13 批第 1 条：
+   * 「系统设置里面的数据接入， 应该是在设备管理的添加设备功能里面」）。
+   *
+   * 注入口而不是在这里直接改设置：本服务不持有设置服务与接入服务（它只碰设备库与凭据），
+   * 而"谁去开端口"是一个显式的接线决定 —— 也让这一条在测试里可断言
+   * （`{ http, mqtt }` 就是全部输入）。
+   *
+   * 缺省不做事：测试里构造 `DeviceService` 不必先造一个接入服务。
+   */
+  syncIngest?: (need: { http: boolean; mqtt: boolean }) => void
 }
 
 /**
@@ -203,6 +217,8 @@ export class DeviceService extends EventEmitter {
   /** IoT 接入配置与地址表（见 `DeviceServiceOptions` 里那两项的说明）。 */
   private readonly getIngestConfig: () => IotIngestConfig
   private readonly listLocalAddresses: () => IotIngestLocalAddress[]
+  /** 设备声明变了之后通知接线层（见 `DeviceServiceOptions.syncIngest`）。 */
+  private readonly onIngestNeedChanged?: (need: { http: boolean; mqtt: boolean }) => void
 
   constructor(options: DeviceServiceOptions) {
     super()
@@ -214,7 +230,41 @@ export class DeviceService extends EventEmitter {
     if (options.createStreamManager) this.createStreamManager = options.createStreamManager
     this.getIngestConfig = options.getIngestConfig ?? defaultIotIngestConfig
     this.listLocalAddresses = options.listLocalAddresses ?? listLocalAddresses
+    this.onIngestNeedChanged = options.syncIngest
     this.resolver = new AuthStrategyResolver(this.transport)
+  }
+
+  /**
+   * 本机要不要开 HTTP / MQTT 监听 —— **由设备声明决定**（业主第 13 批第 1 条）。
+   *
+   * 三处调用点：加设备、改设备、删设备。判据只有这一份：库里有没有设备声明了 http / mqtt。
+   * 于是"设置页那个总开关"不再是操作员要记得去开的东西 —— 他给一台设备选了 HTTP 接入，
+   * 本机就该在那个端口上听着；把最后一台这样的设备删掉，端口就该关掉（离线优先）。
+   *
+   * **不抛异常**：这是加/删设备之后的一次同步，失败不该让"设备已经加进库里了"变成一次报错
+   * （那会让操作员以为没加上）。接线层自己记日志。
+   */
+  private syncIngest(): void {
+    if (!this.onIngestNeedChanged) return
+    const protocols = this.devices.listIngestProtocols()
+    this.onIngestNeedChanged({
+      http: protocols.includes('http'),
+      mqtt: protocols.includes('mqtt')
+    })
+  }
+
+  /** 校验一份接入方案（IPC 是能被直接调用的：范围校验不能只放在界面上）。 */
+  private validateIngestPlan(plan: unknown): DeviceIngestPlan | undefined {
+    if (plan === undefined) return undefined
+    const normalised = normaliseDeviceIngestPlan(plan)
+    const problems = deviceIngestPlanProblems(normalised)
+    if (problems.length > 0) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        `接入方案不合法：${problems.join(', ')}`
+      )
+    }
+    return normalised
   }
 
   // -------------------------------------------------------------------------
@@ -669,6 +719,8 @@ export class DeviceService extends EventEmitter {
     }
 
     this.emit('changed')
+    // 设备集变了 → 本机要不要开监听跟着变（第 13 批第 1 条）。
+    this.syncIngest()
     deviceLog().info(created ? 'Auscultation box added' : 'Auscultation box address updated', {
       deviceId: device.id,
       deviceUid,
@@ -711,6 +763,8 @@ export class DeviceService extends EventEmitter {
     }
 
     this.emit('changed')
+    // 设备集变了 → 本机要不要开监听跟着变（第 13 批第 1 条）。
+    this.syncIngest()
     deviceLog().info(created ? 'Acoustic camera added' : 'Acoustic camera address updated', {
       deviceId: device.id,
       deviceUid,
@@ -731,6 +785,12 @@ export class DeviceService extends EventEmitter {
    */
   async add(input: AddDeviceInput): Promise<Device> {
     validateAddInput(input)
+    /*
+     * 接入方案（第 13 批第 3、4 条）：**写库之前**过一遍共享层的判据。
+     * 规范化之后的结果才是写进去的那一份（库里永远只有一种写法）。
+     */
+    const ingest = this.validateIngestPlan(input.ingest)
+    const withPlan: AddDeviceInput = ingest === undefined ? input : { ...input, ingest }
 
     /*
      * 没给机型就**自动识别**（业主 2026-09-17 第 2 条）。识别走的就是 `probe()`，
@@ -747,7 +807,12 @@ export class DeviceService extends EventEmitter {
       kind = detected.kind ?? 'acousticBox'
       deviceLog().info('添加设备：自动识别到机型', { ip: input.ip, kind })
     }
-    const resolved: AddDeviceInput = { ...input, kind }
+    /*
+     * 接入方案跟着一起走下去（**两族的分支都要拿到它**）—— 相机与听诊盒子也能是
+     * HTTP/MQTT 接入的第三方设备（业主的原话就是"给第三方设备"），所以 `resolved`
+     * 从 `withPlan` 出发，而不是从裸 `input`。
+     */
+    const resolved: AddDeviceInput = { ...withPlan, kind }
 
     if (kind === 'acousticCamera') return this.addCamera(resolved)
     if (kind === 'auscultationBox') return this.addAuscultation(resolved)
@@ -767,7 +832,7 @@ export class DeviceService extends EventEmitter {
       )
     }
 
-    const { device, created } = this.devices.upsertByIdentity(input, probe.info)
+    const { device, created } = this.devices.upsertByIdentity(withPlan, probe.info)
 
     // Credentials live in the OS keyring, keyed by the LOCAL device id, so they
     // can only be stored after the row exists (spec 14.1).
@@ -782,6 +847,8 @@ export class DeviceService extends EventEmitter {
     })
 
     this.emit('changed')
+    // 设备集变了 → 本机要不要开监听跟着变（第 13 批第 1 条）。
+    this.syncIngest()
     deviceLog().info(created ? 'Device added' : 'Device address updated (existing identity)', {
       deviceId: device.id,
       deviceUid: probe.info.deviceUid,
@@ -808,6 +875,9 @@ export class DeviceService extends EventEmitter {
       }
       resolved = { ...input, installation: { ...input.installation } }
     }
+    // 接入方案同一套规矩：写库之前规范化 + 校验（省略 = 不动这一项）。
+    const ingest = this.validateIngestPlan(input.ingest)
+    if (ingest !== undefined) resolved = { ...resolved, ingest }
     /*
      * 凭据（业主 2026-09-18 第 10 条）：用户名与密码都能改，**省略 = 不动**。
      *
@@ -846,6 +916,8 @@ export class DeviceService extends EventEmitter {
     // A changed address invalidates the cached client.
     this.runtime.delete(input.id)
     this.emit('changed')
+    // 协议可能这一次被改了（http → none），监听的开关跟着变。
+    this.syncIngest()
     return updated
   }
 
@@ -855,6 +927,11 @@ export class DeviceService extends EventEmitter {
     const removed = this.devices.remove(id)
     if (!removed) throw new AppError(ErrorCodes.VALIDATION_ERROR, `设备不存在: ${id}`)
     this.emit('changed')
+    /*
+     * 删掉**最后一台**声明了 http / mqtt 的设备之后，端口就该关掉 —— 本机不为没人用的协议
+     * 开着监听（离线优先）。这一条只有在删设备之后才可能发生，所以也走同一个同步点。
+     */
+    this.syncIngest()
     appLog().info('Device removed', { deviceId: id })
   }
 

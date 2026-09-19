@@ -691,12 +691,20 @@ async function runIotIngestDrill(win, layout) {
     'const value = (sel) => { const node = el(sel); return node ? String(node.value) : null; };' +
     'const text = (sel) => { const node = el(sel); return node ? (node.textContent || "").trim() : ""; };' +
     'const enable = el("[data-iot-enable]");' +
+    /*
+     * 第 13 批第 1 条之后总开关是**派生的**（由设备声明决定），所以这一格是只读的：
+     * 量"它被禁用了吗 + 有没有那句派生说明"，而不是像以前那样点它。
+     */
+    'const enableDisabled = enable ? enable.disabled : null;' +
+    'const enableDerivedHint = !!el("[data-iot-enable-derived-hint]");' +
     'const settings = await window.api.settings.get();' +
     'const persisted = settings && settings.success ? settings.data.iotIngest : null;' +
     'return JSON.stringify({' +
     '  ok: true,' +
     '  hasSection: !!el("[data-iot-section]"),' +
     '  hasEnable: !!enable,' +
+    '  enableDisabled,' +
+    '  enableDerivedHint,' +
     '  enabled: !!(enable && enable.checked),' +
     '  persisted: persisted ? { enabled: persisted.enabled, bindAddress: persisted.bindAddress,' +
     '    httpPort: persisted.httpPort, mqttPort: persisted.mqttPort,' +
@@ -722,6 +730,16 @@ async function runIotIngestDrill(win, layout) {
   } else {
     if (!view.hasSection) problems.push('数据接入页签里没有那一块内容（[data-iot-section]）')
     if (!view.hasEnable) problems.push('数据接入里没有总开关（[data-iot-enable]）')
+    /*
+     * 第 13 批第 1 条之后**总开关是派生的、只读的**：勾没勾说的是"有没有设备声明接入"，
+     * 而不是一个可以被改掉的选项（那一格必须带那句派生说明）。
+     */
+    if (view.enableDisabled !== true) {
+      problems.push('数据接入的总开关不是只读的（第 13 批之后它由设备声明决定）')
+    }
+    if (view.enableDerivedHint !== true) {
+      problems.push('数据接入的总开关旁边没有那句"由设备决定"的说明')
+    }
     /*
      * 界面 == 设置（逐项）。这是这一段唯一能在这里证明的事，而它比"出厂默认"更贴界面：
      * 页面上显示的必须是**存着的那一份**，否则操作员看到的是一个不存在的状态。
@@ -847,14 +865,31 @@ async function runIotIngestDrill(win, layout) {
     'setInput(el("[data-iot-http-port]"), __HTTP_PORT__);' +
     'setInput(el("[data-iot-mqtt-port]"), __MQTT_PORT__);' +
     'await wait(1800);' +
-    'const enable = el("[data-iot-enable]");' +
-    'if (enable && !enable.checked) enable.click();' +
+    /*
+     * **第 13 批第 1 条之后：监听由"设备声明"驱动**（设置页那一格是只读的派生显示）。
+     * 所以这里不再点总开关，而是走界面上同一条 IPC —— 让两台设备分别声明 HTTP 与 MQTT 接入：
+     *   · 一台声明 http → 本机的 HTTP 监听应当起来；
+     *   · 另一台声明 mqtt → MQTT 监听应当起来。
+     * 两条都起来之后 `enabled/httpEnabled/mqttEnabled` 三个开关都该是 true（派生出来的）。
+     */
+    'const listed = await window.api.devices.list();' +
+    'const devices = listed && listed.success ? listed.data : [];' +
+    'if (devices.length < 2) return JSON.stringify({ reason: "need-two-devices" });' +
+    'const httpPlan = { protocol: "http", metricKeys: [], videoKey: "video_url" };' +
+    'const mqttPlan = { protocol: "mqtt", metricKeys: [], videoKey: "" };' +
+    'const setHttp = await window.api.devices.update({ id: devices[0].id, ingest: httpPlan });' +
+    'const setMqtt = await window.api.devices.update({ id: devices[1].id, ingest: mqttPlan });' +
     'await wait(2500);' +
     'const config = await window.api.settings.get();' +
     'const status = await window.api.ingest.status();' +
     'return JSON.stringify({' +
     '  originalRoot: before.success ? before.data.storageRoot : null,' +
     '  alarmTotalBefore: alarms.success ? alarms.data.total : null,' +
+    '  declaredOn: [devices[0].id, devices[1].id],' +
+    '  plansWritten: {' +
+    '    http: setHttp && setHttp.success ? setHttp.data.ingest : null,' +
+    '    mqtt: setMqtt && setMqtt.success ? setMqtt.data.ingest : null' +
+    '  },' +
     '  config: config.success ? config.data.iotIngest : null,' +
     '  status: status.success ? status.data : null' +
     '});' +
@@ -867,14 +902,28 @@ async function runIotIngestDrill(win, layout) {
   log('iot opened    : ' + JSON.stringify({
     originalRoot: opened.originalRoot,
     alarmTotalBefore: opened.alarmTotalBefore,
+    plansWritten: opened.plansWritten,
     config: opened.config,
     http: opened.status && opened.status.http,
     mqtt: opened.status && opened.status.mqtt
   }))
 
+  if (opened.reason === 'need-two-devices') {
+    problems.push('接入探针：库里不足两台设备，没法分别声明 HTTP 与 MQTT 接入')
+    return
+  }
+  /*
+   * 第 13 批第 1 条的核心断言：**设备声明 → 本机监听**。
+   * 两台设备分别声明 http / mqtt 之后，三个开关都应当是派生出来的 true，而且两个监听真的起来了。
+   */
+  if (opened.plansWritten?.http?.protocol !== 'http' || opened.plansWritten?.mqtt?.protocol !== 'mqtt') {
+    problems.push('写设备接入方式之后读回不一致：' + JSON.stringify(opened.plansWritten))
+  }
   if (!opened.config || opened.config.enabled !== true) {
-    problems.push('界面上打开总开关之后，主进程读回来的配置里 enabled 不是 true：' +
-      JSON.stringify(opened.config))
+    problems.push('有设备声明 http/mqtt 之后，派生出来的总开关不是 true：' + JSON.stringify(opened.config))
+  }
+  if (opened.config && (!opened.config.httpEnabled || !opened.config.mqttEnabled)) {
+    problems.push('派生出来的两个通道开关不对：' + JSON.stringify(opened.config))
   }
   if (opened.config && opened.config.httpPort !== httpPort) {
     problems.push('界面上改的 HTTP 端口没有写进设置：' + JSON.stringify(opened.config))
@@ -884,10 +933,10 @@ async function runIotIngestDrill(win, layout) {
     problems.push('iotIngest 里出现了 storageRoot（结构串了）')
   }
   if (!opened.status || !opened.status.http.listening) {
-    problems.push('打开总开关之后 HTTP 没有在监听：' + JSON.stringify(opened.status && opened.status.http))
+    problems.push('有设备声明 HTTP 接入之后 HTTP 没有在监听：' + JSON.stringify(opened.status && opened.status.http))
   }
   if (!opened.status || !opened.status.mqtt.listening) {
-    problems.push('打开总开关之后 MQTT 没有在监听：' + JSON.stringify(opened.status && opened.status.mqtt))
+    problems.push('有设备声明 MQTT 接入之后 MQTT 没有在监听：' + JSON.stringify(opened.status && opened.status.mqtt))
   }
 
   // ---- 3a) 真的 HTTP 请求（从 driver 进程，不是渲染层） -----------------------
@@ -1033,9 +1082,14 @@ async function runIotIngestDrill(win, layout) {
     '  if (domStats[0] && domStats[0] !== "0") break;' +
     '}' +
     'const enable = el("[data-iot-enable]");' +
-    'if (enable && enable.checked) enable.click();' +
+    // 第 13 批第 1 条：总开关是派生的（只读）。收尾**不再点它** —— 见下面把两台设备的
+    // 接入方式改回 none：端口自己就会关掉，那正是这一条要证明的事。
+    'const enableDisabled = enable ? enable.disabled : false;' +
     'setInput(el("[data-iot-http-port]"), 8080);' +
     'setInput(el("[data-iot-mqtt-port]"), 1883);' +
+    'const restore = await Promise.all(__DECLARED_IDS__.map((id) =>' +
+    '  window.api.devices.update({ id, ingest: { protocol: "none" } })));' +
+    'await wait(2500);' +
     'await clickTab("storage");' +
     'setInput(el(".path-row .input"), __ORIGINAL_ROOT__);' +
     'await wait(2200);' +
@@ -1047,10 +1101,14 @@ async function runIotIngestDrill(win, layout) {
     '  after: after.success ? after.data : null,' +
     '  config: config.success ? config.data.iotIngest : null,' +
     '  storageRoot: config.success ? config.data.storageRoot : null,' +
+    '  enableDisabled,' +
+    '  restored: restore.every((result) => result && result.success),' +
     '  refreshFound,' +
     '  domStats' +
     '});' +
-    '})()').replace(/__ORIGINAL_ROOT__/g, JSON.stringify(opened.originalRoot || probeStorageRoot))
+    '})()')
+    .replace(/__ORIGINAL_ROOT__/g, JSON.stringify(opened.originalRoot || probeStorageRoot))
+    .replace(/__DECLARED_IDS__/g, JSON.stringify(opened.declaredOn ?? []))
 
   const closed = await layout('/settings', closeScript, 120_000)
   log('iot closed    : ' + JSON.stringify(closed))
@@ -1115,7 +1173,7 @@ async function runIotIngestDrill(win, layout) {
   }
 
   if (!closed.after || closed.after.http.listening || closed.after.mqtt.listening) {
-    problems.push('关掉总开关之后还有监听在跑：' + JSON.stringify(closed.after && {
+    problems.push('把设备的接入方式改回 none 之后还有监听在跑：' + JSON.stringify(closed.after && {
       http: closed.after.http,
       mqtt: closed.after.mqtt
     }))
@@ -1123,8 +1181,15 @@ async function runIotIngestDrill(win, layout) {
   if (closed.config && (closed.config.httpPort !== 8080 || closed.config.mqttPort !== 1883)) {
     problems.push('探针改过的端口没有还原：' + JSON.stringify(closed.config))
   }
+  /*
+   * **这一条是第 13 批第 1 条的另一半**：把两台设备的接入方式改回 `none` 之后，
+   * 派生出来的总开关应当自己关掉（本机不为没人用的协议开着端口）。
+   */
   if (closed.config && closed.config.enabled !== false) {
-    problems.push('探针打开的总开关没有关回去：' + JSON.stringify(closed.config))
+    problems.push('没有设备声明接入之后，派生出来的总开关没有关掉：' + JSON.stringify(closed.config))
+  }
+  if (closed.restored !== true) {
+    problems.push('探针改过的设备接入方式没有还原：' + JSON.stringify(closed.restored))
   }
 }
 

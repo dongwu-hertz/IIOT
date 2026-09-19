@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 export interface Migration {
   version: number
@@ -905,6 +905,31 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE devices ADD COLUMN push_secret TEXT;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_push_secret ON devices (push_secret);
       `)
+    }
+  },
+  {
+    version: 16,
+    name: 'device-ingest-plan',
+    up: (db) => {
+      /**
+       * 设备的**接入方案**（业主 2026-09-19 第 13 批第 3、4 条：添加设备里选 HTTP/MQTT 接入、
+       * 并声明这台设备会推哪些遥测值）。
+       *
+       * WHY ONE JSON COLUMN AND NOT FOUR COLUMNS
+       * 方案是一个**整体**：协议 + 数据流接口（四个指标 ← 键）+ 视频流接口（一个键）。
+       * 拆成四列（protocol / metric keys / video key / …）意味着"改方案"要同时改四列，
+       * 而任何一次只改一半都会得到一个自相矛盾的方案（协议是 mqtt，键却是 HTTP 那套）。
+       * 一列 JSON 让"一份方案"只有一次写入，读出时由 `normaliseDeviceIngestPlan()` 统一修坏值
+       * （`@shared/domain/iot-ingest`）——**列里存的是不可信输入**（旧库、手改过的 JSON）。
+       *
+       * WHY TEXT NOT NULL DEFAULT ''
+       * 空串 = "还没配过"，读出时等同于出厂方案（`none` + 四个规范键 + `video_url`）。
+       * 用 NULL 也能表达，但空串少一种分支：`''` 与 `'{}'` 都会被规范化成同一份出厂方案。
+       *
+       * 为什么不是另一张表：它是**这台设备的事实**，生命周期与设备完全一致（删设备就该消失），
+       * 与 v15 的 `push_secret` 同一条理由。
+       */
+      db.exec(`ALTER TABLE devices ADD COLUMN ingest_plan TEXT NOT NULL DEFAULT '';`)
     }
   }
 ]

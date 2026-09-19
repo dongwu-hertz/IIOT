@@ -1130,6 +1130,26 @@ export const zhCN = {
     installationEmpty: '未填写',
     installationPoint: '点位 {latitude}, {longitude}',
     installationPartial: '只填了一部分',
+    /**
+     * 协议接入方式（业主 2026-09-19 第 13 批第 3、4 条）。
+     *
+     * 「数据流接口 / 视频流接口」这两个名字是业主给的说法（他点名参考 ThingsBoard 的那套）。
+     * 监听状态那两句**必须带端口**：操作员要把它与设备上填的端口对一眼。
+     */
+    protocolSection: '协议接入方式',
+    protocolHint: '这台设备往本机推数据时走哪条路。不接入表示它由本软件主动去连（默认）。',
+    protocolNone: '不接入',
+    protocolHttp: 'HTTP 接入',
+    protocolMqtt: 'MQTT 接入',
+    protocolListening: '本机正在 {port} 端口监听。',
+    protocolNotListening: '本机此刻没有在监听（添加成功之后才会按这台设备的声明打开端口）。',
+    protocolNotListeningReason: '本机没有在监听：{reason}',
+    protocolListenUnknown: '读不到本机的监听状态。',
+    metricKeysTitle: '数据流接口（遥测值）',
+    metricKeysHint: '下面四个量各由一个遥测键送来，设备按这些键发，本机才画得出曲线。默认是规范名，设备用别的写法时才需要改。',
+    videoKeyTitle: '视频流接口',
+    videoKeyHint: '哪一个键装的是视频地址（RTSP / HTTP），留空表示这台设备不推视频。',
+    protocolPlanInvalid: '接入方案里有不合法的键名或重复项，请检查上面的遥测键。',
     noResponseTitle: '设备无响应',
     noResponseBody: '目标地址可以访问，但未返回本系统可识别的设备信息。请确认 IP、端口与设备型号。',
     probeSuccess: '连接成功',
@@ -1184,6 +1204,10 @@ export const zhCN = {
   iotUi: {
     enableLabel: '启用数据接入',
     enableHint: '默认关闭。开启后设备才能把数据推上来；关闭时两个监听都不会启动。',
+    /**
+     * 派生说明（业主 2026-09-19 第 13 批第 1 条之后，这一格是只读的）。
+     */
+    enableDerived: '这一格由设备决定：只要有一台设备在「添加设备 → 协议接入方式」里选了 HTTP 或 MQTT 接入，它就会打开；最后一台这样的设备被删掉之后，它会关掉。',
     bindLabel: '监听地址',
     bindHint: '0.0.0.0 表示所有网卡（设备才连得上）；127.0.0.1 表示只允许本机。',
     errBind: '监听地址只能是 0.0.0.0、127.0.0.1 或一个 IPv4 地址',
@@ -1225,9 +1249,10 @@ export const zhCN = {
     rotateBody: '旧秘钥会立刻失效；设备必须用新秘钥重新配置后才会继续推数据。',
     rotateConfirm: '轮换',
     rotateNotice: '秘钥已轮换，请把新秘钥填到设备上。',
-    serviceOff: '数据接入总开关是关的（在「系统设置 → 数据接入」里开启），设备现在连不上来。',
-    httpOff: 'HTTP 推流已关闭',
-    mqttOff: 'MQTT 已关闭',
+    serviceOff: '本机此刻没有在监听（第 13 批之后由**设备声明**决定）：把地址填进设备、添加成功之后，本机会按这台设备的接入方式自动打开端口。',
+    // `httpOff` / `mqttOff` 两句在 2026-09-19 第 13 批里删掉了：那两个通道开关现在是
+    // **派生**的（有没有设备声明 http / mqtt），而"按开关把地址藏起来"会让操作员在
+    // 设备声明之前拿不到该填进设备的地址。监听状态由上面那句 `serviceOff` 统一回答。
     mqttUser: 'MQTT 用户名（就是秘钥）',
     secretHint: '秘钥按设备一条，可随时轮换；轮换后旧秘钥立刻失效。',
     loadFailed: '读取数据接入状态失败',

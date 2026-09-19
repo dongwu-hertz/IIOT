@@ -134,8 +134,15 @@ async function confirmRotate(): Promise<void> {
 
       <div class="field">
         <span class="field-label">{{ t('iotUi.httpGroup') }}</span>
-        <p v-if="!endpoint.httpEnabled" class="field-hint">{{ t('iotUi.httpOff') }}</p>
-        <template v-else-if="httpUrls.length === 0">
+        <!--
+          **地址与监听状态分开说**（第 13 批第 1 条之后）：地址是**配置**（主机 + 端口 + 秘钥路径），
+          它一直成立；监听开没开是另一件事，由上面那句 `serviceOff` 回答。
+
+          为什么不再按 `httpEnabled` 把地址藏起来：那一格是**派生**的（有没有设备声明 HTTP 接入），
+          而操作员打开这个对话框正是为了把地址填到设备上 —— 在设备还没声明接入（也就是还没添加成功）
+          的时候把地址藏掉，他就没有任何东西可以填。
+        -->
+        <template v-if="httpUrls.length === 0">
           <span class="field-hint">{{ t('iotUi.noLocalAddresses') }}</span>
         </template>
         <template v-else>
@@ -155,8 +162,7 @@ async function confirmRotate(): Promise<void> {
 
       <div class="field">
         <span class="field-label">{{ t('iotUi.mqttGroup') }}</span>
-        <p v-if="!endpoint.mqttEnabled" class="field-hint">{{ t('iotUi.mqttOff') }}</p>
-        <template v-else-if="mqttTargets.length === 0">
+        <template v-if="mqttTargets.length === 0">
           <span class="field-hint">{{ t('iotUi.noLocalAddresses') }}</span>
         </template>
         <template v-else>

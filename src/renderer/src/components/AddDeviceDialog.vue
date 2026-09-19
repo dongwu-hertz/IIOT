@@ -17,8 +17,19 @@ import { useI18n } from 'vue-i18n'
 import type { ProbeResult } from '@shared/ipc/contract'
 import { type Device, type DeviceKind } from '@shared/domain/models'
 import { hasInstallation, parseInstallation } from '@shared/domain/device-installation'
+import {
+  DEFAULT_INGEST_VIDEO_KEY,
+  defaultIngestMetricKeys,
+  deviceIngestPlanProblems,
+  normaliseDeviceIngestPlan,
+  type DeviceIngestPlan,
+  type IngestDisplayMetric,
+  type IngestMetricKey,
+  type IngestProtocol
+} from '@shared/domain/iot-ingest'
 import { resolveChannelCount } from '@renderer/lib/channelWall'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useIngestStore } from '@renderer/stores/ingest'
 import AppModal from '@renderer/components/AppModal.vue'
 import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 
@@ -31,6 +42,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const devices = useDevicesStore()
+const ingest = useIngestStore()
 
 interface FormState {
   ip: string
@@ -101,6 +113,60 @@ const installationSummary = computed(() => {
   return t('addDeviceUi.installationPartial')
 })
 
+// ---------------------------------------------------------------------------
+// 协议接入方式（第 13 批第 3、4 条）
+// ---------------------------------------------------------------------------
+
+const PROTOCOL_OPTIONS: readonly IngestProtocol[] = ['none', 'http', 'mqtt']
+
+const PROTOCOL_LABEL_KEYS: Record<IngestProtocol, string> = {
+  none: 'addDeviceUi.protocolNone',
+  http: 'addDeviceUi.protocolHttp',
+  mqtt: 'addDeviceUi.protocolMqtt'
+}
+
+/** 四个可显示指标的**名字**复用目录里那四个既有词条（趋势页与实时监测页用的是同一批）。 */
+const METRIC_LABEL_KEYS: Record<IngestDisplayMetric, string> = {
+  spl: 'metrics.spl',
+  mainFrequency: 'metrics.mainFrequency',
+  smoothness: 'metrics.smoothness',
+  bandEnergyRatio: 'metrics.bandEnergyRatio'
+}
+
+/** 接入方式（默认不接入）。 */
+const ingestProtocol = ref<IngestProtocol>('none')
+/**
+ * 数据流接口那四行。
+ *
+ * 用 `ref`（而不是 `computed`）：它们是**可编辑的草稿**，键名会被操作员改；
+ * 换语言不该重置它们，而 `defaultIngestMetricKeys()` 每次都返回新数组。
+ */
+const metricKeys = ref<IngestMetricKey[]>(defaultIngestMetricKeys())
+const videoKey = ref(DEFAULT_INGEST_VIDEO_KEY)
+
+/** 这一屏要提交的那份方案（判据与落库用的是同一个纯函数）。 */
+const ingestPlan = computed<DeviceIngestPlan>(() => ({
+  protocol: ingestProtocol.value,
+  metricKeys: metricKeys.value,
+  videoKey: videoKey.value
+}))
+
+const planProblems = computed(() => deviceIngestPlanProblems(ingestPlan.value))
+
+/** 本机监听的现状（只读）：监听中 / 未监听 + 原因。 */
+const listenStatusText = computed(() => {
+  const status = ingest.status
+  if (!status) return t('addDeviceUi.protocolListenUnknown')
+  const entry = ingestProtocol.value === 'mqtt' ? status.mqtt : status.http
+  const port = ingestProtocol.value === 'mqtt' ? status.config.mqttPort : status.config.httpPort
+  if (entry.listening) {
+    return t('addDeviceUi.protocolListening', { port: entry.port ?? port })
+  }
+  return entry.error
+    ? t('addDeviceUi.protocolNotListeningReason', { reason: entry.error })
+    : t('addDeviceUi.protocolNotListening')
+})
+
 /**
  * 刚添加成功的那台设备（业主 2026-09-18 第 10 批第 5 条：「添加设备支持 HTTP 推流
  * （秘钥 + 推流地址）」）。
@@ -161,6 +227,10 @@ function resetForm(): void {
   addedDevice.value = null
   // 收起状态也回到出厂默认（业主第 13 批第 2 条：默认收起）。
   installationOpen.value = false
+  // 接入方式与接口清单同样回到出厂默认（不接入 + 四个规范键 + video_url）。
+  ingestProtocol.value = 'none'
+  metricKeys.value = defaultIngestMetricKeys()
+  videoKey.value = DEFAULT_INGEST_VIDEO_KEY
   resetProbe()
 }
 
@@ -229,6 +299,14 @@ async function submit(): Promise<void> {
     formError.value = installationProblem
     return
   }
+  /*
+   * 接入方案：**选了 HTTP/MQTT 就必须是一份合法方案**（键名形状、四个指标不重复）。
+   * 这一步是界面上的即时校验；主进程会在写库之前再判一次（IPC 能被直接调用）。
+   */
+  if (ingestProtocol.value !== 'none' && planProblems.value.length > 0) {
+    formError.value = t('addDeviceUi.protocolPlanInvalid')
+    return
+  }
   formError.value = ''
   adding.value = true
   const parsed = parseInstallation(form.installation)
@@ -239,7 +317,14 @@ async function submit(): Promise<void> {
     password: form.password,
     // 只有**真的填了东西**才带上这一组：四项全空时不写 installation，
     // 免得库里出现一个"录过安装信息但四项都空"的假象。
-    ...(hasInstallation(parsed.installation) ? { installation: parsed.installation } : {})
+    ...(hasInstallation(parsed.installation) ? { installation: parsed.installation } : {}),
+    /*
+     * 接入方案只在不接入之外才发：`none` 是"这台设备不走推流接入"，
+     * 而库里那一列的出厂值本来就是它 —— 发一份 `none` 与不发是同一件事。
+     */
+    ...(ingestProtocol.value === 'none'
+      ? {}
+      : { ingest: normaliseDeviceIngestPlan(ingestPlan.value) })
   })
   adding.value = false
   if (!device) {
@@ -251,6 +336,11 @@ async function submit(): Promise<void> {
   resetProbe()
   form.password = ''
   addedDevice.value = device
+  /*
+   * 添完之后本机的监听状态可能刚变（有设备声明了 HTTP/MQTT 就会起监听），
+   * 所以读一次读数 —— 上面那句"监听中/未监听"必须说的是**此刻**的事。
+   */
+  void ingest.load()
 }
 
 /** 安装信息四个输入的即时校验；返回空串表示没问题。 */
@@ -284,6 +374,20 @@ const probeChannelCount = computed(() =>
     channelTableCount: null,
     deviceReportedCount: probeInfo.value?.channelCount ?? null
   })
+)
+
+/**
+ * 打开对话框时读一次接入读数（监听状态那一行）。
+ *
+ * **只读一次，不轮询**：这一行说的是"此刻本机有没有在听"，而对话框里的操作（选协议）
+ * 本身不会立刻改变监听（监听由**设备声明**驱动，要等设备真的进库）。添加成功之后
+ * `submit()` 会再读一次。
+ */
+watch(
+  () => props.modelValue,
+  (isOpen) => {
+    if (isOpen) void ingest.load()
+  }
 )
 </script>
 
@@ -419,6 +523,77 @@ const probeChannelCount = computed(() =>
             </label>
           </div>
         </div>
+      </section>
+
+      <!--
+        **协议接入方式**（业主 2026-09-19 第 13 批第 3 条：「在地址信息按钮的下方，增加协议接入方式」）。
+        三档：不接入（默认）/ HTTP / MQTT。选了 HTTP 或 MQTT 之后：
+
+          · **数据流接口**：四个可显示的指标（声压级 / 主频 / 平稳度 / 频带能量比）各由**哪个键**
+            送来 —— 默认就是别名表里那几个规范名（现场设备用别的写法时才需要改）；
+          · **视频流接口**：哪一个键装的是视频地址（默认 `video_url`，留空 = 这台设备不推视频）；
+          · 本机的监听状态**如实显示**（监听中 / 未监听 + 原因），但**这里改不了端口** ——
+            端口仍是系统设置里的那一项（下一轮把端口也搬过来，见 §15.77 的落地顺序）。
+
+        **秘钥与遥测地址在添加成功之后显示**（下面那一块 `DevicePushEndpoint`）：秘钥是**这台设备的**、
+        由主进程生成并读回核对，所以在设备进库之前没有它可以显示的东西 —— 提前"预生成"一个
+        只会给出一串还没生效的字符。
+      -->
+      <section class="protocol" data-add-protocol>
+        <span class="field-label">{{ t('addDeviceUi.protocolSection') }}</span>
+        <p class="field-hint">{{ t('addDeviceUi.protocolHint') }}</p>
+
+        <div class="protocol__choices" role="radiogroup" :aria-label="t('addDeviceUi.protocolSection')">
+          <label v-for="option in PROTOCOL_OPTIONS" :key="option" class="protocol__choice">
+            <input
+              v-model="ingestProtocol"
+              type="radio"
+              name="ingest-protocol"
+              :value="option"
+              :data-iot-protocol="option"
+            />
+            <span>{{ t(PROTOCOL_LABEL_KEYS[option]) }}</span>
+          </label>
+        </div>
+
+        <template v-if="ingestProtocol !== 'none'">
+          <p class="field-hint" data-iot-listen-status>
+            {{ listenStatusText }}
+          </p>
+
+          <div class="protocol__keys">
+            <span class="field-label">{{ t('addDeviceUi.metricKeysTitle') }}</span>
+            <p class="field-hint">{{ t('addDeviceUi.metricKeysHint') }}</p>
+            <label v-for="row in metricKeys" :key="row.metric" class="field protocol__row">
+              <span class="field-label">{{ t(METRIC_LABEL_KEYS[row.metric]) }}</span>
+              <input
+                v-model="row.key"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                :data-iot-metric-key="row.metric"
+              />
+            </label>
+          </div>
+
+          <label class="field protocol__row">
+            <span class="field-label">{{ t('addDeviceUi.videoKeyTitle') }}</span>
+            <input
+              v-model="videoKey"
+              class="input mono"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              data-iot-video-key
+            />
+            <span class="field-hint">{{ t('addDeviceUi.videoKeyHint') }}</span>
+          </label>
+
+          <p v-if="planProblems.length > 0" class="alert alert--warning" role="alert" data-iot-plan-problem>
+            {{ t('addDeviceUi.protocolPlanInvalid') }}
+          </p>
+        </template>
       </section>
 
       <p v-if="formError" class="alert alert--danger" role="alert">{{ formError }}</p>
@@ -595,6 +770,47 @@ const probeChannelCount = computed(() =>
   flex-direction: column;
   gap: var(--space-2);
   padding: 0 10px 10px;
+}
+
+/*
+ * 协议接入方式（第 13 批第 3 条）：一整段，放在「地址信息」下方。
+ *
+ * 它**不是**可折叠的（与地址信息不同）：接入方式是"这台设备怎么把数据送进来"，
+ * 属于添加设备这条主路径的一部分；地址信息是可选的（只有声源定位设备才填点位）。
+ */
+.protocol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.protocol__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.protocol__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.protocol__keys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.protocol__row {
+  gap: 2px;
 }
 
 .probe {
