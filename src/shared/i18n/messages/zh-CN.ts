@@ -655,6 +655,14 @@ export const zhCN = {
      * 名字带 `monitorUi` 是历史原因，四语言必须一致，所以它留在这里而不是新开一个键。
      */
     sampleRate: '采样率',
+    offlineBanner: '{ip} 离线',
+    offlineNoIp: '所选设备离线',
+    offlineLastContent: '以下是最后一次收到的内容（{time}）',
+    offlineNoContent: '还没有收到过这台设备的任何数据',
+    waitingBanner: '设备在线，正在等待它推数据…',
+    staleBanner: '数据已停止更新（最后一帧 {time}）',
+    stoppedBanner: '已停止（最后一帧 {time}）',
+    staleBadge: '上次内容',
     waitingFeatures: '等待实时特征帧…',
     waitingSpectrum: '等待频谱帧…',
     waitingSpectrumData: '等待频谱数据…',

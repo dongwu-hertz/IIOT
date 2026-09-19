@@ -691,7 +691,13 @@ describe('③b 实时趋势置顶 + 四张图谱卡片 + 时间轴回放', () =>
       '\nasync function loadSampleRate',
       '声学波形选项'
     )
-    assert.ok(option.includes('monitor.audio'), '声学波形没有读实时音频帧')
+    /*
+     * 2026-09-19（第 18 轮）改判据：它原来读 `monitor.audio`，现在读
+     * `monitor.content.audio` —— 那是"此刻该画的那一份"（活的优先，没有活数据时是上次内容，
+     * 见业主第 18 条）。**它读的仍然是真实存在的那一帧**（与「播放」按钮听到的是同一份数据），
+     * 所以这条守卫要守的东西没变，只是名字变了。
+     */
+    assert.ok(option.includes('monitor.content.audio'), '声学波形没有读实时音频帧（或它的上次内容）')
     assert.ok(option.includes('?.waveform'), '声学波形没有画那一帧的包络')
     // 固定 ±1 量程：否则安静的帧会被自动缩放到和响的帧一样高。
     assert.match(option, /min: -1,\s*\n\s*max: 1,/, '声学波形的纵轴不是固定 ±1')

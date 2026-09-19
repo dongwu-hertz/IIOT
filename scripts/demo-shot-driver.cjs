@@ -6529,6 +6529,77 @@ async function run() {
    */
   await runCameraViewDrill(win, layout)
 
+  /**
+   * 「实时监测」没有活数据时说什么（业主 2026-09-18 第 10 批第 18 条）。
+   *
+   * WHY THIS DRILL
+   * 这一条只在"真的没有活数据"时才出现，而 operator 库里那几台设备**都是离线的** ——
+   * 所以这一页正是现场要看的那个状态。验三件事：
+   *   1. 提示条**写的是那个 IP**（操作员要去 ping 它，不是去猜设备名）；
+   *   2. 提示条分两句说"有没有上次内容"（从来没收到过 / 以下是最后一次，带时刻）；
+   *   3. 提示条**不撒谎**：设备在线时它不该出现（这一台离线，所以只验"离线时出现"）。
+   * 只读：不点任何开关、不改设备。
+   */
+  const monitorOffline = await layout('/monitor', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const out = {};' +
+    'const listed = await window.api.devices.list();' +
+    'const devices = listed && listed.success ? listed.data : [];' +
+    'out.devices = devices.map((d) => ({ name: d.name, ip: d.ip, status: d.status }));' +
+    'if (devices.length === 0) return JSON.stringify(Object.assign(out, { reason: "no-device" }));' +
+    // 等提示条出现（页面挂载 + 设备状态注入 + 一次渲染）。
+    'for (let i = 0; i < 40 && !document.querySelector("[data-monitor-source-banner]"); i += 1) await sleep(250);' +
+    'const banner = document.querySelector("[data-monitor-source-banner]");' +
+    'out.bannerPresent = !!banner;' +
+    'out.state = banner ? banner.getAttribute("data-monitor-source-state") : null;' +
+    'out.title = text(document.querySelector("[data-monitor-source-title]"));' +
+    'out.detail = text(document.querySelector("[data-monitor-source-detail]"));' +
+    // 不猜"页面选了哪一台"：断言**某一个**设备的 IP 出现在提示条里就够了
+    // （库里那几台都离线，选哪一台都该走"离线"那一档）。
+    'const ips = devices.map((d) => d.ip).filter((value) => typeof value === "string" && value !== "");' +
+    'out.ips = ips;' +
+    'out.titleHasAnIp = ips.some((ip) => out.title.indexOf(ip) >= 0);' +
+    'out.allOffline = devices.every((d) => d.status !== "ONLINE");' +
+    'out.badgePresent = !!document.querySelector("[data-monitor-stale-badge]");' +
+    'out.badgeText = text(document.querySelector("[data-monitor-stale-badge]"));' +
+    'out.contentFlag = banner ? banner.getAttribute("data-monitor-content") : null;' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+  log('monitor offline: ' + JSON.stringify(monitorOffline))
+
+  if (monitorOffline.reason === 'no-device') {
+    problems.push('监测页离线提示探针：库里一台设备都没有，这一条没验证到')
+  } else if (!monitorOffline.bannerPresent) {
+    problems.push('监测页没有"没有活数据"的提示条（[data-monitor-source-banner]）')
+  } else {
+    if (monitorOffline.allOffline && monitorOffline.state !== 'device-offline') {
+      problems.push(
+        '设备离线时提示条的状态不是 device-offline：' + JSON.stringify(monitorOffline.state)
+      )
+    }
+    if (!monitorOffline.titleHasAnIp) {
+      problems.push(
+        '离线提示条里没有任何一台设备的 IP：原文 ' + JSON.stringify(monitorOffline.title) +
+          '，库里的地址 ' + JSON.stringify(monitorOffline.ips)
+      )
+    }
+    if (!String(monitorOffline.detail || '').trim()) {
+      problems.push('离线提示条没有说明"有没有上次内容"')
+    }
+    /*
+     * 角标与那一份内容**必须一致**：有上次内容时必须有角标，没有时**不许有**
+     * （一台从没推过数据的设备上挂着「上次内容」就是在说一件不存在的事）。
+     */
+    const showsLast = monitorOffline.contentFlag === 'last'
+    if (showsLast !== monitorOffline.badgePresent) {
+      problems.push(
+        '「上次内容」角标与屏幕上的内容对不上：内容标记 ' +
+          JSON.stringify(monitorOffline.contentFlag) + '，角标 ' + monitorOffline.badgePresent
+      )
+    }
+  }
+
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)
 

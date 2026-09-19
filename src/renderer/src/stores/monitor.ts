@@ -24,7 +24,15 @@
 
 import { computed, ref, type Ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { RealtimeFeature } from '@shared/domain/models'
+import type { DeviceStatus, RealtimeFeature } from '@shared/domain/models'
+import {
+  monitorSourceMessageKey,
+  monitorSourceState,
+  monitorStaleBadgeKey,
+  monitorUsesLastContent,
+  MONITOR_STALE_AFTER_MS,
+  type MonitorSourceState
+} from '@shared/domain/monitor-offline'
 import {
   channelFeatureFor,
   recordChannelFeature,
@@ -45,6 +53,33 @@ import { i18n } from '@renderer/i18n'
 
 /** Session lifecycle as the UI cares about it. */
 export type MonitorSessionState = 'idle' | 'starting' | 'running' | 'error'
+
+/**
+ * 「上次内容」的一份快照（业主 2026-09-18 第 10 批第 18 条）。
+ *
+ * 带上设备与通道：它只对**同一个来源**有意义，切通道/换设备之后它就是别人的数据
+ * （把两个通道的信号画在一张图上比不画更糟）。`at` 是最后一帧的时刻，界面用它说
+ * 「最后一次 {time}」。
+ */
+export interface MonitorContent {
+  deviceId: string
+  channelId: number
+  at: number
+  features: RealtimeFeature[]
+  spectrum: SpectrumFrameEvent | null
+  audio: AudioFrameEvent | null
+  spectrogramFrames: SpectrogramFrameEvent[]
+}
+
+/** 界面此刻要画的那一份（`fromLastContent` = 这不是实时数据）。 */
+export interface MonitorContentView {
+  features: RealtimeFeature[]
+  spectrum: SpectrumFrameEvent | null
+  audio: AudioFrameEvent | null
+  spectrogramFrames: SpectrogramFrameEvent[]
+  fromLastContent: boolean
+  at: number | null
+}
 
 /**
  * Every stream the device exposes; the monitor page starts all four.
@@ -140,6 +175,33 @@ export const useMonitorStore = defineStore('monitor', () => {
   const frameCounts = ref<Record<StreamKind, number>>(emptyFrameCounts())
   const recording = ref<MonitorRecordingState>({ active: false })
 
+  /**
+   * 走时的"现在"。
+   *
+   * `stale`（数据停了）只有在**时间往前走**的时候才会成立，而它必须在没有新帧的情况下
+   * 也能成立 —— 所以这个 store 在看这一页的时候挂一个 1 秒的定时器（`subscribe()` 起、
+   * `unsubscribe()` 停）。业主第 18 条要的是"没有活数据时说实话"，而"多久没数据了"
+   * 是这句话里唯一会随时间变化的部分。
+   */
+  const now = ref(Date.now())
+
+  /**
+   * 「上次内容」（业主第 18 条）：最近一次**有数据**的那一份缓冲。
+   *
+   * 它与活缓冲分开存，而不是"停了就不清"：清了才好在切通道/切设备时区分
+   * "这是上一路的数据"与"这是这一路的历史"。`selectDevice()` 会把它丢掉（那是另一台设备）。
+   */
+  const lastContent = ref<MonitorContent | null>(null)
+
+  /**
+   * 界面上选中的那台设备的在线状态。
+   *
+   * 由界面注入（`setDeviceStatus()`）：这个 store 不持有设备列表，而"这台设备现在离线吗"
+   * 是设备列表的事实。`UNKNOWN`（还没探过）按"还没确认"处理，不算离线 —— 判据在
+   * `@shared/domain/monitor-offline.ts`。
+   */
+  const deviceStatus = ref<DeviceStatus | undefined>(undefined)
+
   // -------------------------------------------------------------------------
   // Subscription handles
   // -------------------------------------------------------------------------
@@ -172,14 +234,90 @@ export const useMonitorStore = defineStore('monitor', () => {
 
   /** Newest feature frame, or null before the first one arrives. */
   const latest = computed<RealtimeFeature | null>(
-    () => features.value[features.value.length - 1] ?? null
+    () => content.value.features[content.value.features.length - 1] ?? null
   )
 
+  /**
+   * 图表与读数此刻应当画哪一份内容：**活的优先，没有活的就用上次内容**。
+   *
+   * 两个条件缺一不可：
+   *   1. 上次内容必须属于**当前**的设备与通道（切通道/换设备之后它属于别人）；
+   *   2. 状态必须是"没有活数据"的那几档（`monitorShowsLastContent`）——
+   *      在线且正在出帧时显示旧数据就是界面在说一件没发生的事。
+   * 只要有一点不成立就回活的（可能是空的），由界面的提示条负责说明原因。
+   */
+  const content = computed<MonitorContentView>(() => {
+    const live: MonitorContentView = {
+      features: features.value,
+      spectrum: spectrum.value,
+      audio: audio.value,
+      spectrogramFrames: spectrogramFrames.value,
+      fromLastContent: false,
+      at: null
+    }
+    const last = lastContent.value
+    if (
+      !monitorUsesLastContent({
+        snapshot: last,
+        deviceId: deviceId.value,
+        channelId: channelId.value,
+        state: sourceState.value
+      }) ||
+      !last
+    ) {
+      return live
+    }
+    return {
+      features: last.features,
+      spectrum: last.spectrum,
+      audio: last.audio,
+      spectrogramFrames: last.spectrogramFrames,
+      fromLastContent: true,
+      at: last.at
+    }
+  })
+
+  /** 最近一帧的时刻（活的没有就问上次内容），用来判"数据停了多久"。 */
+  const lastFrameAt = computed<number | undefined>(() => {
+    const times = [
+      features.value[features.value.length - 1]?.timestamp,
+      spectrum.value?.timestamp,
+      audio.value?.timestamp,
+      spectrogramFrames.value[spectrogramFrames.value.length - 1]?.timestamp
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (times.length > 0) return Math.max(...times)
+    return lastContent.value?.at
+  })
+
+  /**
+   * 这一页现在处于哪一档（六档，判据在 `@shared/domain/monitor-offline.ts`）。
+   *
+   * 设备状态由界面通过 `setDeviceStatus()` 注入 —— 这个 store 不持有设备列表
+   * （与 `stores/liveWall.ts` 的 `bindDevices` 同一条做法：谁有列表谁传进来）。
+   */
+  const sourceState = computed<MonitorSourceState>(() =>
+    monitorSourceState({
+      hasDevice: deviceId.value !== '',
+      ...(deviceStatus.value !== undefined ? { deviceStatus: deviceStatus.value } : {}),
+      sessionState: state.value,
+      ...(lastFrameAt.value !== undefined ? { lastFrameAt: lastFrameAt.value } : {}),
+      now: now.value
+    })
+  )
+
+  /** 提示条与角标的目录键（`null` = 这一档不需要说话）。 */
+  const sourceMessageKey = computed(() => monitorSourceMessageKey(sourceState.value))
+  const staleBadgeKey = computed(() => monitorStaleBadgeKey(sourceState.value))
+
   /** Magnitudes of the latest sweep; empty until the spectrum stream delivers. */
-  const spectrumMagnitudes = computed<number[]>(() => spectrum.value?.magnitudes ?? [])
+  /**
+   * 频谱幅度：取自**此刻该画的那一份**（content）—— 没有活数据时就是上次内容，
+   * 这样图表不会在设备掉线的瞬间变成空白（业主第 18 条）。
+   */
+  const spectrumMagnitudes = computed<number[]>(() => content.value.spectrum?.magnitudes ?? [])
 
   const newestSpectrogram = computed<SpectrogramFrameEvent | null>(
-    () => spectrogramFrames.value[spectrogramFrames.value.length - 1] ?? null
+    () => content.value.spectrogramFrames[content.value.spectrogramFrames.length - 1] ?? null
   )
 
   /** Latest status for one stream, or undefined when nothing was pushed yet. */
@@ -213,6 +351,15 @@ export const useMonitorStore = defineStore('monitor', () => {
   }
 
   function clearBuffers(): void {
+    /**
+     * 清之前先把这一份**存成"上次内容"**（业主第 18 条：没有活数据时要显示上次内容）。
+     *
+     * 键是**清除那一刻**的设备与通道：`start()` 是先 `stopSession()`（清）再
+     * `channelId.value = target`，所以切通道时快照带的是**旧通道**的号 ——
+     * 显示那一边按 (设备, 通道) 过滤，于是切通道之后旧数据不会冒充新通道的读数
+     * （把两个通道的信号画在一张图上比不画更糟）。
+     */
+    lastContent.value = snapshotContent()
     features.value = []
     spectrum.value = null
     audio.value = null
@@ -220,6 +367,34 @@ export const useMonitorStore = defineStore('monitor', () => {
     streamStatus.value = emptyStreamStatus()
     frameCounts.value = emptyFrameCounts()
     recording.value = { active: false }
+  }
+
+  /** 现在这一份缓冲快照（没有内容可留时给 `null`）。 */
+  function snapshotContent(): MonitorContent | null {
+    if (
+      features.value.length === 0 &&
+      spectrum.value === null &&
+      audio.value === null &&
+      spectrogramFrames.value.length === 0
+    ) {
+      return null
+    }
+    const times = [
+      features.value[features.value.length - 1]?.timestamp,
+      spectrum.value?.timestamp,
+      audio.value?.timestamp,
+      spectrogramFrames.value[spectrogramFrames.value.length - 1]?.timestamp
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    return {
+      deviceId: deviceId.value,
+      channelId: channelId.value,
+      // 一帧都没有时间戳时用当前时间：那句"最后一次 {time}"宁可说现在，也不说 1970。
+      at: times.length > 0 ? Math.max(...times) : Date.now(),
+      features: [...features.value],
+      spectrum: spectrum.value,
+      audio: audio.value,
+      spectrogramFrames: [...spectrogramFrames.value]
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -298,6 +473,8 @@ export const useMonitorStore = defineStore('monitor', () => {
    */
   function subscribe(): void {
     if (unsubscribers.length > 0) return
+    // 走时与订阅一起起（`stale` 只有时间往前走才会出现）。
+    startClock()
     // `window.events` is absent when the renderer runs outside Electron (plain
     // `vite` preview); degrade to a silent no-op instead of crashing.
     if (typeof window === 'undefined' || !window.events) return
@@ -333,7 +510,33 @@ export const useMonitorStore = defineStore('monitor', () => {
       }
     }
     unsubscribers.length = 0
+    if (clockTimer !== undefined) {
+      window.clearInterval(clockTimer)
+      clockTimer = undefined
+    }
     clearBuffers()
+  }
+
+  /**
+   * 走时（`stale` 那一档要靠时间往前走才会出现）。
+   *
+   * 只在订阅期间跑（1 秒一次），离开这一页就停 —— 一个常年占着事件循环的定时器
+   * 是这个仓库明确不要的东西（与趋势落盘那个定时器同一条规矩）。
+   */
+  let clockTimer: number | undefined
+
+  function startClock(): void {
+    if (clockTimer !== undefined) return
+    if (typeof window === 'undefined') return
+    clockTimer = window.setInterval(() => {
+      now.value = Date.now()
+    }, 1_000)
+  }
+
+  /** 界面把选中那台设备的在线状态告诉 store（见 `deviceStatus` 的注释）。 */
+  function setDeviceStatus(status: DeviceStatus | undefined): void {
+    if (deviceStatus.value === status) return
+    deviceStatus.value = status
   }
 
   /** True while the push bridge is installed. Used by the view's status strip. */
@@ -350,6 +553,8 @@ export const useMonitorStore = defineStore('monitor', () => {
     channelId.value = 0
     // 每通道读数属于**上一台**设备：留着它们会让新设备的通道卡片显示旧设备的数字。
     channelFeatures.value = {}
+    // 上次内容同理：它是另一台设备的画面。
+    lastContent.value = null
   }
 
   /** 某一路通道的最后读数；没有读到过就是 `null`。 */
@@ -513,9 +718,22 @@ export const useMonitorStore = defineStore('monitor', () => {
     frameCounts,
     recording,
     channelFeatures,
+    /** 「上次内容」的快照（业主第 18 条），界面上只用它的时刻。 */
+    lastContent,
+    deviceStatus,
+    now,
     // getters
     isRunning,
     latest,
+    /** 此刻该画哪一份（活的优先，没有活的就用上次内容）。 */
+    content,
+    /** 六档状态（没有设备 / 离线 / 等待 / 实时 / 已停止更新 / 已停止）。 */
+    sourceState,
+    sourceMessageKey,
+    staleBadgeKey,
+    lastFrameAt,
+    /** 判"数据停了多久"的阈值（界面说明里要用同一个数）。 */
+    staleAfterMs: MONITOR_STALE_AFTER_MS,
     spectrumMagnitudes,
     newestSpectrogram,
     statusOf,
@@ -524,6 +742,7 @@ export const useMonitorStore = defineStore('monitor', () => {
     channelFeatureOf,
     // actions
     selectDevice,
+    setDeviceStatus,
     start,
     stop,
     startRecording,

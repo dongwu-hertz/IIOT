@@ -123,6 +123,18 @@ const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
  */
 const selectedDeviceOnline = computed(() => selectedDevice.value?.status === 'ONLINE')
 
+/**
+ * 把"选中那台设备在不在线"告诉监测 store（业主第 18 条：没有活数据时要说得清是哪一台 IP）。
+ *
+ * store 不持有设备列表（与画面墙同一条做法：谁有列表谁传进来），所以这条同步必须显式做。
+ * `undefined`（没有选中设备）也照传：那是"没有设备"那一档，不是"离线"。
+ */
+watch(
+  selectedDevice,
+  (device) => monitor.setDeviceStatus(device?.status),
+  { immediate: true }
+)
+
 /** 下拉里每一项前面的那个字符（原生 `<option>` 画不出颜色，颜色由旁边的点负责）。 */
 function deviceStatusDot(status: Device['status']): string {
   return status === 'ONLINE' ? '●' : '○'
@@ -314,7 +326,7 @@ const audioError = ref('')
 const volumePercent = ref(DEFAULT_VOLUME_PERCENT)
 
 /** 有预览帧才能按：按下去什么都不会发生的按钮比禁用更糟。 */
-const canPlayAudio = computed(() => monitor.audio !== null)
+const canPlayAudio = computed(() => monitor.content.audio !== null)
 
 function onVolumeInput(event: Event): void {
   const raw = Number((event.target as HTMLInputElement).value)
@@ -352,9 +364,9 @@ async function stopBoxAudio(): Promise<void> {
 }
 
 watch(
-  () => monitor.audio?.timestamp,
+  () => monitor.content.audio?.timestamp,
   () => {
-    const frame = monitor.audio
+    const frame = monitor.content.audio
     if (audioEnabled.value && frame) audioPlayer.push(frame.waveform, frame.frameMs)
   }
 )
@@ -416,7 +428,7 @@ function timeLabel(epochMs: number): string {
 }
 
 const trendOption = computed<EChartsCoreOption>(() => {
-  const frames = monitor.features
+  const frames = monitor.content.features
   const metric = activeTrendMetric.value
   return {
     animation: false,
@@ -463,11 +475,11 @@ const trendOption = computed<EChartsCoreOption>(() => {
  * device sample rate.
  */
 const spectrumAxisMax = computed(() =>
-  spectrumMaxHz(monitor.spectrumMagnitudes, monitor.spectrum?.binHz ?? 0)
+  spectrumMaxHz(monitor.spectrumMagnitudes, monitor.content.spectrum?.binHz ?? 0)
 )
 
 const spectrumHint = computed(() => {
-  const binHz = monitor.spectrum?.binHz ?? 0
+  const binHz = monitor.content.spectrum?.binHz ?? 0
   // Reading `locale.value` keeps this computed subscribed to language changes;
   // the label itself is locale-independent (Hz), but the number formatting is not
   // (Spanish writes `94,5`).
@@ -480,7 +492,7 @@ const spectrumHint = computed(() => {
 
 const spectrumOption = computed<EChartsCoreOption>(() => {
   const magnitudes = monitor.spectrumMagnitudes
-  const binHz = monitor.spectrum?.binHz ?? 0
+  const binHz = monitor.content.spectrum?.binHz ?? 0
   return {
     animation: false,
     grid: { left: 46, right: 16, top: 24, bottom: 28 },
@@ -537,7 +549,7 @@ const spectrumOption = computed<EChartsCoreOption>(() => {
  * **这一帧内的毫秒**（0..frameMs），不是绝对时间：一帧画一屏，下一帧覆盖上一帧。
  */
 const waveformOption = computed<EChartsCoreOption>(() => {
-  const frame = monitor.audio
+  const frame = monitor.content.audio
   const points = frame?.waveform ?? []
   const frameMs = frame?.frameMs ?? 100
   const last = Math.max(points.length - 1, 1)
@@ -1493,6 +1505,50 @@ const sessionLabel = computed(() => {
     </EmptyState>
 
     <template v-else>
+      <!--
+        「没有活数据」这一条提示（业主 2026-09-18 第 10 批第 18 条）。
+
+        为什么单独一条、而且**必须带 IP**：操作员看到空白画面时第一个问题是"哪一台不通"；
+        设备名在标题栏里已经有，而排查要的是**地址**（他要去 ping 它、去它的 Web 界面看）。
+        状态机在 `@shared/domain/monitor-offline.ts`（六档，含"数据停了"与"操作员自己停的"）。
+
+        下面那两条补充说明是**分开的**：一台离线的设备可能"有上次内容"也可能"从来没收到过"，
+        这两句话对操作员意味着完全不同的下一步。
+      -->
+      <div
+        v-if="monitor.sourceMessageKey"
+        class="alert"
+        :class="monitor.sourceState === 'device-offline' ? 'alert--danger' : 'alert--warning'"
+        role="alert"
+        data-monitor-source-banner
+        :data-monitor-source-state="monitor.sourceState"
+        :data-monitor-content="monitor.content.fromLastContent ? 'last' : 'live'"
+      >
+        <span class="alert__body">
+          <span class="alert__title" data-monitor-source-title>
+            {{
+              monitor.sourceState === 'device-offline'
+                ? selectedDevice?.ip
+                  ? t('monitorUi.offlineBanner', { ip: selectedDevice.ip })
+                  : t('monitorUi.offlineNoIp')
+                : t(monitor.sourceMessageKey, {
+                    time: monitor.lastFrameAt ? formatDateTime(monitor.lastFrameAt) : '—'
+                  })
+            }}
+          </span>
+          <br />
+          <span v-if="monitor.sourceState === 'device-offline'" data-monitor-source-detail>
+            {{
+              monitor.content.fromLastContent
+                ? t('monitorUi.offlineLastContent', {
+                    time: formatDateTime(monitor.content.at ?? monitor.lastFrameAt ?? Date.now())
+                  })
+                : t('monitorUi.offlineNoContent')
+            }}
+          </span>
+        </span>
+      </div>
+
       <div class="camera-board">
       <!--
         相机页的排布
@@ -1561,6 +1617,21 @@ const sessionLabel = computed(() => {
               :status="selectedDevice.status"
               :connection-type="selectedDevice.connectionType"
             />
+            <!--
+              角标：这一屏显示的数据**不是实时**的（业主第 18 条）。
+              放在设备头这里而不是只挂在某一张图上：**三种机型**（声纹设备 / 声呐 / 相机）
+              的图各不相同，而"你正在看的是上次内容"这句话对三种都成立。
+
+              它**还要真的有一份上次内容**才显示：一台从来没推过数据的离线设备上写着
+              「上次内容」就是在说一件不存在的事（那时由提示条那一句"还没有收到过"负责）。
+            -->
+            <span
+              v-if="monitor.staleBadgeKey && monitor.content.fromLastContent"
+              class="badge badge--warning"
+              data-monitor-stale-badge
+            >
+              {{ t(monitor.staleBadgeKey) }}
+            </span>
             <!--
               Box-only readouts. A camera has no channels and no WebSocket monitor
               session, so showing "0 channels" and "monitor stopped" next to it would
@@ -2049,7 +2120,7 @@ const sessionLabel = computed(() => {
         <EChart
           :option="trendOption"
           height="240px"
-          :placeholder="monitor.features.length === 0 ? t('monitorUi.waitingFeatures') : ''"
+          :placeholder="monitor.content.features.length === 0 ? t('monitorUi.waitingFeatures') : ''"
         />
       </section>
 
@@ -2067,6 +2138,7 @@ const sessionLabel = computed(() => {
         <section class="chart-panel card">
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.spectrumSection') }}</h3>
+
             <span class="muted chart-hint">{{ spectrumHint }}</span>
           </div>
           <EChart
@@ -2080,7 +2152,7 @@ const sessionLabel = computed(() => {
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.spectrogramSection') }}</h3>
           </div>
-          <SpectrogramViewer :frames="monitor.spectrogramFrames" height="240px" />
+          <SpectrogramViewer :frames="monitor.content.spectrogramFrames" height="240px" />
         </section>
 
         <section class="chart-panel card">
@@ -2091,7 +2163,7 @@ const sessionLabel = computed(() => {
           <EChart
             :option="waveformOption"
             height="240px"
-            :placeholder="monitor.audio === null ? t('monitorUi.waitingAudio') : ''"
+            :placeholder="monitor.content.audio === null ? t('monitorUi.waitingAudio') : ''"
           />
         </section>
 
@@ -2241,13 +2313,13 @@ const sessionLabel = computed(() => {
           </div>
         </div>
         <AudioLevelMeter
-          :peak="monitor.audio?.peak"
-          :rms="monitor.audio?.rms"
+          :peak="monitor.content.audio?.peak"
+          :rms="monitor.content.audio?.rms"
           :recording="monitor.recording.active"
           :elapsed-ms="monitor.recording.elapsedMs"
-          :disabled="monitor.audio === null"
-          :sample-rate="monitor.audio?.sampleRate ?? sampleRate ?? undefined"
-          :frame-ms="monitor.audio?.frameMs"
+          :disabled="monitor.content.audio === null"
+          :sample-rate="monitor.content.audio?.sampleRate ?? sampleRate ?? undefined"
+          :frame-ms="monitor.content.audio?.frameMs"
         />
         <p class="muted audio-bar__hint">{{ t('monitorUi.audioPreviewHint') }}</p>
         <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>

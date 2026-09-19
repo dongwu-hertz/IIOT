@@ -134,6 +134,10 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
      * 2026-09-18（同日，相机选择器 bug）加了**第四条**：总览页相机墙空白格上的「+」
      * → 相机选择器浮层 → 真把一台相机放进一格（界面上的写），并读回那一格、离开页面
      * 再回来确认清干净。它同样排在最后一条。
+     *
+     * 2026-09-19（第 18 轮）加了**第五条**：「实时监测」页在没有活数据时那句提示
+     * （设备离线 → 写出 IP + 有没有上次内容）。它是**只读**的（只看提示条与角标、
+     * 不点任何开关），但同样排在最后 —— 数字从 4 改成 5 的时候特意核对了这一点。
      */
     const mockStart = driver.indexOf('await startMockE2Device(')
     const report = driver.indexOf("log('problems     : ' + problems.length)")
@@ -142,11 +146,11 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
     const layoutsAfterMock = (afterMock.match(/await layout\(/g) || []).length
     assert.equal(
       layoutsAfterMock,
-      4,
+      5,
       '假设备启动之后还有别的探针在跑（' + layoutsAfterMock + ' 次 layout）——' +
         '写操作的探针必须排在所有只读探针之后'
     )
-    // 四次都是"写操作那些流程"，不是别的页面探针。
+    // 五次都是"写操作那些流程"与那一条只读的离线提示，不是别的页面探针。
     assert.ok(afterMock.includes('const e2Flow = await layout('), '听诊盒子那一套不见了')
     assert.ok(afterMock.includes('const sonarFlow = await layout('), '空气声呐那一套不见了')
     assert.ok(
@@ -156,6 +160,10 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
     assert.ok(
       afterMock.includes('const cameraPicker = await layout('),
       '相机选择器（把相机放进一格）那一条不见了'
+    )
+    assert.ok(
+      afterMock.includes('const monitorOffline = await layout('),
+      '监测页那条"没有活数据"的提示不见了'
     )
   })
 })
