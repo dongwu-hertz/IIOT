@@ -115,7 +115,6 @@ export const es: MessageSchema = {
     tabLanguage: 'Idioma',
     tabStorage: 'Almacenamiento',
     tabVideo: 'Vídeo y búfer',
-    tabIot: 'Ingesta de datos',
     tabAlarm: 'Alarmas',
     tabEmail: 'Correo',
     tabAccount: 'Cuenta',
@@ -1039,6 +1038,11 @@ export const es: MessageSchema = {
     videoKeyTitle: 'Interfaz de flujo de vídeo',
     videoKeyHint: 'Qué clave lleva la dirección de vídeo (RTSP / HTTP). Déjelo vacío si este equipo no envía vídeo.',
     protocolPlanInvalid: 'El plan de acceso tiene una clave no válida o duplicada: revise las claves de telemetría.',
+    localIngestTitle: 'Recepción en esta máquina (escucha y contadores)',
+    localIngestHint:
+      'En qué dirección y puerto escucha esta máquina los datos enviados, y qué ha llegado. El interruptor general y los dos de canal se derivan de las declaraciones de los equipos y solo se muestran.',
+    localIngestDerived: 'General {master}; canal HTTP {http}; canal MQTT {mqtt} (derivado de las declaraciones de equipos)',
+    localIngestSave: 'Guardar ajustes de escucha',
     noResponseTitle: 'El equipo no respondió',
     noResponseBody: 'La dirección es accesible pero no devolvió información de equipo que este sistema reconozca. Compruebe la IP, el puerto y el modelo del equipo.',
     probeSuccess: 'Conexión correcta',
@@ -1066,32 +1070,27 @@ export const es: MessageSchema = {
    * de dispositivo de ThingsBoard (token en la ruta de la URL / como usuario MQTT).
    */
   iotUi: {
-    enableLabel: 'Activar la ingesta de datos',
-    enableHint: 'Desactivada de forma predeterminada. Los dispositivos solo pueden enviar datos si está activada; al desactivarla no se inicia ningún puerto de escucha.',
-    // Derivada de los equipos desde el lote 13, punto 1: esta casilla es de solo lectura.
-    enableDerived: 'Esta casilla la deciden los equipos: se activa en cuanto un equipo elige acceso HTTP o MQTT en «Añadir equipo → Acceso por protocolo», y se desactiva al borrar el último equipo de ese tipo.',
+    /* El lote 13, punto 1 movió la ingesta de datos a «Añadir equipo»: las claves
+       de la pestaña eliminada se borraron de los cuatro catálogos. */
     bindLabel: 'Dirección de escucha',
     bindHint: '0.0.0.0 acepta todas las interfaces (los dispositivos pueden conectarse); 127.0.0.1 solo el equipo local.',
     errBind: 'La dirección de escucha debe ser 0.0.0.0, 127.0.0.1 o una dirección IPv4',
     errPort: 'El puerto debe ser un número entero entre 1 y 65535',
     httpGroup: 'HTTP push',
-    httpEnable: 'Activar HTTP push',
     httpPortLabel: 'Puerto HTTP',
-    httpPathLabel: 'Ruta de envío',
     mqttGroup: 'MQTT',
-    mqttEnable: 'Activar MQTT',
     mqttPortLabel: 'Puerto MQTT',
     mqttTopicLabel: 'Tema de publicación',
-    mqttUserHint: 'Conéctese con el secreto del dispositivo como usuario y la contraseña vacía.',
     secretLabel: 'Secreto del dispositivo',
-    manualNote: 'El manual no describe esta sección: la forma sigue la API de dispositivo de ThingsBoard (secreto en la ruta de la URL, secreto como usuario MQTT) para que se conecten tanto nuestros equipos como equipos de terceros.',
-    devicesWithSecret: 'Equipos con secreto: {count}',
     localAddressesLabel: 'Direcciones locales (para los equipos)',
     noLocalAddresses: 'Este equipo no tiene ninguna dirección utilizable por un dispositivo (solo loopback).',
-    statusGroup: 'Estado de ejecución',
     listening: 'Escuchando en {address}:{port}',
     notListening: 'Sin escucha',
-    statusOff: 'Desactivado',
+    derivedOn: 'sí',
+    derivedOff: 'no',
+    saveDone: 'Ajustes de escucha guardados y verificados',
+    saveFailed: 'No se pudieron guardar los ajustes de escucha',
+    saveMismatch: 'El valor leído tras guardar difiere del escrito (la interfaz muestra el valor leído)',
     statsRequests: 'Peticiones HTTP',
     statsMessages: 'Mensajes MQTT',
     statsRejectedAuth: 'Credenciales rechazadas',
@@ -1115,7 +1114,6 @@ export const es: MessageSchema = {
     // httpOff / mqttOff se eliminaron en el lote 13: esos interruptores de canal ahora se derivan.
     mqttUser: 'Usuario MQTT (el secreto)',
     secretHint: 'Un secreto por equipo; al rotarlo el anterior deja de funcionar de inmediato.',
-    loadFailed: 'No se pudo leer el estado de la ingesta de datos',
   },
 
   installUi: {

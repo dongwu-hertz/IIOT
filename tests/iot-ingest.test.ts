@@ -1124,24 +1124,38 @@ function read(relative: string): string {
 }
 
 describe('界面接线（源码守卫）', () => {
-  it('设置页有第八个页签「数据接入」，并且六项配置一起提交', () => {
+  it('数据接入在**添加设备**里（第 13 批第 1 条），设置页那个页签已经删掉', () => {
+    /*
+     * 这一条在 2026-09-19 第 13 批第 1 条之后**翻了向**：原来钉的是"设置页有第八个页签
+     * 数据接入"，现在业主把那一页整体搬进「设备管理 → 添加设备」，所以改钉两件事：
+     *   1. 设置页**没有**那个页签了（连词条一起删）；
+     *   2. 监听设置与收数读数在设备对话框里，而且判据仍然是共享层那一份
+     *      （界面允许写、主进程却回落默认值是最坏的失败）。
+     */
     const view = read('src/renderer/src/views/SettingsView.vue')
-    assert.ok(view.includes("id: 'iot'"), '设置页没有数据接入页签')
-    assert.ok(view.includes("t('settingsUi.tabIot')"), '页签没有用目录键')
-    assert.match(view, /iotIngest: \{/, '草稿没有提交 iotIngest 这一个键')
-    for (const field of [
-      'iotEnabled',
-      'iotBindAddress',
-      'iotHttpEnabled',
-      'iotHttpPort',
-      'iotMqttEnabled',
-      'iotMqttPort'
+    assert.equal(view.includes("id: 'iot'"), false, '设置页还有数据接入页签')
+    assert.equal(view.includes("t('settingsUi.tabIot')"), false, '设置页还在引用已删的页签词条')
+    assert.equal(/iotIngest: \{/.test(view), false, '设置页还在提交 iotIngest（会与设备声明派生打架）')
+
+    const dialog = read('src/renderer/src/components/AddDeviceDialog.vue')
+    assert.ok(dialog.includes('data-add-iot-local'), '添加设备对话框里没有「本机接入」那一块')
+    for (const hook of [
+      'data-add-iot-bind',
+      'data-add-iot-http-port',
+      'data-add-iot-mqtt-port',
+      'data-add-iot-save',
+      'data-add-iot-http-status',
+      'data-add-iot-stats'
     ]) {
-      assert.ok(view.includes(field), `草稿里缺 ${field}`)
+      assert.ok(dialog.includes(hook), `「本机接入」缺探针钩子 ${hook}`)
     }
-    // 判据必须是共享层那一份（界面允许写、主进程却回落默认值是最坏的失败）。
-    assert.match(view, /isBindAddress\(/, '绑定地址没有用共享判据')
-    assert.match(view, /isPort\(/, '端口没有用共享判据')
+    // 判据必须是共享层那一份。
+    assert.match(dialog, /isBindAddress\(/, '绑定地址没有用共享判据')
+    assert.match(dialog, /isPort\(/, '端口没有用共享判据')
+    // 写的是**整份** `IotIngestConfig`（契约如此），而派生的三个开关原样带回。
+    assert.match(dialog, /iotIngest: \{ \.\.\.current, bindAddress: bind, httpPort, mqttPort \}/)
+    // 写后读回核对。
+    assert.match(dialog, /t\('iotUi\.saveMismatch'\)/, '保存之后没有核对读回来的值')
   })
 
   it('设备对话框有推流地址与秘钥，并且**添加成功之后**就能看到', () => {

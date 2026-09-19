@@ -123,7 +123,6 @@ export const tr: MessageSchema = {
     tabLanguage: 'Dil',
     tabStorage: 'Depolama',
     tabVideo: 'Video ve tampon',
-    tabIot: 'Veri aktarımı',
     tabAlarm: 'Alarmlar',
     tabEmail: 'E-posta',
     tabAccount: 'Hesap',
@@ -1045,6 +1044,11 @@ export const tr: MessageSchema = {
     videoKeyTitle: 'Video akışı arayüzü',
     videoKeyHint: 'Video adresini (RTSP / HTTP) hangi anahtar taşır. Bu cihaz video göndermiyorsa boş bırakın.',
     protocolPlanInvalid: 'Erişim planında geçersiz veya yinelenen bir anahtar var — yukarıdaki telemetri anahtarlarını kontrol edin.',
+    localIngestTitle: 'Bu makinenin alımı (dinleme ayarları ve sayaçlar)',
+    localIngestHint:
+      'Bu makinenin hangi adreste ve bağlantı noktasında veri beklediği ve ne geldiği. Ana anahtar ile iki kanal anahtarı cihaz bildirimlerinden türetilir; burada yalnızca gösterilir.',
+    localIngestDerived: 'Ana {master}; HTTP kanalı {http}; MQTT kanalı {mqtt} (cihaz bildirimlerinden türetilir)',
+    localIngestSave: 'Dinleme ayarlarını kaydet',
     noResponseTitle: 'Cihaz yanıt vermedi',
     noResponseBody: 'Adrese erişilebiliyor ancak bu sistemin tanıdığı cihaz bilgisi döndürülmedi. IP’yi, bağlantı noktasını ve cihaz modelini kontrol edin.',
     probeSuccess: 'Bağlantı başarılı',
@@ -1072,32 +1076,27 @@ export const tr: MessageSchema = {
    * API sine uyar (belirteç URL yolunda / MQTT kullanıcı adı olarak).
    */
   iotUi: {
-    enableLabel: 'Veri aktarımını etkinleştir',
-    enableHint: 'Varsayılan olarak kapalıdır. Açık olmadıkça cihazlar veri gönderemez; kapalıyken iki dinleyici de başlatılmaz.',
-    // 13. parti 1. maddeden beri cihazlara göre türetilir — bu kutu salt okunurdur.
-    enableDerived: 'Bu kutuyu cihazlar belirler: «Cihaz ekle → Protokol erişimi» altında bir cihaz HTTP veya MQTT erişimini seçtiği anda açılır, bu tür son cihaz silindiğinde kapanır.',
+    /* 13. parti 1. madde veri alımını «Cihaz ekle»ye taşıdı: silinen sekmenin
+       anahtarları dört katalogdan da kaldırıldı. */
     bindLabel: 'Dinleme adresi',
     bindHint: '0.0.0.0 tüm arayüzleri kabul eder (cihazlar bağlanabilir); 127.0.0.1 yalnızca bu makinedir.',
     errBind: 'Dinleme adresi 0.0.0.0, 127.0.0.1 veya bir IPv4 adresi olmalı',
     errPort: 'Port 1 ile 65535 arasında bir tam sayı olmalı',
     httpGroup: 'HTTP push',
-    httpEnable: 'HTTP push etkinleştir',
     httpPortLabel: 'HTTP portu',
-    httpPathLabel: 'Gönderim yolu',
     mqttGroup: 'MQTT',
-    mqttEnable: 'MQTT etkinleştir',
     mqttPortLabel: 'MQTT portu',
     mqttTopicLabel: 'Yayın konusu',
-    mqttUserHint: 'Cihaz gizli anahtarını kullanıcı adı olarak kullanın, parola boş kalsın.',
     secretLabel: 'Cihaz gizli anahtarı',
-    manualNote: 'Kılavuz bu bölümü açıklamıyor: biçim ThingsBoard cihaz API sine uyar (gizli anahtar URL yolunda, MQTT kullanıcı adı olarak), böylece hem kendi cihazlarımız hem üçüncü taraf cihazlar bağlanabilir.',
-    devicesWithSecret: 'Gizli anahtarı olan cihazlar: {count}',
     localAddressesLabel: 'Yerel adresler (cihazlar için)',
     noLocalAddresses: 'Bu makinede cihazın kullanabileceği bir adres yok (yalnızca geri döngü).',
-    statusGroup: 'Çalışma durumu',
     listening: '{address}:{port} dinleniyor',
     notListening: 'Dinlenmiyor',
-    statusOff: 'Kapalı',
+    derivedOn: 'açık',
+    derivedOff: 'kapalı',
+    saveDone: 'Dinleme ayarları kaydedildi ve geri okundu',
+    saveFailed: 'Dinleme ayarları kaydedilemedi',
+    saveMismatch: 'Kaydettikten sonra geri okunan değer yazılandan farklı (arayüz geri okunanı gösterir)',
     statsRequests: 'HTTP istekleri',
     statsMessages: 'MQTT iletileri',
     statsRejectedAuth: 'Reddedilen kimlik bilgileri',
@@ -1121,7 +1120,6 @@ export const tr: MessageSchema = {
     // httpOff / mqttOff 13. partide kaldırıldı: bu kanal anahtarları artık türetiliyor.
     mqttUser: 'MQTT kullanıcı adı (gizli anahtar)',
     secretHint: 'Cihaz başına bir gizli anahtar; yenilendiğinde önceki hemen geçersiz olur.',
-    loadFailed: 'Veri aktarımı durumu okunamadı',
   },
 
   installUi: {

@@ -21,6 +21,8 @@ import {
   DEFAULT_INGEST_VIDEO_KEY,
   defaultIngestMetricKeys,
   deviceIngestPlanProblems,
+  isBindAddress,
+  isPort,
   normaliseDeviceIngestPlan,
   type DeviceIngestPlan,
   type IngestDisplayMetric,
@@ -28,8 +30,10 @@ import {
   type IngestProtocol
 } from '@shared/domain/iot-ingest'
 import { resolveChannelCount } from '@renderer/lib/channelWall'
+import { formatDateTime } from '@renderer/lib/format'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useIngestStore } from '@renderer/stores/ingest'
+import { useSettingsStore } from '@renderer/stores/settings'
 import AppModal from '@renderer/components/AppModal.vue'
 import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 
@@ -43,6 +47,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const devices = useDevicesStore()
 const ingest = useIngestStore()
+const settings = useSettingsStore()
 
 interface FormState {
   ip: string
@@ -166,6 +171,135 @@ const listenStatusText = computed(() => {
     ? t('addDeviceUi.protocolNotListeningReason', { reason: entry.error })
     : t('addDeviceUi.protocolNotListening')
 })
+
+// ---------------------------------------------------------------------------
+// 本机接入：监听设置 + 收数统计（第 13 批第 1 条：数据接入搬进添加设备）
+// ---------------------------------------------------------------------------
+
+/** 折叠状态。默认收起：它是"配好之后偶尔回来看一眼"的东西，不该占着主路径。 */
+const iotLocalOpen = ref(false)
+
+/**
+ * 监听设置的草稿（绑定地址 + 两个端口）。
+ *
+ * 只草拟**这三项**：`enabled` / `httpEnabled` / `mqttEnabled` 由**设备声明**派生
+ * （`DeviceService.syncIngest()` → `syncIngestFromDevices()`），界面不该拨它们 ——
+ * 拨了也会被下一次设备变更覆盖，而"我改了它又自己变回去了"是最难解释的一种界面行为。
+ * 但 `settings.update` 收的是**整份** `IotIngestConfig`，所以提交时把当前那份展开再覆盖这三项
+ * （enabled 那三个键原样带回去，等于什么都没改）。
+ */
+const iotDraft = ref({ bindAddress: '0.0.0.0', httpPort: 8080, mqttPort: 1883 })
+const iotSaving = ref(false)
+const iotNotice = ref('')
+const iotError = ref('')
+
+/** 当前落库的那一份（拿来判断草稿有没有改、也是提交时的底稿）。 */
+const iotCurrent = computed(() => settings.settings?.iotIngest)
+
+const iotDirty = computed(() => {
+  const current = iotCurrent.value
+  if (!current) return false
+  return (
+    iotDraft.value.bindAddress.trim() !== current.bindAddress ||
+    Number(iotDraft.value.httpPort) !== current.httpPort ||
+    Number(iotDraft.value.mqttPort) !== current.mqttPort
+  )
+})
+
+/** 两个监听端口撞在一起：这不是错误，但一定不是操作员想要的（一启一失）。 */
+const iotPortConflict = computed(
+  () => Number(iotDraft.value.httpPort) === Number(iotDraft.value.mqttPort)
+)
+
+/** 派生的三个开关的说法（只读那一行用）。 */
+const ingestEnabledText = computed(() =>
+  ingest.status?.config.enabled ? t('iotUi.derivedOn') : t('iotUi.derivedOff')
+)
+
+function ingestChannelText(flag: boolean | undefined): string {
+  return flag ? t('iotUi.derivedOn') : t('iotUi.derivedOff')
+}
+
+/** 一句"监听中 0.0.0.0:8080 / 未监听"（复用设置页原来那两个词条，说法保持一致）。 */
+function listenerText(entry: { listening: boolean; port?: number } | undefined): string {
+  if (!entry) return t('iotUi.notListening')
+  if (!entry.listening) return t('iotUi.notListening')
+  return t('iotUi.listening', {
+    address: ingest.status?.config.bindAddress ?? '',
+    port: entry.port ?? 0
+  })
+}
+
+/** 「最近一条」：从没收到过时说"从未"，而不是一个空值或 1970 年。 */
+const iotLastAtText = computed(() => {
+  const at = ingest.status?.stats.lastAt
+  return at ? formatDateTime(at) : t('iotUi.statsNever')
+})
+
+/** 把草稿灌成当前值（进对话框、以及保存成功后都走这里）。 */
+function seedIotDraft(): void {
+  const current = iotCurrent.value
+  if (!current) return
+  iotDraft.value = {
+    bindAddress: current.bindAddress,
+    httpPort: current.httpPort,
+    mqttPort: current.mqttPort
+  }
+}
+
+async function reloadIngest(): Promise<void> {
+  await ingest.load()
+  seedIotDraft()
+}
+
+/**
+ * 保存监听设置。
+ *
+ * 三条判断都写在这里，因为它们是"写本机监听"这件事的一部分：
+ *   1. 判据用**共享层**的 `isBindAddress` / `isPort`（与主进程归一化器同一份）——
+ *      界面允许写进去、主进程却回落到默认值，是这类设置最坏的一种失败；
+ *   2. 发的是**整份** `IotIngestConfig`（契约如此），enabled 那三个键从当前值原样带回；
+ *   3. 保存后**重读**一次状态（`ingest.load()`）并核对草稿与落库值一致 —— 写后读回。
+ */
+async function saveIotSettings(): Promise<void> {
+  iotNotice.value = ''
+  iotError.value = ''
+  const current = iotCurrent.value
+  if (!current) {
+    iotError.value = t('iotUi.saveFailed')
+    return
+  }
+  const bind = iotDraft.value.bindAddress.trim()
+  if (!isBindAddress(bind)) {
+    iotError.value = t('iotUi.errBind')
+    return
+  }
+  const httpPort = Number(iotDraft.value.httpPort)
+  const mqttPort = Number(iotDraft.value.mqttPort)
+  if (!isPort(httpPort) || !isPort(mqttPort)) {
+    iotError.value = t('iotUi.errPort')
+    return
+  }
+
+  iotSaving.value = true
+  const saved = await settings.update({
+    iotIngest: { ...current, bindAddress: bind, httpPort, mqttPort }
+  })
+  iotSaving.value = false
+  if (!saved) {
+    iotError.value = settings.error || t('iotUi.saveFailed')
+    return
+  }
+  await reloadIngest()
+  const applied = iotCurrent.value
+  if (!applied || applied.bindAddress !== bind || applied.httpPort !== httpPort ||
+      applied.mqttPort !== mqttPort) {
+    // 读回来的与刚写的不一样：以读回来的为准，并如实说出来。
+    iotError.value = t('iotUi.saveMismatch')
+    return
+  }
+  iotNotice.value = t('iotUi.saveDone', { port: httpPort })
+}
 
 /**
  * 刚添加成功的那台设备（业主 2026-09-18 第 10 批第 5 条：「添加设备支持 HTTP 推流
@@ -386,8 +520,15 @@ const probeChannelCount = computed(() =>
 watch(
   () => props.modelValue,
   (isOpen) => {
-    if (isOpen) void ingest.load()
-  }
+    if (isOpen) {
+      void ingest.load()
+      // 监听设置的草稿从**落库值**灌进来（进对话框时读一次当前设置）。
+      void settings.load().then(() => seedIotDraft())
+      iotNotice.value = ''
+      iotError.value = ''
+    }
+  },
+  { immediate: true }
 )
 </script>
 
@@ -594,6 +735,174 @@ watch(
             {{ t('addDeviceUi.protocolPlanInvalid') }}
           </p>
         </template>
+
+        <!--
+          本机接入（业主 2026-09-19 第 13 批第 1 条：「系统设置里面的数据接入，应该是在设备管理的
+          添加设备功能里面」）。
+
+          这一块原来在**系统设置 → 数据接入**那个页签里，整页随这一次改造删掉了。搬到这里的三件
+          东西按"谁在什么时候需要它"排：
+            · 监听设置（绑定地址 / 两个端口）—— 选完接入方式就要知道"本机在哪个口上等"；
+            · 监听状态（是不是真的起来了、起不来是什么原因）—— 填进设备之前必须看见；
+            · 收数统计（收到几条、被拒几条、写进趋势几行、最近一条是什么时候、哪些键不认识）——
+              设备接上之后回来核对"到底通没通"。
+          **总开关与两个通道开关不在这里**：它们由**设备声明**派生（库里有没有设备声明 http/mqtt），
+          所以这一块只把它们**显示**出来（只读），不让操作员拨 —— 拨了也会被下一次设备变更覆盖。
+          用原生 `<details>` 折叠：它们是"配好之后偶尔回来看一眼"的东西，不该占着对话框的主路径。
+        -->
+        <details class="iot-local" data-add-iot-local :open="iotLocalOpen">
+          <summary @click.prevent="iotLocalOpen = !iotLocalOpen">
+            {{ t('addDeviceUi.localIngestTitle') }}
+          </summary>
+
+          <p class="field-hint">{{ t('addDeviceUi.localIngestHint') }}</p>
+
+          <!-- 派生的三个开关：只读显示（说的是事实，不是一个可以被改掉的选项）。 -->
+          <p class="field-hint" data-iot-derived-flags>
+            {{
+              t('addDeviceUi.localIngestDerived', {
+                master: ingestEnabledText,
+                http: ingestChannelText(ingest.status?.config.httpEnabled),
+                mqtt: ingestChannelText(ingest.status?.config.mqttEnabled)
+              })
+            }}
+          </p>
+
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.bindLabel') }}</span>
+              <input
+                v-model="iotDraft.bindAddress"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                data-add-iot-bind
+              />
+              <span class="field-hint">{{ t('iotUi.bindHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.httpPortLabel') }}</span>
+              <input
+                v-model.number="iotDraft.httpPort"
+                class="input"
+                type="number"
+                min="1"
+                max="65535"
+                data-add-iot-http-port
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.mqttPortLabel') }}</span>
+              <input
+                v-model.number="iotDraft.mqttPort"
+                class="input"
+                type="number"
+                min="1"
+                max="65535"
+                data-add-iot-mqtt-port
+              />
+            </label>
+          </div>
+
+          <p v-if="iotPortConflict" class="alert alert--warning" role="alert" data-add-iot-conflict>
+            {{ t('iotUi.portConflict', { port: iotDraft.httpPort }) }}
+          </p>
+
+          <div class="btn-row">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="iotSaving || !iotDirty"
+              data-add-iot-save
+              @click="saveIotSettings"
+            >
+              {{ iotSaving ? t('common.saving') : t('addDeviceUi.localIngestSave') }}
+            </button>
+            <button type="button" class="btn btn--sm" data-add-iot-reload @click="reloadIngest">
+              {{ t('common.refresh') }}
+            </button>
+          </div>
+          <p v-if="iotNotice" class="alert alert--success" role="status" data-add-iot-notice>
+            {{ iotNotice }}
+          </p>
+          <p v-if="iotError" class="alert alert--danger" role="alert" data-add-iot-error>
+            {{ iotError }}
+          </p>
+
+          <dl class="kv">
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.httpGroup') }}</dt>
+              <dd class="kv__value" data-add-iot-http-status>
+                {{ listenerText(ingest.status?.http) }}
+                <span v-if="ingest.status?.http.error" class="text-danger">
+                  （{{ ingest.status.http.error }}）
+                </span>
+              </dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.mqttGroup') }}</dt>
+              <dd class="kv__value" data-add-iot-mqtt-status>
+                {{ listenerText(ingest.status?.mqtt) }}
+                <span v-if="ingest.status?.mqtt.error" class="text-danger">
+                  （{{ ingest.status.mqtt.error }}）
+                </span>
+              </dd>
+            </div>
+          </dl>
+
+          <dl class="kv" data-add-iot-stats>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRequests') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.httpRequests ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsMessages') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.mqttMessages ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRejectedAuth') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.rejectedAuth ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRejectedPayload') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.rejectedPayload ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsTrendRows') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.trendRows ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsAlarmRows') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.alarmRows ?? 0 }}</dd>
+            </div>
+            <!--
+              「最近一条是什么时候」与「本机有哪些地址」是这一块里最常被问的两件事：
+              前者回答"它还在推吗"，后者回答"设备该填哪个 IP"。
+            -->
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsLastAt') }}</dt>
+              <dd class="kv__value">{{ iotLastAtText }}</dd>
+            </div>
+          </dl>
+
+          <p v-if="ingest.status?.stats.lastUnrecognised?.length" class="field-hint" data-add-iot-unrecognised>
+            {{ t('iotUi.lastUnrecognised', { keys: ingest.status.stats.lastUnrecognised.join(', ') }) }}
+          </p>
+
+          <div class="field">
+            <span class="field-label">{{ t('iotUi.localAddressesLabel') }}</span>
+            <div v-if="ingest.status?.localAddresses.length" class="iot-addresses">
+              <span
+                v-for="item in ingest.status.localAddresses"
+                :key="item.address"
+                class="mono iot-local-address"
+              >
+                {{ item.address }}（{{ item.iface }}）
+              </span>
+            </div>
+            <span v-else class="field-hint">{{ t('iotUi.noLocalAddresses') }}</span>
+          </div>
+        </details>
       </section>
 
       <p v-if="formError" class="alert alert--danger" role="alert">{{ formError }}</p>
@@ -842,5 +1151,44 @@ watch(
 
 dd {
   margin: 0;
+}
+
+/*
+ * 「本机接入」那一块（第 13 批第 1 条：数据接入搬进添加设备）。
+ *
+ * 它是一块**独立的**内容（配好之后偶尔回来看一眼），所以用原生 `<details>` 折叠：
+ * 收起时只留一行标题，展开时是监听设置 + 监听状态 + 收数统计。
+ */
+.iot-local {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.iot-local > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.iot-local[open] > summary {
+  margin-bottom: var(--space-1);
+}
+
+/* 本机地址允许折断：一行 "192.168.110.97（以太网）" 在窄对话框里会溢出。 */
+.iot-addresses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.iot-local-address {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 </style>

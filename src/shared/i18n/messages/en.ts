@@ -119,7 +119,6 @@ export const en: MessageSchema = {
     tabLanguage: 'Language',
     tabStorage: 'Storage',
     tabVideo: 'Video & buffering',
-    tabIot: 'Data ingest',
     tabAlarm: 'Alarms',
     tabEmail: 'Email',
     tabAccount: 'Account',
@@ -1072,6 +1071,12 @@ export const en: MessageSchema = {
     videoKeyTitle: 'Video-stream interface',
     videoKeyHint: 'Which key carries the video address (RTSP / HTTP). Leave empty when this device pushes no video.',
     protocolPlanInvalid: 'The access plan has an invalid or duplicated key — check the telemetry keys above.',
+    /* 本机接入（batch 13 item 1: data ingest moved into Add device). */
+    localIngestTitle: 'This machine’s ingest (listen settings and counters)',
+    localIngestHint:
+      'Which address and port this machine listens on for pushed data, and what has arrived. The master switch and the two channel switches are derived from the device declarations and are shown read-only.',
+    localIngestDerived: 'Master {master}; HTTP channel {http}; MQTT channel {mqtt} (derived from device declarations)',
+    localIngestSave: 'Save listen settings',
     noResponseTitle: 'The device did not answer',
     noResponseBody: 'The address is reachable but did not return device information this system recognises. Check the IP, the port and the device model.',
     probeSuccess: 'Connected',
@@ -1100,32 +1105,27 @@ export const en: MessageSchema = {
    * follows the ThingsBoard device-side API (token in the URL path / as the MQTT username).
    */
   iotUi: {
-    enableLabel: 'Enable data ingest',
-    enableHint: 'Off by default. Devices can only push once this is on; when off neither listener starts.',
-    // Derived from the devices since owner batch 13 item 1 — this box is read-only.
-    enableDerived: 'This box follows the devices: it turns on as soon as one device picks HTTP or MQTT access under "Add device → Protocol access", and turns off once the last such device is deleted.',
+    /* Batch 13 item 1 moved data ingest into Add device: the switch/path keys of
+       the deleted settings tab were removed from all four catalogues. */
     bindLabel: 'Bind address',
     bindHint: '0.0.0.0 accepts every interface (devices can reach it); 127.0.0.1 is local only.',
     errBind: 'The bind address must be 0.0.0.0, 127.0.0.1 or an IPv4 address',
     errPort: 'The port must be an integer between 1 and 65535',
     httpGroup: 'HTTP push',
-    httpEnable: 'Enable HTTP push',
     httpPortLabel: 'HTTP port',
-    httpPathLabel: 'Push path',
     mqttGroup: 'MQTT',
-    mqttEnable: 'Enable MQTT',
     mqttPortLabel: 'MQTT port',
     mqttTopicLabel: 'Publish topic',
-    mqttUserHint: 'Connect with the device secret as the username and an empty password.',
     secretLabel: 'Device secret',
-    manualNote: 'The manual does not describe this section: the shape follows the ThingsBoard device-side API (secret in the URL path, secret as the MQTT username) so both our devices and third-party devices can connect.',
-    devicesWithSecret: 'Devices with a secret: {count}',
     localAddressesLabel: 'Local addresses (for devices)',
     noLocalAddresses: 'This machine has no address a device could use (loopback only).',
-    statusGroup: 'Runtime status',
     listening: 'Listening on {address}:{port}',
     notListening: 'Not listening',
-    statusOff: 'Off',
+    derivedOn: 'on',
+    derivedOff: 'off',
+    saveDone: 'Listen settings saved and read back',
+    saveFailed: 'Saving the listen settings failed',
+    saveMismatch: 'The value read back after saving differs from what was written (the UI shows the value read back)',
     statsRequests: 'HTTP requests',
     statsMessages: 'MQTT messages',
     statsRejectedAuth: 'Rejected credentials',
@@ -1149,7 +1149,6 @@ export const en: MessageSchema = {
     // httpOff / mqttOff were removed in batch 13: those channel switches are derived now.
     mqttUser: 'MQTT username (the secret)',
     secretHint: 'One secret per device; rotating it invalidates the previous one immediately.',
-    loadFailed: 'Could not read the data ingest status',
   },
 
   installUi: {

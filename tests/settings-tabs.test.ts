@@ -61,10 +61,10 @@ const settings = stripComments(read('src/renderer/src/views/SettingsView.vue'))
 /**
  * 页签 id 与它的目录键（顺序就是业主给的那一串）。
  *
- * 2026-09-19 多了第八个「数据接入」（业主第 1 条：HTTP 推流 + MQTT）：它排在「邮箱」之后、
- * 「账号」之前 —— 前六页都是"我们怎么用数据"，这一页是"设备怎么把数据送进来"，而账号与
- * 关于属于另一类（身份 / 元信息）。守卫的价值不变：这张表**就是**我们商定的那一串，
- * 多一个少一个都要在这里改一次，而不是在页面里悄悄多出来一页。
+ * 2026-09-19 第 13 批第 1 条把**第八个页签「数据接入」删掉了**（业主：
+ * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）：监听设置与收数统计
+ * 搬进「添加设备 → 协议接入方式」下面那一块「本机接入」，`settingsUi.tabIot` 四语言一起删。
+ * 守卫的价值不变：这张表**就是**我们商定的那一串，多一个少一个都要在这里改一次。
  */
 const TABS: ReadonlyArray<[string, string]> = [
   ['language', 'tabLanguage'],
@@ -72,7 +72,6 @@ const TABS: ReadonlyArray<[string, string]> = [
   ['video', 'tabVideo'],
   ['alarm', 'tabAlarm'],
   ['email', 'tabEmail'],
-  ['iot', 'tabIot'],
   ['account', 'tabAccount'],
   ['about', 'tabAbout']
 ]

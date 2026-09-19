@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 /**
  * DEMO / VERIFICATION DRIVER — not part of the shipped app.
  *
@@ -682,110 +682,95 @@ async function runIotIngestDrill(win, layout) {
    * 这一段改做的事情是**界面保真**：界面上那几个控件必须逐项等于 `settings.get()` 里的值 ——
    * 这才是"这一页有没有如实显示设置"的证据。
    */
+  /*
+   * ── 1) 数据接入**在添加设备里**（业主 2026-09-19 第 13 批第 1 条） ──
+   *
+   * 这一段在 2026-09-19 第 26/27 轮之前量的是**系统设置 → 数据接入**那一个页签。
+   * 业主第 13 批第 1 条把那一整页搬进「设备管理 → 添加设备」，所以现在量两件事：
+   *   a. 设置页里**没有**那个页签了（反向断言：整块搬走，不是复制一份）；
+   *   b. 添加设备对话框里那一块「本机接入」在，而且显示的绑定地址与两个端口**逐项等于**
+   *      `settings.get()` 里存着的那一份（"这一块有没有如实显示设置"的唯一证据）。
+   */
   const view = await layout('/settings', '(async () => {' +
-    'const tab = document.querySelector(".settings-tabs [data-tab=iot]");' +
-    'if (!tab) return JSON.stringify({ ok: false, reason: "no-iot-tab" });' +
-    'tab.click();' +
-    'await new Promise((r) => setTimeout(r, 300));' +
-    'const el = (sel) => document.querySelector(sel);' +
-    'const value = (sel) => { const node = el(sel); return node ? String(node.value) : null; };' +
-    'const text = (sel) => { const node = el(sel); return node ? (node.textContent || "").trim() : ""; };' +
-    'const enable = el("[data-iot-enable]");' +
-    /*
-     * 第 13 批第 1 条之后总开关是**派生的**（由设备声明决定），所以这一格是只读的：
-     * 量"它被禁用了吗 + 有没有那句派生说明"，而不是像以前那样点它。
-     */
-    'const enableDisabled = enable ? enable.disabled : null;' +
-    'const enableDerivedHint = !!el("[data-iot-enable-derived-hint]");' +
+    'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
     'const settings = await window.api.settings.get();' +
-    'const persisted = settings && settings.success ? settings.data.iotIngest : null;' +
     'return JSON.stringify({' +
-    '  ok: true,' +
-    '  hasSection: !!el("[data-iot-section]"),' +
-    '  hasEnable: !!enable,' +
-    '  enableDisabled,' +
-    '  enableDerivedHint,' +
-    '  enabled: !!(enable && enable.checked),' +
-    '  persisted: persisted ? { enabled: persisted.enabled, bindAddress: persisted.bindAddress,' +
-    '    httpPort: persisted.httpPort, mqttPort: persisted.mqttPort,' +
-    '    httpEnabled: persisted.httpEnabled, mqttEnabled: persisted.mqttEnabled } : null,' +
-    '  bind: value("[data-iot-bind]"),' +
-    '  httpPort: value("[data-iot-http-port]"),' +
-    '  mqttPort: value("[data-iot-mqtt-port]"),' +
-    '  httpEnable: !!(el("[data-iot-http-enable]") && el("[data-iot-http-enable]").checked),' +
-    '  mqttEnable: !!(el("[data-iot-mqtt-enable]") && el("[data-iot-mqtt-enable]").checked),' +
-    '  pathSample: text(".iot-value"),' +
-    '  topic: text("[data-iot-mqtt-topic]"),' +
-    '  httpStatus: text("[data-iot-http-status]"),' +
-    '  mqttStatus: text("[data-iot-mqtt-status]"),' +
-    '  secretCount: text("[data-iot-secret-count]"),' +
-    '  hasStats: !!el("[data-iot-stats]"),' +
-    '  rawKeyLeak: /iotUi\\./.test(document.body.innerText || "")' +
+    '  tabPresent: !!document.querySelector(".settings-tabs [data-tab=iot]"),' +
+    '  tabLabelPresent: /数据接入/.test(text(document.querySelector(".settings-tabs"))),' +
+    '  sectionPresent: !!document.querySelector("[data-iot-section]"),' +
+    '  persisted: settings && settings.success ? settings.data.iotIngest : null' +
     '});' +
-    '})()', 90_000)
+    '})()', 60_000)
   log('iot settings  : ' + JSON.stringify(view))
 
-  if (!view.ok) {
-    problems.push('设置页里没有「数据接入」页签（[data-tab=iot]）')
+  if (view.tabPresent) {
+    problems.push('设置页里还有「数据接入」页签（第 13 批第 1 条要求整块搬进添加设备）')
+  }
+  if (view.sectionPresent) {
+    problems.push('设置页里还有数据接入那一块内容（[data-iot-section]）')
+  }
+
+  /* b. 添加设备对话框里的「本机接入」 */
+  const local = await layout('/devices', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const openButton = [...document.querySelectorAll("button")]' +
+    '  .find((b) => text(b) === "添加设备" || /^Add device/.test(text(b)));' +
+    'if (!openButton) return JSON.stringify({ ok: false, reason: "no-add-button" });' +
+    'openButton.click();' +
+    'for (let i = 0; i < 20 && !document.querySelector("[data-add-device-dialog]"); i += 1) await wait(200);' +
+    'const dialog = document.querySelector("[data-add-device-dialog]");' +
+    'if (!dialog) return JSON.stringify({ ok: false, reason: "no-dialog" });' +
+    'const local = dialog.querySelector("[data-add-iot-local]");' +
+    'if (!local) return JSON.stringify({ ok: false, reason: "no-local-block" });' +
+    // 折叠着也要能量：把 details 打开（这一块默认收起）。
+    'local.open = true;' +
+    'await wait(200);' +
+    'const value = (sel) => { const node = local.querySelector(sel); return node ? String(node.value) : null; };' +
+    'const settings = await window.api.settings.get();' +
+    'const persisted = settings && settings.success ? settings.data.iotIngest : null;' +
+    'const out = {' +
+    '  ok: true,' +
+    '  bind: value("[data-add-iot-bind]"),' +
+    '  httpPort: value("[data-add-iot-http-port]"),' +
+    '  mqttPort: value("[data-add-iot-mqtt-port]"),' +
+    '  hasSave: !!local.querySelector("[data-add-iot-save]"),' +
+    '  hasStats: !!local.querySelector("[data-add-iot-stats]"),' +
+    '  httpStatus: text(local.querySelector("[data-add-iot-http-status]")),' +
+    '  mqttStatus: text(local.querySelector("[data-add-iot-mqtt-status]")),' +
+    '  derived: text(local.querySelector("[data-iot-derived-flags]")),' +
+    '  persisted: persisted ? { bindAddress: persisted.bindAddress, httpPort: persisted.httpPort, mqttPort: persisted.mqttPort } : null,' +
+    '  rawKeyLeak: /iotUi\\.|addDeviceUi\\./.test(text(dialog))' +
+    '};' +
+    // 关窗（这一条是只读的：不改任何值）。
+    'const close = dialog.querySelector(".panel__header button");' +
+    'if (close) close.click();' +
+    'return JSON.stringify(out);' +
+    '})()', 60_000)
+  log('iot local block: ' + JSON.stringify(local))
+
+  if (local.ok !== true) {
+    problems.push('添加设备对话框里没有「本机接入」那一块：' + JSON.stringify(local.reason))
   } else {
-    if (!view.hasSection) problems.push('数据接入页签里没有那一块内容（[data-iot-section]）')
-    if (!view.hasEnable) problems.push('数据接入里没有总开关（[data-iot-enable]）')
-    /*
-     * 第 13 批第 1 条之后**总开关是派生的、只读的**：勾没勾说的是"有没有设备声明接入"，
-     * 而不是一个可以被改掉的选项（那一格必须带那句派生说明）。
-     */
-    if (view.enableDisabled !== true) {
-      problems.push('数据接入的总开关不是只读的（第 13 批之后它由设备声明决定）')
-    }
-    if (view.enableDerivedHint !== true) {
-      problems.push('数据接入的总开关旁边没有那句"由设备决定"的说明')
-    }
-    /*
-     * 界面 == 设置（逐项）。这是这一段唯一能在这里证明的事，而它比"出厂默认"更贴界面：
-     * 页面上显示的必须是**存着的那一份**，否则操作员看到的是一个不存在的状态。
-     */
-    const persisted = view.persisted
+    if (!local.hasSave) problems.push('「本机接入」里没有保存按钮（[data-add-iot-save]）')
+    if (!local.hasStats) problems.push('「本机接入」里没有收数统计（[data-add-iot-stats]）')
+    if (!local.httpStatus || !local.mqttStatus) problems.push('「本机接入」里没有两个监听状态')
+    if (!local.derived) problems.push('「本机接入」里没有那句"由设备声明派生"的说明')
+    if (local.rawKeyLeak) problems.push('「本机接入」里渲染出了裸 key')
+    const persisted = local.persisted
     if (!persisted) {
       problems.push('读不到持久化的数据接入设置（settings.get()）')
     } else {
-      if (view.enabled !== persisted.enabled) {
-        problems.push('总开关显示的与存的不一致：界面 ' + view.enabled + ' / 设置 ' + persisted.enabled)
+      if (local.bind !== persisted.bindAddress) {
+        problems.push('「本机接入」显示的绑定地址与存的不一致：' + local.bind + ' / ' + persisted.bindAddress)
       }
-      if (view.bind !== persisted.bindAddress) {
-        problems.push('绑定地址显示的与存的不一致：' + view.bind + ' / ' + persisted.bindAddress)
+      if (local.httpPort !== String(persisted.httpPort)) {
+        problems.push('「本机接入」显示的 HTTP 端口与存的不一致：' + local.httpPort + ' / ' + persisted.httpPort)
       }
-      if (view.httpPort !== String(persisted.httpPort)) {
-        problems.push('HTTP 端口显示的与存的不一致：' + view.httpPort + ' / ' + persisted.httpPort)
-      }
-      if (view.mqttPort !== String(persisted.mqttPort)) {
-        problems.push('MQTT 端口显示的与存的不一致：' + view.mqttPort + ' / ' + persisted.mqttPort)
-      }
-      if (view.httpEnable !== persisted.httpEnabled) {
-        problems.push('HTTP 通道开关显示的与存的不一致')
-      }
-      if (view.mqttEnable !== persisted.mqttEnabled) {
-        problems.push('MQTT 通道开关显示的与存的不一致')
+      if (local.mqttPort !== String(persisted.mqttPort)) {
+        problems.push('「本机接入」显示的 MQTT 端口与存的不一致：' + local.mqttPort + ' / ' + persisted.mqttPort)
       }
     }
-    /*
-     * 这一台机器上那个开关是开着的（操作员自己开的，探针不动它）：**如实写一行日志**，
-     * 不报成问题 —— 它是一份设置值，不是出厂默认。出厂默认由单测钉住。
-     */
-    if (view.enabled) {
-      log('iot settings  : 注意 —— 这一台 profile 的「数据接入」总开关是**开着**的' +
-        '（设置值 ' + JSON.stringify(persisted && { bind: persisted.bindAddress, http: persisted.httpPort, mqtt: persisted.mqttPort }) +
-        '）。出厂默认是关闭的（由 tests/iot-ingest.test.ts 钉住），这一条不是缺陷，也不由探针改动。')
-    }
-    if (!/\/api\/v1\/.+\/telemetry/.test(view.pathSample)) {
-      problems.push('推流路径样例不是 ThingsBoard 的形状：' + JSON.stringify(view.pathSample))
-    }
-    if (view.topic !== 'v1/devices/me/telemetry') {
-      problems.push('MQTT 主题不是 v1/devices/me/telemetry：' + JSON.stringify(view.topic))
-    }
-    if (!view.httpStatus || !view.mqttStatus) problems.push('两个监听状态没有显示出来')
-    if (!/\d/.test(view.secretCount)) problems.push('「已有秘钥的设备」那一行没有数字：' + view.secretCount)
-    if (!view.hasStats) problems.push('数据接入里没有收数统计（[data-iot-stats]）')
-    if (view.rawKeyLeak) problems.push('数据接入里渲染出了裸 key（页面上出现了 iotUi.*）')
   }
 
   // ---- 2) 设备对话框：推流地址与秘钥（只读；首次读会生成一条秘钥） ----------------
@@ -1047,25 +1032,27 @@ async function runIotIngestDrill(win, layout) {
   // ---- 3c) 读数真的变了 + 关掉并还原 ------------------------------------------
   const closeScript = ('(async () => {' +
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
-    'const el = (sel) => document.querySelector(sel);' +
-    'const clickTab = async (id) => { const tab = el(".settings-tabs [data-tab=" + id + "]");' +
-    '  if (tab) tab.click();' +
-    '  await wait(300); };' +
+    'const el = (sel, root) => (root || document).querySelector(sel);' +
+    'const text = (node) => (node ? (node.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
     'const setInput = (node, value) => { if (!node) return false;' +
     '  node.value = String(value);' +
     '  node.dispatchEvent(new Event("input", { bubbles: true }));' +
     '  return true; };' +
     'const status = await window.api.ingest.status();' +
     'const alarms = await window.api.alarms.query({ acknowledged: false, limit: 1 });' +
-    'await clickTab("iot");' +
     /*
-     * 页面上那七个数字**逐项读出来**（DOM），用来与主进程报的那一份对比：
+     * 第 13 批第 1 条之后这一段的读数在**添加设备对话框**里（设置页那个页签已经删了）。
+     * 打开对话框 → 展开「本机接入」→ 点顶栏那一颗唯一的刷新 → 把收数统计逐项读出来。
      * 「服务收了 5 条」而屏幕上写着 0，是这一类改动最典型的假成功（接上了但没刷新）。
-     *
-     * 读之前先点**顶栏那一颗唯一的刷新**（业主 2026-09-19 更正第 4 条）：页面里的刷新按钮都
-     * 删掉了，读数靠它重读 —— 所以这一段同时验证了"顶栏刷新会不会重读这一页"。
-     * 而且必须在**数据接入页签还开着**的时候读：切到存储页签之后那一块就不在 DOM 里了。
      */
+    'const addButton = [...document.querySelectorAll("button")]' +
+    '  .find((b) => text(b) === "添加设备" || /^Add device/.test(text(b)));' +
+    'if (addButton) addButton.click();' +
+    'for (let i = 0; i < 20 && !el("[data-add-iot-local]"); i += 1) await wait(200);' +
+    'const dialog = el("[data-add-device-dialog]");' +
+    'const local = el("[data-add-iot-local]");' +
+    'if (local) local.open = true;' +
+    'await wait(300);' +
     'const refresh = el("[data-action=topbar-refresh]");' +
     'if (refresh) refresh.click();' +
     'const refreshFound = !!refresh;' +
@@ -1077,31 +1064,51 @@ async function runIotIngestDrill(win, layout) {
     'let domStats = [];' +
     'for (let attempt = 0; attempt < 40; attempt += 1) {' +
     '  await wait(500);' +
-    '  domStats = [...document.querySelectorAll("[data-iot-stats] .kv__item")].map((item) =>' +
+    '  domStats = [...document.querySelectorAll("[data-add-iot-stats] .kv__item")].map((item) =>' +
     '    ((item.querySelector(".kv__value") || {}).textContent || "").trim());' +
     '  if (domStats[0] && domStats[0] !== "0") break;' +
     '}' +
-    'const enable = el("[data-iot-enable]");' +
-    // 第 13 批第 1 条：总开关是派生的（只读）。收尾**不再点它** —— 见下面把两台设备的
-    // 接入方式改回 none：端口自己就会关掉，那正是这一条要证明的事。
-    'const enableDisabled = enable ? enable.disabled : false;' +
-    'setInput(el("[data-iot-http-port]"), 8080);' +
-    'setInput(el("[data-iot-mqtt-port]"), 1883);' +
+    /*
+     * 顺手把监听设置**保存一次**（写 + 读回核对）：把两个端口写回出厂默认值。
+     * 这是这一段唯一的写操作，而且它走的就是界面上那条路（不是开发接口）。
+     */
+    'setInput(el("[data-add-iot-http-port]", dialog), 8080);' +
+    'setInput(el("[data-add-iot-mqtt-port]", dialog), 1883);' +
+    'const saveButton = el("[data-add-iot-save]", dialog);' +
+    'if (saveButton) saveButton.click();' +
+    'await wait(1500);' +
+    'const saveNotice = text(el("[data-add-iot-notice]", dialog));' +
+    'const saveError = text(el("[data-add-iot-error]", dialog));' +
+    'const portsAfterSave = {' +
+    '  http: (function(){ const n = el("[data-add-iot-http-port]", dialog); return n ? String(n.value) : null; })(),' +
+    '  mqtt: (function(){ const n = el("[data-add-iot-mqtt-port]", dialog); return n ? String(n.value) : null; })()' +
+    '};' +
     'const restore = await Promise.all(__DECLARED_IDS__.map((id) =>' +
     '  window.api.devices.update({ id, ingest: { protocol: "none" } })));' +
     'await wait(2500);' +
-    'await clickTab("storage");' +
-    'setInput(el(".path-row .input"), __ORIGINAL_ROOT__);' +
-    'await wait(2200);' +
     'const after = await window.api.ingest.status();' +
     'const config = await window.api.settings.get();' +
+    'const close = dialog ? el(".panel__header button", dialog) : null;' +
+    'if (close) close.click();' +
+    'await wait(400);' +
+    // 存储根还原仍然在设置页的「存储」页签上（那一页没有搬走）。
+    'location.hash = "#/settings";' +
+    'await wait(1200);' +
+    'const storageTab = el(".settings-tabs [data-tab=storage]");' +
+    'if (storageTab) storageTab.click();' +
+    'await wait(400);' +
+    'setInput(el(".path-row .input"), __ORIGINAL_ROOT__);' +
+    'await wait(2200);' +
     'return JSON.stringify({' +
     '  before: status.success ? status.data : null,' +
     '  alarmTotalAfter: alarms.success ? alarms.data.total : null,' +
     '  after: after.success ? after.data : null,' +
     '  config: config.success ? config.data.iotIngest : null,' +
     '  storageRoot: config.success ? config.data.storageRoot : null,' +
-    '  enableDisabled,' +
+    '  saveNotice,' +
+    '  saveError,' +
+    '  portsAfterSave,' +
+    '  localBlockFound: !!local,' +
     '  restored: restore.every((result) => result && result.success),' +
     '  refreshFound,' +
     '  domStats' +
@@ -1152,13 +1159,27 @@ async function runIotIngestDrill(win, layout) {
     const shown = (closed.domStats || []).slice(0, expected.length)
     if (!closed.refreshFound) {
       problems.push('顶栏那颗唯一的刷新（[data-action=topbar-refresh]）不在页面上')
+    } else if (closed.localBlockFound !== true) {
+      problems.push('收尾那一段没找到添加设备对话框里的「本机接入」那一块')
     } else if (shown.length < expected.length) {
-      problems.push('数据接入页面上那七个读数没有全部渲染出来：' + JSON.stringify(closed.domStats))
+      problems.push('「本机接入」里那几个读数没有全部渲染出来：' + JSON.stringify(closed.domStats))
     } else if (JSON.stringify(shown) !== JSON.stringify(expected)) {
       problems.push(
         '页面上的读数与主进程报的不一致：屏幕 ' + JSON.stringify(shown) +
           ' vs 服务 ' + JSON.stringify(expected) + '（接上了但没刷新？）'
       )
+    }
+    /*
+     * 监听设置那一次保存：它是这一段唯一的**界面写操作**（写 + 读回核对）。
+     * 成功时给一句"已保存并读回核对"，失败时会有一句错误 —— 两者不许同时有、也不许都没有。
+     */
+    if (closed.saveError) {
+      problems.push('在「本机接入」里保存监听设置报错：' + JSON.stringify(closed.saveError))
+    } else if (!closed.saveNotice) {
+      problems.push('在「本机接入」里保存监听设置之后没有任何结果提示')
+    }
+    if (closed.portsAfterSave && (closed.portsAfterSave.http !== '8080' || closed.portsAfterSave.mqtt !== '1883')) {
+      problems.push('保存之后输入框里的端口不是 8080 / 1883：' + JSON.stringify(closed.portsAfterSave))
     }
 
     const alarmBefore = opened.alarmTotalBefore
@@ -4302,6 +4323,15 @@ async function run() {
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
     /*
+     * 每一步在 `document.body.dataset.probeStep` 上留一个标记。
+     *
+     * 为什么：第 28 轮这一段连续两次在 120/180 秒上超时，而超时之后 driver 只拿到
+     * `{probeTimeout: true}` —— 连"卡在哪一步"都不知道（第 28 轮更糟：超时之后整个 app
+     * 自己退出了，连 summary 都没打出来）。有了标记，下一次可以直接读回卡住的位置。
+     */
+    'const mark = (step) => { try { document.body.dataset.probeStep = step; } catch (e) {} };' +
+    'mark("start");' +
+    /*
      * 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条）：原来是筛选栏里一排 chip
      * （`[data-channel-toggle]` + `aria-pressed`），现在是图右侧那一列里的**勾选框**
      * （`[data-trend-channel-check]` + `checked`）。判据没变（点一下只改"画哪几条线"），
@@ -4349,6 +4379,7 @@ async function run() {
     'out.panelRightOfChart = !!(panel && chartCard)' +
     '  && panel.getBoundingClientRect().left >= chartCard.getBoundingClientRect().right - 2;' +
     'out.panelRows = document.querySelectorAll("[data-trend-channel-row]").length;' +
+    'mark("panel");' +
     'out.panelSummary = text(document.querySelector("[data-channel-panel-summary]"));' +
     'out.summaryAtStart = out.panelSummary;' +
     'out.rowChecks = checks().length;' +
@@ -4442,6 +4473,7 @@ async function run() {
     '  out.rangeEmptyStateAfterRestore = text(document.querySelector(".page .empty .empty__title"));' +
     '}' +
     // ④ 多选一个量：图都应多一份。
+    'mark("metrics");' +
     'if (metricButtons.length > 1) {' +
     '  metricButtons[1].click(); await wait(1200);' +
     '  out.selectedMetrics = [...document.querySelectorAll("[data-metric-toggle]")]' +
@@ -4505,7 +4537,9 @@ async function run() {
     '}' +
     'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
     'return JSON.stringify(out);' +
-    '})()', 120_000)
+    // 180 秒：这一段要跑 8 条通道查询、切一次时间范围、再切两档颗粒度 —— 本机 120 秒时
+    // 偶尔会在负载高的机器上顶到上限（第 28 轮实测到一次），而超时会把这一段所有读数丢掉。
+    '})()', 180_000)
   log('trend channels: ' + JSON.stringify(trendChannels))
   if (trendChannels.probeTimeout === true) {
     problems.push('趋势页的多通道探针超时 —— 这一段没有任何结论')

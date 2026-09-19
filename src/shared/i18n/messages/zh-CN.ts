@@ -175,7 +175,6 @@ export const zhCN = {
     tabLanguage: '语言',
     tabStorage: '存储',
     tabVideo: '视频与缓冲',
-    tabIot: '数据接入',
     tabAlarm: '告警',
     tabEmail: '邮箱',
     tabAccount: '账号',
@@ -1237,6 +1236,15 @@ export const zhCN = {
     videoKeyTitle: '视频流接口',
     videoKeyHint: '哪一个键装的是视频地址（RTSP / HTTP），留空表示这台设备不推视频。',
     protocolPlanInvalid: '接入方案里有不合法的键名或重复项，请检查上面的遥测键。',
+    /*
+     * 本机接入（业主 2026-09-19 第 13 批第 1 条：数据接入从系统设置搬进「添加设备」）。
+     * 这一块是**本机**的监听设置与收数读数；设置页那个「数据接入」页签随这次改造删掉了。
+     */
+    localIngestTitle: '本机接入（监听设置与收数）',
+    localIngestHint:
+      '本机在哪个地址、哪个端口上等设备推数据，以及接到了什么。总开关与两个通道开关由设备声明派生，这里只显示、不改。',
+    localIngestDerived: '总开关 {master}；HTTP 通道 {http}；MQTT 通道 {mqtt}（由设备声明派生）',
+    localIngestSave: '保存监听设置',
     noResponseTitle: '设备无响应',
     noResponseBody: '目标地址可以访问，但未返回本系统可识别的设备信息。请确认 IP、端口与设备型号。',
     probeSuccess: '连接成功',
@@ -1289,34 +1297,36 @@ export const zhCN = {
    * 所以"我们自己的设备"与"第三方设备"共用同一套接收端。
    */
   iotUi: {
-    enableLabel: '启用数据接入',
-    enableHint: '默认关闭。开启后设备才能把数据推上来；关闭时两个监听都不会启动。',
-    /**
-     * 派生说明（业主 2026-09-19 第 13 批第 1 条之后，这一格是只读的）。
+    /*
+     * 2026-09-19 第 13 批第 1 条：「数据接入」从系统设置搬进「设备管理 → 添加设备」。
+     * 随那一页删掉的词条（四本一起删）：`enableLabel` / `enableHint` / `enableDerived` /
+     * `httpEnable` / `mqttEnable` / `httpPathLabel` / `statusGroup` / `statusOff` /
+     * `devicesWithSecret` / `localAddressesLabel`（**留着**，见下）/ `manualNote` /
+     * `loadFailed` / `settingsUi.tabIot`。
+     * 留下来的都是"这一块现在真的会显示"的：监听地址、端口、监听状态、收数统计、
+     * 本机地址、秘钥那几句（在 `DevicePushEndpoint` 里）。
      */
-    enableDerived: '这一格由设备决定：只要有一台设备在「添加设备 → 协议接入方式」里选了 HTTP 或 MQTT 接入，它就会打开；最后一台这样的设备被删掉之后，它会关掉。',
     bindLabel: '监听地址',
     bindHint: '0.0.0.0 表示所有网卡（设备才连得上）；127.0.0.1 表示只允许本机。',
     errBind: '监听地址只能是 0.0.0.0、127.0.0.1 或一个 IPv4 地址',
     errPort: '端口需为 1-65535 之间的整数',
     httpGroup: 'HTTP 推流',
-    httpEnable: '启用 HTTP 推流',
     httpPortLabel: 'HTTP 端口',
-    httpPathLabel: '推流路径',
     mqttGroup: 'MQTT',
-    mqttEnable: '启用 MQTT',
     mqttPortLabel: 'MQTT 端口',
     mqttTopicLabel: '发布主题',
-    mqttUserHint: '连接时用设备秘钥当用户名，密码留空。',
     secretLabel: '设备秘钥',
-    manualNote: '手册未说明这一节：形状照抄 ThingsBoard 的设备侧接入（秘钥在 URL 路径里、MQTT 用秘钥当用户名），这样现场设备与第三方设备都能接。',
-    devicesWithSecret: '已有秘钥的设备：{count} 台',
     localAddressesLabel: '本机地址（给设备用）',
     noLocalAddresses: '本机没有可用于设备的地址（只有回环地址）。',
-    statusGroup: '运行状态',
     listening: '监听中 {address}:{port}',
     notListening: '未监听',
-    statusOff: '已关闭',
+    /* 派生的三个开关的取值（只读那一行）。 */
+    derivedOn: '开',
+    derivedOff: '关',
+    /* 监听设置（绑定地址 / 端口）保存的三个结果。 */
+    saveDone: '监听设置已保存，并已读回核对',
+    saveFailed: '保存监听设置失败',
+    saveMismatch: '保存之后读回来的值与刚写的不一样（界面上显示的是读回来的那一份）',
     statsRequests: 'HTTP 请求',
     statsMessages: 'MQTT 报文',
     statsRejectedAuth: '凭据被拒',
@@ -1342,7 +1352,6 @@ export const zhCN = {
     // 设备声明之前拿不到该填进设备的地址。监听状态由上面那句 `serviceOff` 统一回答。
     mqttUser: 'MQTT 用户名（就是秘钥）',
     secretHint: '秘钥按设备一条，可随时轮换；轮换后旧秘钥立刻失效。',
-    loadFailed: '读取数据接入状态失败',
   },
 
   installUi: {
