@@ -15,6 +15,7 @@
 
 import { ipcMain, shell, dialog, BrowserWindow, app } from 'electron'
 import { existsSync } from 'node:fs'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IpcChannels } from '@shared/ipc/contract'
 import type {
@@ -81,6 +82,7 @@ import { E2_SYNC_MAX_LIMIT } from '../services/device/e2/e2-device-service'
 import type { E2PtzPatch } from '@shared/domain/e2-ptz'
 import type { AlarmProfileConfig } from '../services/device/config-service'
 import type { TrendQueryBody } from '@shared/domain/trend'
+import type { TrendExportRequest, TrendExportResult } from '@shared/domain/trend-export'
 import { SystemControlAction } from '../services/device/protocol/dto'
 import { EVENT_CENTER_DEFAULT_LIMIT, type EventSeverity } from '@shared/domain/event-center'
 import type { RememberLoginInput } from '@shared/domain/auth'
@@ -2553,6 +2555,47 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.TREND_FLUSH, () =>
     toResult(async () => getServices().trends.flush())
+  )
+
+  /**
+   * 趋势数据导出成 CSV（业主 2026-09-19 第 13 批第 6 条：「支持数据导出」）。
+   *
+   * 三件事都在这一层做，因为它们是"落盘"这件事的一部分：
+   *   1. **参数收窄**：文件名只取最后一段（`path.basename`）、剥掉非法字符，CSV 必须是字符串。
+   *      渲染层送进来的任何东西都不能让它写到 `exports/trends/` 之外；
+   *   2. **写**：先 `mkdir -p`，再写文件（UTF-8，内容里已经带 BOM）；
+   *   3. **读回核对**（仓库里每一条写路径的规矩）：`stat` 拿真实字节数、把文件重新读出来
+   *      数一遍数据行 —— 返回给界面的 `bytes` / `rows` 都来自**读回的那一份**，
+   *      而不是我们以为自己写了多少。
+   *
+   * 权限用 `viewTrends`（与查趋势同一档）：导出的是这个操作员本来就能看到的数据，
+   * 它写的是**我们自己的**导出目录，不改设备也不改库。
+   */
+  ipcMain.handle(IpcChannels.TREND_EXPORT_CSV, (_event, request: TrendExportRequest) =>
+    toResult(async (): Promise<TrendExportResult> => {
+      requirePermission('viewTrends')
+      const rawName = typeof request?.fileName === 'string' ? request.fileName : ''
+      const csv = typeof request?.csv === 'string' ? request.csv : ''
+      if (csv === '') {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, '导出内容为空')
+      }
+      const safeName = path.basename(rawName).replace(/[\\/:*?"<>|]/g, '_').trim()
+      if (safeName === '' || safeName === '.' || safeName === '..') {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, '导出文件名不合法')
+      }
+
+      const directory = path.join(getServices().settings.get().storageRoot, 'exports', 'trends')
+      await mkdir(directory, { recursive: true })
+      const target = path.join(directory, safeName)
+      await writeFile(target, csv, 'utf8')
+
+      // 读回核对：字节数与数据行数都数**读回来的那一份**。
+      const back = await readFile(target, 'utf8')
+      const bytes = (await stat(target)).size
+      const rows = back.split(/\r?\n/).filter((line, index) => index > 0 && line.trim() !== '').length
+      appLog().info('Trend CSV exported', { path: target, bytes, rows })
+      return { path: target, bytes, rows }
+    })
   )
 
   // -------------------------------------------------------------------------

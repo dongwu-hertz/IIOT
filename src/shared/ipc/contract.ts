@@ -57,12 +57,14 @@ export type {
   TrendSeries,
   TrendStorageStats
 } from '../domain/trend'
+export type { TrendExportRequest, TrendExportResult } from '../domain/trend-export'
 import type {
   TrendCoverage,
   TrendQueryBody,
   TrendSeries,
   TrendStorageStats
 } from '../domain/trend'
+import type { TrendExportRequest, TrendExportResult } from '../domain/trend-export'
 import type {
   AddDeviceInput,
   AlarmEvent,
@@ -603,6 +605,7 @@ export const IpcChannels = {
   TREND_COVERAGE: 'trend:coverage',
   TREND_STATS: 'trend:stats',
   TREND_FLUSH: 'trend:flush',
+  TREND_EXPORT_CSV: 'trend:export-csv',
 
   /**
    * 事件与告警中心（产品要求：「设置事件和告警中心。」）。
@@ -2188,13 +2191,22 @@ export interface RendererApi {
     stats(): Promise<DeviceResult<TrendStorageStats>>
     /** Force a flush; used by the Settings page and before an export. */
     flush(): Promise<DeviceResult<{ rows: number; files: number }>>
+    /**
+     * 把当前这一份趋势数据存成 CSV（业主 2026-09-19 第 13 批第 6 条：「支持数据导出」）。
+     *
+     * CSV 文本由**渲染层**拼（`@shared/domain/trend-export.ts` 是纯函数，可单测），
+     * 主进程只做两件它才知道怎么做的事：挑目录、写盘并**读回核对**。
+     *
+     * `fileName` 只允许是一段文件名（不含路径分隔符）：真正写到哪儿由主进程决定
+     * （存储根下的 `exports/trends/`），渲染层没有、也不该有"随便写一个路径"的能力。
+     */
+    exportCsv(input: TrendExportRequest): Promise<DeviceResult<TrendExportResult>>
   }
 
   protocol: {
     diagnose(deviceId: string): Promise<DeviceResult<DiagnoseReport>>
     probeEndpoint(deviceId: string, path: string, method?: string): Promise<DeviceResult<EndpointProbeResult>>
   }
-
   /**
    * Realtime monitoring. `start` opens WebSocket subscriptions in the main
    * process and begins pushing frames; `stop` closes them and releases the

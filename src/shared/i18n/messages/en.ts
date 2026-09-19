@@ -619,6 +619,16 @@ export const en: MessageSchema = {
     /* `filterAggregation` and the four bucket-card keys were removed with the
        selector and the cards (batch 13 item 5). */
     granularityLabel: 'Granularity',
+    zoomHint: 'Showing points {from}–{to} of {total}: {range}',
+    zoomReset: 'Reset zoom',
+    exportCsv: 'Export data',
+    exporting: 'Exporting…',
+    exportHint: 'Save the data currently on screen as CSV (visible channels only)',
+    exportDone: 'Exported {rows} rows to {path} ({bytes})',
+    exportNothing: 'Nothing to export on this screen (run a query, or pick another range)',
+    exportFailed: 'Export failed (the main process did not confirm the write)',
+    print: 'Print / save as PDF',
+    printHint: 'Opens the print dialog; choose “Save as PDF” as the destination',
     filterFrom: 'From',
     filterTo: 'To',
     incompleteRange: 'Select both a start and an end time',

@@ -390,7 +390,14 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
     'sample:ai-save-config',
     'sample:ai-label'
   ],
-  viewTrends: ['trend:query', 'trend:coverage', 'trend:stats'],
+  /**
+   * 趋势的读 + **导出 CSV**（业主 2026-09-19 第 13 批第 6 条：「支持数据导出」）。
+   *
+   * 导出归这一项而不是 `manageSystemSettings`：它导出的**就是这个操作员本来就能看到的数据**，
+   * 而且只写进我们自己的导出目录（`存储根/exports/trends/`）—— 不改设备、不改库。
+   * 把它提成管理员操作的话，一个只能看趋势的账号连"把看到的图存下来"都做不到。
+   */
+  viewTrends: ['trend:query', 'trend:coverage', 'trend:stats', 'trend:export-csv'],
   /** 事件中心的读 + **确认** + 取图片证据 + 处置（改状态/指派）+ 读处置流水；理由同上一条。 */
   viewEvents: [
     'event-center:query',

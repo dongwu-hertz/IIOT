@@ -988,3 +988,22 @@ table {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/*
+ * 打印（业主 2026-09-19 第 13 批第 6 条：「支持…打印为 PDF」）。
+ *
+ * 打印出来的东西应当是**证据**，不是"界面截图"：把应用外壳（侧边栏 / 顶栏 / 页面按钮）
+ * 藏掉，只留页面自己的内容。页面内部该藏什么（筛选栏、通道列、诊断行）由各自的视图用
+ * 自己的 `@media print` 决定 —— 这里只管**外壳**，因为外壳不属于任何一页。
+ *
+ * 用 `visibility` 而不是 `display: none`：侧边栏一藏，`.app-content` 的左侧偏移就会变，
+ * 打印出来的图表宽度会与屏幕上量到的不是同一个（第 13 批的几何断言都基于屏幕尺寸）。
+ * `visibility: hidden` 保留布局、只把像素藏掉。
+ */
+@media print {
+  .sidebar,
+  .topbar {
+    visibility: hidden !important;
+  }
+}
+

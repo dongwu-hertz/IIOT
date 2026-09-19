@@ -33,8 +33,13 @@ import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
-import { trendAxisRange, trendAxisRangeText } from '@shared/domain/trend'
+import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomIsIdentity, trendZoomWindow } from '@shared/domain/trend'
 import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
+import {
+  buildTrendCsv,
+  trendCsvFileName,
+  type TrendExportRow
+} from '@shared/domain/trend-export'
 import {
   CHANNEL_NAME_MAX_LENGTH,
   CHANNEL_NAME_PROBLEM_KEYS,
@@ -52,12 +57,14 @@ import { channelState, channelStateLabelKey, type ChannelState } from '@renderer
 import {
   EMPTY_VALUE,
   channelLabel,
+  formatBytes,
   formatDateTime,
   formatDuration,
   formatTrendTick,
   fromDateTimeLocalValue,
   toDateTimeLocalValue
 } from '@renderer/lib/format'
+import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import {
   TREND_METRIC_META,
   TREND_METRIC_OPTIONS,
@@ -515,6 +522,23 @@ const chartBundles = computed<TrendChartBundle[]>(() =>
 )
 
 /**
+ * 每一张图的 ECharts 选项，**做成 computed**。
+ *
+ * 为什么不能直接在模板里调 `chartOptionFor(bundle)`：那样每次重渲染都会造一个新对象，
+ * 而 `EChart.vue` 监听的是选项的**引用**（`watch(() => props.option)`）—— 一次与图无关的
+ * 重渲染（勾一个通道、切一个量、诊断行刷新）都会变成一次 `setOption(option, true)`，
+ * 那会**把用户刚做的缩放丢掉**，而丢掉之后又发一次 `dataZoom` 事件……第 27 轮第一版就是
+ * 这样转成了一个死循环（探针整段 150 秒超时）。computed 只在真正的输入变化时重算。
+ */
+const chartOptions = computed<Record<string, EChartsCoreOption>>(() => {
+  const map: Record<string, EChartsCoreOption> = {}
+  for (const bundle of chartBundles.value) {
+    map[bundle.metric] = chartOptionFor(bundle)
+  }
+  return map
+})
+
+/**
  * ECharts tooltip。`params` 的类型是 `unknown`，在这里就地收窄：选项对象是宽松类型的
  * `EChartsCoreOption`，而"这个桶里有几个采样点"从 bundle 里按索引读，序列数据因此可以
  * 保持成纯数字数组。
@@ -594,7 +618,14 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
     // Real measurements, not a dashboard toy: an animated line implies the data
     // is live and makes a bucket boundary impossible to read.
     animation: false,
-    grid: { left: 58, right: 18, top: 34, bottom: 30 },
+    // 底边留出滑块的位置（`trendDataZoom()` 里那条 `slider` 高 18、贴底 4）。
+    grid: { left: 58, right: 18, top: 34, bottom: 52 },
+    /*
+     * 时间轴缩放（第 13 批第 6 条：「所有折线图支持时间轴放大缩小」）。
+     * `filterMode: 'filter'` 同时把"Y 轴弹性变化"接到缩放上：放大之后 Y 轴按可见的那一段重算。
+     * `zoomWindow.value` 也传进去 —— 重画时窗口跟着选项走，不会被 `setOption(option, true)` 丢掉。
+     */
+    dataZoom: trendDataZoom(zoomWindow.value ?? undefined),
     tooltip: { trigger: 'axis', formatter: trendTooltipFor(bundle) },
     // ECharts 自带的图例在这里**关掉**：图例是页面上的那一列通道（点一下切换
     // 显示/隐藏），两处各画一份的话，用户会看到两个"看起来一样但行为不同"的图例。
@@ -657,7 +688,9 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
 
   return {
     animation: false,
-    grid: { left: 58, right: 18, top: 34, bottom: 30 },
+    grid: { left: 58, right: 18, top: 34, bottom: 52 },
+    // 回退那条单序列图**同样**能缩放（"所有折线图"这句话不该有例外）。
+    dataZoom: trendDataZoom(zoomWindow.value ?? undefined),
     tooltip: {
       trigger: 'axis',
       formatter: (params: unknown): string => {
@@ -743,6 +776,209 @@ const reductionText = computed(() => {
   const ratio = series.totalRows / series.points.length
   return `${ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)} : 1`
 })
+
+// ---------------------------------------------------------------------------
+// 时间轴缩放（第 13 批第 6 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 当前的时间轴缩放窗口（百分比）。
+ *
+ * `null` = 没有缩放（整段）。它是**每一张图各自**的事件，但这一页上只有一个"当前窗口"：
+ * 多张图的分桶完全相同（同一次查询、同一批时间戳），所以任何一张图上的缩放对整页都成立
+ * —— 分别记的话，两张图会显示出两个不同的时间窗口，而它们画的是同一批数据。
+ */
+const zoomWindow = ref<{ start: number; end: number } | null>(null)
+
+/** 正在缩放的是哪一张图（重置时只需要重置这一张：其余的窗口本来就是同一段）。 */
+const zoomedChart = ref<string | null>(null)
+
+/** 每个量一张图的 ref（重置缩放时用其中一张的 `resetZoom()`）。 */
+const chartRefs = ref<Record<string, { resetZoom: () => void } | null>>({})
+
+/** 回退那张单序列图的 ref（同一个重置动作要能收上它）。 */
+const fallbackChart = ref<{ resetZoom: () => void } | null>(null)
+
+function setChartRef(metric: string, instance: unknown): void {
+  const typed = instance as { resetZoom: () => void } | null
+  chartRefs.value = { ...chartRefs.value, [metric]: typed }
+}
+
+/** 缩放之后可见的时间桶区间（用主量的时间轴：多张图的时间戳是同一批）。 */
+const zoomRange = computed(() => {
+  const window = zoomWindow.value
+  if (!window) return null
+  const primary = chartBundles.value[0]
+  if (!primary) return null
+  return trendZoomWindow(primary.timestamps.length, window.start, window.end)
+})
+
+/** 缩放之后那一段的时间范围（提示里要写出来：只写"第几个点"没人看得懂）。 */
+const zoomRangeText = computed(() => {
+  const range = zoomRange.value
+  const primary = chartBundles.value[0]
+  if (!range || !primary) return ''
+  const from = primary.timestamps[range.fromIndex]
+  const to = primary.timestamps[range.toIndex]
+  if (from === undefined || to === undefined) return ''
+  return `${formatDateTime(from)} ~ ${formatDateTime(to)}`
+})
+
+/** 显示"当前显示 a–b / 共 n 点"；没有缩放时是空串（不多说一句废话）。 */
+const zoomHint = computed(() => {
+  const range = zoomRange.value
+  const primary = chartBundles.value[0]
+  if (!range || !primary) return ''
+  return t('trendsUi.zoomHint', {
+    from: range.fromIndex + 1,
+    to: range.toIndex + 1,
+    total: primary.timestamps.length,
+    range: zoomRangeText.value
+  })
+})
+
+function onChartZoom(metric: string, window: { start: number; end: number }): void {
+  const next = trendZoomIsIdentity(window.start, window.end) ? null : window
+  /*
+   * **同一次缩放只记一次。**
+   *
+   * ECharts 在 `setOption` 之后也会发一次 `dataZoom`，而这一页每次重画都会把选项重新交给
+   * 图表；不判"有没有变"的话就是：事件 → 改状态 → 重画 → setOption → 事件 → …… 一直转下去
+   * （第 27 轮第一次跑探针时整段 `layout('/trends')` 卡到 150 秒超时，就是这个环）。
+   * 判据是**窗口有没有真的变**（同一个窗口再报一次就丢掉）。
+   */
+  const current = zoomWindow.value
+  if (next === null) {
+    if (current === null) return
+  } else if (
+    current !== null &&
+    Math.abs(current.start - next.start) < 0.01 &&
+    Math.abs(current.end - next.end) < 0.01
+  ) {
+    return
+  }
+  zoomWindow.value = next
+  zoomedChart.value = next === null ? null : metric
+}
+
+/**
+ * 「重置缩放」：把**所有**图的时间轴拉回整段。
+ *
+ * 每一张图都重置（不是只重置正在缩放的那一张）：它们的窗口本来就是同一段，
+ * 只重置一张会让两张图看起来在显示不同的时间范围。
+ */
+function resetZoom(): void {
+  for (const instance of Object.values(chartRefs.value)) instance?.resetZoom()
+  fallbackChart.value?.resetZoom()
+  zoomWindow.value = null
+  zoomedChart.value = null
+}
+
+// ---------------------------------------------------------------------------
+// 数据导出（第 13 批第 6 条：「支持数据导出」）
+// ---------------------------------------------------------------------------
+
+const exporting = ref(false)
+const exportNotice = ref('')
+const exportError = ref('')
+
+/**
+ * 把**当前这一屏查到的**数据导成 CSV。
+ *
+ * 导出的是"看得见的那些通道"：显式隐藏的通道不进文件 —— 文件要能对上屏幕
+ * （"我隐藏了 CH3，导出来却有它"和"屏幕上有它、文件里没有"一样糟）。
+ * 每一行的单位、通道名都跟着走（见 `@shared/domain/trend-export.ts` 的文件头）。
+ */
+async function exportCsv(): Promise<void> {
+  exportNotice.value = ''
+  exportError.value = ''
+  const device = selectedDevice.value
+  const from = trends.queriedFrom
+  const to = trends.queriedTo
+  if (!device || from === null || to === null) {
+    exportError.value = t('trendsUi.exportNothing')
+    return
+  }
+
+  const rows = buildExportRows(from, to)
+  if (rows.length === 0) {
+    // 一行都没有时**不写空文件**：一个只有表头的文件看起来像"导成功了但数据是空的"。
+    exportError.value = t('trendsUi.exportNothing')
+    return
+  }
+
+  exporting.value = true
+  const result = await callApi(() =>
+    window.api.trends.exportCsv({
+      fileName: trendCsvFileName({ deviceName: device.name, from, to }),
+      csv: buildTrendCsv(rows)
+    })
+  )
+  exporting.value = false
+  if (!result.success) {
+    exportError.value = resultMessage(result)
+    return
+  }
+  const info = unwrap(result)
+  if (!info) {
+    exportError.value = t('trendsUi.exportFailed')
+    return
+  }
+  // 报的是**读回核对过**的字节数与行数（不是"我们以为写了多少"）。
+  exportNotice.value = t('trendsUi.exportDone', {
+    path: info.path,
+    rows: info.rows,
+    bytes: formatBytes(info.bytes)
+  })
+}
+
+/** 把叠加的那几组序列摊成一行一个读数（长表，见 `trend-export.ts`）。 */
+function buildExportRows(from: number, to: number): TrendExportRow[] {
+  const rows: TrendExportRow[] = []
+  for (const targetMetric of trends.metrics) {
+    const meta = TREND_METRIC_META[targetMetric]
+    for (const channel of trends.visibleChannelIds) {
+      const series = trends.seriesFor(targetMetric, channel)
+      if (!series) continue
+      const name = channelOptions.value.find((item) => item.index === channel)?.name ?? ''
+      for (const point of series.points) {
+        // 空桶不进文件（见 `buildTrendCsv`）：CSV 里没有"空桶"这个概念。
+        if (!Number.isFinite(point.value)) continue
+        if (point.timestamp < from || point.timestamp > to) continue
+        rows.push({
+          timestamp: point.timestamp,
+          metric: targetMetric,
+          channel,
+          channelName: name,
+          value: point.value,
+          sampleCount: point.sampleCount,
+          unit: meta.unit
+        })
+      }
+    }
+  }
+  // 按时间、再按量、再按通道排序：一份给人看的文件不该是"按查询顺序"拼出来的。
+  // 量的顺序用 `TREND_METRIC_OPTIONS`（与界面上那一排按钮同一个顺序）。
+  const metricOrder = TREND_METRIC_OPTIONS.map((option) => option.key)
+  return rows.sort(
+    (left, right) =>
+      left.timestamp - right.timestamp ||
+      metricOrder.indexOf(left.metric) - metricOrder.indexOf(right.metric) ||
+      left.channel - right.channel
+  )
+}
+
+/**
+ * 打印（Chromium 的打印对话框里可以"另存为 PDF"，所以这就是"打印为 PDF"）。
+ *
+ * 为什么用 `window.print()` 而不是主进程的 `printToPDF`：后者需要渲染层把整页的
+ * 版式交给主进程再拼一份 PDF，而 `window.print()` 用的是**操作员眼前那一页**
+ * （配合 `@media print` 把导航与筛选条收起来）。它也不需要新权限、新依赖。
+ */
+function printCharts(): void {
+  window.print()
+}
+
 
 const chartPlaceholder = computed(() => {
   if (trends.series !== null) return ''
@@ -1061,6 +1297,51 @@ watch(
           <span class="muted chart-hint">
             {{ deviceHint }} · {{ channelHint }} · {{ rangeText }}
           </span>
+          <!--
+            第 13 批第 6 条：数据导出与打印（打印对话框里可以"另存为 PDF"）。
+            两颗按钮放在这一张卡片里、靠右：它们作用于**这一屏查到的数据**与**这一屏的图**，
+            而这两样东西就是这张卡片。
+          -->
+          <div class="btn-row chart-actions">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="exporting || trends.queriedFrom === null"
+              data-trend-export
+              :title="t('trendsUi.exportHint')"
+              @click="exportCsv"
+            >
+              {{ exporting ? t('trendsUi.exporting') : t('trendsUi.exportCsv') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-trend-print
+              :title="t('trendsUi.printHint')"
+              @click="printCharts"
+            >
+              {{ t('trendsUi.print') }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="exportNotice" class="alert alert--success" role="status" data-trend-export-notice>
+          {{ exportNotice }}
+        </p>
+        <p v-if="exportError" class="alert alert--danger" role="alert" data-trend-export-error>
+          {{ exportError }}
+        </p>
+
+        <!--
+          缩放提示（第 6 条）：放大之后图上**看不出来**自己在哪一段 —— 一张只画了三分钟的图
+          与一张画了三十天的图长得一模一样。所以放大时写明"当前显示第 a–b 个点 / 共 n 点
+          （某时刻 ~ 某时刻）"，并给一个「重置缩放」。
+        -->
+        <div v-if="zoomHint" class="zoom-bar" data-trend-zoom-bar>
+          <span class="muted" data-trend-zoom-hint>{{ zoomHint }}</span>
+          <button type="button" class="btn btn--sm" data-trend-zoom-reset @click="resetZoom">
+            {{ t('trendsUi.zoomReset') }}
+          </button>
         </div>
 
         <p v-if="trends.series?.truncated" class="alert alert--warning" role="status">
@@ -1116,14 +1397,23 @@ watch(
             </p>
             <EChart
               v-else
-              :option="chartOptionFor(bundle)"
+              :ref="(instance) => setChartRef(bundle.metric, instance)"
+              :option="chartOptions[bundle.metric] ?? chartOptionFor(bundle)"
               height="320px"
               :placeholder="chartPlaceholder"
+              @datazoom="(window) => onChartZoom(bundle.metric, window)"
             />
           </div>
         </template>
 
-        <EChart v-else :option="fallbackOption" height="360px" :placeholder="chartPlaceholder" />
+        <EChart
+          v-else
+          ref="fallbackChart"
+          :option="fallbackOption"
+          height="360px"
+          :placeholder="chartPlaceholder"
+          @datazoom="(window) => onChartZoom('fallback', window)"
+        />
 
         <dl v-if="trends.series" class="kv diagnostics">
           <div class="kv__item">
@@ -1495,6 +1785,39 @@ watch(
  */
 .chip--auto-hint {
   border-style: dashed;
+}
+
+/* 导出 / 打印两颗按钮：靠右，与卡片标题同一行。 */
+.chart-actions {
+  margin-left: auto;
+}
+
+/*
+ * 缩放提示行：放大之后必须看得出来"现在看的是哪一段"（见模板里的注释）。
+ */
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/*
+ * 打印（第 6 条）：只留图与那一行说明。
+ *
+ * 视图自己的这些东西（筛选栏、通道列、诊断行、按钮）在这里藏掉；应用外壳（侧边栏、顶栏）
+ * 在 `main.css` 里统一藏 —— 打印出来的东西应当是"证据"，不是"界面截图"。
+ */
+@media print {
+  .card:not(.chart-panel),
+  .channel-panel,
+  .filter-bar,
+  .range-bar,
+  .chart-actions,
+  .diagnostics,
+  .zoom-bar {
+    display: none !important;
+  }
 }
 
 /* 一个量一张图：图之间用空隙分开，不画分隔线（它们本来就是独立的两张图）。 */

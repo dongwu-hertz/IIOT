@@ -247,9 +247,11 @@ describe('不知道通道时退回单条聚合线（设备没返回通道表的�
   })
 
   it('视图在那种情况下用 `fallbackOption`（一条线），而不是空图', () => {
+    // 第 26/27 轮给这张回退图加了缩放与 ref，属性因此分行写 —— 判据仍然是
+    // "最后那一支（v-else）画的是 fallbackOption"。
     assert.match(
       viewTemplate,
-      /v-else :option="fallbackOption"/,
+      /<EChart\s+v-else\s+ref="fallbackChart"\s+:option="fallbackOption"/,
       '没有通道信息时模板没有退回单序列'
     )
   })

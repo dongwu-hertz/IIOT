@@ -80,7 +80,7 @@ import type {
   UpdateUserProfileInput,
   UserRole
 } from '@shared/domain/auth'
-import type { AppSettingsPatch } from '@shared/ipc/contract'
+import type { AppSettingsPatch, TrendExportRequest } from '@shared/ipc/contract'
 import type { EventSeverity } from '@shared/domain/event-center'
 import type { SampleLabelDimension, SampleLabelSource } from '@shared/domain/sample-library'
 import type {
@@ -295,7 +295,9 @@ const api: RendererApi = {
     query: (query: unknown) => ipcRenderer.invoke(IpcChannels.TREND_QUERY, query),
     coverage: (deviceId: string) => ipcRenderer.invoke(IpcChannels.TREND_COVERAGE, deviceId),
     stats: () => ipcRenderer.invoke(IpcChannels.TREND_STATS),
-    flush: () => ipcRenderer.invoke(IpcChannels.TREND_FLUSH)
+    flush: () => ipcRenderer.invoke(IpcChannels.TREND_FLUSH),
+    exportCsv: (input: TrendExportRequest) =>
+      ipcRenderer.invoke(IpcChannels.TREND_EXPORT_CSV, input)
   },
 
   maintenance: {

@@ -187,3 +187,87 @@ export function trendAxisRangeText(metric: TrendMetric): string {
   if (range.min === undefined && range.max === undefined) return 'auto'
   return `${range.min ?? 'auto'}-${range.max ?? 'auto'}`
 }
+
+// ---------------------------------------------------------------------------
+// 时间轴缩放（第 13 批第 6 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 每张折线图的时间轴都能放大缩小（业主原话：「所有折线图支持时间轴放大缩小」）。
+ *
+ * 两条通道一起给，是因为它们解决的是两种不同的操作：
+ *   · `inside` —— 滚轮/双指在图上缩放（快，手不离鼠标）；
+ *   · `slider` —— 图下方那条可以拖的范围条（能看见"现在看的是哪一段"，也能拖回去）。
+ * 只给 `inside` 的话，操作员一旦缩进去就**看不出来**自己在哪一段（滑块把这件事画出来了）。
+ *
+ * `filterMode: 'filter'` 是要紧的一行：它让 Y 轴按**当前可见的那一段**重算范围
+ * （也就是第 6 条要的"Y 轴弹性变化"）。默认的 `'filter'` 本来就是它，这里**写明**
+ * 是因为"放大之后 Y 轴不跟着变"正是这个字段被改成 `'none'` 时的表现，而那种图看起来
+ * 只是"线条变得很平"。
+ *
+ * `moveOnMouseMove: false`：ECharts 在 `inside` 上的默认值是 `true`，意思是**鼠标划过就把
+ * 图平移**。在一个监控台页面上，那等于"鼠标从图上走过，时间窗口自己跑了"——操作员会以为
+ * 图坏了。所以平移只留给下面那条范围条（拖动它），滚轮仍然只负责缩放。
+ */
+export function trendDataZoom(window?: { start: number; end: number }): unknown[] {
+  /*
+   * 窗口**写进选项里**（而不是留给 ECharts 自己记）：
+   *
+   * `EChart.vue` 用的是 `setOption(option, true)`（notMerge），它的好处是"序列条数变了会
+   * 整张换掉"，代价是**任何一次重画都会把用户的缩放丢掉** —— 而这一页会因为通道勾选、
+   * 量多选、诊断行更新而重画。把窗口写进选项，重画就只是把同一段窗口画一遍。
+   */
+  const start = window ? Math.min(100, Math.max(0, window.start)) : 0
+  const end = window ? Math.min(100, Math.max(0, window.end)) : 100
+  return [
+    {
+      type: 'inside',
+      filterMode: 'filter',
+      zoomOnMouseWheel: true,
+      moveOnMouseMove: false,
+      moveOnMouseWheel: false,
+      start,
+      end
+    },
+    {
+      type: 'slider',
+      filterMode: 'filter',
+      height: 18,
+      bottom: 4,
+      start,
+      end,
+      // 滑块自己不需要额外的数据阴影（八条通道会在它上面叠成一片糊）。
+      showDataShadow: false,
+      brushSelect: false
+    }
+  ]
+}
+
+/**
+ * 缩放百分比 → 可见的时间桶下标区间（闭区间）。
+ *
+ * ECharts 的 `dataZoom` 事件给的是百分比（`start` / `end`，0–100），而界面上要说的是
+ * "现在看的是第几个到第几个时间桶、从几点到几点" —— 这句话必须由**百分比**算出来，
+ * 而不是再猜一次数据。`pointCount` 是这张图的桶数。
+ *
+ * 边界：桶数 < 2 时给 `null`（没有"一段"可选）；百分比超出 0–100 时收进范围（ECharts 在
+ * 拖到两端时会给出带小数的值）。
+ */
+export function trendZoomWindow(
+  pointCount: number,
+  startPercent: number,
+  endPercent: number
+): { fromIndex: number; toIndex: number } | null {
+  if (!Number.isFinite(pointCount) || pointCount < 2) return null
+  const clamp = (value: number): number =>
+    !Number.isFinite(value) ? 0 : Math.min(100, Math.max(0, value))
+  const last = pointCount - 1
+  const fromIndex = Math.min(last, Math.max(0, Math.round((clamp(startPercent) / 100) * last)))
+  const toIndex = Math.min(last, Math.max(fromIndex, Math.round((clamp(endPercent) / 100) * last)))
+  return { fromIndex, toIndex }
+}
+
+/** 缩放百分比是不是"没有缩放"（两端都在整段范围上）。 */
+export function trendZoomIsIdentity(startPercent: number, endPercent: number): boolean {
+  return startPercent <= 0.5 && endPercent >= 99.5
+}

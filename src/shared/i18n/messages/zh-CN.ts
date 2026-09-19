@@ -762,6 +762,19 @@ export const zhCN = {
      * 只显示趋势曲线」）。四本目录同步删，理由见 §15.82。
      */
     granularityLabel: '颗粒度',
+    /*
+     * 第 13 批第 6 条：时间轴缩放 + 数据导出 + 打印为 PDF。
+     */
+    zoomHint: '当前显示第 {from}–{to} 个点（共 {total} 点）：{range}',
+    zoomReset: '重置缩放',
+    exportCsv: '导出数据',
+    exporting: '正在导出…',
+    exportHint: '把当前这一屏查到的数据存成 CSV（只导出正在显示的通道）',
+    exportDone: '已导出 {rows} 行到 {path}（{bytes}）',
+    exportNothing: '当前这一屏没有可导出的数据（先查一次、或换一段时间）',
+    exportFailed: '导出失败（主进程没有确认写盘结果）',
+    print: '打印 / 存为 PDF',
+    printHint: '打开打印对话框；在"目标"里选"另存为 PDF"就能拿到 PDF',
     filterFrom: '起始时间',
     filterTo: '结束时间',
     incompleteRange: '请选择完整的起始与结束时间',

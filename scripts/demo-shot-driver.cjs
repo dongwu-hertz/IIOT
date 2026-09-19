@@ -1,4 +1,4 @@
-'use strict'
+﻿'use strict'
 /**
  * DEMO / VERIFICATION DRIVER — not part of the shipped app.
  *
@@ -4730,8 +4730,7 @@ async function run() {
       }
     }
     // ① 点灭一条通道：只有它变 false，其余不变。
-    if (trendChannels.pressedAfterHide) {
-      const before = trendChannels.pressedAtStart || []
+    if (trendChannels.pressedAfterHide) {      const before = trendChannels.pressedAtStart || []
       const after = trendChannels.pressedAfterHide
       const turnedOff = after.filter((value, index) => before[index] === 'true' && value === 'false')
       if (turnedOff.length !== 1) {
@@ -4796,6 +4795,222 @@ async function run() {
           'trend channels: 注意 —— 有 ' + trendChannels.metricEmpty.length +
           ' 个量在这段时间里没有读数（画的是空态）：' + JSON.stringify(trendChannels.metricEmpty)
         )
+      }
+    }
+  }
+
+  /**
+   * 第 13 批第 6 条：时间轴缩放 / 数据导出 / 打印为 PDF。
+   *
+   * WHY A SEPARATE DRILL
+   * 这三件事都要**动手**（滚轮、点击、调 IPC），而上一版把它们塞进趋势页那一段之后，
+   * 一卡住整段就只剩 `{"probeTimeout":true}` —— 连带着把已经量到的通道列、颗粒度那些读数
+   * 全丢了。分开之后：这一段挂了，那一段的证据还在。
+   *
+   * 每一步都在 `document.body.dataset.probeStep` 上留一个标记：万一这一段自己挂了，
+   * 下一条（很短、很快）能读回"卡在哪一步"，而不是只有一句"超时"。
+   */
+  const trendZoom = await layout('/trends', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const out = {};' +
+    'const mark = (step) => { try { document.body.dataset.probeStep = step; } catch (e) {} };' +
+    'mark("start");' +
+    'const withTimeout = (promise, ms, label) => Promise.race([' +
+    '  promise,' +
+    '  wait(ms).then(() => ({ success: false, error: { message: label + " 超时" } }))' +
+    ']);' +
+    'out.exportButton = document.querySelectorAll("[data-trend-export]").length;' +
+    'out.printButton = document.querySelectorAll("[data-trend-print]").length;' +
+    /*
+     * 打印：把 `window.print` **换成桩**再点 —— 真点会弹出系统打印对话框（模态窗口），
+     * 探针会永远等下去。而且**先确认桩装上了再点**：装不上就不点，如实记
+     * `printStubActive: false`。宁可这一条"没验到"，也不能让探针卡在一个对话框上。
+     */
+    'const realPrint = window.print;' +
+    'let printStub = null;' +
+    'try {' +
+    '  printStub = function () { out.printCalls += 1; };' +
+    '  window.print = printStub;' +
+    '} catch (error) { printStub = null; }' +
+    'out.printCalls = 0;' +
+    'out.printStubActive = printStub !== null && window.print === printStub;' +
+    'if (out.printStubActive) {' +
+    '  const printButton = document.querySelector("[data-trend-print]");' +
+    '  if (printButton) printButton.click();' +
+    '}' +
+    'window.print = realPrint;' +
+    'mark("print");' +
+    /*
+     * 缩放：图旁边真的滚一下滚轮（`dataZoom: inside` 认的就是这个），看那一行提示出不出来。
+     * 没有图的 profile 上如实记 null（这一条只在有历史数据时才谈得上）。
+     */
+    'out.zoomBarBefore = document.querySelectorAll("[data-trend-zoom-bar]").length;' +
+    'out.zoomCanvas = !!document.querySelector("[data-metric-chart] canvas, .chart__canvas canvas");' +
+    'out.zoomBarAfterWheel = null;' +
+    'out.zoomBarAfterReset = null;' +
+    'if (out.zoomCanvas) {' +
+    '  const canvas = document.querySelector("[data-metric-chart] canvas, .chart__canvas canvas");' +
+    '  const rect = canvas.getBoundingClientRect();' +
+    '  canvas.dispatchEvent(new WheelEvent("wheel", {' +
+    '    bubbles: true, cancelable: true, deltaY: -240,' +
+    '    clientX: Math.round(rect.left + rect.width / 2),' +
+    '    clientY: Math.round(rect.top + rect.height / 2)' +
+    '  }));' +
+    '  for (let i = 0; i < 12 && document.querySelectorAll("[data-trend-zoom-bar]").length === 0; i += 1) {' +
+    '    await wait(200);' +
+    '  }' +
+    '  out.zoomBarAfterWheel = document.querySelectorAll("[data-trend-zoom-bar]").length;' +
+    '  out.zoomHintText = (function(){' +
+    '    const el = document.querySelector("[data-trend-zoom-hint]");' +
+    '    return el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "";' +
+    '  })();' +
+    '  const reset = document.querySelector("[data-trend-zoom-reset]");' +
+    '  if (reset) { reset.click(); await wait(500); }' +
+    '  out.zoomBarAfterReset = document.querySelectorAll("[data-trend-zoom-bar]").length;' +
+    '}' +
+    'mark("wheel");' +
+    /*
+     * 导出：**直接调 IPC**（不经按钮，所以与"这一屏有没有数据"无关），写完由 driver
+     * 去磁盘上核对。写的是**当前配置的**导出目录（`存储根/exports/trends/`）——
+     * 刻意**不切存储根**：切根会触发一次存储迁移，而 `--with-data` 用的是操作员真库的副本、
+     * 指向他真实的存储目录（第 27 轮第一版就是那样卡住的）。driver 核对完会把这两个文件删掉。
+     */
+    'const csvText = "\\uFEFFtimestamp_iso,timestamp_ms,metric,channel,channel_name,value,unit,sample_count\\r\\n" +' +
+    '  "2026-09-19T07:30:00.000Z,1758267000000,spl,0,CH1,62.3,dB,12\\r\\n" +' +
+    '  "2026-09-19T07:30:00.000Z,1758267000000,spl,1,\\"1#机组, 东侧\\",58.1,dB,11\\r\\n";' +
+    'const exported = await withTimeout(window.api.trends.exportCsv({' +
+    '  fileName: "probe-trend-export.csv", csv: csvText' +
+    '}), 20000, "导出");' +
+    'out.exportOk = !!(exported && exported.success);' +
+    'out.exportError = exported && !exported.success ? String(exported.error && exported.error.message) : null;' +
+    'out.exportPath = exported && exported.success ? exported.data.path : null;' +
+    'out.exportBytes = exported && exported.success ? exported.data.bytes : null;' +
+    'out.exportRows = exported && exported.success ? exported.data.rows : null;' +
+    'const escaped = await withTimeout(window.api.trends.exportCsv({' +
+    '  fileName: "..\\\\..\\\\probe-escape.csv", csv: csvText' +
+    '}), 20000, "导出（越界文件名）");' +
+    'out.escapeOk = !!(escaped && escaped.success);' +
+    'out.escapePath = escaped && escaped.success ? escaped.data.path : null;' +
+    'out.exportDir = out.exportPath ? out.exportPath.slice(0, out.exportPath.lastIndexOf("\\\\")) : null;' +
+    'out.escapeInsideDir = !!(out.escapePath && out.exportDir &&' +
+    '  out.escapePath.slice(0, out.escapePath.lastIndexOf("\\\\")) === out.exportDir);' +
+    'mark("export");' +
+    'return JSON.stringify(out);' +
+    '})()', 60_000)
+  log('trend zoom/export: ' + JSON.stringify(trendZoom))
+
+  if (trendZoom.probeTimeout === true) {
+    /*
+     * 这一段自己挂了：读回它留的标记，至少说清卡在哪一步（下一条很短，所以即使上一条
+     * 是被拖垮的，这一条通常还能返回）。
+     */
+    const marker = await layout('/trends', '(() => JSON.stringify({' +
+      '  step: document.body.dataset.probeStep || null' +
+      '}))()', 20_000)
+    problems.push(
+      '第 6 条那一组探针超时（卡在 ' + JSON.stringify(marker.step) + ' 那一步）—— ' +
+        '"时间轴缩放 / 导出 / 打印"这三条没有任何结论'
+    )
+  } else {
+    if (trendZoom.exportButton !== 1) {
+      problems.push('图表卡片上没有「导出数据」按钮：' + trendZoom.exportButton)
+    }
+    if (trendZoom.printButton !== 1) {
+      problems.push('图表卡片上没有「打印 / 存为 PDF」按钮：' + trendZoom.printButton)
+    }
+    if (trendZoom.printStubActive === false) {
+      log('trend zoom/export: window.print 换不成桩，打印这一条**没验到**（不点它，免得弹出对话框）')
+    } else if (trendZoom.printCalls !== 1) {
+      problems.push(
+        '点了「打印 / 存为 PDF」之后 window.print 被调用了 ' + trendZoom.printCalls +
+          ' 次（应为 1 次）—— 按钮没有接上打印'
+      )
+    }
+    if (trendZoom.zoomCanvas !== true) {
+      log('trend zoom/export: 这个 profile 里一张图都没渲染，"滚轮缩放"没验到')
+    } else {
+      if (trendZoom.zoomBarAfterWheel !== 1) {
+        problems.push(
+          '滚轮缩放之后没有出现"当前显示第 a–b 个点"那一行（' +
+            JSON.stringify(trendZoom.zoomBarAfterWheel) + '）'
+        )
+      }
+      if (trendZoom.zoomBarAfterReset !== 0) {
+        problems.push('点了「重置缩放」之后提示行还在：' + trendZoom.zoomBarAfterReset)
+      }
+      log(
+        'trend zoom/export: 滚轮前 ' + trendZoom.zoomBarBefore + ' → 滚轮后 ' +
+          trendZoom.zoomBarAfterWheel + ' → 重置后 ' + trendZoom.zoomBarAfterReset +
+          '；提示 ' + JSON.stringify(trendZoom.zoomHintText)
+      )
+    }
+    if (trendZoom.exportOk !== true) {
+      problems.push('导出 CSV 的 IPC 失败了：' + JSON.stringify(trendZoom.exportError))
+    } else {
+      if (trendZoom.exportRows !== 2) {
+        problems.push(
+          '导出返回的数据行数不是 2：' + JSON.stringify(trendZoom.exportRows) +
+            '（返回的行数必须来自**读回**的那一份文件）'
+        )
+      }
+      if (!trendZoom.exportPath || !trendZoom.exportPath.includes('exports')) {
+        problems.push('导出的路径不在导出目录里：' + JSON.stringify(trendZoom.exportPath))
+      }
+      if (trendZoom.escapeInsideDir !== true) {
+        problems.push(
+          '文件名里的 `..\\..\\` 没被收掉（可以写到导出目录之外）：' +
+            JSON.stringify({ path: trendZoom.escapePath, dir: trendZoom.exportDir })
+        )
+      }
+      // driver 侧核对：文件真的在磁盘上、内容真的能读回来（写后读回核对的最后一环）。
+      try {
+        const bytes = fs.statSync(trendZoom.exportPath).size
+        const text = fs.readFileSync(trendZoom.exportPath, 'utf8')
+        const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '')
+        if (bytes !== trendZoom.exportBytes) {
+          problems.push('导出报的字节数与磁盘上的不一致：' + trendZoom.exportBytes + ' vs ' + bytes)
+        }
+        if (lines.length !== 3) {
+          problems.push('导出的文件里不是"表头 + 2 行"：' + JSON.stringify(lines.length))
+        }
+        if (!text.startsWith('\uFEFF')) {
+          problems.push('导出的 CSV 没有 UTF-8 BOM（Excel 打开中文会乱码）')
+        }
+        if (!text.includes('"1#机组, 东侧"')) {
+          problems.push('含逗号的通道名没有被引号包起来（列会错位）')
+        }
+        log(
+          'trend zoom/export: 导出落盘 ' + bytes + ' 字节 / ' + (lines.length - 1) +
+            ' 行数据 → ' + trendZoom.exportPath + '；打印调用 ' + trendZoom.printCalls + ' 次'
+        )
+      } catch (error) {
+        problems.push('导出的文件读不回来：' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    /*
+     * 收尾：把两个探针文件删掉，再试着删掉那个（可能）空掉的导出目录。
+     * 写入用的是**当前配置的**存储根，那在 `--with-data` 下就是操作员真实的存储目录 ——
+     * 探针不该在他的机器上留文件。删完**读回确认**（`existsSync` 为 false）。
+     */
+    for (const file of [trendZoom.exportPath, trendZoom.escapePath]) {
+      if (!file) continue
+      try {
+        fs.rmSync(file, { force: true })
+      } catch (error) {
+        log('trend zoom/export: 探针文件删不掉：' + file + '（' + String(error) + '）')
+      }
+    }
+    const leftovers = [trendZoom.exportPath, trendZoom.escapePath].filter(
+      (file) => !!file && fs.existsSync(file)
+    )
+    if (leftovers.length > 0) {
+      problems.push('导出探针在自己机器上留下了文件：' + JSON.stringify(leftovers))
+    }
+    if (trendZoom.exportDir) {
+      try {
+        if (fs.readdirSync(trendZoom.exportDir).length === 0) fs.rmdirSync(trendZoom.exportDir)
+      } catch {
+        // 目录不空或删不掉都无所谓：它本来就是应用的导出目录。
       }
     }
   }
