@@ -4590,25 +4590,13 @@ async function run() {
     '  videoWall: document.querySelectorAll(".video-wall, .camera-video-wall").length,' +
     '  alarmEntry: document.querySelectorAll(".camera-alarm-entry").length,' +
     /*
-     * ② 每通道声纹特性卡片 + 音频回放（声纹设备那一支）。
-     *
-     * 这里量的是"结构对不对"，不是"有没有数据"：真实数据要一台在线设备，而这一条
-     * 在离线设备上也必须能断言。三件事：
-     *   - 卡片数 = 通道页签数（一通道一张，且都渲染出来了）；
-     *   - 每张卡片恰好是一种读数状态，且"有值"与"有时间"必须同真同假
-     *     （只画数字不画时间 = 把旧读数当实时值卖）；
-     *   - 播放按钮 / 音量滑杆 / 那句"播的是什么"都在。
+     * ② 每通道声纹特性：2026-09-19 第 13 批第 3 条把它从"每通道一张小卡"改成了
+     * **一张表**，并且加了"是否告警"一列与详情弹窗。这一段的量法整块搬到了下面那条
+     * `monitor table/autostart` 探针里（表头六列 / 行数 / 告警格 / 等高 / 点行切通道），
+     * 因为那一条还要做**交互**（点行、点告警），而这一段只取快照。
+     * 这里只留通道页签数：下面的版式断言用它确认"这一页确实是声纹那一支"。
      */
     '  channelTabs: document.querySelectorAll(".channel-tab").length,' +
-    '  channelCards: document.querySelectorAll(".channel-card").length,' +
-    '  channelCardActive: document.querySelectorAll(".channel-card--active").length,' +
-    '  channelCardValues: document.querySelectorAll(".channel-card__values").length,' +
-    '  channelCardStates: [...document.querySelectorAll(".channel-card")].map((card) => ({' +
-    '    badges: card.querySelectorAll(".badge").length,' +
-    '    hasValues: !!card.querySelector(".channel-card__values"),' +
-    '    hasTime: !!card.querySelector(".channel-card__time"),' +
-    '    empty: !!card.querySelector(".channel-card__empty")' +
-    '  })),' +
     '  playButton: document.querySelectorAll(".audio-bar__play").length,' +
     '  playDisabled: (function(){ const b = document.querySelector(".audio-bar__play");' +
     '    return b ? b.disabled : null; })(),' +
@@ -4722,34 +4710,12 @@ async function run() {
    * 与"数据没来"必须能分开：前者是数量对不上，后者是卡片显示"未读取"。
    */
   {
-    const cards = monitorChrome.channelCardStates || []
-    if (monitorChrome.channelCards === 0) {
-      problems.push('实时监测页没有每通道声纹特性卡片（② 要求一通道一张）')
-    } else if (monitorChrome.channelCards !== monitorChrome.channelTabs) {
-      problems.push(
-        '每通道卡片数与通道页签数不一致：卡片 ' + monitorChrome.channelCards +
-          ' 个 vs 页签 ' + monitorChrome.channelTabs + ' 个'
-      )
-    }
-    if (monitorChrome.channelCards > 0 && monitorChrome.channelCardActive !== 1) {
-      problems.push('高亮的通道卡片不是恰好一张：' + monitorChrome.channelCardActive)
-    }
-    for (let index = 0; index < cards.length; index += 1) {
-      const card = cards[index]
-      if (card.badges !== 1) {
-        problems.push('第 ' + (index + 1) + ' 张通道卡片的读数状态标记不是恰好一个：' + card.badges)
-      }
-      // 有值 ⇔ 有时间：只有数字没有时间的那张卡片是在把旧读数当实时值卖。
-      if (card.hasValues !== card.hasTime) {
-        problems.push(
-          '第 ' + (index + 1) + ' 张通道卡片的"数值"与"更新时间"不同真同假：' + JSON.stringify(card)
-        )
-      }
-      // 空态与数值二选一，不许都出现或都不出现。
-      if (card.empty === card.hasValues) {
-        problems.push('第 ' + (index + 1) + ' 张通道卡片既没有空态也没有数值：' + JSON.stringify(card))
-      }
-    }
+    /*
+     * ② 的"每通道一张卡片"那一套断言**整块搬走**了（2026-09-19 第 13 批第 3 条把它改成
+     * 一张表）：表头六列 / 行数 / 告警格 / 等高 / 点行切通道 / 点告警开详情，现在由下面那条
+     * `monitor table/autostart` 探针负责（它还要做交互，而这里只取快照）。
+     * 这里只留音频条那三件（与表无关，仍然是这一支的控件）。
+     */
     if (monitorChrome.playButton !== 1) {
       problems.push('实时监测页的音频播放按钮不是恰好一个：' + monitorChrome.playButton)
     }
@@ -4761,8 +4727,7 @@ async function run() {
         monitorChrome.previewHint)
     }
     log(
-      'monitor chrome/②: 卡片 ' + monitorChrome.channelCards + '/' + monitorChrome.channelTabs +
-        '，有数值的 ' + monitorChrome.channelCardValues + ' 张，播放按钮 disabled=' +
+      'monitor chrome/②: 通道页签 ' + monitorChrome.channelTabs + ' 个，播放按钮 disabled=' +
         monitorChrome.playDisabled + '（无预览帧时应当为 true），音量 ' + monitorChrome.volumeValue + '%'
     )
   }
@@ -7176,6 +7141,278 @@ async function run() {
      */
     if (monitorOffline.badgePresent && !String(monitorOffline.badgeText || '').includes('上次')) {
       problems.push('「上次内容」角标上的字不对：' + JSON.stringify(monitorOffline.badgeText))
+    }
+  }
+
+  /**
+   * 业主 2026-09-19 第 13 批第 3 条（实时监测第 2、3 条）：
+   *   ① 「选中设备就默认开始接收数据，不用点击开始监测按钮」→ 页头**不该再有**那个按钮，
+   *      而会话必须**已经自己开过**（离线设备上就是"尝试过并失败"，那也是"开过"）。
+   *   ② 每通道特性表：8 行 ×（通道 / 声压级 / 主频 / 平稳度 / 频带能量比 / 告警），
+   *      高度与同排的图谱卡片一致，位置在原「频谱」那一格，点行切通道，点告警开详情。
+   *
+   * WHY THIS DRILL IS SO LONG
+   * 这一段量的是**两件完全不同的事**：一件是"控件没了"（反向），一件是"表对了"（正向）。
+   * 第一件最容易做成假通过 —— 探针在别的地方也能量到 `.btn`，所以这里数的是
+   * `.monitor-head` 里**除了通道页签以外**的按钮（通道页签本来就在那一块里）。
+   * 第二件要能分开"表没渲染"与"表渲染了但没有数据"：行数、表头、每行恰好一种告警格
+   * 都是无条件的；有没有真的告警记录只影响"点开详情"那一次交互（operator 库里有告警，
+   * 但**不假设**一定有，测不到就写进日志而不是报问题 —— 报问题会让这条断言在别的库上假红）。
+   */
+  const monitorTable = await layout('/monitor', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const out = {};' +
+    /*
+     * 先把设备切到**声纹设备**（`kind === "acousticBox"`）。
+     *
+     * 为什么必须显式切：跑到这里时顶栏选中的设备是前面那条声呐流程留下来的那台
+     * （`devices.selectedDeviceId` 是 store 里的状态，不随路由复位），而声呐那一支
+     * 一块图谱都不渲染 —— 不切的话这段探针量到的全是 0，看起来像"表没做出来"。
+     * 从 `devices.list()` 里按 kind 找，不写死设备名。
+     */
+    'const listed = await window.api.devices.list();' +
+    'const all = listed && listed.success ? listed.data : [];' +
+    'const box = all.find((d) => d.kind === "acousticBox") || null;' +
+    'out.boxName = box ? box.name : null;' +
+    'if (!box) return JSON.stringify(Object.assign(out, { reason: "no-box" }));' +
+    'const select = document.querySelector("#topbar-page-slot select");' +
+    'if (!select) return JSON.stringify(Object.assign(out, { reason: "no-select" }));' +
+    'const option = [...select.options].find((o) => (o.textContent || "").indexOf(box.name) >= 0);' +
+    'if (!option) {' +
+    '  return JSON.stringify(Object.assign(out, {' +
+    '    reason: "no-option",' +
+    '    options: [...select.options].map((o) => (o.textContent || "").trim())' +
+    '  }));' +
+    '}' +
+    'if (select.value !== option.value) {' +
+    '  select.value = option.value;' +
+    '  select.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '}' +
+    'for (let i = 0; i < 20 && !document.querySelector("[data-channel-feature-table]"); i += 1) {' +
+    '  await sleep(250);' +
+    '}' +
+    /*
+     * ① 页头那一块里除通道页签以外的按钮。删掉「开始监测」之后应当一个都不剩：
+     * 会话状态本身还在（下面那枚徽标），但"改变状态"的手段已经由自动开始接管。
+     */
+    'const head = document.querySelector(".monitor-head");' +
+    'out.headButtons = head' +
+    '  ? [...head.querySelectorAll("button")]' +
+    '      .filter((b) => !b.classList.contains("channel-tab"))' +
+    '      .map((b) => text(b))' +
+    '  : null;' +
+    /*
+     * 会话徽标（`data-monitor-session-badge`）：四种语言里"已停止"那一句就是
+     * "自动开始没跑"的证据。这台设备离线，所以正常结局是「数据流异常」——
+     * 那也是**开过**（尝试过）。
+     */
+    'const badge = document.querySelector("[data-monitor-session-badge]");' +
+    'out.sessionBadge = text(badge);' +
+    'const STOPPED = ["实时数据已停止", "Live data stopped", "Datos en vivo detenidos", "Canlı veri durduruldu"];' +
+    'out.sessionStopped = STOPPED.indexOf(out.sessionBadge) >= 0;' +
+    // ② 表本身：行数 / 表头列数 / 表头文字。
+    'const table = document.querySelector("[data-channel-feature-table]");' +
+    'out.table = !!table;' +
+    'out.rows = document.querySelectorAll("[data-channel-feature-row]").length;' +
+    'out.tabs = document.querySelectorAll(".channel-tab").length;' +
+    'out.headers = table ? table.querySelectorAll("thead th").length : 0;' +
+    'out.headerTexts = table' +
+    '  ? [...table.querySelectorAll("thead th")].map((th) => text(th))' +
+    '  : [];' +
+    /*
+     * 每一行必须**恰好**有一种告警格：红按钮（还有没确认的）/ 灰按钮（都确认过了）/
+     * "正常"文字。一个都没有 = 那一格是空的（会被读成"没数据"）。
+     */
+    'out.alarmCells = 0;' +
+    'out.alarmButtons = 0;' +
+    'out.alarmNone = 0;' +
+    'out.rowsAlarmCellCounts = [...document.querySelectorAll("[data-channel-feature-row]")].map((row) => {' +
+    '  const buttons = row.querySelectorAll("[data-channel-alarm]").length;' +
+    '  const none = row.querySelectorAll("[data-channel-alarm-none]").length;' +
+    '  return buttons + none;' +
+    '});' +
+    'out.alarmButtons = document.querySelectorAll("[data-channel-alarm]").length;' +
+    'out.alarmNone = document.querySelectorAll("[data-channel-alarm-none]").length;' +
+    'out.alarmCells = out.alarmButtons + out.alarmNone;' +
+    // "有值"与"有时间"必须同真同假（与旧卡片同一条底线：旧读数不许看起来像实时值）。
+    'out.rowsWithValues = [...document.querySelectorAll("[data-channel-feature-row] .channel-table__value")].length;' +
+    'out.rowsWithTime = [...document.querySelectorAll("[data-channel-feature-row] .channel-table__time")].length;' +
+    /*
+     * 位置与等高：`data-channel-feature-table` 必须在图谱网格的**第一张卡**里
+     * （业主：「把这个卡片挪到当前的频谱卡片的位置」），并且同一排的卡片高度一致。
+     */
+    'const grid = document.querySelector(".graph-grid");' +
+    'const cards = grid ? [...grid.querySelectorAll(":scope > .card")] : [];' +
+    'out.gridCards = cards.length;' +
+    'out.tableCardIndex = cards.findIndex((card) => card.querySelector("[data-channel-feature-table]"));' +
+    'out.gridRows = (function(){' +
+    '  const rows = [];' +
+    '  cards.forEach((card) => {' +
+    '    const rect = card.getBoundingClientRect();' +
+    '    const found = rows.find((row) => Math.abs(row.top - rect.top) < 4);' +
+    '    if (found) found.heights.push(Math.round(rect.height));' +
+    '    else rows.push({ top: rect.top, heights: [Math.round(rect.height)] });' +
+    '  });' +
+    '  return rows.map((row) => row.heights);' +
+    '})();' +
+    // ③ 点一行通道：三张图（频谱/时频域/声学波形）跟着切 —— 判据是"当前通道"真的换了。
+    'const enabledRows = [...document.querySelectorAll("[data-channel-feature-row]")]' +
+    '  .filter((row) => { const b = row.querySelector(".channel-table__select"); return b && !b.disabled; });' +
+    'const activeBefore = document.querySelector(".channel-table__row--active");' +
+    'out.activeRowBefore = activeBefore ? activeBefore.getAttribute("data-channel-feature-row") : null;' +
+    'const target = enabledRows.find((row) => row !== activeBefore);' +
+    'out.clickedRow = target ? target.getAttribute("data-channel-feature-row") : null;' +
+    'if (target) {' +
+    '  target.click();' +
+    '  for (let i = 0; i < 20; i += 1) {' +
+    '    const now = document.querySelector(".channel-table__row--active");' +
+    '    if (now && now.getAttribute("data-channel-feature-row") === out.clickedRow) break;' +
+    '    await sleep(250);' +
+    '  }' +
+    '}' +
+    'const activeAfter = document.querySelector(".channel-table__row--active");' +
+    'out.activeRowAfter = activeAfter ? activeAfter.getAttribute("data-channel-feature-row") : null;' +
+    'const activeTab = document.querySelector(".channel-tab--active");' +
+    'out.activeTabText = text(activeTab);' +
+    // ④ 点告警那一格：详情弹窗里必须列出这一路的告警（同一次查询的那一份）。
+    'const alarmButton = document.querySelector("[data-channel-alarm]");' +
+    'out.detailOpened = false;' +
+    'if (alarmButton) {' +
+    '  alarmButton.click();' +
+    '  for (let i = 0; i < 20 && !document.querySelector("[data-channel-alarm-detail-list]"); i += 1) {' +
+    '    await sleep(250);' +
+    '  }' +
+    '  const dialog = document.querySelector("[role=dialog]");' +
+    '  out.detailOpened = !!document.querySelector("[data-channel-alarm-detail-list]") ||' +
+    '    !!document.querySelector("[data-channel-alarm-detail-empty]");' +
+    '  out.detailItems = document.querySelectorAll("[data-channel-alarm-detail-id]").length;' +
+    '  out.detailTypes = document.querySelectorAll("[data-channel-alarm-types]").length;' +
+    '  out.detailTitle = dialog ? text(dialog.querySelector(".panel__title")) : null;' +
+    '  const close = dialog ? dialog.querySelector(".panel__footer .btn--primary") : null;' +
+    '  if (close) close.click();' +
+    '  for (let i = 0; i < 12 && document.querySelector("[role=dialog]"); i += 1) await sleep(120);' +
+    '  out.detailClosed = !document.querySelector("[role=dialog]");' +
+    '}' +
+    'out.pageAlive = !!document.querySelector(".page");' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+  log('monitor table/autostart: ' + JSON.stringify(monitorTable))
+
+  {
+    if (monitorTable.reason === 'no-box') {
+      problems.push('每通道特性表探针：库里没有声纹设备（acousticBox），这一条没验到')
+    } else if (monitorTable.reason === 'no-select' || monitorTable.reason === 'no-option') {
+      problems.push(
+        '每通道特性表探针：顶栏设备下拉里找不到这台声纹设备：' +
+          JSON.stringify(monitorTable.options || [])
+      )
+    } else if (monitorTable.reason) {
+      problems.push('每通道特性表探针没跑起来：' + JSON.stringify(monitorTable.reason))
+    } else {
+    if (monitorTable.table !== true) {
+      problems.push('实时监测页没有每通道特性表（[data-channel-feature-table]）')
+    }
+    /*
+     * ① 按钮删干净了。`headButtons` 为 null = 连 `.monitor-head` 都没了，那是另一件事。
+     */
+    if (monitorTable.headButtons === null) {
+      problems.push('实时监测页找不到设备头那一块（.monitor-head）')
+    } else if (monitorTable.headButtons.length !== 0) {
+      problems.push(
+        '设备头里还有按钮（「开始监测 / 停止监测」应当已按第 13 批第 3 条删掉）：' +
+          JSON.stringify(monitorTable.headButtons)
+      )
+    }
+    /*
+     * ① 反过来证明"默认开始接收数据"真的跑了：徽标不许停在「已停止」。
+     * 离线设备上的正常结局是「数据流异常」（尝试过、失败了），那也是开过。
+     */
+    if (monitorTable.sessionStopped === true) {
+      problems.push(
+        '进页面之后会话还停在「已停止」：自动开始没有跑（徽标文字 ' +
+          JSON.stringify(monitorTable.sessionBadge) + '）'
+      )
+    }
+    // ② 表结构。
+    if (monitorTable.rows === 0) {
+      problems.push('每通道特性表一行都没有（表渲染了但没有通道）')
+    } else if (monitorTable.rows !== monitorTable.tabs) {
+      problems.push(
+        '每通道特性表的行数与通道页签数不一致：行 ' + monitorTable.rows +
+          ' vs 页签 ' + monitorTable.tabs
+      )
+    }
+    if (monitorTable.headers !== 6) {
+      problems.push(
+        '每通道特性表的表头不是六列（通道 + 四项指标 + 告警）：' + monitorTable.headers +
+          '（' + JSON.stringify(monitorTable.headerTexts) + '）'
+      )
+    }
+    const badCells = (monitorTable.rowsAlarmCellCounts || []).filter((count) => count !== 1)
+    if (badCells.length > 0) {
+      problems.push(
+        '有 ' + badCells.length + ' 行的告警格不是恰好一个（空格会被读成"没数据"）：' +
+          JSON.stringify(monitorTable.rowsAlarmCellCounts)
+      )
+    }
+    if (monitorTable.alarmCells !== monitorTable.rows) {
+      problems.push(
+        '告警格总数与行数不一致：格 ' + monitorTable.alarmCells + ' vs 行 ' + monitorTable.rows
+      )
+    }
+    // "旧读数必须带时间"这条底线要按行守：有值没时间 = 把旧读数当实时值卖。
+    const valueCells = monitorTable.rowsWithValues;
+    if (valueCells > 0 && monitorTable.rowsWithTime !== Math.floor(valueCells / 4)) {
+      problems.push(
+        '有读数的行与带时间的行对不上：数值格 ' + valueCells + ' 个，时间 ' +
+          monitorTable.rowsWithTime + ' 个（每个有读数的行有 4 格）'
+      )
+    }
+    // 位置：特性表在图谱网格的第一张卡里（= 原「频谱」那一格）。
+    if (monitorTable.tableCardIndex !== 0) {
+      problems.push(
+        '每通道特性表不在图谱网格的第一格（应在原「频谱」的位置）：index ' +
+          monitorTable.tableCardIndex + '（共 ' + monitorTable.gridCards + ' 张卡）'
+      )
+    }
+    // 等高：同一排的卡片高度必须一致（业主：「高度和左边的一致」）。
+    for (const heights of monitorTable.gridRows || []) {
+      const min = Math.min(...heights);
+      const max = Math.max(...heights);
+      if (max - min > 2) {
+        problems.push('同一排的图谱卡片高度不一致（第 13 批第 3 条要求一致）：' + JSON.stringify(heights))
+      }
+    }
+    // ③ 点行切通道。
+    if (monitorTable.clickedRow === null) {
+      problems.push('特性表里没有第二路可点的通道（只有一个通道时这一条验不到）')
+    } else if (monitorTable.activeRowAfter !== monitorTable.clickedRow) {
+      problems.push(
+        '点了通道 ' + monitorTable.clickedRow + ' 之后当前通道没变（还在 ' +
+          monitorTable.activeRowAfter + '）—— 三张图不会跟着切'
+      )
+    }
+    // ④ 告警详情（有没有记录取决于这个库，所以只记日志、不报问题）。
+    if (monitorTable.alarmButtons > 0) {
+      if (monitorTable.detailOpened !== true) {
+        problems.push('点了告警那一格之后详情弹窗没有出现')
+      }
+      if (monitorTable.detailItems === 0) {
+        problems.push('告警详情弹窗里一条记录都没有（而那一格说有告警）')
+      }
+      if (monitorTable.detailClosed !== true) {
+        problems.push('告警详情弹窗关不掉（关闭按钮没有生效）')
+      }
+    } else {
+      log(
+        'monitor table/autostart: 这个库里这台设备没有最近告警（' + monitorTable.alarmNone +
+          ' 行显示"正常"），详情弹窗这一条没验到'
+      )
+    }
+    if (monitorTable.pageAlive !== true) {
+      problems.push('每通道特性表这一段之后页面本身没渲染出来')
+    }
     }
   }
 

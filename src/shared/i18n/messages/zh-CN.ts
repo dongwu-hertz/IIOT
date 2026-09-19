@@ -579,8 +579,12 @@ export const zhCN = {
     deviceLabel: '监测设备',
     noAddress: '无地址',
     channelHint: '{count} 个通道',
-    start: '开始监测',
-    stop: '停止监测',
+    /*
+     * 这里原来还有 `start: '开始监测'` / `stop: '停止监测'`：业主 2026-09-19 第 13 批
+     * 第 3 条要求「选中设备就默认开始接收数据，不用点击开始监测按钮」，按钮删掉之后
+     * 这两个词条没有任何地方再用（会话状态仍然由页头那枚徽标显示），
+     * 四本目录同步删除 —— 理由见 §15.80。
+     */
     channelSelect: '通道选择',
     /** 声呐那一支的机型徽标（顶栏状态行）。 */
     sonarFamilyBadge: 'SN-16 空气声呐',
@@ -614,6 +618,29 @@ export const zhCN = {
     channelFeature_unread: '未读取',
     channelFeatureUnread: '这一路还没有读到过特征帧',
     channelFeatureUpdated: '更新于 {time}',
+    /*
+     * 2026-09-19 第 13 批第 3 条：这张卡片从"每通道一张小卡"改成**一张表**
+     * （8 行 × 通道序号/声压级/主频/平稳度/频带能量比/是否告警），并且
+     * 「点击告警则显示详细的告警状态」。下面这一组就是表头与告警那一列/详情弹窗的词条。
+     */
+    channelFeatureColumnChannel: '通道',
+    channelFeatureColumnAlarm: '告警',
+    channelAlarmYes: '告警',
+    /*
+     * 有记录但**都确认过了**：不标红（确认过的不再打断人），但入口留着 ——
+     * 已确认不等于没发生过（判据在 `@shared/domain/channel-alarm.ts`）。
+     */
+    channelAlarmAcknowledged: '已确认',
+    channelAlarmNone: '正常',
+    channelAlarmOpen: '查看这一路的详细告警状态',
+    /*
+     * 这一列是**采样窗口**里的结论（最近 N 条），必须把 N 说出来：
+     * 不写就等于把"最近这一批记录里没有"说成了"历史上从没有过"。
+     */
+    channelAlarmSampleHint: '告警一列来自最近 {count} 条告警记录；已确认的不再标红，仍可查看详情',
+    channelAlarmDetailTitle: '{channel} 详细告警状态',
+    channelAlarmAcknowledgedState: '已确认',
+    channelAlarmUnacknowledgedState: '未确认',
     audioSection: '实时音频',
     audioPlay: '播放',
     audioStop: '停止播放',

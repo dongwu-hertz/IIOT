@@ -143,6 +143,11 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
      * 读设备列表挑出有点位的那一台、打开它的详情页看那两个入口、点进地图页确认选中了它，
      * 外加"点位只录一半的设备上不许有那两个入口"那条边界。三条都是**只读**的
      * （点链接只是导航），所以它们同样排在最后不影响这条不变量。
+     *
+     * 2026-09-19（第 24 轮）加了**第九条**：「每通道特性表 + 默认开始接收数据」——
+     * 它也是**只读**的（点一行通道切通道、点告警格开一个弹窗再关掉，都不写库、不写设备），
+     * 所以同样排在最后。数字从 8 改成 9，理由与第 18 轮那次一样：只读探针的条数变了，
+     * 而"写操作必须在最后"这条不变量不变。
      */
     const mockStart = driver.indexOf('await startMockE2Device(')
     const report = driver.indexOf("log('problems     : ' + problems.length)")
@@ -151,11 +156,11 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
     const layoutsAfterMock = (afterMock.match(/await layout\(/g) || []).length
     assert.equal(
       layoutsAfterMock,
-      8,
+      9,
       '假设备启动之后还有别的探针在跑（' + layoutsAfterMock + ' 次 layout）——' +
         '写操作的探针必须排在所有只读探针之后'
     )
-    // 八次都是"写操作那些流程"与那几条只读的页面探针，不是别的页面探针。
+    // 九次都是"写操作那些流程"与那几条只读的页面探针，不是别的页面探针。
     assert.ok(afterMock.includes('const e2Flow = await layout('), '听诊盒子那一套不见了')
     assert.ok(afterMock.includes('const sonarFlow = await layout('), '空气声呐那一套不见了')
     assert.ok(
@@ -169,6 +174,10 @@ describe('E2 端到端探针的假设备：端点覆盖', () => {
     assert.ok(
       afterMock.includes('const monitorOffline = await layout('),
       '监测页那条"没有活数据"的提示不见了'
+    )
+    assert.ok(
+      afterMock.includes('const monitorTable = await layout('),
+      '每通道特性表（第 13 批第 3 条）那一条不见了'
     )
     assert.ok(afterMock.includes('const gisCard = await layout('), '地址信息 GIS 那一条不见了')
   })

@@ -380,9 +380,21 @@ describe('实时检测页：三种机型三支内容', () => {
 
   it('声呐**不会**被开一条实时监测会话（会去开不存在的 /features_stream）', () => {
     const mounted = between(monitorView, 'onMounted(async () => {', '\n})', 'onMounted')
-    assert.ok(
-      /else if \(isVoiceprint\.value\) \{\s*await startSession\(\)/.test(mounted),
+    /*
+     * 第 13 批第 3 条之后这里调的是 `autoStartSessionIfNeeded()`，而它内部**第一道**判据
+     * 就是 `hasLiveStream: isVoiceprint.value`（`@shared/domain/monitor-autostart.ts`
+     * 的 `no-stream`）—— 判据从"这一支的 if"搬进了纯函数，声呐仍然不会被开会话。
+     * 所以这一条改成钉住那个入参，而不是钉住那句已经搬走的 `if`。
+     */
+    assert.match(
+      mounted,
+      /else if \(isVoiceprint\.value\) \{[\s\S]{0,600}?await autoStartSessionIfNeeded\(\)/,
       'onMounted 里会话的启动条件不再是"声纹设备"'
+    )
+    assert.match(
+      monitorView,
+      /hasLiveStream: isVoiceprint\.value/,
+      '自动开始的判定没有把"这一支有没有实时流"喂进去（声呐会被开会话）'
     )
     assert.equal(
       /else await startSession\(\)/.test(mounted),

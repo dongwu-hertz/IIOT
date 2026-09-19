@@ -402,11 +402,16 @@ describe('B2. 实时监测页：相机块并排，声学箱分支不动', () => 
     assert.ok(box.includes('<AudioLevelMeter'), '音量条不见了')
     assert.ok(box.includes('<SpectrogramViewer'), '时谱图不见了')
     assert.ok(box.includes('<EChart'), '图表不见了')
-    // 会话启停按钮属于设备头那一块（两个设备族共用），它也必须还在。
+    /*
+     * 会话启停按钮**已经不在了**（业主 2026-09-19 第 13 批第 3 条：选中设备就默认开始
+     * 接收数据，不用点「开始监测」）。这一条从"恰好一个按钮"改成"**恰好零个**"：
+     * 判据与三条自动开始的路径一起钉在 `tests/monitor-autostart.test.ts` 里，
+     * 这里只守住"这一页不再有那个按钮"。
+     */
     assert.equal(
       count(monitor, /@click="toggleSession"/g),
-      1,
-      '「开始 / 停止」会话按钮不是恰好一个'
+      0,
+      '「开始 / 停止」会话按钮应该已经删掉（第 13 批第 3 条）'
     )
     /*
      * ③b 之后这一块从两块（频谱 + 时谱）变成四块（另加声学波形与每通道特性），
@@ -613,17 +618,28 @@ describe('相机界面这一轮的目录条目', () => {
   it('㉔ 告警信息就地列出来，取数与告警记录页同源', () => {
     assert.ok(monitor.includes('data-camera-alarms'), '相机页没有告警信息那一块')
     assert.ok(monitor.includes('data-camera-alarms-empty'), '没有"这台相机还没有告警"的空态')
+    /*
+     * 这一次查询现在**两种机型共用**（第 13 批第 3 条要给每一路通道标"是否告警"，
+     * 它读的是同一份 `alarms.query`），条数也从写死的 10 改成具名常量
+     * `DEVICE_ALARM_SAMPLE`（50）：采样窗口是界面上要说明的事实，不该是一个藏在
+     * IPC 调用里的字面量。所以断言改成"按这台设备查 + 条数来自那个常量"。
+     */
     assert.match(
       monitor,
-      /window\.api\.alarms\.query\(\{ deviceId, limit: 10 \}\)/,
+      /window\.api\.alarms\.query\(\{ deviceId, limit: DEVICE_ALARM_SAMPLE \}\)/,
       '告警信息不是按这台设备查的（那会显示别的相机的告警）'
+    )
+    assert.match(
+      monitor,
+      /const DEVICE_ALARM_SAMPLE = \d+/,
+      'DEVICE_ALARM_SAMPLE 不是一个具名常量（读它的地方会各写一个数字）'
     )
     // 换设备要重新读：否则列表还是上一台的。
     const switchBlock = monitor.slice(monitor.indexOf('watch(selectedDeviceId'))
     assert.match(
-      switchBlock.slice(0, 2500),
-      /await loadCameraAlarms\(id\)/,
-      '换相机之后没有重新读告警信息'
+      switchBlock.slice(0, 3000),
+      /await loadDeviceAlarms\(id\)/,
+      '换设备之后没有重新读告警信息'
     )
     // 切走之后到达的结果不许写进另一台的列表。
     assert.match(

@@ -38,6 +38,14 @@ import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { AlarmEvent, Channel, Device, RealtimeFeature } from '@shared/domain/models'
 import { CHANNEL_COUNT } from '@shared/domain/models'
+import {
+  alarmSeverityBadgeClass,
+  channelAlarmOf,
+  channelIsAlarming,
+  groupAlarmsByChannel,
+  type ChannelAlarmSummary
+} from '@shared/domain/channel-alarm'
+import { decideMonitorAutoStart } from '@shared/domain/monitor-autostart'
 import type { CameraLiveState, CameraLiveStatus } from '@shared/domain/camera-live'
 import {
   buildCameraNvrMenu,
@@ -50,7 +58,7 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { ALL_STREAM_KINDS, useMonitorStore } from '@renderer/stores/monitor'
-import { streamKindLabel } from '@renderer/lib/labels'
+import { alarmTypeLabel, describeAlarmMask, eventSeverityLabel, streamKindLabel } from '@renderer/lib/labels'
 import {
   channelActivityLabelKey,
   channelReceivesData,
@@ -85,6 +93,7 @@ import {
   type CameraFlip
 } from '@renderer/lib/cameraLivePrefs'
 import EmptyState from '@renderer/components/EmptyState.vue'
+import AppModal from '@renderer/components/AppModal.vue'
 import MetricCard from '@renderer/components/MetricCard.vue'
 import EChart from '@renderer/components/EChart.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
@@ -260,15 +269,16 @@ function showActivity(tab: ChannelTab): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * 每通道一张卡片，显示**该路最后一次读到的**声纹特性。
+ * 每一路一行：**该路最后一次读到的**声纹特性 + 这一路有没有告警。
  *
  * 为什么是"最后一次"而不是"此刻"：设备一次只在一路通道上开流（PROTOCOL-FINDINGS 4.3），
- * 切到别的通道之后这一路就没有帧了。三种状态在卡片上是分开写的（`channelFeatures.ts`）：
+ * 切到别的通道之后这一路就没有帧了。三种读数状态在行里分开写（`channelFeatures.ts`）：
  * 实时 / 最后一次读数（带时间）/ 未读取 —— 把"旧读数"画成"实时"比不显示更糟。
  *
- * 这个 computed 只做**取数**，状态判定全部走 `channelFeatureState()`（可单测的纯函数）。
+ * 这个 computed 只做**取数**，状态判定全部走可单测的纯函数
+ * （`channelFeatureState()` 与 `@shared/domain/channel-alarm.ts`）。
  */
-interface ChannelFeatureCardView {
+interface ChannelFeatureRow {
   index: number
   label: string
   name: string
@@ -276,11 +286,16 @@ interface ChannelFeatureCardView {
   state: ChannelState
   feature: RealtimeFeature | null
   featureState: ChannelFeatureState
+  /** 这一路在这批最近告警里的小结；没有就是 `null`（详情按钮不出现）。 */
+  alarm: ChannelAlarmSummary | null
+  /** **还有没确认的**才算告警（判据在 `channel-alarm.ts`，已确认的不再标红）。 */
+  alarming: boolean
 }
 
-const channelFeatureCards = computed<ChannelFeatureCardView[]>(() =>
+const channelFeatureRows = computed<ChannelFeatureRow[]>(() =>
   channelTabs.value.map((tab) => {
     const feature = monitor.channelFeatureOf(tab.index)
+    const alarm = channelAlarmOf(alarmsByChannel.value, tab.index)
     return {
       index: tab.index,
       label: tab.label,
@@ -294,7 +309,9 @@ const channelFeatureCards = computed<ChannelFeatureCardView[]>(() =>
         // 上一路的帧数算成"这一路正在实时"。
         frameCount: tab.index === monitor.channelId ? monitor.frameCountOf('features') : 0,
         hasFeature: feature !== null
-      })
+      }),
+      alarm,
+      alarming: channelIsAlarming(alarm)
     }
   })
 )
@@ -309,6 +326,55 @@ function featureStateClass(state: ChannelFeatureState): string {
 /** 读数的时间（本地时间，秒级就够：帧率是 10 Hz 量级，不是毫秒级的判断依据）。 */
 function featureTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString()
+}
+
+// ---------------------------------------------------------------------------
+// ③ 「点击告警则显示详细的告警状态」（业主 2026-09-19 第 13 批第 3 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 详情弹窗对哪一路打开；`null` = 关着。
+ *
+ * 存**通道号**而不是那一行对象：告警列表会随每次读库变（这一页在读设备的时候会重读一次），
+ * 存对象的话弹窗里显示的是"打开那一刻的那一份"，与表里那一列可能不一致。
+ */
+const channelAlarmDetail = ref<number | null>(null)
+
+/** 弹窗打开时那一路的读数行（通道不存在或列表刚清空时是 `undefined`）。 */
+const channelAlarmDetailRow = computed(() =>
+  channelFeatureRows.value.find((row) => row.index === channelAlarmDetail.value)
+)
+
+/**
+ * 弹窗里那一路的**全部**（这一批查询里的）告警，最近的在最前。
+ *
+ * 与表里那一列同源（`deviceAlarms`），所以"表里说 3 条、点开只有 1 条"不可能发生。
+ * 排序在这里做一次：`alarms.query` 今天按时间倒序返回，但界面不该依赖上游的排序。
+ */
+const channelAlarmDetailItems = computed<AlarmEvent[]>(() => {
+  const index = channelAlarmDetail.value
+  if (index === null) return []
+  return deviceAlarms.value
+    .filter((alarm) => alarm.channelId === index)
+    .slice()
+    .sort((a, b) => b.timestamp - a.timestamp)
+})
+
+function openChannelAlarmDetail(index: number): void {
+  channelAlarmDetail.value = index
+}
+
+function closeChannelAlarmDetail(): void {
+  channelAlarmDetail.value = null
+}
+
+/** 详情里那一行的故障类型文本（复用告警中心同一套解码，不另写一份）。 */
+function alarmTypesText(alarm: AlarmEvent): string {
+  // 位图 > 0 时走 `describeAlarmMask`：它会把"设备设了一个本版本不认识的位"如实说出来，
+  // 这比空列表诚实（听诊盒子族的位图恒为 0，那种情况由 `deviceReason` 说）。
+  if (alarm.alarmMask > 0) return describeAlarmMask(alarm.alarmMask)
+  if (alarm.alarmTypes.length > 0) return alarm.alarmTypes.map(alarmTypeLabel).join(' + ')
+  return t('alarms.none')
 }
 
 /**
@@ -633,13 +699,58 @@ async function startSession(): Promise<void> {
   await monitor.start(ALL_STREAM_KINDS, activeChannelIndex.value)
 }
 
-async function toggleSession(): Promise<void> {
-  if (isLive.value) {
-    await monitor.stop()
-    return
-  }
+/**
+ * 自动开始的尝试计数（业主 2026-09-19 第 13 批第 3 条）。
+ *
+ * 「这一次页面停留里为这台设备自动开过几次」。三条路径（进页面 / 切换设备 /
+ * 设备刚上线）共用它，切设备时清零 —— 计数是**每台设备**的，不是全局的。
+ */
+const autoStartAttempts = ref(0)
+
+function resetAutoStartAttempts(): void {
+  autoStartAttempts.value = 0
+}
+
+/**
+ * 「进页面 / 换设备 / 设备刚上线」共用的自动开始。
+ *
+ * 判定在 `@shared/domain/monitor-autostart.ts`（纯函数，可单测），这里只做两件事：
+ * 把这一页的事实喂进去，把结论变成一次 `monitor.start()`。**没有**第二个"开始监测"
+ * 按钮可点——按钮按业主的要求删掉了，所以这三条路径漏掉任何一条，操作员就只能刷新页面。
+ *
+ * 失败不在这里吞掉也不在这里报警：`monitor.start()` 的失败会落到会话状态（`error`）上，
+ * 页头那枚徽标如实显示（`sessionError`），与改造前按按钮失败时的表现一致。
+ */
+async function autoStartSessionIfNeeded(): Promise<void> {
+  const decision = decideMonitorAutoStart({
+    hasLiveStream: isVoiceprint.value,
+    deviceId: selectedDeviceId.value,
+    deviceStatus: selectedDevice.value?.status ?? 'UNKNOWN',
+    sessionState: monitor.state,
+    sessionDeviceId: monitor.deviceId,
+    attempts: autoStartAttempts.value
+  })
+  if (decision.action !== 'start') return
+  autoStartAttempts.value += 1
   await startSession()
 }
+
+/**
+ * 设备**刚上线**：自动开始一次（业主第 3 条的下半句）。
+ *
+ * 为什么需要这一条：本机探活可能比现实慢一拍（软件刚开机、设备刚上电），那时第一次
+ * 自动尝试注定失败，而删除按钮之后就没有第二次机会了。所以在线状态从"不是 ONLINE"
+ * 变成"ONLINE"时清零尝试计数并重新问一次判定 —— 判定仍然只有一处，这里只负责
+ * "什么时候再问一次"。
+ */
+watch(
+  () => selectedDevice.value?.status,
+  async (status, previous) => {
+    if (status !== 'ONLINE' || previous === 'ONLINE') return
+    resetAutoStartAttempts()
+    await autoStartSessionIfNeeded()
+  }
+)
 
 /**
  * Switching channel RESTARTS the streams.
@@ -805,32 +916,52 @@ async function refreshCameraState(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 这一台相机的告警信息（第 24 条）
+// 这一台设备的告警信息（相机第 24 条 + 声纹第 13 批第 3 条的「是否告警」列）
 // ---------------------------------------------------------------------------
 
 /**
- * 最近几条告警，就地显示在「告警配置」那张卡片里。
+ * 最近几条告警，就地显示在「告警配置」那张卡片里（相机），同时供**每通道特性表**
+ * 的「是否告警」一列分组（声纹设备）。
  *
  * 为什么在页面上直接列出来、而不是只给一个"查看告警记录"的链接：第 24 条要的是
  * **告警信息与历史告警展示**两件事 —— 链接解决"去看全部"，这几行解决"现在有没有事"。
  * 数据与告警记录页同源（同一个 `alarms.query`），所以两处不会各说一套。
  *
+ * 为什么两台机型**共用这一次查询**：一次查询就是一次读库。相机要的是"最近几条"，
+ * 声纹要的是"按通道分组"。分成两次查询会让同一屏上的两个数字有机会不一致（一次查询
+ * 之间插进一条新告警），而共用一份结果不可能不一致。
+ *
  * 只读一次、不订阅：这一页不持有告警的实时推送（那一条在事件中心与右上角告警图标里），
- * 刷新由换设备与「刷新」按钮触发。
+ * 刷新由换设备与顶栏的「刷新」按钮触发。
  */
-const cameraAlarms = ref<AlarmEvent[]>([])
-const cameraAlarmsLoading = ref(false)
+const deviceAlarms = ref<AlarmEvent[]>([])
+const deviceAlarmsLoading = ref(false)
 
-async function loadCameraAlarms(deviceId: string): Promise<void> {
-  cameraAlarms.value = []
+async function loadDeviceAlarms(deviceId: string): Promise<void> {
+  deviceAlarms.value = []
   if (!deviceId) return
-  cameraAlarmsLoading.value = true
-  const result = await callApi(() => window.api.alarms.query({ deviceId, limit: 10 }))
-  cameraAlarmsLoading.value = false
+  deviceAlarmsLoading.value = true
+  const result = await callApi(() =>
+    window.api.alarms.query({ deviceId, limit: DEVICE_ALARM_SAMPLE })
+  )
+  deviceAlarmsLoading.value = false
   // 切走了设备：这一批结果不该写进另一台的列表。
   if (selectedDeviceId.value !== deviceId) return
-  cameraAlarms.value = result.success ? (unwrap(result)?.items ?? []) : []
+  deviceAlarms.value = result.success ? (unwrap(result)?.items ?? []) : []
 }
+
+/**
+ * 这一次查询取多少条。
+ *
+ * 50 是"够覆盖一屏 8 路各一条、还留得下一点历史"的量级，同时把这次读库的成本钉住。
+ * ⚠ 它是**采样窗口**：表里那一列回答的是"在这最近 50 条里，这一路有没有告警"，
+ * 不是"历史上这一路有没有过告警"。界面上那行说明（`channelAlarmSampleHint`）就是
+ * 这句话，不写就是把采样说成了全部历史。
+ */
+const DEVICE_ALARM_SAMPLE = 50
+
+/** 按通道分组的告警小结（纯函数在 `@shared/domain/channel-alarm.ts`）。 */
+const alarmsByChannel = computed(() => groupAlarmsByChannel(deviceAlarms.value))
 
 async function startCameraLive(): Promise<void> {
   const id = selectedDeviceId.value
@@ -1356,10 +1487,14 @@ onMounted(async () => {
       liveVolume.value = loadCameraVolume(selectedDeviceId.value)
       audioUnlocked.value = false
       // 第 24 条：告警信息（最近几条）与自动起播一起读一次。
-      await loadCameraAlarms(selectedDeviceId.value)
+      await loadDeviceAlarms(selectedDeviceId.value)
       await autoPlayCameraIfWorking()
     } else if (isVoiceprint.value) {
-      await startSession()
+      // 第 13 批第 3 条：进页面就默认开始接收数据（判定见 `autoStartSessionIfNeeded`），
+      // 页头那个「开始监测」按钮已经删掉。
+      await autoStartSessionIfNeeded()
+      // 每通道特性表里的「是否告警」与相机的告警入口读的是同一次查询。
+      await loadDeviceAlarms(selectedDeviceId.value)
     }
     // 声呐那一支什么都不开：它的协议里没有我们要订的实时流（见 `isSonar` 的注释），
     // 而对着它开一条 `/features_stream` 只会让一台健康的设备显示成"监测起不来"。
@@ -1418,7 +1553,7 @@ watch(selectedDeviceId, async (id) => {
     await refreshCameraState()
     await refreshRecordingState()
     // 第 24 条：换了一台相机要重新读它的告警信息（否则列表还是上一台的）。
-    await loadCameraAlarms(id)
+    await loadDeviceAlarms(id)
     // 第 21 条：**选中即自动播放**。挂在换设备这条路径上，与挂载那条走同一个
     // `autoPlayCameraIfWorking()` —— 两条入口读的是同一份判定，不会一个自动一个不自动。
     await autoPlayCameraIfWorking()
@@ -1436,7 +1571,18 @@ watch(selectedDeviceId, async (id) => {
     // ...and the other way round: a live camera stream must not keep an ffmpeg
     // process running once the operator has switched to a box.
     await stopCameraLive()
-    if (live) await startSession()
+    /*
+     * 第 13 批第 3 条：换设备也默认开始接收数据。
+     *
+     * 这里**不能再**写成 `if (live) await startSession()`（改造前的样子，`live` 是
+     * 切换前那一支的会话状态）：从相机/声呐切回声纹设备时 `live` 是 `false`，于是新设备
+     * 的会话根本不会开 —— 而"开始监测"按钮已经按业主的要求删掉了，操作员只能刷新页面。
+     * 判定改由 `autoStartSessionIfNeeded()` 统一回答；尝试计数是**每台设备**的，所以先清零。
+     */
+    resetAutoStartAttempts()
+    await autoStartSessionIfNeeded()
+    // 每通道特性表里那一列的告警属于**这一台**设备（否则显示的是上一台的）。
+    await loadDeviceAlarms(id)
   }
   void router.replace({ path: '/monitor', query: { ...route.query, device: id } })
 })
@@ -1618,7 +1764,17 @@ const sessionLabel = computed(() => {
             <template v-if="isVoiceprint">
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
-              <span class="badge" :class="monitor.isRunning ? 'badge--accent' : ''">
+              <!--
+                会话状态徽标。`data-monitor-session-badge` 是**给探针用的**标记属性
+                （不带样式）：第 13 批第 3 条删掉了那个启停按钮之后，"进来到底有没有自动开始"
+                只剩这一枚徽标能回答，而设备头里另有一枚「局域网/广域网」徽标（`StatusBadge`），
+                靠"第几个 badge"去数是会数错的。
+              -->
+              <span
+                class="badge"
+                :class="monitor.isRunning ? 'badge--accent' : ''"
+                data-monitor-session-badge
+              >
                 {{ sessionLabel }}
               </span>
             </template>
@@ -1643,17 +1799,16 @@ const sessionLabel = computed(() => {
 
           <div class="spacer"></div>
 
-          <!-- 会话启停只属于声纹设备：相机走自己的直播按钮，声呐没有要订的流。 -->
-          <div v-if="isVoiceprint" class="btn-row">
-            <button
-              type="button"
-              class="btn btn--sm"
-              :disabled="monitor.state === 'starting'"
-              @click="toggleSession"
-            >
-              {{ monitor.isRunning ? t('monitorUi.stop') : t('monitorUi.start') }}
-            </button>
-          </div>
+          <!--
+            「开始监测 / 停止监测」按钮**删掉了**（业主 2026-09-19 第 13 批第 3 条）：
+            「实时监测里面选中哪个设备就默认开始接收数据，不用点击开始监测按钮」。
+            会话状态没有丢，它就是上面那枚徽标（`sessionRunning` / `sessionStarting` /
+            `sessionError` / `sessionStopped`）—— 徽标说明"现在是什么状态"，
+            按钮只是"改变状态"的手段，而那个手段已经由自动开始接管
+            （`autoStartSessionIfNeeded()` + `decideMonitorAutoStart()`）。
+            相关的两个词条（`monitorUi.start` / `monitorUi.stop`）四本目录同步删除，
+            理由见 §15.80。
+          -->
         </div>
 
         <!-- 通道页签也是声纹设备专有的：相机的"通道"不存在，声呐的通道没有实时数据可切。 -->
@@ -1988,12 +2143,12 @@ const sessionLabel = computed(() => {
           不必先跳走。读的是同一个 `alarms.query`，与告警记录页同一份数据。
         -->
         <div class="camera-alarm-entry__list" data-camera-alarms>
-          <p v-if="cameraAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
-          <p v-else-if="cameraAlarms.length === 0" class="muted" data-camera-alarms-empty>
+          <p v-if="deviceAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
+          <p v-else-if="deviceAlarms.length === 0" class="muted" data-camera-alarms-empty>
             {{ t('cameraAlarmUi.noAlarms') }}
           </p>
           <ul v-else class="camera-alarm-entry__items">
-            <li v-for="alarm in cameraAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
+            <li v-for="alarm in deviceAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
               <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
               <span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
               <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
@@ -2113,6 +2268,148 @@ const sessionLabel = computed(() => {
         媒体查询问的是窗口，不是这一块。
       -->
       <div class="graph-grid">
+        <!--
+          ② 每通道声纹特性（业主 2026-09-17 要求的卡片；2026-09-19 第 13 批第 3 条改成表）。
+
+          位置：**挪到原来的「频谱」那一格**（业主原话「把这个卡片挪到当前的频谱卡片的位置」），
+          于是频谱卡整体后移一格。四张卡片的**高度现在一致**（`.graph-grid` 从
+          `align-items: start` 改成默认的 `stretch`）—— 业主说「高度和左边的一致」，
+          而"左边"取决于窗口宽度下这一排到底并了几列，只有让同一行的卡片互相撑齐才能
+          在任何宽度下都成立（写死一个高度只会在某个宽度上刚好）。
+
+          内容：8 行 × （通道序号 / 声压级 / 主频 / 平稳度 / 频带能量比 / 是否告警）。
+          四列读数仍然只来自**本机订阅过的那一路**（设备一次只开一路流，见 4.3），
+          所以第一格里那枚徽标和读数时间必须留着：`stored` 的数字是上一次读到的，
+          没有时间它就与"实时"在视觉上没有区别。
+        -->
+        <section class="card chart-panel channel-features">
+          <div class="section-header">
+            <h3 class="section-title">{{ t('monitorUi.channelFeaturesSection') }}</h3>
+            <span class="muted channel-features__hint">
+              {{ t('monitorUi.channelFeaturesHint', { count: channelFeatureRows.length }) }}
+            </span>
+          </div>
+
+          <div class="channel-features__body">
+            <table class="channel-table" data-channel-feature-table>
+              <caption class="visually-hidden">{{ t('monitorUi.channelFeaturesSection') }}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">{{ t('monitorUi.channelFeatureColumnChannel') }}</th>
+                  <th scope="col">{{ t('metrics.spl') }}</th>
+                  <th scope="col">{{ t('metrics.mainFrequency') }}</th>
+                  <th scope="col">{{ t('metrics.smoothness') }}</th>
+                  <th scope="col">{{ t('metrics.bandEnergyRatio') }}</th>
+                  <th scope="col">{{ t('monitorUi.channelFeatureColumnAlarm') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!--
+                  整行可点 = 切这一路通道（业主：「点这个通道…三张卡就跟着切」）。
+                  这一页的三张图（频谱/时频域/声学波形）只能显示**当前订阅的那一路**，
+                  点行就是让它们跟着走 —— 走的仍然是共享的 `selectChannel()`
+                  （未启用的通道不参与实时监测，那一行整块灰掉且点不动）。
+                -->
+                <tr
+                  v-for="row in channelFeatureRows"
+                  :key="row.index"
+                  class="channel-table__row"
+                  :class="[
+                    channelStateClass(row.state),
+                    { 'channel-table__row--active': row.index === activeChannelIndex }
+                  ]"
+                  :data-channel-feature-row="row.index"
+                  @click="selectChannel(row.index)"
+                >
+                  <th scope="row" class="channel-table__channel">
+                    <button
+                      type="button"
+                      class="channel-table__select"
+                      :class="{ 'channel-table__select--active': row.index === activeChannelIndex }"
+                      :disabled="isTabDisabled(row)"
+                      :aria-pressed="row.index === activeChannelIndex"
+                      :title="tabHint(row) || undefined"
+                      @click.stop="selectChannel(row.index)"
+                    >
+                      <span class="channel-table__label">{{ row.label }}</span>
+                      <span v-if="row.name" class="channel-table__name">{{ row.name }}</span>
+                      <span class="channel-table__state">
+                        <span :class="channelStateClass(row.state)">
+                          {{ t(channelStateLabelKey(row.state)) }}
+                        </span>
+                        <span class="badge" :class="featureStateClass(row.featureState)">
+                          {{ t(channelFeatureStateLabelKey(row.featureState)) }}
+                        </span>
+                      </span>
+                      <!--
+                        读数的时间**必须**画出来（原来在卡片底部，现在缩到第一格里）：
+                        `stored` 那一行的数字是上一次读到的，没有时间它和"实时"没有区别。
+                      -->
+                      <span v-if="row.feature" class="muted channel-table__time">
+                        {{ t('monitorUi.channelFeatureUpdated', { time: featureTime(row.feature.timestamp) }) }}
+                      </span>
+                    </button>
+                  </th>
+
+                  <template v-if="row.feature">
+                    <td class="channel-table__value">{{ formatNumber(row.feature.spl, 2) }} dB</td>
+                    <td class="channel-table__value">
+                      {{ formatNumber(row.feature.mainFrequency, 2) }} Hz
+                    </td>
+                    <td class="channel-table__value">
+                      {{ formatNumber(row.feature.smoothness, 3) }}
+                    </td>
+                    <td class="channel-table__value">
+                      {{ formatNumber(row.feature.bandEnergyRatio, 3) }}
+                    </td>
+                  </template>
+                  <!--
+                    没读到过的那几路：四格写 `—` 并整行给出原因（`channelFeatureUnread`），
+                    不是四个空格 —— 空格会被读成 0。
+                  -->
+                  <td v-else class="channel-table__empty" colspan="4">
+                    {{ t('monitorUi.channelFeatureUnread') }}
+                  </td>
+
+                  <td class="channel-table__alarm">
+                    <button
+                      v-if="row.alarming"
+                      type="button"
+                      class="badge badge--danger channel-table__alarm-button"
+                      :data-channel-alarm="row.index"
+                      :title="t('monitorUi.channelAlarmOpen')"
+                      @click.stop="openChannelAlarmDetail(row.index)"
+                    >
+                      {{ t('monitorUi.channelAlarmYes') }}
+                    </button>
+                    <!--
+                      这一路有告警记录但**都确认过了**：不标红（告警中心确认过的就
+                      不该继续打断人），但仍然给一个入口 —— 已确认不等于没发生过。
+                    -->
+                    <button
+                      v-else-if="row.alarm"
+                      type="button"
+                      class="badge channel-table__alarm-button"
+                      :data-channel-alarm="row.index"
+                      :title="t('monitorUi.channelAlarmOpen')"
+                      @click.stop="openChannelAlarmDetail(row.index)"
+                    >
+                      {{ t('monitorUi.channelAlarmAcknowledged') }}
+                    </button>
+                    <span v-else class="muted" :data-channel-alarm-none="row.index">
+                      {{ t('monitorUi.channelAlarmNone') }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="muted channel-features__sample">
+            {{ t('monitorUi.channelAlarmSampleHint', { count: DEVICE_ALARM_SAMPLE }) }}
+          </p>
+        </section>
+
         <section class="chart-panel card">
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.spectrumSection') }}</h3>
@@ -2143,76 +2440,6 @@ const sessionLabel = computed(() => {
             height="240px"
             :placeholder="monitor.content.audio === null ? t('monitorUi.waitingAudio') : ''"
           />
-        </section>
-
-        <!--
-          ② 每通道声纹特性卡片（业主 2026-09-17）；
-          ③b 把它并入这四张卡片里 —— 它本来就是一张"图谱卡片"。
-        -->
-        <section class="card chart-panel channel-features">
-          <div class="section-header">
-            <h3 class="section-title">{{ t('monitorUi.channelFeaturesSection') }}</h3>
-            <span class="muted channel-features__hint">
-              {{ t('monitorUi.channelFeaturesHint', { count: channelFeatureCards.length }) }}
-            </span>
-          </div>
-          <ul class="channel-features__grid">
-            <li v-for="card in channelFeatureCards" :key="card.index">
-              <button
-                type="button"
-                class="channel-card"
-                :class="[
-                  channelStateClass(card.state),
-                  { 'channel-card--active': card.index === activeChannelIndex }
-                ]"
-                :disabled="isTabDisabled(card)"
-                :aria-pressed="card.index === activeChannelIndex"
-                :title="tabHint(card) || undefined"
-                @click="selectChannel(card.index)"
-              >
-                <span class="channel-card__head">
-                  <span class="channel-card__label">{{ card.label }}</span>
-                  <span v-if="card.name" class="channel-card__name">{{ card.name }}</span>
-                  <span :class="channelStateClass(card.state)">
-                    {{ t(channelStateLabelKey(card.state)) }}
-                  </span>
-                </span>
-
-                <dl v-if="card.feature" class="channel-card__values">
-                  <div class="channel-card__row">
-                    <dt>{{ t('metrics.spl') }}</dt>
-                    <dd>{{ formatNumber(card.feature.spl, 2) }} dB</dd>
-                  </div>
-                  <div class="channel-card__row">
-                    <dt>{{ t('metrics.mainFrequency') }}</dt>
-                    <dd>{{ formatNumber(card.feature.mainFrequency, 2) }} Hz</dd>
-                  </div>
-                  <div class="channel-card__row">
-                    <dt>{{ t('metrics.smoothness') }}</dt>
-                    <dd>{{ formatNumber(card.feature.smoothness, 3) }}</dd>
-                  </div>
-                  <div class="channel-card__row">
-                    <dt>{{ t('metrics.bandEnergyRatio') }}</dt>
-                    <dd>{{ formatNumber(card.feature.bandEnergyRatio, 3) }}</dd>
-                  </div>
-                </dl>
-                <p v-else class="channel-card__empty">{{ t('monitorUi.channelFeatureUnread') }}</p>
-
-                <span class="channel-card__foot">
-                  <span class="badge" :class="featureStateClass(card.featureState)">
-                    {{ t(channelFeatureStateLabelKey(card.featureState)) }}
-                  </span>
-                  <!--
-                    读数的时间**必须**画出来：`stored` 那张卡片上的数字是上一次读到的，
-                    没有时间的话它和"实时"在视觉上没有区别（这正是这张卡片最容易骗人的地方）。
-                  -->
-                  <span v-if="card.feature" class="muted channel-card__time">
-                    {{ t('monitorUi.channelFeatureUpdated', { time: featureTime(card.feature.timestamp) }) }}
-                  </span>
-                </span>
-              </button>
-            </li>
-          </ul>
         </section>
       </div>
 
@@ -2309,6 +2536,99 @@ const sessionLabel = computed(() => {
         数据来源与谱图缓存是排查用的内部状态 —— 需要时由协议实验室回答，
         不该占实时监测页的一整张卡片。
       -->
+
+      <!--
+        「点击告警则显示详细的告警状态」（业主 2026-09-19 第 13 批第 3 条）。
+
+        弹窗里是**这一路**在这批最近告警里的全部记录（与表里那一列同源，见
+        `channelAlarmDetailItems`），每一条给出：时间 / 等级 / 故障类型 / 是否已确认 /
+        设备自己的原因原话 / 四项读数。再往下是去「告警中心」的入口（按设备预筛），
+        因为"看全部历史"是那一页的职责，弹窗只回答"这一路现在怎么了"。
+      -->
+      <AppModal
+        :model-value="channelAlarmDetail !== null"
+        :title="t('monitorUi.channelAlarmDetailTitle', { channel: channelLabel(channelAlarmDetail ?? 0) })"
+        width="620px"
+        @update:model-value="closeChannelAlarmDetail"
+      >
+        <p v-if="channelAlarmDetailRow?.name" class="muted" data-channel-alarm-detail-name>
+          {{ channelAlarmDetailRow.name }}
+        </p>
+        <p class="muted">{{ t('monitorUi.channelAlarmSampleHint', { count: DEVICE_ALARM_SAMPLE }) }}</p>
+
+        <ul v-if="channelAlarmDetailItems.length > 0" class="channel-alarm__list" data-channel-alarm-detail-list>
+          <li
+            v-for="alarm in channelAlarmDetailItems"
+            :key="alarm.id"
+            class="channel-alarm__item"
+            :data-channel-alarm-detail-id="alarm.id"
+          >
+            <div class="channel-alarm__head">
+              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+              <span :class="alarmSeverityBadgeClass(alarm.severity)">
+                {{ eventSeverityLabel(alarm.severity) }}
+              </span>
+              <span class="badge" :class="alarm.acknowledged ? 'badge--success' : 'badge--danger'">
+                {{
+                  alarm.acknowledged
+                    ? t('monitorUi.channelAlarmAcknowledgedState')
+                    : t('monitorUi.channelAlarmUnacknowledgedState')
+                }}
+              </span>
+            </div>
+            <div class="channel-alarm__types" data-channel-alarm-types>
+              {{ alarmTypesText(alarm) }}
+            </div>
+            <dl class="channel-alarm__values">
+              <div>
+                <dt>{{ t('metrics.spl') }}</dt>
+                <dd>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 2)} dB` }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('metrics.mainFrequency') }}</dt>
+                <dd>
+                  {{ alarm.mainFrequency === undefined ? '—' : `${formatNumber(alarm.mainFrequency, 2)} Hz` }}
+                </dd>
+              </div>
+              <div>
+                <dt>{{ t('metrics.smoothness') }}</dt>
+                <dd>{{ alarm.smoothness === undefined ? '—' : formatNumber(alarm.smoothness, 3) }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('metrics.bandEnergyRatio') }}</dt>
+                <dd>
+                  {{ alarm.bandEnergyRatio === undefined ? '—' : formatNumber(alarm.bandEnergyRatio, 3) }}
+                </dd>
+              </div>
+            </dl>
+            <!--
+              设备自己的原话（听诊盒子族的 `alarm_reasons`，例："时域能量比超限，"）。
+              原样显示、不翻译：那是设备的措辞，我们映射过的枚举不能替代它
+              （记在 §15.23.3 里的理由）。
+            -->
+            <p v-if="alarm.deviceReason" class="muted channel-alarm__reason" data-channel-alarm-reason>
+              {{ alarm.deviceReason }}
+            </p>
+          </li>
+        </ul>
+        <p v-else class="muted" data-channel-alarm-detail-empty>
+          {{ t('monitorUi.channelAlarmNone') }}
+        </p>
+
+        <template #footer>
+          <RouterLink
+            class="btn btn--sm"
+            :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
+            data-link="channel-alarm-history"
+            @click="closeChannelAlarmDetail"
+          >
+            {{ t('cameraAlarmUi.goAlarmList') }}
+          </RouterLink>
+          <button type="button" class="btn btn--sm btn--primary" @click="closeChannelAlarmDetail">
+            {{ t('common.close') }}
+          </button>
+        </template>
+      </AppModal>
       </template>
 
       <!--
@@ -2567,7 +2887,7 @@ const sessionLabel = computed(() => {
   text-overflow: ellipsis;
 }
 
-/* --- ② per-channel voiceprint cards ------------------------------------- */
+/* --- ② per-channel voiceprint TABLE (batch 13 item 3) -------------------- */
 
 .channel-features {
   display: flex;
@@ -2579,107 +2899,209 @@ const sessionLabel = computed(() => {
   font-size: 11.5px;
 }
 
-/*
- * 每通道一张卡。列数由**这一块自己的宽度**决定（与 §15.31 的图谱排同一套理由：
- * 媒体查询问的是窗口，不是这一排）。最小 200px：再窄下去四项数字会折行折到读不出来。
- */
-.channel-features__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-3);
+.channel-features__sample {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  font-size: 11px;
 }
 
-.channel-card {
+/*
+ * 表体。`flex: 1` + `min-height: 0` 让它在同一行的卡片里"能长能缩"：
+ * 八行刚好和左边那三张 240px 高的图差不多高，窗口更矮时它会收缩并出滚动条，
+ * 而**不会**把整行撑得比图高出一大截（业主说「高度和左边的一致」）。
+ */
+.channel-features__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/*
+ * 8 行 ×（通道 / 声压级 / 主频 / 平稳度 / 频带能量比 / 告警）。
+ *
+ * 宽窄由内容定（`table-layout: auto`）：数值列必须能一次读完，通道那一列里那枚
+ * 状态徽标 + 读数时间最宽，所以给它 `width: 1%` + `white-space: nowrap` 让它按内容收，
+ * 剩余宽度分给五个数值格。
+ */
+.channel-table {
   width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.channel-table th,
+.channel-table td {
+  padding: 4px 6px;
   text-align: left;
-  background: var(--color-bg-subtle);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.channel-table thead th {
+  padding-top: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.channel-table tbody tr:last-child th,
+.channel-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* 整行可点 = 切这一路通道（三张图跟着走），所以指针要变手型。 */
+.channel-table__row {
   cursor: pointer;
 }
 
-.channel-card:hover:not(:disabled) {
-  border-color: var(--color-border-strong);
+.channel-table__row:hover {
+  background: var(--color-bg-subtle);
 }
 
-.channel-card--active {
-  border-color: var(--color-accent);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
+/* 正在看的那一路：左侧一条强调色，与通道页签上的选中态同一套语言。 */
+.channel-table__row--active {
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
-.channel-card:disabled {
-  cursor: not-allowed;
+.channel-table__channel {
+  width: 1%;
+  padding-left: 0;
+  font-weight: 400;
+}
+
+/* 未启用的通道不可点（与通道页签同一条规则）：整行变灰，但文字仍然读得清。 */
+.channel-table__row.channel-state--disabled {
   opacity: 0.6;
 }
 
-.channel-card__head {
+.channel-table__select {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
-.channel-card__label {
+.channel-table__select:disabled {
+  cursor: not-allowed;
+}
+
+.channel-table__select--active .channel-table__label {
+  color: var(--color-accent-hover);
+}
+
+.channel-table__label {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.channel-card__name {
-  font-size: 11.5px;
+.channel-table__name {
+  font-size: 11px;
   color: var(--color-text-secondary);
   max-width: 120px;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.channel-card__values {
+.channel-table__state {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.channel-table__time {
+  font-size: 11px;
+}
+
+.channel-table__value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.channel-table__empty {
+  color: var(--color-text-secondary);
+}
+
+.channel-table__alarm {
+  white-space: nowrap;
+}
+
+/* 告警那一格是按钮：外观沿用徽标，但按下有反馈（它是打开详情的入口）。 */
+.channel-table__alarm-button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.channel-table__alarm-button:hover {
+  border-color: var(--color-border-strong);
+}
+
+/* --- 告警详情弹窗 ------------------------------------------------------- */
+
+.channel-alarm__list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
   margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.channel-alarm__item {
+  padding: var(--space-3);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.channel-alarm__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font-size: 12px;
 }
 
-.channel-card__row {
+.channel-alarm__types {
+  margin-top: 4px;
+  font-size: 12.5px;
+}
+
+.channel-alarm__values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 2px var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+}
+
+.channel-alarm__values div {
   display: flex;
   justify-content: space-between;
   gap: var(--space-2);
 }
 
-.channel-card__row dt {
+.channel-alarm__values dt {
   color: var(--color-text-secondary);
 }
 
-.channel-card__row dd {
+.channel-alarm__values dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
 
-.channel-card__empty {
-  margin: 0;
+.channel-alarm__reason {
+  margin: 4px 0 0;
   font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.channel-card__foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: auto;
-}
-
-.channel-card__time {
-  font-size: 11px;
 }
 
 /* --- audio panel -------------------------------------------------------- */
@@ -2717,7 +3139,7 @@ const sessionLabel = computed(() => {
 }
 
 /*
- * ③b 四张图谱卡片（频谱 / 时频图 / 声学波形 / 每通道声纹特性）的排布。
+ * ③b 四张图谱卡片（每通道声纹特性 / 频谱 / 时频图 / 声学波形）的排布。
  *
  * 列数由**这一块自己的宽度**决定（`auto-fit` + 最小 420px）：最小 420px 是为了让两张卡
  * 并排时每张仍然放得下 ECharts 的坐标轴标签，而 420 这个数又是 1366×768 那种常见窗口
@@ -2726,13 +3148,17 @@ const sessionLabel = computed(() => {
  * 这里曾经叫 `.chart-columns`（只有两块：频谱 + 时谱）。③b 之后它变成四块，
  * 名字跟着改成 `graph-grid`，**旧规则一并删掉**：留着一条没人用的 CSS 只会让下一个
  * 人以为那块还在（§15.29.4 记过同一条教训）。
+ *
+ * **对齐方式改过**（2026-09-19 第 13 批第 3 条）：原来是 `align-items: start`（各自按内容
+ * 高），业主说每通道特性表「高度和左边的一致」。写死一个高度只能在某一个窗口宽度上成立
+ * —— 这一排并几列是随宽度变的，"左边"是谁也跟着变。所以改成网格默认的 `stretch`：
+ * 同一行的卡片互相撑齐，无论并成几列，"和左边一致"都自动成立。
+ * 表体是 `flex: 1; overflow: auto`，所以它只会跟着变高/变矮，不会反过来把整行撑爆。
  */
 .graph-grid {
   display: grid;
   gap: var(--space-4);
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  /* 各自按内容高：四块的高度差很大（时频图是固定高度的 JPEG，通道卡片有八张）。 */
-  align-items: start;
 }
 
 /* ③b 置顶的趋势卡片：整幅宽，图标区比另外四张高一点（它是这一页的主图）。 */

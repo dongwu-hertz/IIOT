@@ -479,8 +479,11 @@ export const en: MessageSchema = {
     deviceLabel: 'Device',
     noAddress: 'no address',
     channelHint: '{count} channels',
-    start: 'Start monitoring',
-    stop: 'Stop monitoring',
+    /*
+     * `start: 'Start monitoring'` / `stop: 'Stop monitoring'` used to live here:
+     * batch 13 item 3 removed the button (receiving starts by itself), so nothing
+     * referenced them any more. Deleted from all four catalogues — see §15.80.
+     */
     channelSelect: 'Channel selection',
     /** Family badge for the sonar branch (top of the page). */
     sonarFamilyBadge: 'SN-16 air sonar',
@@ -508,6 +511,22 @@ export const en: MessageSchema = {
     channelFeature_unread: 'Not read',
     channelFeatureUnread: 'No feature frame has been read on this channel yet',
     channelFeatureUpdated: 'Updated {time}',
+    /*
+     * 2026-09-19 batch 13 item 3: this card became a single TABLE
+     * (8 rows × channel / SPL / main frequency / smoothness / band energy ratio /
+     * alarm) and an alarm cell opens the detailed alarm state.
+     */
+    channelFeatureColumnChannel: 'Channel',
+    channelFeatureColumnAlarm: 'Alarm',
+    channelAlarmYes: 'Alarm',
+    channelAlarmAcknowledged: 'Acknowledged',
+    channelAlarmNone: 'Normal',
+    channelAlarmOpen: 'Show this channel’s detailed alarm state',
+    channelAlarmSampleHint:
+      'The alarm column comes from the most recent {count} alarms; acknowledged ones are no longer highlighted and can still be opened',
+    channelAlarmDetailTitle: '{channel} detailed alarm state',
+    channelAlarmAcknowledgedState: 'Acknowledged',
+    channelAlarmUnacknowledgedState: 'Unacknowledged',
     audioSection: 'Live audio',
     audioPlay: 'Play',
     audioStop: 'Stop playback',

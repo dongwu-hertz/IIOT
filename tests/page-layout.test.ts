@@ -539,40 +539,48 @@ describe('⑨ 相机配置搬家：同实现分块渲染 + 页签按机型', () 
  * ② 每通道声纹特性卡片 + 音频播放按钮 + 音量（业主 2026-09-17，声纹设备那一支）。
  *
  * 三条守卫，每一条都对着一个**不报错但会骗人**的失效方式：
- *   1. 卡片必须一通道一张，且数据来自"每通道最后一次读数"，不是当前那一路的读数
- *      （否则八张卡片会显示同一路的数字）；
+ *   1. 一行一通道，且数据来自"每通道最后一次读数"，不是当前那一路的读数
+ *      （否则八行会显示同一路的数字）；
  *   2. 旧读数必须带时间和"最后一次读数"标记 —— 不带的话它看起来就是实时值；
  *   3. 播放按钮必须有说明它播的是什么（包络预览，不是原声），也必须真的接上音量。
+ *
+ * 2026-09-19 第 13 批第 3 条把这张卡片改成了**一张表**（八行 × 通道/四指标/告警），
+ * 所以第 1、2 条断言的标记跟着换名（`channelFeatureRows` / `row.*`），判据本身没变。
  */
-describe('② 每通道声纹特性卡片 + 音频回放', () => {
+describe('② 每通道声纹特性表 + 音频回放', () => {
   const monitor = stripComments(read('src/renderer/src/views/MonitorView.vue'))
   const store = stripComments(read('src/renderer/src/stores/monitor.ts'))
 
-  it('卡片按通道生成，取自每通道读数，点击即切到那一路', () => {
+  it('一行一通道，取自每通道读数，点击即切到那一路', () => {
     assert.ok(
-      /v-for="card in channelFeatureCards"/.test(monitor),
-      '每通道卡片没有按 channelFeatureCards 渲染（会变成当前那一路的重复）'
+      /v-for="row in channelFeatureRows"/.test(monitor),
+      '每通道表没有按 channelFeatureRows 渲染（会变成当前那一路的重复）'
     )
     assert.ok(
       monitor.includes('monitor.channelFeatureOf(tab.index)'),
-      '卡片取数没有走每通道读数（channelFeatureOf）'
+      '表的取数没有走每通道读数（channelFeatureOf）'
     )
     // 点击必须复用同一个通道切换入口，不许另写一套。
     assert.ok(
-      /v-for="card in channelFeatureCards"[\s\S]{0,2000}?@click="selectChannel\(card.index\)"/.test(
+      /v-for="row in channelFeatureRows"[\s\S]{0,3000}?@click="selectChannel\(row.index\)"/.test(
         monitor
       ),
-      '通道卡片没有走 selectChannel()'
+      '通道行没有走 selectChannel()'
+    )
+    // 八路各自一行：行数由设备返回的通道表决定，不是写死 8 行。
+    assert.ok(
+      monitor.includes(':data-channel-feature-row="row.index"'),
+      '行上缺少通道号的探针标记'
     )
   })
 
   it('旧读数带时间与状态标记（否则它看起来就是实时值）', () => {
     assert.ok(
-      monitor.includes('channelFeatureStateLabelKey(card.featureState)'),
-      '卡片没有渲染读数状态（实时 / 最后一次读数 / 未读取）'
+      monitor.includes('channelFeatureStateLabelKey(row.featureState)'),
+      '表没有渲染读数状态（实时 / 最后一次读数 / 未读取）'
     )
     assert.ok(
-      monitor.includes("t('monitorUi.channelFeatureUpdated', { time: featureTime(card.feature.timestamp) })"),
+      monitor.includes("t('monitorUi.channelFeatureUpdated', { time: featureTime(row.feature.timestamp) })"),
       '旧读数没有带更新时间'
     )
     // 三种状态必须是三种不同的视觉：stored 不许与 unread 一样是"无色"。
