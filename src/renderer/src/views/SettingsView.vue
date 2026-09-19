@@ -23,6 +23,13 @@ import { RELEASE, formatVersion, parsePlainDate } from '@shared/release'
  */
 import logoUrl from '@renderer/assets/branding/hertzinno-logo.png'
 import { useTrendsStore } from '@renderer/stores/trends'
+import { useIngestStore } from '@renderer/stores/ingest'
+import {
+  MQTT_TELEMETRY_TOPIC,
+  isBindAddress,
+  isPort,
+  telemetryPath
+} from '@shared/domain/iot-ingest'
 import {
   bytesToGb,
   formatBytes,
@@ -47,6 +54,13 @@ const settings = useSettingsStore()
 const uiRefresh = useUiRefreshStore()
 /** Trend buffering counters live in the trends store, shared with the trend page. */
 const trends = useTrendsStore()
+/**
+ * IoT 数据接入的**读数**（业主 2026-09-19 第 1 条）。
+ *
+ * 与配置分开：配置和这一页其它项一样走草稿 + 自动保存（那样改完端口立刻生效），
+ * 而这个 store 只有"监听起没起来、收到多少"这些主进程才有答案的事实。
+ */
+const ingest = useIngestStore()
 /** 当前登录的账号：设置页「账号」页签要显示它，并提供改密与退出登录（业主 ③）。 */
 const session = useSessionStore()
 
@@ -67,6 +81,14 @@ const TABS = [
   { id: 'video', labelKey: 'settingsUi.tabVideo' },
   { id: 'alarm', labelKey: 'settingsUi.tabAlarm' },
   { id: 'email', labelKey: 'settingsUi.tabEmail' },
+  /**
+   * 数据接入（业主 2026-09-19 第 1 条）。
+   *
+   * 排在「邮箱」之后、账号之前：前六页都是"我们怎么用数据"，这一页是"设备怎么把数据送进来"，
+   * 而账号与关于属于另一类（身份 / 元信息）。`tests/settings-tabs.test.ts` 钉着这张表 ——
+   * 加一个页签必须同时改那条守卫，否则它会红。
+   */
+  { id: 'iot', labelKey: 'settingsUi.tabIot' },
   { id: 'account', labelKey: 'settingsUi.tabAccount' },
   { id: 'about', labelKey: 'settingsUi.tabAbout' }
 ] as const
@@ -97,6 +119,18 @@ interface Draft {
    * 点击保存才会写进主进程的设置表。
    */
   autoPlayCameraLive: boolean
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条：HTTP 推流 + MQTT）。
+   *
+   * 六个字段一起走同一个草稿与同一次保存（`patchFromDraft()` 只发 `iotIngest` 这一个键）：
+   * 它们是**一块**配置，分成六次写会让监听被重起六遍（改端口那一次才真正需要重起）。
+   */
+  iotEnabled: boolean
+  iotBindAddress: string
+  iotHttpEnabled: boolean
+  iotHttpPort: number
+  iotMqttEnabled: boolean
+  iotMqttPort: number
 }
 
 const draft = reactive<Draft>({
@@ -109,7 +143,13 @@ const draft = reactive<Draft>({
   preAlarmSeconds: 10,
   postAlarmSeconds: 20,
   ringBufferSeconds: 60,
-  autoPlayCameraLive: true
+  autoPlayCameraLive: true,
+  iotEnabled: false,
+  iotBindAddress: '0.0.0.0',
+  iotHttpEnabled: true,
+  iotHttpPort: 8080,
+  iotMqttEnabled: true,
+  iotMqttPort: 1883
 })
 
 const formError = ref('')
@@ -134,6 +174,13 @@ function seedFromStore(): void {
   draft.postAlarmSeconds = current.postAlarmSeconds
   draft.ringBufferSeconds = current.ringBufferSeconds
   draft.autoPlayCameraLive = current.autoPlayCameraLive
+  const iot = current.iotIngest
+  draft.iotEnabled = iot.enabled
+  draft.iotBindAddress = iot.bindAddress
+  draft.iotHttpEnabled = iot.httpEnabled
+  draft.iotHttpPort = iot.httpPort
+  draft.iotMqttEnabled = iot.mqttEnabled
+  draft.iotMqttPort = iot.mqttPort
 }
 
 onMounted(async () => {
@@ -143,6 +190,8 @@ onMounted(async () => {
   // Read-only diagnostics; the trend writer lives in the main process and this
   // panel never configures it, it only reports what it is doing.
   void trends.loadStats()
+  /** IoT 接入的读数（监听事实 + 收数统计）。与上面两个诊断读数同一类。 */
+  void ingest.load()
 })
 
 watch(() => settings.settings, seedFromStore)
@@ -156,6 +205,7 @@ watch(
   () => {
     void settings.loadDiskUsage()
     void trends.loadStats()
+    void ingest.load()
   }
 )
 
@@ -167,7 +217,14 @@ watch(
  * 会看到一个永远不会变的数字 —— 那比没有这个数更糟。
  */
 watch(activeTab, (tab) => {
-  if (tab !== 'storage') return
+  if (tab !== 'storage') {
+    /**
+     * 切到「数据接入」页签也重读一次：这一页显示的是**运行读数**（监听状态、收到多少条），
+     * 停在上次进页面时的值会让人以为服务没在收数据。
+     */
+    if (tab === 'iot') void ingest.load()
+    return
+  }
   void settings.loadDiskUsage()
   void trends.loadStats()
 })
@@ -188,6 +245,15 @@ function validate(): string {
     return t('settingsUi.errRingBuffer')
   if (draft.ringBufferSeconds < draft.preAlarmSeconds + draft.postAlarmSeconds)
     return t('settingsUi.errRingBufferTooShort')
+  /**
+   * 数据接入（业主 2026-09-19 第 1 条）。
+   *
+   * 用**共享层**的判据（`isBindAddress` / `isPort`），与主进程归一化器同一份：
+   * 界面允许写进去、主进程却回落到默认值，是这类设置最坏的一种失败。
+   */
+  if (!isBindAddress(draft.iotBindAddress.trim())) return t('iotUi.errBind')
+  if (draft.iotHttpEnabled && !isPort(Number(draft.iotHttpPort))) return t('iotUi.errPort')
+  if (draft.iotMqttEnabled && !isPort(Number(draft.iotMqttPort))) return t('iotUi.errPort')
   return ''
 }
 
@@ -206,7 +272,19 @@ function patchFromDraft(): AppSettingsPatch {
     preAlarmSeconds: draft.preAlarmSeconds,
     postAlarmSeconds: draft.postAlarmSeconds,
     ringBufferSeconds: draft.ringBufferSeconds,
-    autoPlayCameraLive: draft.autoPlayCameraLive
+    autoPlayCameraLive: draft.autoPlayCameraLive,
+    /**
+     * 六项**一起**提交（一个键）：主进程收到之后会按新配置重新对账监听，
+     * 分开提交等于把监听重起六遍。
+     */
+    iotIngest: {
+      enabled: draft.iotEnabled,
+      bindAddress: draft.iotBindAddress.trim(),
+      httpEnabled: draft.iotHttpEnabled,
+      httpPort: Number(draft.iotHttpPort),
+      mqttEnabled: draft.iotMqttEnabled,
+      mqttPort: Number(draft.iotMqttPort)
+    }
   }
 }
 
@@ -222,9 +300,24 @@ function draftDiffersFromStore(): boolean {
   const current = settings.settings
   if (!current) return false
   const patch = patchFromDraft() as Record<string, unknown>
-  return Object.keys(patch).some(
-    (key) => (current as unknown as Record<string, unknown>)[key] !== patch[key]
-  )
+  return Object.keys(patch).some((key) => {
+    const stored = (current as unknown as Record<string, unknown>)[key]
+    const next = patch[key]
+    /**
+     * 嵌套块（`iotIngest`）**逐字段**比。
+     *
+     * `patchFromDraft()` 每次都新建那个对象，所以引用比较永远为真 —— 后果是"没改也在保存"，
+     * 而保存会重启一次监听（设置变化的回调）。逐字段比才是"草稿与已存值是否不同"的原意。
+     */
+    if (next !== null && typeof next === 'object') {
+      const before = stored as Record<string, unknown> | undefined
+      if (!before) return true
+      return Object.keys(next as Record<string, unknown>).some(
+        (field) => before[field] !== (next as Record<string, unknown>)[field]
+      )
+    }
+    return stored !== next
+  })
 }
 
 /**
@@ -270,6 +363,14 @@ async function persist(): Promise<void> {
   // 回填一次：让草稿与 store 对齐（例如 storageRoot 被 trim 过），也顺手清掉"有差异"状态。
   seedFromStore()
   await settings.loadDiskUsage()
+  /**
+   * 保存之后**过一会儿再读一次接入读数**。
+   *
+   * 主进程是在设置写入的事件回调里重新起监听的（异步的 `listen()`），所以紧接着读回来的
+   * 大概率还是上一份状态 —— 那会让"我刚开了它、屏幕上却写着未监听"。真实的结论仍然来自
+   * 主进程报的 `listening`，这里的等待只是不去抢在那之前。
+   */
+  window.setTimeout(() => void ingest.load(), 250)
 }
 
 /** 草稿一变就排一次自动保存；回填与保存成功造成的变化会被 `draftDiffersFromStore()` 挡掉。 */
@@ -417,6 +518,50 @@ const APP_INFO_ROWS = computed(() => [
 ])
 
 // ---------------------------------------------------------------------------
+// 数据接入（业主 2026-09-19 第 1 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 推流路径的样例（秘钥位置用**语言无关**的占位符）。
+ *
+ * 路径形状只能有一处定义（共享层的 `telemetryPath()`），界面不自己拼字符串 —— 否则
+ * 「设备该往哪推」与「服务认哪条路径」会各有一份，而那两份只要差一个斜杠就是 404。
+ */
+const iotHttpPathSample = telemetryPath('<secret>')
+const iotMqttTopic = MQTT_TELEMETRY_TOPIC
+
+/**
+ * 两个通道用同一个端口是**冲突**而不是非法值：归一化器不替用户改端口（改哪一个都是猜测），
+ * 服务那边会各自报 `EADDRINUSE`。界面上先说一句，省得用户去看两条错误码。
+ */
+const iotPortConflict = computed(
+  () =>
+    draft.iotHttpEnabled &&
+    draft.iotMqttEnabled &&
+    Number(draft.iotHttpPort) === Number(draft.iotMqttPort)
+)
+
+/** 一个监听的读数文案：关着 / 没监听 / 监听中。 */
+function listenerText(listener?: {
+  enabled: boolean
+  listening: boolean
+  address?: string
+  port?: number
+}): string {
+  if (!listener) return t('iotUi.loadFailed')
+  if (!listener.enabled) return t('iotUi.statusOff')
+  if (listener.listening) {
+    return t('iotUi.listening', { address: listener.address ?? '—', port: listener.port ?? '—' })
+  }
+  return t('iotUi.notListening')
+}
+
+const iotLastAtText = computed(() => {
+  const at = ingest.status?.stats.lastAt
+  return at ? formatDateTime(at) : t('iotUi.statsNever')
+})
+
+// ---------------------------------------------------------------------------
 // 一键恢复默认值（手册 §17.2 第 5227 行）
 // ---------------------------------------------------------------------------
 
@@ -444,7 +589,9 @@ const RESTORE_ITEMS = computed(() => [
   t('settingsUi.restoreItemAutoPlay'),
   t('settingsUi.restoreItemMaxStreams'),
   t('settingsUi.restoreItemAlarmLinkage'),
-  t('settingsUi.restoreItemAlarmSounds')
+  t('settingsUi.restoreItemAlarmSounds'),
+  /** 数据接入（业主 2026-09-19 第 1 条）：恢复默认会把监听**关掉**，所以必须列出来。 */
+  t('settingsUi.restoreItemIotIngest')
 ])
 
 const restoreOpen = ref(false)
@@ -785,6 +932,188 @@ async function confirmRestore(): Promise<void> {
       <EmailSettingsSection v-if="activeTab === 'email'" />
 
       <!--
+        数据接入（业主 2026-09-19 第 1 条：HTTP 推流 + MQTT）。
+
+        这一页是**入站**那一侧：本机开两个监听，等设备把数据推上来。三组内容按现场要回答的
+        三个问题排：能不能接（开关 / 地址 / 端口）、接成什么样（监听状态）、接到没有（收数统计）。
+        秘钥与逐设备的推流地址在**设备对话框**里（那里才知道是哪一台设备）。
+      -->
+      <section v-if="activeTab === 'iot'" class="card settings-panel" role="tabpanel">
+        <div class="settings-group" data-iot-section>
+          <span class="settings-group__title">{{ t('settingsUi.tabIot') }}</span>
+
+          <div class="field">
+            <label class="toggle">
+              <input v-model="draft.iotEnabled" type="checkbox" data-iot-enable />
+              <span>{{ t('iotUi.enableLabel') }}</span>
+            </label>
+            <span class="field-hint">{{ t('iotUi.enableHint') }}</span>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('iotUi.httpGroup') }}</span>
+
+          <div class="field">
+            <label class="toggle">
+              <input v-model="draft.iotHttpEnabled" type="checkbox" data-iot-http-enable />
+              <span>{{ t('iotUi.httpEnable') }}</span>
+            </label>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.bindLabel') }}</span>
+              <input
+                v-model="draft.iotBindAddress"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                data-iot-bind
+              />
+              <span class="field-hint">{{ t('iotUi.bindHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.httpPortLabel') }}</span>
+              <input
+                v-model.number="draft.iotHttpPort"
+                class="input"
+                type="number"
+                min="1"
+                max="65535"
+                data-iot-http-port
+              />
+            </label>
+            <div class="field">
+              <span class="field-label">{{ t('iotUi.httpPathLabel') }}</span>
+              <span class="mono iot-value">{{ iotHttpPathSample }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('iotUi.mqttGroup') }}</span>
+
+          <div class="field">
+            <label class="toggle">
+              <input v-model="draft.iotMqttEnabled" type="checkbox" data-iot-mqtt-enable />
+              <span>{{ t('iotUi.mqttEnable') }}</span>
+            </label>
+            <span class="field-hint">{{ t('iotUi.mqttUserHint') }}</span>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">{{ t('iotUi.mqttPortLabel') }}</span>
+              <input
+                v-model.number="draft.iotMqttPort"
+                class="input"
+                type="number"
+                min="1"
+                max="65535"
+                data-iot-mqtt-port
+              />
+            </label>
+            <div class="field">
+              <span class="field-label">{{ t('iotUi.mqttTopicLabel') }}</span>
+              <span class="mono iot-value" data-iot-mqtt-topic>{{ iotMqttTopic }}</span>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="iotPortConflict" class="alert alert--warning" role="alert" data-iot-conflict>
+          {{ t('iotUi.portConflict', { port: draft.iotHttpPort }) }}
+        </p>
+
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('iotUi.statusGroup') }}</span>
+
+          <p v-if="ingest.error" class="alert alert--danger" role="alert">{{ ingest.error }}</p>
+
+          <dl class="kv">
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.httpGroup') }}</dt>
+              <dd class="kv__value" data-iot-http-status>
+                {{ listenerText(ingest.status?.http) }}
+                <span v-if="ingest.status?.http.error" class="text-danger">
+                  （{{ ingest.status.http.error }}）
+                </span>
+              </dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.mqttGroup') }}</dt>
+              <dd class="kv__value" data-iot-mqtt-status>
+                {{ listenerText(ingest.status?.mqtt) }}
+                <span v-if="ingest.status?.mqtt.error" class="text-danger">
+                  （{{ ingest.status.mqtt.error }}）
+                </span>
+              </dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.secretLabel') }}</dt>
+              <dd class="kv__value" data-iot-secret-count>
+                {{ t('iotUi.devicesWithSecret', { count: ingest.status?.devicesWithSecret ?? 0 }) }}
+              </dd>
+            </div>
+          </dl>
+
+          <dl class="kv" data-iot-stats>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRequests') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.httpRequests ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsMessages') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.mqttMessages ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRejectedAuth') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.rejectedAuth ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsRejectedPayload') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.rejectedPayload ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsTrendRows') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.trendRows ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsAlarmRows') }}</dt>
+              <dd class="kv__value">{{ ingest.status?.stats.alarmRows ?? 0 }}</dd>
+            </div>
+            <div class="kv__item">
+              <dt class="kv__label">{{ t('iotUi.statsLastAt') }}</dt>
+              <dd class="kv__value">{{ iotLastAtText }}</dd>
+            </div>
+          </dl>
+
+          <p v-if="ingest.status?.stats.lastUnrecognised?.length" class="field-hint" data-iot-unrecognised>
+            {{ t('iotUi.lastUnrecognised', { keys: ingest.status.stats.lastUnrecognised.join(', ') }) }}
+          </p>
+
+          <div class="field">
+            <span class="field-label">{{ t('iotUi.localAddressesLabel') }}</span>
+            <div v-if="ingest.status?.localAddresses.length" class="iot-addresses">
+              <span
+                v-for="item in ingest.status.localAddresses"
+                :key="item.address"
+                class="mono iot-value"
+              >
+                {{ item.address }}（{{ item.iface }}）
+              </span>
+            </div>
+            <span v-else class="field-hint">{{ t('iotUi.noLocalAddresses') }}</span>
+          </div>
+
+          <p class="field-hint">{{ t('iotUi.manualNote') }}</p>
+          <p v-if="settings.settings && !settings.settings.iotIngest.enabled" class="field-hint">
+            {{ t('iotUi.serviceOff') }}
+          </p>
+        </div>
+      </section>
+
+      <!--
         账号管理（手册 §17.1）。
 
         它落在设置页里，因为手册第 5173–5174 行把它列在同一个工具菜单下
@@ -1075,6 +1404,23 @@ async function confirmRestore(): Promise<void> {
 
 .settings-hint {
   font-size: 11.5px;
+}
+
+/*
+ * 数据接入里那些"要照抄去别处"的值（推流路径、MQTT 主题、本机地址）用等宽字，
+ * 并且**允许折断**：一条 `/api/v1/<32 位十六进制>/telemetry` 在窄窗口里会溢出卡片。
+ */
+.iot-value {
+  display: inline-block;
+  font-size: 12.5px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.iot-addresses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .about-brand {

@@ -232,13 +232,31 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
   manageSystemSettings: [
     'settings:update',
     'settings:restore-defaults',
-    'settings:pick-alarm-sound'
+    'settings:pick-alarm-sound',
+    /**
+     * IoT 数据接入的读数（业主 2026-09-19 第 1 条）。
+     *
+     * 归这一项而不是 `viewDevices`：它回的是**监听事实**（绑定地址、端口、起没起来）与
+     * 收数统计 —— 那是系统设置页上那张卡片，与 `settings:update` 在同一页、同一档权限。
+     * 界面上的"数据接入"页签只有管理员进得去，所以这一条与它一致。
+     */
+    'iot-ingest:status'
   ],
   manageDevices: [
     'device:add',
     'device:update',
     'device:remove',
     'device:open-web-ui',
+    /**
+     * 推流秘钥与推流地址（业主 2026-09-18 第 10 批第 5 条）。
+     *
+     * 归 `manageDevices` 而不是 `configureDevices`：秘钥是**这台设备在库里的凭据**
+     * （与"它在不在库里、叫什么、地址是什么"同一件事），而 `configureDevices` 管的是
+     * 写进设备里的参数。读端点信息时第一次会**生成**一条秘钥，那是一次写库 ——
+     * 所以它不该只要求"能看设备"。
+     */
+    'device:ingest-endpoint',
+    'device:rotate-push-secret',
     'maintenance:reboot',
     'maintenance:factory-reset',
     'maintenance:system-upgrade',

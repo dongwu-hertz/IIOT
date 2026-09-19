@@ -182,6 +182,7 @@ async function refresh(): Promise<void> {
         :title="refreshing ? t('deviceDetailUi.refreshing') : t('common.refresh')"
         :aria-label="refreshing ? t('deviceDetailUi.refreshing') : t('common.refresh')"
         :disabled="refreshing"
+        data-action="topbar-refresh"
         @click="refresh"
       >
         <svg

@@ -115,6 +115,7 @@ export const es: MessageSchema = {
     tabLanguage: 'Idioma',
     tabStorage: 'Almacenamiento',
     tabVideo: 'Vídeo y búfer',
+    tabIot: 'Ingesta de datos',
     tabAlarm: 'Alarmas',
     tabEmail: 'Correo',
     tabAccount: 'Cuenta',
@@ -206,6 +207,7 @@ export const es: MessageSchema = {
     restoreItemMaxStreams: 'Máximo de transmisiones simultáneas',
     restoreItemAlarmLinkage: 'Vinculación de alarmas (servidor de correo, destinatarios, plantillas y enfriamiento)',
     restoreItemAlarmSounds: 'Biblioteca de sonidos de alarma (tipos y archivos de audio elegidos)',
+    restoreItemIotIngest: 'Ingesta de datos (interruptores de HTTP push / MQTT, dirección y puertos)',
     restoreWarnStorage: 'La ruta de almacenamiento vuelve a la predeterminada. Las grabaciones y los archivos que ya están en el disco no se borran, simplemente dejan de estar referenciados; anote la ruta actual si la necesita.',
     restoreKeeps: 'La lista de dispositivos, los canales, las grabaciones y los archivos de audio, los registros de alarma, las cuentas y sus permisos no se modifican.',
     restoreConfirm: 'Restaurar',
@@ -992,6 +994,64 @@ export const es: MessageSchema = {
     // ese campo en `GET /get_devinfo`, así que el mapeador escribe la constante del
     // protocolo. La cifra autoritativa llega de `GET /get_passageway` tras registrar.
     channelCountUnreported: 'no informado'
+  },
+
+  /**
+   * Ingesta de datos IoT (propietario, 2026-09-19, punto 1: HTTP push + MQTT).
+   *
+   * El manual NO describe esta sección, así que el texto es nuestro; la forma sigue la API
+   * de dispositivo de ThingsBoard (token en la ruta de la URL / como usuario MQTT).
+   */
+  iotUi: {
+    enableLabel: 'Activar la ingesta de datos',
+    enableHint: 'Desactivada de forma predeterminada. Los dispositivos solo pueden enviar datos si está activada; al desactivarla no se inicia ningún puerto de escucha.',
+    bindLabel: 'Dirección de escucha',
+    bindHint: '0.0.0.0 acepta todas las interfaces (los dispositivos pueden conectarse); 127.0.0.1 solo el equipo local.',
+    errBind: 'La dirección de escucha debe ser 0.0.0.0, 127.0.0.1 o una dirección IPv4',
+    errPort: 'El puerto debe ser un número entero entre 1 y 65535',
+    httpGroup: 'HTTP push',
+    httpEnable: 'Activar HTTP push',
+    httpPortLabel: 'Puerto HTTP',
+    httpPathLabel: 'Ruta de envío',
+    mqttGroup: 'MQTT',
+    mqttEnable: 'Activar MQTT',
+    mqttPortLabel: 'Puerto MQTT',
+    mqttTopicLabel: 'Tema de publicación',
+    mqttUserHint: 'Conéctese con el secreto del dispositivo como usuario y la contraseña vacía.',
+    secretLabel: 'Secreto del dispositivo',
+    manualNote: 'El manual no describe esta sección: la forma sigue la API de dispositivo de ThingsBoard (secreto en la ruta de la URL, secreto como usuario MQTT) para que se conecten tanto nuestros equipos como equipos de terceros.',
+    devicesWithSecret: 'Equipos con secreto: {count}',
+    localAddressesLabel: 'Direcciones locales (para los equipos)',
+    noLocalAddresses: 'Este equipo no tiene ninguna dirección utilizable por un dispositivo (solo loopback).',
+    statusGroup: 'Estado de ejecución',
+    listening: 'Escuchando en {address}:{port}',
+    notListening: 'Sin escucha',
+    statusOff: 'Desactivado',
+    statsRequests: 'Peticiones HTTP',
+    statsMessages: 'Mensajes MQTT',
+    statsRejectedAuth: 'Credenciales rechazadas',
+    statsRejectedPayload: 'Cargas rechazadas',
+    statsTrendRows: 'Filas de tendencia escritas',
+    statsAlarmRows: 'Filas de alarma escritas',
+    statsLastAt: 'Última recepción',
+    statsNever: 'Todavía no se ha recibido nada',
+    lastUnrecognised: 'Claves no reconocidas en el último mensaje: {keys}',
+    portConflict: 'HTTP y MQTT comparten el puerto {port}; el que arranque en segundo lugar fallará.',
+    devicesTitle: 'Dirección de envío y secreto',
+    devicesHint: 'Introduzca la dirección siguiente en la configuración de envío del equipo. El secreto solo permite escribir telemetría en este equipo; no permite leer nada.',
+    copy: 'Copiar',
+    copied: 'Copiado',
+    rotate: 'Rotar el secreto',
+    rotateTitle: '¿Rotar el secreto de envío?',
+    rotateBody: 'El secreto anterior deja de funcionar de inmediato; hay que reconfigurar el equipo con el nuevo antes de que vuelva a enviar datos.',
+    rotateConfirm: 'Rotar',
+    rotateNotice: 'Secreto rotado. Introduzca el nuevo secreto en el equipo.',
+    serviceOff: 'La ingesta de datos está desactivada (actívela en Sistema - Ingesta de datos), así que ahora los equipos no pueden conectarse.',
+    httpOff: 'HTTP push está desactivado',
+    mqttOff: 'MQTT está desactivado',
+    mqttUser: 'Usuario MQTT (el secreto)',
+    secretHint: 'Un secreto por equipo; al rotarlo el anterior deja de funcionar de inmediato.',
+    loadFailed: 'No se pudo leer el estado de la ingesta de datos',
   },
 
   installUi: {

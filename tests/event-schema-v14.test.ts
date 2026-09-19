@@ -68,12 +68,20 @@ function seedV13Workflow(db: InstanceType<typeof Database>): void {
 }
 
 describe('schema v14：Incident 与关联两张表', () => {
-  it('版本号与迁移表是一起的（改了其中一处就会在这里报）', () => {
-    assert.equal(SCHEMA_VERSION, 14)
+  it('v14 那条迁移在表里，而且名字没被改过', () => {
+    /**
+     * 这里**不写死** `SCHEMA_VERSION === 14`：v15（设备推流秘钥，2026-09-19）加进来之后，
+     * 那句断言会红 —— 而它要守的东西（v14 这条迁移存在、名字对、现场 v13 库能升上来）
+     * 一条都没坏。一个因为"版本号变了"就红的断言，最后只会教人顺手改数字。
+     * 常量与迁移表的最高版本一致这件事由 `alarm-schema-v6.test.ts` 与
+     * `device-installation.test.ts` 那几条守着。
+     */
+    const v14 = MIGRATIONS.find((migration) => migration.version === 14)
+    assert.ok(v14, 'MIGRATIONS 里没有 v14')
+    assert.equal(v14.name, 'incidents-and-links')
     const last = MIGRATIONS[MIGRATIONS.length - 1]
     assert.ok(last)
-    assert.equal(last.version, 14)
-    assert.equal(last.name, 'incidents-and-links')
+    assert.equal(SCHEMA_VERSION, last.version)
   })
 
   it('升级现场的 v13 库：老数据一行不少，同时多出两张空表', () => {
@@ -83,7 +91,7 @@ describe('schema v14：Incident 与关联两张表', () => {
 
     runMigrations(db)
 
-    assert.equal(db.pragma('user_version', { simple: true }), 14)
+    assert.equal(db.pragma('user_version', { simple: true }), SCHEMA_VERSION)
     assert.equal(countRows(db, 'event_status'), 1, '升级把既有状态弄丢了')
     assert.equal(countRows(db, 'event_activity'), 1, '升级把既有流水弄丢了')
     for (const table of ['incidents', 'incident_alerts']) {
@@ -101,7 +109,7 @@ describe('schema v14：Incident 与关联两张表', () => {
     const db = openV13()
     runMigrations(db)
     runMigrations(db)
-    assert.equal(db.pragma('user_version', { simple: true }), 14)
+    assert.equal(db.pragma('user_version', { simple: true }), SCHEMA_VERSION)
     db.close()
   })
 

@@ -175,6 +175,7 @@ export const zhCN = {
     tabLanguage: '语言',
     tabStorage: '存储',
     tabVideo: '视频与缓冲',
+    tabIot: '数据接入',
     tabAlarm: '告警',
     tabEmail: '邮箱',
     tabAccount: '账号',
@@ -270,6 +271,7 @@ export const zhCN = {
     restoreItemMaxStreams: '同时直播路数上限',
     restoreItemAlarmLinkage: '告警联动（含邮件服务器、收件人、模板与冷却）',
     restoreItemAlarmSounds: '告警声音库（声音类型与所选音频文件）',
+    restoreItemIotIngest: '数据接入（HTTP 推流 / MQTT 的开关、监听地址与端口）',
     restoreWarnStorage: '存储路径会被改回默认值。磁盘上已有的录音与文件不会被删除，只是不再被指向；需要保留原路径时请先记下它。',
     restoreKeeps: '设备列表、通道、录像与录音文件、告警记录、账号与账号权限都不会被改动。',
     restoreConfirm: '恢复默认值',
@@ -1154,6 +1156,66 @@ export const zhCN = {
    * **库里的列与 API 仍在**（`devices.sound_level_db`，v11 迁移已经发布过，删列要再做一次
    * 迁移），旧值原样保留但界面不再读写 —— 取舍见 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
    */
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条：HTTP 推流 + MQTT）。
+   *
+   * **手册未说明**这一节（手册里没有"IoT 接入"这一章），所以下面是我们的口径，
+   * 形状照抄 ThingsBoard 的设备侧接入：秘钥放在 URL 路径里 / 当 MQTT 用户名。
+   * 现场那台 FA8 声纹设备自己的 Push 配置就是这个形状（`GET /get_date_push` 实测），
+   * 所以"我们自己的设备"与"第三方设备"共用同一套接收端。
+   */
+  iotUi: {
+    enableLabel: '启用数据接入',
+    enableHint: '默认关闭。开启后设备才能把数据推上来；关闭时两个监听都不会启动。',
+    bindLabel: '监听地址',
+    bindHint: '0.0.0.0 表示所有网卡（设备才连得上）；127.0.0.1 表示只允许本机。',
+    errBind: '监听地址只能是 0.0.0.0、127.0.0.1 或一个 IPv4 地址',
+    errPort: '端口需为 1-65535 之间的整数',
+    httpGroup: 'HTTP 推流',
+    httpEnable: '启用 HTTP 推流',
+    httpPortLabel: 'HTTP 端口',
+    httpPathLabel: '推流路径',
+    mqttGroup: 'MQTT',
+    mqttEnable: '启用 MQTT',
+    mqttPortLabel: 'MQTT 端口',
+    mqttTopicLabel: '发布主题',
+    mqttUserHint: '连接时用设备秘钥当用户名，密码留空。',
+    secretLabel: '设备秘钥',
+    manualNote: '手册未说明这一节：形状照抄 ThingsBoard 的设备侧接入（秘钥在 URL 路径里、MQTT 用秘钥当用户名），这样现场设备与第三方设备都能接。',
+    devicesWithSecret: '已有秘钥的设备：{count} 台',
+    localAddressesLabel: '本机地址（给设备用）',
+    noLocalAddresses: '本机没有可用于设备的地址（只有回环地址）。',
+    statusGroup: '运行状态',
+    listening: '监听中 {address}:{port}',
+    notListening: '未监听',
+    statusOff: '已关闭',
+    statsRequests: 'HTTP 请求',
+    statsMessages: 'MQTT 报文',
+    statsRejectedAuth: '凭据被拒',
+    statsRejectedPayload: '载荷被拒',
+    statsTrendRows: '写入趋势行',
+    statsAlarmRows: '写入告警行',
+    statsLastAt: '最近收到',
+    statsNever: '尚未收到任何数据',
+    lastUnrecognised: '最近一次认不出来的键：{keys}',
+    portConflict: 'HTTP 与 MQTT 用了同一个端口（{port}），后启动的那个会失败。',
+    devicesTitle: '推流地址与秘钥',
+    devicesHint: '把下面的地址填进设备的推流配置。秘钥只允许往本机写遥测，不能读任何数据。',
+    copy: '复制',
+    copied: '已复制',
+    rotate: '轮换秘钥',
+    rotateTitle: '轮换推流秘钥？',
+    rotateBody: '旧秘钥会立刻失效；设备必须用新秘钥重新配置后才会继续推数据。',
+    rotateConfirm: '轮换',
+    rotateNotice: '秘钥已轮换，请把新秘钥填到设备上。',
+    serviceOff: '数据接入总开关是关的（在「系统设置 → 数据接入」里开启），设备现在连不上来。',
+    httpOff: 'HTTP 推流已关闭',
+    mqttOff: 'MQTT 已关闭',
+    mqttUser: 'MQTT 用户名（就是秘钥）',
+    secretHint: '秘钥按设备一条，可随时轮换；轮换后旧秘钥立刻失效。',
+    loadFailed: '读取数据接入状态失败',
+  },
+
   installUi: {
     section: '地址信息（可选）',
     sectionHint: '声源定位设备（SN-16 空气声呐）填这几项；其他机型留空。经纬度用 WGS84 十进制度。',

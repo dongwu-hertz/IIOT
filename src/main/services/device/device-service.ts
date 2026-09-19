@@ -15,6 +15,7 @@
  */
 
 import { EventEmitter } from 'node:events'
+import { randomBytes } from 'node:crypto'
 import { AppError, ErrorCodes } from '@shared/errors'
 import { now } from '@shared/utils/id'
 import type {
@@ -57,6 +58,16 @@ import type { DeviceRepository, ChannelRepository } from '../database/device-rep
 import { AUSCULTATION_CHANNEL_COUNT } from '../database/device-repository'
 import { e2ChannelCountFromModel, type E2Variant } from '@shared/domain/e2'
 import { parseInstallation } from '@shared/domain/device-installation'
+import {
+  MQTT_TELEMETRY_TOPIC,
+  PUSH_SECRET_BYTES,
+  defaultIotIngestConfig,
+  pushSecretFromBytes,
+  type DeviceIngestEndpoint,
+  type IotIngestConfig,
+  type IotIngestLocalAddress
+} from '@shared/domain/iot-ingest'
+import { listLocalAddresses } from '../ingest/local-addresses'
 
 /**
  * 自动识别机型时试家系的顺序（业主 2026-09-17 第 2 条：添加设备不再让人选机型）。
@@ -109,6 +120,20 @@ export interface DeviceServiceOptions {
    * without a filesystem.
    */
   createStreamManager?: (options: StreamManagerOptions) => StreamManager
+  /**
+   * IoT 接入配置（业主 2026-09-19 第 1 条）。
+   *
+   * 设备对话框要显示"设备该往哪个端口推"，而端口是设置里的一项。默认给出厂那一份
+   * （接入关闭、8080 / 1883），这样测试里构造 `DeviceService` 不必先造一个设置服务。
+   */
+  getIngestConfig?: () => IotIngestConfig
+  /**
+   * 本机可用于设备的地址表。
+   *
+   * 注入口而不是在这里 `import os`：测试机器上有几张网卡、地址是什么，与"秘钥怎么生成、
+   * 地址怎么拼"无关，而写死成真实网卡会让断言变成"跑在什么机器上"的函数。
+   */
+  listLocalAddresses?: () => IotIngestLocalAddress[]
 }
 
 /**
@@ -175,6 +200,9 @@ export class DeviceService extends EventEmitter {
    */
   private readonly streamBridges = new Map<string, () => void>()
   private readonly createStreamManager?: (options: StreamManagerOptions) => StreamManager
+  /** IoT 接入配置与地址表（见 `DeviceServiceOptions` 里那两项的说明）。 */
+  private readonly getIngestConfig: () => IotIngestConfig
+  private readonly listLocalAddresses: () => IotIngestLocalAddress[]
 
   constructor(options: DeviceServiceOptions) {
     super()
@@ -184,6 +212,8 @@ export class DeviceService extends EventEmitter {
     this.transport = options.transport ?? new FetchHttpTransport(options.settings().requestTimeoutMs)
     this.getSettings = options.settings
     if (options.createStreamManager) this.createStreamManager = options.createStreamManager
+    this.getIngestConfig = options.getIngestConfig ?? defaultIotIngestConfig
+    this.listLocalAddresses = options.listLocalAddresses ?? listLocalAddresses
     this.resolver = new AuthStrategyResolver(this.transport)
   }
 
@@ -207,6 +237,79 @@ export class DeviceService extends EventEmitter {
 
   findClient(deviceId: string): DeviceApiClient | undefined {
     return this.runtime.get(deviceId)?.client
+  }
+
+  // -------------------------------------------------------------------------
+  // 推流秘钥（业主 2026-09-18 第 10 批第 5 条 / 2026-09-19 第 1 条）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 这台设备的推流端点：秘钥 + 本机候选地址 + 两个端口。
+   *
+   * **没秘钥就当场生成一条**（写库 + 读回核对，见 `DeviceRepository.setPushSecret`）。
+   * 为什么是"读的时候生成"而不是"添加设备时生成"：
+   *   - 秘钥只在这一个对话框里被需要，而"每台设备都有一条秘钥"会在库里留下一堆没人用过的
+   *     凭据（现场 3 台设备、其中 2 台永远不会推数据）；
+   *   - 生成是一条幂等的写（已经有就返回已有的），所以反复打开对话框不会换掉秘钥 ——
+   *     那是最糟的行为：用户复制走一条、再打开一次发现变了。
+   *
+   * 返回的秘钥是**从库里读回来的**，不是刚生成的那个字面量。
+   */
+  ingestEndpoint(deviceId: string): DeviceIngestEndpoint {
+    const device = this.get(deviceId)
+    const existing = this.devices.getPushSecret(deviceId)
+    const secret = existing ?? this.mintPushSecret(deviceId)
+    return this.describeIngestEndpoint(device, secret)
+  }
+
+  /**
+   * 换一条秘钥（**旧的立刻失效**）。
+   *
+   * 轮换的意义是把一条已经泄漏（截图、贴进邮件）的秘钥作废，所以它必须真的换一个新的、
+   * 而且**不能**碰巧生成同一条 —— 概率上不可能，但读回核对的返回值就是证据。
+   */
+  rotatePushSecret(deviceId: string): DeviceIngestEndpoint {
+    const device = this.get(deviceId)
+    const secret = this.mintPushSecret(deviceId)
+    return this.describeIngestEndpoint(device, secret)
+  }
+
+  private mintPushSecret(deviceId: string): string {
+    // 16 字节随机数（`pushSecretFromBytes` 转成 32 位小写十六进制）。`randomBytes` 是
+    // 密码学安全的：这条秘钥是**唯一**的凭据，`Math.random()` 在这里是不合格的。
+    const stored = this.devices.setPushSecret(
+      deviceId,
+      pushSecretFromBytes(randomBytes(PUSH_SECRET_BYTES))
+    )
+    if (!stored) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '生成推流秘钥失败：设备不存在', deviceId)
+    }
+    return stored
+  }
+
+  private describeIngestEndpoint(device: Device, secret: string): DeviceIngestEndpoint {
+    const config = this.getIngestConfig()
+    return {
+      deviceId: device.id,
+      deviceName: device.name,
+      secret,
+      serviceEnabled: config.enabled,
+      httpEnabled: config.httpEnabled,
+      httpPort: config.httpPort,
+      mqttEnabled: config.mqttEnabled,
+      mqttPort: config.mqttPort,
+      mqttTopic: MQTT_TELEMETRY_TOPIC,
+      localAddresses: this.listLocalAddresses()
+    }
+  }
+  /**
+   * 已经有推流秘钥的设备台数（设置页那张接入卡片显示它）。
+   *
+   * 单独一个方法而不是把仓库挂到 `AppServices` 上：那一个数字的语义是"接过几台设备"，
+   * 而界面除此之外不需要 `devices` 表的任何东西。
+   */
+  countIngestSecrets(): number {
+    return this.devices.countWithPushSecret()
   }
 
   // -------------------------------------------------------------------------

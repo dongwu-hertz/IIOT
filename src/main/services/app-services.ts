@@ -64,6 +64,9 @@ import { PlaybackService } from './audio/playback-service'
 import { TrendStorageService } from './trend/trend-storage-service'
 import { TrendQueryService } from './trend/trend-query-service'
 import { AudioRecordingService } from './audio/recording-service'
+import { IotIngestService } from './ingest/iot-ingest-service'
+import { TelemetryIntake } from './ingest/telemetry-intake'
+import { listLocalAddresses } from './ingest/local-addresses'
 import { appLog, initLogging, storageLog } from './logging/logger'
 
 /** Default storage root. Windows users are expected to move this to a data disk. */
@@ -187,6 +190,16 @@ export interface AppServices {
   sampleLabels: SampleLabelService
   /** 听诊盒子族（E2 / FA100 / FA110）的「拉」通道：状态与告警同步。 */
   e2: E2DeviceService
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条）：HTTP 推流 + 最小 MQTT broker。
+   *
+   * 它**只负责收**：秘钥 → 设备、SSL 无关、把收到的行交给 `TelemetryIntake`。
+   * 落库那一步走的是 `trends` 与 `alarmRepo`（同一个实例，不新开第二套存储），
+   * 所以历史趋势页与告警列表**立刻**能看到推上来的数据。
+   *
+   * **默认关闭**（设置里的 `iotIngest.enabled`）：装了软件就在局域网里开监听端口是缺陷。
+   */
+  iotIngest: IotIngestService
   /** 可插拔 AI 标注（配置 + 让大模型给候选标签）。 */
   sampleAi: SampleAiLabelService
   /**
@@ -367,6 +380,15 @@ export async function initServices(): Promise<AppServices> {
       preAlarmSeconds: settings.get().preAlarmSeconds,
       postAlarmSeconds: settings.get().postAlarmSeconds
     }),
+    /**
+     * IoT 接入的两项（业主 2026-09-19 第 1 条）。
+     *
+     * 从设置里**现读**（每次调用都读，不缓存）：端口改完的下一刻，设备对话框里显示的
+     * 推流地址就该是新的。地址表用真的网卡枚举 —— 界面必须给出设备**连得上**的地址，
+     * 而 `0.0.0.0` 不是一个可以连的目标。
+     */
+    getIngestConfig: () => settings.get().iotIngest,
+    listLocalAddresses,
 
     /**
      * Build a StreamManager for one device.
@@ -444,6 +466,46 @@ export async function initServices(): Promise<AppServices> {
   // so the feature-stream hot path never performs disk I/O per sample.
   const trends = new TrendStorageService({ storage })
   const trendQuery = new TrendQueryService({ storage })
+
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条）：HTTP 推流 + 最小 MQTT broker。
+   *
+   * 建在这里（`trends` 与 `alarmRepo` 之后）是因为它**必须**把收到的数据交给那两个已有的
+   * 所有者 —— 自己 new 一个趋势写入器或告警仓储，就会出现"推上来的历史与流出来的历史在
+   * 两个文件里"这种事，而现场看到的只是"趋势图少了一段"。
+   *
+   * 三个依赖都写成薄薄的适配器，服务本身不认识 SQLite / Parquet：
+   *   - `appendFeature` 与实时流走**同一个** `trends.append(deviceUid, feature)`；
+   *   - `insertAlarm` 就是 `alarmRepo.insert`（它自带去重，设备重发不会产生第二条）；
+   *   - `channelCountFor` 用来拒绝越界通道号（写到一个不存在的通道上会让趋势图凭空
+   *     多出一条没人认识的曲线）。
+   */
+  const iotIngest = new IotIngestService({
+    getConfig: () => settings.get().iotIngest,
+    resolveDevice: (secret) => {
+      const device = deviceRepo.findByPushSecret(secret)
+      return device ? { id: device.id, deviceUid: device.deviceUid, name: device.name } : undefined
+    },
+    intake: new TelemetryIntake({
+      appendFeature: (deviceUid, feature) => trends.append(deviceUid, feature),
+      insertAlarm: (input) => alarmRepo.insert(input),
+      channelCountFor: (deviceId) => channelRepo.listByDevice(deviceId).length
+    }),
+    log: {
+      info: (message, meta) => appLog().info(message, meta),
+      warn: (message, meta) => appLog().warn(message, meta)
+    }
+  })
+
+  /**
+   * 设置一变就重新对账监听（改端口 / 开总开关都不需要重启应用）。
+   *
+   * `applyConfig()` 内部串行化并且是幂等的：设置页连着敲两下数字会触发两次，而"关旧监听 +
+   * 起新监听"不是一个原子操作 —— 不排队就会留下一个没人持有句柄的监听（端口被占）。
+   */
+  settings.on('changed', () => {
+    void iotIngest.applyConfig()
+  })
 
   /**
    * 样本库 → 外部训练数据集。与 `SampleLibraryService` 分开：那一个只管"库里有什么"，
@@ -724,6 +786,18 @@ export async function initServices(): Promise<AppServices> {
   deviceService.startMonitor()
 
   /**
+   * IoT 接入：把设置里那份配置**当场应用一次**。
+   *
+   * 无论开关是开是关都调一次：关着的时候它什么都不做（`reconcile()` 里那条分支），
+   * 开着的时候监听必须在 IPC 处理器注册**之前**就绪 —— 否则设置页第一次打开会读到
+   * "配置说开着、服务说没监听"这种自相矛盾的状态。
+   *
+   * **不 await**：`listen()` 失败（端口被占/地址不属于本机）不该拦住应用启动，
+   * 而状态里的 `error` 就是给界面看的。
+   */
+  void iotIngest.applyConfig()
+
+  /**
    * 告警联动服务在这里启动：它必须在 IPC 处理器注册**之前**就绪，
    * 否则设置页第一次打开会读到一个还没连上触发源的引擎。
    */
@@ -783,6 +857,7 @@ export async function initServices(): Promise<AppServices> {
     sampleExport,
     sampleAi,
     e2,
+    iotIngest,
     alarms: alarmService,
     recordings: recordingService,
     overview: overviewService,
@@ -809,6 +884,9 @@ export async function initServices(): Promise<AppServices> {
       // 再收尾可能正在跑的联动录像与弹窗。它自己也会 kill 掉 ffmpeg 子进程，
       // 所以顺序必须在 `killAllFfmpeg` 之前。
       linkage.dispose()
+      // 入站接入服务：先停监听（不再收新数据），再让下面的趋势 flush 把已经收到的写出去。
+      // 反过来的话，关库期间到达的一条推送会撞上已经关掉的 SQLite 句柄。
+      await iotIngest.dispose()
       // Same reason, and more urgently: this one owns ffmpeg child processes. An
       // orphaned transcoder would keep an RTSP connection open on the camera (its
       // measured client limit is 6) and hold this process alive.

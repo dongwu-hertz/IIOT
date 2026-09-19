@@ -153,7 +153,26 @@ const api: RendererApi = {
     refreshStatus: (id?: string) => ipcRenderer.invoke(IpcChannels.DEVICE_REFRESH_STATUS, id),
     getInfo: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_GET_INFO, id),
     getChannels: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_GET_CHANNELS, id),
-    openWebUi: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_OPEN_WEB_UI, id)
+    openWebUi: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_OPEN_WEB_UI, id),
+    /**
+     * 推流地址与秘钥（业主 2026-09-18 第 10 批第 5 条）。
+     *
+     * ⚠ 第一次读**会生成一条秘钥**（写库 + 读回核对），所以它不是纯读动作 ——
+     * 调用点只有"添加/编辑设备"那个对话框。
+     */
+    ingestEndpoint: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_INGEST_ENDPOINT, id),
+    /** 换一条秘钥（旧的立刻失效），回的是读回来的那一份端点信息。 */
+    rotatePushSecret: (id: string) => ipcRenderer.invoke(IpcChannels.DEVICE_ROTATE_PUSH_SECRET, id)
+  },
+
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条）：只有读数一条通道。
+   *
+   * 配置本身写在 `settings.iotIngest` 里，所以这里没有 setter —— 改配置与改其它设置走
+   * 同一条路（`settings.update`），主进程那边监听设置变化并重新起 / 停监听。
+   */
+  ingest: {
+    status: () => ipcRenderer.invoke(IpcChannels.IOT_INGEST_STATUS)
   },
 
   overview: {

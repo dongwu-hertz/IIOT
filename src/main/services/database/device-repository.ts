@@ -29,6 +29,7 @@ import type {
 import { CHANNEL_COUNT, SensorType as SensorTypeEnum, isDeviceKind } from '@shared/domain/models'
 import { hasInstallation } from '@shared/domain/device-installation'
 import { isE2Variant, type E2Variant } from '@shared/domain/e2'
+import { isPushSecret } from '@shared/domain/iot-ingest'
 
 // ---------------------------------------------------------------------------
 // Row shape + mapping
@@ -58,6 +59,14 @@ interface DeviceRow {
   sound_level_db: number | null
   /** v12：听诊盒子族的两代协议（`auscultation` / `airSonar`），NULL = 还没读到过。 */
   e2_variant: string | null
+  /**
+   * v15：设备推流秘钥（32 位小写十六进制），NULL = 还没生成过。
+   *
+   * **不进 `Device` 模型**：设备列表、设备详情、悬停卡片都不需要它，而把它塞进 `Device`
+   * 就意味着它随每一次 `devices.list()` 过 IPC —— 一条只该在"添加/编辑设备"那个对话框里
+   * 出现一次的凭据没有理由到处走。界面要它的时候走 `devices.ingestEndpoint(id)`。
+   */
+  push_secret: string | null
 }
 
 interface ChannelRow {
@@ -453,6 +462,65 @@ export class DeviceRepository {
     // Channels / alarms / recordings cascade via foreign keys.
     const result = this.db.prepare(`DELETE FROM devices WHERE id = ?`).run(id)
     return result.changes > 0
+  }
+
+  // -------------------------------------------------------------------------
+  // 推流秘钥（v15）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 秘钥 → 设备。接入服务收到一条推送时问的就是这一个问题。
+   *
+   * 只接受合法形状的秘钥：`push_secret` 列是 TEXT，而拿一个 `'a'` 去比也不会命中任何行 ——
+   * 但更重要的是，先判形状意味着"秘钥不对"这个结论在**形状**上就已经成立，不必依赖库里刚好
+   * 没有那一行（别人动过的库里可能真有一个奇怪的短串）。
+   */
+  findByPushSecret(secret: string): Device | undefined {
+    if (!isPushSecret(secret)) return undefined
+    const row = this.db
+      .prepare<[string], DeviceRow>(`SELECT * FROM devices WHERE push_secret = ?`)
+      .get(secret)
+    return row ? toDevice(row) : undefined
+  }
+
+  /** 这台设备当前的秘钥；没生成过就是 `undefined`（不是空串）。 */
+  getPushSecret(id: string): string | undefined {
+    const row = this.db
+      .prepare<[string], { push_secret: string | null }>(
+        `SELECT push_secret FROM devices WHERE id = ?`
+      )
+      .get(id)
+    const stored = row?.push_secret ?? null
+    return stored !== null && isPushSecret(stored) ? stored : undefined
+  }
+
+  /**
+   * 写入 / 轮换秘钥，**写完读回来核对**（与 `updateE2Variant` 同一条规矩）。
+   *
+   * 返回的是**从库里读回来的**那一个值：写错列、库里被触发器改掉、索引冲突导致没写进去，
+   * 这三种情况都只能靠读回发现。调用方拿它决定界面显示什么，所以绝不能回传参值。
+   */
+  setPushSecret(id: string, secret: string): string | undefined {
+    if (!isPushSecret(secret)) {
+      throw new Error(
+        `非法推流秘钥：${String(secret).length} 个字符（要求 32 位小写十六进制）`
+      )
+    }
+    if (!this.findById(id)) return undefined
+    this.db
+      .prepare(`UPDATE devices SET push_secret = ?, updated_at = ? WHERE id = ?`)
+      .run(secret, now(), id)
+    return this.getPushSecret(id)
+  }
+
+  /** 有多少台设备已经有秘钥（设置页那张接入卡片要显示它）。 */
+  countWithPushSecret(): number {
+    const row = this.db
+      .prepare<[], { total: number }>(
+        `SELECT COUNT(*) AS total FROM devices WHERE push_secret IS NOT NULL`
+      )
+      .get()
+    return row?.total ?? 0
   }
 
   /** Persist an online-probe outcome. Bumps lastSeen on success. */

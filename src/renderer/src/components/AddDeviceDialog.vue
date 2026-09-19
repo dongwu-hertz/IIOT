@@ -15,11 +15,12 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ProbeResult } from '@shared/ipc/contract'
-import { type DeviceKind } from '@shared/domain/models'
+import { type Device, type DeviceKind } from '@shared/domain/models'
 import { hasInstallation, parseInstallation } from '@shared/domain/device-installation'
 import { resolveChannelCount } from '@renderer/lib/channelWall'
 import { useDevicesStore } from '@renderer/stores/devices'
 import AppModal from '@renderer/components/AppModal.vue'
+import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 
 const props = defineProps<{ modelValue: boolean }>()
 
@@ -79,6 +80,16 @@ const adding = ref(false)
 const probeResult = ref<ProbeResult | null>(null)
 const probeError = ref('')
 
+/**
+ * 刚添加成功的那台设备（业主 2026-09-18 第 10 批第 5 条：「添加设备支持 HTTP 推流
+ * （秘钥 + 推流地址）」）。
+ *
+ * 添加成功之后**不立刻关窗**，而是把这一台设备的推流地址与秘钥显示出来：秘钥要趁现在就
+ * 填到设备上（或复制走），关掉之后它只剩"去设备列表里点齿轮"这一条路。这一步不写任何东西
+ * （秘钥由主进程在读取时生成一条并读回核对，见 `DevicePushEndpoint`）。
+ */
+const addedDevice = ref<Device | null>(null)
+
 const kindLabel = (kind: DeviceKind): string => t(`domain.deviceKind.${kind}`)
 
 /**
@@ -117,9 +128,16 @@ function resetProbe(): void {
   probeError.value = ''
 }
 
-function reset(): void {
+/**
+ * 清干净这次输入（关窗时走这条路）。
+ *
+ * 注意它**不**在"添加成功"那条路上被调用：那时窗口还开着，要显示这一台设备的推流地址，
+ * 而表单已经被 `addedDevice` 那一块换掉了（见模板里的两个分支）。
+ */
+function resetForm(): void {
   Object.assign(form, emptyForm())
   formError.value = ''
+  addedDevice.value = null
   resetProbe()
 }
 
@@ -142,6 +160,7 @@ watch(
       // Wipe the credential from memory whenever the dialog goes away.
       form.password = ''
       formError.value = ''
+      addedDevice.value = null
       resetProbe()
     }
   }
@@ -206,8 +225,9 @@ async function submit(): Promise<void> {
     return
   }
   emit('added', device.id)
-  reset()
-  open.value = false
+  resetProbe()
+  form.password = ''
+  addedDevice.value = device
 }
 
 /** 安装信息四个输入的即时校验；返回空串表示没问题。 */
@@ -218,6 +238,7 @@ function installationValidation(): string {
 
 function close(): void {
   open.value = false
+  resetForm()
 }
 
 const probeInfo = computed(() => probeResult.value?.info)
@@ -256,6 +277,19 @@ const probeChannelCount = computed(() =>
       判据不能再是"里面有机型单选项" —— 机型选择已经删掉了（第 2 条）。
     -->
     <div class="add" data-add-device-dialog>
+      <!--
+        添加成功之后这一块**接替**表单：设备已经在库里了，这时现场要做的下一件事是
+        「把这台设备的推流地址填到设备上」（业主 2026-09-18 第 10 批第 5 条）。
+        此时地址与秘钥是**确定的**（就这一台），所以它比"关掉窗口、再去设备列表点齿轮"有用。
+      -->
+      <template v-if="addedDevice">
+        <p class="alert alert--success" role="status" data-add-device-done>
+          {{ t('devicesUi.noticeAdded') }}
+        </p>
+        <DevicePushEndpoint :device-id="addedDevice.id" />
+      </template>
+
+      <template v-else>
       <!--
         **不让人选机型**（业主 2026-09-17 第 2 条）：协议由主进程按地址自动匹配。
         为什么这比"选一张机型卡"更好：选错家系的表现是"设备没响应"，而那是**网络故障的样子** ——
@@ -426,16 +460,26 @@ const probeChannelCount = computed(() =>
           </span>
         </div>
       </template>
+      </template>
     </div>
 
     <template #footer>
-      <button type="button" class="btn" :disabled="probing || adding" @click="testConnection">
-        {{ probing ? t('addDeviceUi.testing') : t('devices.testConnection') }}
+      <!--
+        添加成功之后只剩「完成」：这一台已经进库了，再点一次「添加设备」只会再注册一遍
+        （主进程按设备标识幂等，所以它不会产生第二台，但按钮会让人以为还能做点什么）。
+      -->
+      <button v-if="addedDevice" type="button" class="btn btn--primary" @click="close">
+        {{ t('common.close') }}
       </button>
-      <button type="button" class="btn btn--primary" :disabled="adding || probing" @click="submit">
-        {{ adding ? t('addDeviceUi.adding') : t('devices.addDevice') }}
-      </button>
-      <button type="button" class="btn btn--ghost" :disabled="adding" @click="close">{{ t('common.cancel') }}</button>
+      <template v-else>
+        <button type="button" class="btn" :disabled="probing || adding" @click="testConnection">
+          {{ probing ? t('addDeviceUi.testing') : t('devices.testConnection') }}
+        </button>
+        <button type="button" class="btn btn--primary" :disabled="adding || probing" @click="submit">
+          {{ adding ? t('addDeviceUi.adding') : t('devices.addDevice') }}
+        </button>
+        <button type="button" class="btn btn--ghost" :disabled="adding" @click="close">{{ t('common.cancel') }}</button>
+      </template>
     </template>
   </AppModal>
 </template>

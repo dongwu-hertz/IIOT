@@ -54,7 +54,9 @@ import type {
   SampleAiConfigInput,
   SampleAiLabelRequest,
   SampleExportRequest,
-  E2SyncRequest
+  E2SyncRequest,
+  /** IoT 接入的读数（业主 2026-09-19 第 1 条）：监听事实 + 收数统计。 */
+  IotIngestRuntimeStatus
 } from '@shared/ipc/contract'
 import { AppError, ErrorCodes, toResult, type DeviceResult } from '@shared/errors'
 import type {
@@ -86,6 +88,7 @@ import { isSampleLabelDimension, isSampleLabelSource, type SampleLabelSource } f
 import { getServices } from '../services/app-services'
 import { appLog, deviceLog } from '../services/logging/logger'
 import { normaliseBaseUrl } from '../services/device/device-api-client'
+import { listLocalAddresses } from '../services/ingest/local-addresses'
 
 /**
  * Register every handler exactly once.
@@ -660,6 +663,23 @@ export function registerIpcHandlers(): void {
       })
   )
 
+  ipcMain.handle(
+    IpcChannels.IOT_INGEST_STATUS,
+    (): Promise<DeviceResult<IotIngestRuntimeStatus>> =>
+      toResult(async () => {
+        // 与写接入配置同一档权限：这一份读数里有监听地址与端口、以及"哪台设备推过数据"，
+        // 它属于系统设置页的那张卡片。
+        requireAdministrator()
+        requirePermission('manageSystemSettings')
+        const services = getServices()
+        return {
+          ...services.iotIngest.status,
+          localAddresses: listLocalAddresses(),
+          devicesWithSecret: services.devices.countIngestSecrets()
+        }
+      })
+  )
+
   // -------------------------------------------------------------------------
   // Devices
   // -------------------------------------------------------------------------
@@ -732,6 +752,42 @@ export function registerIpcHandlers(): void {
     toResult(async () => {
       requirePermission('viewDevices')
       return getServices().devices.refreshChannels(id)
+    })
+  )
+
+  /**
+   * 这台设备的推流地址与秘钥（业主 2026-09-18 第 10 批第 5 条）。
+   *
+   * 权限用的是 `manageDevices`（与编辑设备同一档）而不是 `viewDevices`：**首次读取会生成
+   * 一条秘钥**，那是一次写库；而"谁能看到还没被设备用起来的凭据"在这里与"谁能改设备"
+   * 是同一件事。
+   *
+   * `describeIngestEndpoint` 里的地址表来自真实的网卡枚举，`serviceEnabled` / 端口来自设置 ——
+   * 所以这个返回值把「设备该往哪推」与「本机现在到底有没有在听」两件事一起说清楚了。
+   */
+  ipcMain.handle(IpcChannels.DEVICE_INGEST_ENDPOINT, (_event, id: string) =>
+    toResult(async () => {
+      requireAdministrator()
+      requirePermission('manageDevices')
+      return getServices().devices.ingestEndpoint(id)
+    })
+  )
+
+  /**
+   * 轮换推流秘钥。
+   *
+   * 与 `DEVICE_INGEST_ENDPOINT` 分开一个通道，理由在契约里：轮换是一次**凭据变更**，
+   * 旧秘钥立刻失效（设备必须重新配置才会再推上来），所以它值得界面上一次明确确认与
+   * 自己的日志行。日志里**不写秘钥本身**，只写设备与操作人。
+   */
+  ipcMain.handle(IpcChannels.DEVICE_ROTATE_PUSH_SECRET, (_event, id: string) =>
+    toResult(async () => {
+      requireAdministrator()
+      requirePermission('manageDevices')
+      const services = getServices()
+      const endpoint = services.devices.rotatePushSecret(id)
+      appLog().info('已轮换设备推流秘钥', { deviceId: id, by: actor() })
+      return endpoint
     })
   )
 

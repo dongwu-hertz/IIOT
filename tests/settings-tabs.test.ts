@@ -58,19 +58,27 @@ function messageAt(locale: string, key: string): unknown {
 
 const settings = stripComments(read('src/renderer/src/views/SettingsView.vue'))
 
-/** 页签 id 与它的目录键（顺序就是业主给的那一串）。 */
+/**
+ * 页签 id 与它的目录键（顺序就是业主给的那一串）。
+ *
+ * 2026-09-19 多了第八个「数据接入」（业主第 1 条：HTTP 推流 + MQTT）：它排在「邮箱」之后、
+ * 「账号」之前 —— 前六页都是"我们怎么用数据"，这一页是"设备怎么把数据送进来"，而账号与
+ * 关于属于另一类（身份 / 元信息）。守卫的价值不变：这张表**就是**我们商定的那一串，
+ * 多一个少一个都要在这里改一次，而不是在页面里悄悄多出来一页。
+ */
 const TABS: ReadonlyArray<[string, string]> = [
   ['language', 'tabLanguage'],
   ['storage', 'tabStorage'],
   ['video', 'tabVideo'],
   ['alarm', 'tabAlarm'],
   ['email', 'tabEmail'],
+  ['iot', 'tabIot'],
   ['account', 'tabAccount'],
   ['about', 'tabAbout']
 ]
 
-describe('③ 设置页的七个页签', () => {
-  it('页签表就是业主点名的那七个，顺序不变', () => {
+describe('③ 设置页的页签', () => {
+  it('页签表就是我们商定的那一串，顺序不变', () => {
     const table = settings.slice(
       settings.indexOf('const TABS = ['),
       settings.indexOf('] as const', settings.indexOf('const TABS = ['))
@@ -80,8 +88,12 @@ describe('③ 设置页的七个页签', () => {
       assert.ok(table.includes(`id: '${id}'`), `页签表里没有 ${id}`)
       assert.ok(table.includes(`labelKey: 'settingsUi.${labelKey}'`), `页签 ${id} 的目录键不对`)
     }
-    // 恰好七个：多一个少一个都说明业主那张清单被改了。
-    assert.equal((table.match(/id: '/g) || []).length, TABS.length, '页签数不是 7')
+    // 恰好这些：多一个少一个都说明这张清单被改了。
+    assert.equal(
+      (table.match(/id: '/g) || []).length,
+      TABS.length,
+      `页签数不是 ${TABS.length}`
+    )
   })
 
   it('每一页都被 activeTab 门住（否则七个页签的内容会同时显示）', () => {

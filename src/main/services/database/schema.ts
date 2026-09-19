@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 
 export interface Migration {
   version: number
@@ -878,6 +878,32 @@ export const MIGRATIONS: readonly Migration[] = [
         );
 
         CREATE INDEX IF NOT EXISTS idx_incident_alerts_entry ON incident_alerts (entry_id);
+      `)
+    }
+  },
+  {
+    version: 15,
+    name: 'device-push-secret',
+    up: (db) => {
+      /**
+       * 设备推流秘钥（业主 2026-09-19 第 1 条：「HTTP 推流和 MQTT 是类似于 thingsboard 平台接
+       * IOT 设备的逻辑」）。
+       *
+       * WHY A COLUMN ON `devices` AND NOT A TABLE OF ITS OWN
+       * 秘钥是**这台设备的事实**（与它的地址、机型同一个主语），生命周期也完全一致：删掉设备
+       * 就该一并消失。单开一张表意味着要自己维护这个级联，而 `devices` 的主键已经被四张表
+       * 用 `ON DELETE CASCADE` 引着 —— 多一张表只多一处可能忘记加外键的地方。
+       *
+       * WHY UNIQUE
+       * 两台设备共用一条秘钥，收到数据时"这条是谁的"就没有答案，而错误答案的表现是
+       * **数据写进了另一台设备**（比拒绝写入严重得多）。索引允许 NULL（多条 `NULL` 不冲突），
+       * 所以"这台设备还没生成过秘钥"与"两台设备用了同一条"是两件互不干扰的事。
+       *
+       * 口径（32 位小写十六进制、可轮换、只允许写入遥测）见 `@shared/domain/iot-ingest`。
+       */
+      db.exec(`
+        ALTER TABLE devices ADD COLUMN push_secret TEXT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_push_secret ON devices (push_secret);
       `)
     }
   }

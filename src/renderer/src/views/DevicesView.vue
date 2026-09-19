@@ -21,6 +21,7 @@ import AddDeviceDialog from '@renderer/components/AddDeviceDialog.vue'
 import AppModal from '@renderer/components/AppModal.vue'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
+import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -686,6 +687,14 @@ function onAdded(deviceId: string): void {
       </fieldset>
 
       <p v-if="editError" class="alert alert--danger" role="alert">{{ editError }}</p>
+
+      <!--
+        推流地址与秘钥（业主 2026-09-18 第 10 批第 5 条「添加设备支持 HTTP 推流（秘钥 +
+        推流地址）」）。放在编辑对话框的最后一块：它是**配置给设备看的**信息，不是我们要填的
+        字段；`editTarget` 一定有 id，所以这一块只在真正打开编辑时挂载。
+      -->
+      <DevicePushEndpoint v-if="editTarget" :key="editTarget.id" :device-id="editTarget.id" />
+
       <template #footer>
         <button type="button" class="btn" :disabled="editSaving" @click="editOpen = false">
           {{ t('common.cancel') }}

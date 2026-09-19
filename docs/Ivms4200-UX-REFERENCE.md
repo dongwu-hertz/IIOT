@@ -5087,6 +5087,9 @@ GUI 探针 **0 problems**。逐页实测：侧栏地图那一项 = 「地图信�
 
 #### 15.61.3 HTTP 推流 / MQTT 的调研（第 1 条；**设计已定，代码下一轮**）
 
+> **2026-09-19 补**：这里的设计**已经在第 14 轮实现**（见 §15.62 那张表与"没做的"清单）。
+> 本节保留原样的调研结论与设计口径，实现与出入以 §15.62 为准。
+
 业主原话：「HTTP 推流和 MQTT 是类似于 thingsboard 平台接 IOT 设备的逻辑，你去调研，然后开发。」
 
 **调研结论（ThingsBoard 的设备侧接入方式）**：
@@ -5130,6 +5133,51 @@ GUI 探针 **0 problems**。逐页实测：侧栏地图那一项 = 「地图信�
 所以第 2 条的完整口径是：视频墙每一格支持 **播放 / 1 秒时域图 / 频域图 / 时频谱图** 四种视图，
 并且相机来源可以是**手填的 RTSP 地址**（第三方相机），不只是本应用管理的设备。
 与四种视图一起做（两者都要动墙的格子模型），排在 HTTP/MQTT 之后。
+
+### 15.62 HTTP 推流 / MQTT —— 已实现（2026-09-19 第 14 轮）
+
+#### 15.62.1 我们做了什么（一张表）
+
+| 块 | 实现 | 文件 |
+|---|---|---|
+| 纯规则（秘钥形状 / 载荷解析 / 键对照 / 配置归一化 / 地址拼装） | 32 位小写十六进制秘钥；三种载荷形状；七种固件字段名 + 驼峰；`channel_id`；`alarm_mask` | `src/shared/domain/iot-ingest.ts` |
+| HTTP 接入 | `node:http`，`POST /api/v1/<秘钥>/telemetry`（401 / 404 / 400 / 413 / 405），`GET …/attributes` 回 `{}` | `src/main/services/ingest/iot-ingest-service.ts` |
+| MQTT broker | `node:net` 上的最小 MQTT **3.1.1**：CONNECT（秘钥当用户名）→ CONNACK → PUBLISH(`v1/devices/me/telemetry`) → PUBACK(QoS 1) / PINGREQ / SUBSCRIBE / UNSUBSCRIBE / DISCONNECT；**QoS 2 明确不支持**（断开并记日志） | `…/mqtt-codec.ts` + `…/iot-ingest-service.ts` |
+| 落库 | 认得出的量 → `TrendStorageService.append()`（与实时流同一条路）；带 `alarm_mask` 的行 → `AlarmRepository.insert()`（来源 `fa8`，去重照旧） | `…/telemetry-intake.ts` |
+| 秘钥生命周期 | 按设备一条，首次读取时生成（写库 + **读回核对**）；可轮换（旧秘钥立刻失效）；唯一索引挡两台设备共用 | `devices.push_secret`（schema **v15**）+ `DeviceRepository.setPushSecret()` |
+| 配置 | 设置里的 `iotIngest`（默认**关闭**、`0.0.0.0`、8080 / 1883）；改完立刻重起监听 | `SettingsService` + `IotIngestService.applyConfig()` |
+| 界面 | 设置页第八个页签「数据接入」（开关 / 地址 / 端口 / 路径 / 主题 / 监听状态 / 收数统计 / 本机地址）；设备对话框里的「推流地址与秘钥」（可复制、可轮换） | `SettingsView.vue` + `DevicePushEndpoint.vue` |
+
+#### 15.62.2 为什么是这个形状（业主原话与出处）
+
+业主原话：「HTTP 推流和 MQTT 是类似于 thingsboard 平台接 IOT 设备的逻辑，你去调研，然后开发。」
+调研结论与出处见上一节的表（ThingsBoard 的 access token 在 URL 路径里、MQTT 用 token 当用户名）。
+**现场那台 FA8 声纹设备自己的 Push 配置就是这个形状** —— `GET /get_date_push` 实测回来的四个地址都是
+`http://8.153.195.75:3000/api/v1/dt_<32 位十六进制>/telemetry`（`docs/PROTOCOL-FINDINGS.md` §3.9），
+所以"接我们自己的设备"与"接第三方的 ThingsBoard 设备"是同一套接收端。
+
+#### 15.62.3 我们**没有**做的（每一条都有理由）
+
+| 没做 | 为什么 |
+|---|---|
+| 本机按门限判告警 | 门限在**设备端**的告警档位里，本机没有第二份。自己造一份会与「手册未说明的一律不编」冲突，也会与设备上的档位打架。所以只有载荷里带 `alarm_mask`（FA8 的位图词汇）才落告警 |
+| 第三种告警来源 `source = 'iot'` | `alarms.source` 的 CHECK 只允许 `fa8` / `e2`（schema v9），加第三种要重建那张被索引与父表牵着的表；而这里并没有第二套告警词汇需要区分 |
+| QoS 2 | 四次握手 + "已收到未释放"状态，收益为零（遥测重复一条没有后果）。**不假装支持** |
+| MQTT 遗嘱 / 保留消息 / 会话持久化 | 我们从不给设备发消息，这三样没有落点 |
+| 属性通道写入 | 没有客户端属性存储，`GET` 回 `{}` 是如实回答，`POST/PUT` 一律 404（不假装存下了） |
+| TLS / 认证加固 | 现场固件只会明文；IP 白名单、速率限制、失败锁定都没做。**默认绑 `0.0.0.0`**（否则设备连不上），所以"局域网里谁能拿到秘钥谁就能写遥测" |
+| 把推流地址**写进设备**（`PUT /set_date_push`） | 那是"写设备"，要读回逐字段核对，单独一轮做。现场现在要自己到设备 Web 界面上填地址 |
+
+#### 15.62.4 实测（GUI 探针，2026-09-19）
+
+- 默认关闭；打开之后两个监听都真的起来（HTTP 20528 / MQTT 33915，状态 `listening:true`）；
+- 从探针进程发真 HTTP：200（不认识的键）/ 200 且 `trendRows:1`（认得出的键）/
+  200 且 `alarmRows:1`（带 `alarm_mask`）/ **401**（秘钥不对）/ **404**（路径不对）；
+- 发真 MQTT 字节：CONNECT 回 `20 02 00 00`；
+- 页面上七个读数与主进程报的逐项一致（点顶栏刷新之后读到的）；
+- 关掉之后两个监听都停、端口还原；
+- 推来的那条告警进库了（未确认告警 201 → 202）。
+
 
 
 

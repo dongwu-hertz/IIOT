@@ -123,6 +123,7 @@ export const tr: MessageSchema = {
     tabLanguage: 'Dil',
     tabStorage: 'Depolama',
     tabVideo: 'Video ve tampon',
+    tabIot: 'Veri aktarımı',
     tabAlarm: 'Alarmlar',
     tabEmail: 'E-posta',
     tabAccount: 'Hesap',
@@ -214,6 +215,7 @@ export const tr: MessageSchema = {
     restoreItemMaxStreams: 'Eşzamanlı canlı yayın üst sınırı',
     restoreItemAlarmLinkage: 'Alarm bağlantısı (e-posta sunucusu, alıcılar, şablonlar ve bekleme süresi)',
     restoreItemAlarmSounds: 'Alarm ses kitaplığı (ses türleri ve seçilen ses dosyaları)',
+    restoreItemIotIngest: 'Veri aktarımı (HTTP push / MQTT anahtarları, dinleme adresi ve portlar)',
     restoreWarnStorage: 'Depolama yolu öntanımlıya döner. Disk üzerindeki kayıtlar ve dosyalar silinmez, yalnızca artık işaret edilmez; gerekirse geçerli yolu önceden not edin.',
     restoreKeeps: 'Cihaz listesi, kanallar, kayıtlar ve ses dosyaları, alarm kayıtları, hesaplar ve hesap izinleri değiştirilmez.',
     restoreConfirm: 'Geri yükle',
@@ -998,6 +1000,64 @@ export const tr: MessageSchema = {
     // bir alan yok, bu yüzden eşleyici protokol sabitini yazıyor. Yetkili sayı, kayıttan
     // sonra `GET /get_passageway` yolundan gelir.
     channelCountUnreported: 'bildirilmedi'
+  },
+
+  /**
+   * IoT veri aktarımı (sahip, 2026-09-19, madde 1: HTTP push + MQTT).
+   *
+   * Kılavuz bu bölümü AÇIKLAMIYOR; aşağıdaki ifadeler bize aittir. Biçim, ThingsBoard cihaz
+   * API sine uyar (belirteç URL yolunda / MQTT kullanıcı adı olarak).
+   */
+  iotUi: {
+    enableLabel: 'Veri aktarımını etkinleştir',
+    enableHint: 'Varsayılan olarak kapalıdır. Açık olmadıkça cihazlar veri gönderemez; kapalıyken iki dinleyici de başlatılmaz.',
+    bindLabel: 'Dinleme adresi',
+    bindHint: '0.0.0.0 tüm arayüzleri kabul eder (cihazlar bağlanabilir); 127.0.0.1 yalnızca bu makinedir.',
+    errBind: 'Dinleme adresi 0.0.0.0, 127.0.0.1 veya bir IPv4 adresi olmalı',
+    errPort: 'Port 1 ile 65535 arasında bir tam sayı olmalı',
+    httpGroup: 'HTTP push',
+    httpEnable: 'HTTP push etkinleştir',
+    httpPortLabel: 'HTTP portu',
+    httpPathLabel: 'Gönderim yolu',
+    mqttGroup: 'MQTT',
+    mqttEnable: 'MQTT etkinleştir',
+    mqttPortLabel: 'MQTT portu',
+    mqttTopicLabel: 'Yayın konusu',
+    mqttUserHint: 'Cihaz gizli anahtarını kullanıcı adı olarak kullanın, parola boş kalsın.',
+    secretLabel: 'Cihaz gizli anahtarı',
+    manualNote: 'Kılavuz bu bölümü açıklamıyor: biçim ThingsBoard cihaz API sine uyar (gizli anahtar URL yolunda, MQTT kullanıcı adı olarak), böylece hem kendi cihazlarımız hem üçüncü taraf cihazlar bağlanabilir.',
+    devicesWithSecret: 'Gizli anahtarı olan cihazlar: {count}',
+    localAddressesLabel: 'Yerel adresler (cihazlar için)',
+    noLocalAddresses: 'Bu makinede cihazın kullanabileceği bir adres yok (yalnızca geri döngü).',
+    statusGroup: 'Çalışma durumu',
+    listening: '{address}:{port} dinleniyor',
+    notListening: 'Dinlenmiyor',
+    statusOff: 'Kapalı',
+    statsRequests: 'HTTP istekleri',
+    statsMessages: 'MQTT iletileri',
+    statsRejectedAuth: 'Reddedilen kimlik bilgileri',
+    statsRejectedPayload: 'Reddedilen yükler',
+    statsTrendRows: 'Yazılan eğilim satırları',
+    statsAlarmRows: 'Yazılan alarm satırları',
+    statsLastAt: 'Son alınan',
+    statsNever: 'Henüz hiç veri alınmadı',
+    lastUnrecognised: 'Son iletide tanınmayan anahtarlar: {keys}',
+    portConflict: 'HTTP ve MQTT {port} portunu paylaşıyor; ikinci başlayan başarısız olur.',
+    devicesTitle: 'Gönderim adresi ve gizli anahtar',
+    devicesHint: 'Aşağıdaki adresi cihazın gönderim yapılandırmasına girin. Gizli anahtar yalnızca bu makineye telemetri yazabilir; hiçbir şey okuyamaz.',
+    copy: 'Kopyala',
+    copied: 'Kopyalandı',
+    rotate: 'Gizli anahtarı yenile',
+    rotateTitle: 'Gönderim gizli anahtarı yenilensin mi?',
+    rotateBody: 'Eski gizli anahtar hemen geçersiz olur; cihazın yeniden gönderebilmesi için yeni anahtarla yapılandırılması gerekir.',
+    rotateConfirm: 'Yenile',
+    rotateNotice: 'Gizli anahtar yenilendi. Yeni anahtarı cihaza girin.',
+    serviceOff: 'Veri aktarımı kapalı (Sistem ayarları - Veri aktarımı altından açın), bu yüzden cihazlar şu anda bağlanamaz.',
+    httpOff: 'HTTP push kapalı',
+    mqttOff: 'MQTT kapalı',
+    mqttUser: 'MQTT kullanıcı adı (gizli anahtar)',
+    secretHint: 'Cihaz başına bir gizli anahtar; yenilendiğinde önceki hemen geçersiz olur.',
+    loadFailed: 'Veri aktarımı durumu okunamadı',
   },
 
   installUi: {

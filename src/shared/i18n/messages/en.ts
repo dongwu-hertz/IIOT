@@ -119,6 +119,7 @@ export const en: MessageSchema = {
     tabLanguage: 'Language',
     tabStorage: 'Storage',
     tabVideo: 'Video & buffering',
+    tabIot: 'Data ingest',
     tabAlarm: 'Alarms',
     tabEmail: 'Email',
     tabAccount: 'Account',
@@ -210,6 +211,7 @@ export const en: MessageSchema = {
     restoreItemMaxStreams: 'Maximum concurrent live streams',
     restoreItemAlarmLinkage: 'Alarm linkage (including the mail server, receivers, templates and cooldown)',
     restoreItemAlarmSounds: 'Alarm sound library (sound types and the audio files chosen)',
+    restoreItemIotIngest: 'Data ingest (HTTP push / MQTT switches, bind address and ports)',
     restoreWarnStorage: 'The storage path goes back to the default. Recordings and files already on disk are not deleted, they are simply no longer pointed at; note the current path down first if you need it.',
     restoreKeeps: 'The device list, channels, recordings and audio files, alarm records, accounts and account permissions are not touched.',
     restoreConfirm: 'Restore defaults',
@@ -1007,6 +1009,64 @@ export const en: MessageSchema = {
     // protocol constant. The authoritative count comes from `GET /get_passageway`
     // once the device is registered.
     channelCountUnreported: 'not reported'
+  },
+
+  /**
+   * IoT data ingest (owner, 2026-09-19, item 1: HTTP push + MQTT).
+   *
+   * The manual does NOT describe this section, so the wording below is ours; the shape
+   * follows the ThingsBoard device-side API (token in the URL path / as the MQTT username).
+   */
+  iotUi: {
+    enableLabel: 'Enable data ingest',
+    enableHint: 'Off by default. Devices can only push once this is on; when off neither listener starts.',
+    bindLabel: 'Bind address',
+    bindHint: '0.0.0.0 accepts every interface (devices can reach it); 127.0.0.1 is local only.',
+    errBind: 'The bind address must be 0.0.0.0, 127.0.0.1 or an IPv4 address',
+    errPort: 'The port must be an integer between 1 and 65535',
+    httpGroup: 'HTTP push',
+    httpEnable: 'Enable HTTP push',
+    httpPortLabel: 'HTTP port',
+    httpPathLabel: 'Push path',
+    mqttGroup: 'MQTT',
+    mqttEnable: 'Enable MQTT',
+    mqttPortLabel: 'MQTT port',
+    mqttTopicLabel: 'Publish topic',
+    mqttUserHint: 'Connect with the device secret as the username and an empty password.',
+    secretLabel: 'Device secret',
+    manualNote: 'The manual does not describe this section: the shape follows the ThingsBoard device-side API (secret in the URL path, secret as the MQTT username) so both our devices and third-party devices can connect.',
+    devicesWithSecret: 'Devices with a secret: {count}',
+    localAddressesLabel: 'Local addresses (for devices)',
+    noLocalAddresses: 'This machine has no address a device could use (loopback only).',
+    statusGroup: 'Runtime status',
+    listening: 'Listening on {address}:{port}',
+    notListening: 'Not listening',
+    statusOff: 'Off',
+    statsRequests: 'HTTP requests',
+    statsMessages: 'MQTT messages',
+    statsRejectedAuth: 'Rejected credentials',
+    statsRejectedPayload: 'Rejected payloads',
+    statsTrendRows: 'Trend rows written',
+    statsAlarmRows: 'Alarm rows written',
+    statsLastAt: 'Last received',
+    statsNever: 'Nothing received yet',
+    lastUnrecognised: 'Keys not recognised in the last message: {keys}',
+    portConflict: 'HTTP and MQTT share port {port}; whichever starts second will fail.',
+    devicesTitle: 'Push address and secret',
+    devicesHint: 'Put the address below into the device push configuration. The secret may only write telemetry to this machine; it cannot read anything.',
+    copy: 'Copy',
+    copied: 'Copied',
+    rotate: 'Rotate secret',
+    rotateTitle: 'Rotate the push secret?',
+    rotateBody: 'The old secret stops working immediately; the device must be reconfigured with the new one before it can push again.',
+    rotateConfirm: 'Rotate',
+    rotateNotice: 'Secret rotated. Put the new secret into the device.',
+    serviceOff: 'Data ingest is switched off (enable it under System settings - Data ingest), so devices cannot connect right now.',
+    httpOff: 'HTTP push is off',
+    mqttOff: 'MQTT is off',
+    mqttUser: 'MQTT username (the secret)',
+    secretHint: 'One secret per device; rotating it invalidates the previous one immediately.',
+    loadFailed: 'Could not read the data ingest status',
   },
 
   installUi: {

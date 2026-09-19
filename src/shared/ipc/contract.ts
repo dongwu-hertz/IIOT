@@ -134,6 +134,23 @@ import type { AlarmSoundLibrary } from '../domain/alarm-sound'
 export type { UserPermissionSet } from '../domain/auth'
 
 /**
+ * IoT 数据接入（业主 2026-09-19 第 1 条）。
+ *
+ * 形状与纯规则都在 `@shared/domain/iot-ingest`，契约层只把它带出去：设置页要用**同一份**
+ * 配置归一化器校验用户填的端口与绑定地址，设备对话框要用同一个「秘钥 → 推流地址」拼装。
+ */
+export type {
+  DeviceIngestEndpoint,
+  IotIngestConfig,
+  IotIngestListenerStatus,
+  IotIngestLocalAddress,
+  IotIngestRuntimeStatus,
+  IotIngestStats
+} from '../domain/iot-ingest'
+import type { IotIngestConfig, IotIngestRuntimeStatus } from '../domain/iot-ingest'
+import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
+
+/**
  * Result of a successful login.
  *
  * `mustChangePassword` rides alongside the session rather than inside
@@ -185,6 +202,15 @@ export const IpcChannels = {
    * 扩展名判一次。返回 `null` = 用户取消。
    */
   SETTINGS_PICK_ALARM_SOUND: 'settings:pick-alarm-sound',
+
+  /**
+   * IoT 数据接入的运行状态（业主 2026-09-19 第 1 条）。
+   *
+   * 它**不是**设置里那块配置的副本：配置走 `SETTINGS_GET` / `SETTINGS_UPDATE`
+   * （`iotIngest` 那一个键），这里回的是**监听事实**与**收数统计** ——
+   * 「开着吗 / 有人连吗 / 收的东西认出来了吗」这三件事在设置表里没有答案。
+   */
+  IOT_INGEST_STATUS: 'iot-ingest:status',
 
   /**
    * Application accounts (the software's own login, not a device's).
@@ -245,6 +271,23 @@ export const IpcChannels = {
   DEVICE_GET_INFO: 'device:get-info',
   DEVICE_GET_CHANNELS: 'device:get-channels',
   DEVICE_OPEN_WEB_UI: 'device:open-web-ui',
+  /**
+   * 这台设备的**推流地址与秘钥**（业主 2026-09-18 第 10 批第 5 条：「添加设备支持
+   * HTTP 推流（秘钥 + 推流地址）」）。
+   *
+   * 与 `DEVICE_GET` 分开是有意的：秘钥**不随设备列表走**（见 `DeviceRow.push_secret` 的
+   * 说明），而"谁在什么时候要看秘钥"只有这个对话框知道。第一次读的时候会自动生成一条
+   * （写库 + 读回核对），所以这个动作**可能写库**。
+   */
+  DEVICE_INGEST_ENDPOINT: 'device:ingest-endpoint',
+  /**
+   * 轮换这台设备的推流秘钥：**旧秘钥立刻失效**（设备要用新秘钥重新配置才会再推上来）。
+   *
+   * 单独一个通道而不是 `DEVICE_UPDATE` 的一个字段：轮换是一次明确的**凭据变更**，
+   * 它必须有自己的一句话（界面上是一次确认），而且与改名/改端口这些编辑动作的失败模式
+   * 完全不同。
+   */
+  DEVICE_ROTATE_PUSH_SECRET: 'device:rotate-push-secret',
 
   /**
    * Open an external URL in the system browser.
@@ -807,6 +850,15 @@ export interface AppSettings {
    * 各自指向哪个 `.wav` 文件」。**「哪类告警用哪个声音」的绑定不在本轮**。
    */
   alarmSounds: AlarmSoundLibrary
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条：HTTP 推流 + MQTT）。
+   *
+   * **手册未说明**这一节（手册里没有"IoT 接入"这一章），所以整套口径是我们定的，
+   * 写在 `@shared/domain/iot-ingest`：形状照抄 ThingsBoard 的设备侧接入
+   * （`/api/v1/<秘钥>/telemetry`、MQTT 用秘钥当用户名），**默认关闭**，
+   * 绑定地址与两个端口可配。
+   */
+  iotIngest: IotIngestConfig
 }
 
 export type AppSettingsPatch = Partial<AppSettings>
@@ -1823,6 +1875,16 @@ export interface RendererApi {
     pickAlarmSound(): Promise<DeviceResult<string | null>>
   }
 
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条）。
+   *
+   * 只有**读**一条：配置写在 `settings.iotIngest` 里（于是"改了就生效"与其它设置同一条
+   * 路径：设置一变，主进程那边重新起 / 停监听）。这里回的是监听事实与收数统计。
+   */
+  ingest: {
+    status(): Promise<DeviceResult<IotIngestRuntimeStatus>>
+  }
+
   auth: {
     login(input: LoginInput): Promise<DeviceResult<LoginOutcome>>
     logout(): Promise<DeviceResult<void>>
@@ -1867,6 +1929,15 @@ export interface RendererApi {
     getInfo(id: string): Promise<DeviceResult<DeviceInfo>>
     getChannels(id: string): Promise<DeviceResult<Channel[]>>
     openWebUi(id: string): Promise<DeviceResult<void>>
+    /**
+     * 这台设备的推流地址与秘钥（业主 2026-09-18 第 10 批第 5 条）。
+     *
+     * **首次读取会生成一条秘钥**（写库 + 读回核对），所以它不是一个纯读动作 ——
+     * 调用点只有"添加/编辑设备"那个对话框（秘钥在那里要么给设备端配置、要么复制走）。
+     */
+    ingestEndpoint(id: string): Promise<DeviceResult<DeviceIngestEndpoint>>
+    /** 换一条秘钥（旧的立刻失效），返回**读回来**的那一份端点信息。 */
+    rotatePushSecret(id: string): Promise<DeviceResult<DeviceIngestEndpoint>>
   }
 
   /**

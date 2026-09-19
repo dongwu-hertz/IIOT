@@ -28,6 +28,10 @@ import {
   normaliseAlarmSoundLibrary,
   type AlarmSoundLibrary
 } from '@shared/domain/alarm-sound'
+import {
+  defaultIotIngestConfig,
+  normaliseIotIngestConfig
+} from '@shared/domain/iot-ingest'
 import { appLog } from '../logging/logger'
 
 /** Defaults applied on first run and used to fill any missing key. */
@@ -78,7 +82,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
    *
    * 归一出厂那一份见 `@shared/domain/alarm-sound`。
    */
-  alarmSounds: defaultAlarmSoundLibrary()
+  alarmSounds: defaultAlarmSoundLibrary(),
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条：HTTP 推流 + MQTT）。
+   *
+   * **默认关闭**：装完软件就在局域网里开一个监听端口是缺陷。归一出厂那一份见
+   * `@shared/domain/iot-ingest` 的 `defaultIotIngestConfig()`（端口 8080 / 1883、
+   * 绑定 `0.0.0.0` —— 只有设备连得上，接入才有意义）。
+   */
+  iotIngest: defaultIotIngestConfig()
 }
 
 /**
@@ -115,7 +127,8 @@ export const RESTORABLE_SETTING_KEYS = [
   'autoPlayCameraLive',
   'maxConcurrentCameraStreams',
   'alarmLinkage',
-  'alarmSounds'
+  'alarmSounds',
+  'iotIngest'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 export type RestorableSettingKey = (typeof RESTORABLE_SETTING_KEYS)[number]
@@ -194,6 +207,23 @@ const VALIDATORS: {
       appLog().warn('告警声音库存在非法字段，已回落到默认值', { fields: issues })
     }
     return library as AlarmSoundLibrary
+  },
+  /**
+   * IoT 数据接入（业主 2026-09-19 第 1 条）。
+   *
+   * 与上面两块同一形状：**整块归一化、永远返回一个合法的完整对象**。逐字段回落的理由很
+   * 具体：一个坏端口不该把用户配好的绑定地址一起清掉（那会让接入整个停掉，而用户只改错了
+   * 一个数字）。
+   *
+   * `portConflict`（两个通道同端口）**不在这里改**：改哪一个都是猜测，服务那边会各自报告
+   * 监听错误（`EADDRINUSE`），界面照实显示。
+   */
+  iotIngest: (value) => {
+    const { config, issues } = normaliseIotIngestConfig(value)
+    if (issues.length > 0) {
+      appLog().warn('IoT 接入配置存在非法字段，已回落到默认值', { fields: issues })
+    }
+    return config
   }
 }
 
