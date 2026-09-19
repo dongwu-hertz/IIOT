@@ -3752,12 +3752,28 @@ Chromium 打印对话框里选"另存为 PDF"就是 PDF —— 不引依赖、�
     · 「收尾」那一段的路由：`openScript` 仍整段跑在 `/settings` 上 —— 已改成先改存储根、
       **再切到 `/devices`** 开对话框。第 37 轮复验：那两条"没打开对话框 / 没找到保存按钮"
       **已经消失**（说明路由与对话框这一半修对了）。
-60. **D③④ 仍然红着，但范围已经缩到一处**（第 37 轮 `probe-round53.log`）：
-    对话框找到了、保存也点了，但 `界面上改的 HTTP 端口没有写进设置`（还是 8080/1883）、
-    `在「本机接入」里保存监听设置之后没有任何结果提示`，于是后面九条推送断言继续红。
-    **下一步**：看 `AddDeviceDialog.vue` 的 `saveIotSettings()` 与探针 `setInput()` 的手法 ——
-    高度怀疑是"**端口输入框要的是数字**"（`v-model.number` / 提交时按 number 校验），
-    而探针塞进去的是字符串 `"23157"`，于是校验不过、保存静默失败。
+60. **D③④ 仍然红着，但第 37 轮把范围缩到一处**（`probe-round53.log` 的 `iot opened` 一行）：
+
+    ```
+    portPlan: {http:23157, mqtt:32348, dialog:true, saved:true, notice:"", error:"",
+               readBack:{http:"23157", mqtt:"32348"}}
+    iot closed before: config.httpPort=8080, http.listening=true@8080, mqtt.listening=true@1883,
+                       stats 全 0, devicesWithSecret=3
+    ```
+
+    两件事因此很清楚：
+    · **应用这一侧是好的**：`ingest.status()` 报两个监听真的起来了（8080 / 1883）、外网地址、
+      三台设备有秘钥 —— 界面也如实显示（同一轮 `iot local block` 逐项等于设置值）。
+    · **探针这一侧差一步**：它把两个端口框填成 23157/32348、点保存、`readBack` 也是这两个数，
+      但 `notice` 与 `error` **同时为空**，设置里仍是 8080/1883 —— 于是后面九条推送
+      全打到一个**没人听的端口**上（`ECONNREFUSED`）。
+      （`saveIotSettings()` 的每条分支都会写 `notice` 或 `error`，所以更像是"这次点击没有真的
+      走进去"，而不是校验失败；`v-model.number` + 探针塞字符串这条路已经排除 —— 代码里有 `Number()`。）
+    **下一步（更省事也更贴业主的用法）**：不要再改端口 —— 直接按**应用报出来的监听地址**
+    （`ingest.status().http/mqtt` 里的 `address`+`port`，也就是对话框里给操作员看的那种地址）
+    去推 5 条 HTTP 与 1 条 MQTT，断言 200/401/404、计数与落库；"改端口"那一件事单独作为
+    一条界面保真断言（现在这条红着，如实留着）。
+
 
 
 
