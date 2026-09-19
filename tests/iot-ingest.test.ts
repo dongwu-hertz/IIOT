@@ -26,22 +26,34 @@ import { after, describe, it } from 'node:test'
 import Database from 'better-sqlite3'
 
 import {
+  DEFAULT_INGEST_VIDEO_KEY,
   IOT_INGEST_LIMITS,
+  INGEST_DISPLAY_METRICS,
+  INGEST_PROTOCOLS,
+  MAX_INGEST_METRIC_KEYS,
   MQTT_TELEMETRY_TOPIC,
   PUSH_SECRET_BYTES,
   PUSH_SECRET_LENGTH,
+  defaultDeviceIngestPlan,
+  defaultIngestMetricKeys,
   defaultIotIngestConfig,
+  deviceIngestPlanProblems,
   httpPushUrl,
   interpretTelemetry,
   isBindAddress,
+  isIngestKey,
+  isIngestProtocol,
   isPort,
   isPushSecret,
+  normaliseDeviceIngestPlan,
+  normaliseIngestProtocol,
   normaliseIotIngestConfig,
   parseTelemetryPayload,
   pushSecretFromBytes,
   secretFromAttributesPath,
   secretFromTelemetryPath,
-  telemetryPath
+  telemetryPath,
+  usesIngest
 } from '../src/shared/domain/iot-ingest'
 import {
   MQTT_CONNACK,
@@ -346,6 +358,110 @@ describe('接入配置的归一化（界面与主进程共用同一份判据）'
      */
     assert.equal(defaults.httpEnabled, true, 'HTTP 通道出厂应当是开的')
     assert.equal(defaults.mqttEnabled, true, 'MQTT 通道出厂应当是开的')
+  })
+
+  /*
+   * 接入方案（业主 2026-09-19 第 13 批第 3、4 条）。这一组纯函数是那一块界面的地基：
+   * 界面下一轮才接上，但"什么算合法、坏值怎么修"必须现在就有唯一答案
+   * （设计说明见 `docs/Ivrs4200-UX-REFERENCE.md` §15.77 —— 文件名是 `Ivms4200`）。
+   */
+  it('接入方式：三种取值，坏值一律归 none（最保守的那一档）', () => {
+    assert.deepEqual([...INGEST_PROTOCOLS], ['none', 'http', 'mqtt'])
+    for (const good of INGEST_PROTOCOLS) assert.equal(isIngestProtocol(good), true, good)
+    for (const bad of ['HTTP', 'tcp', '', undefined, null, 7, {}]) {
+      assert.equal(isIngestProtocol(bad), false, String(bad))
+      assert.equal(normaliseIngestProtocol(bad), 'none', String(bad))
+    }
+    assert.equal(usesIngest('none'), false)
+    assert.equal(usesIngest('http'), true)
+    assert.equal(usesIngest('mqtt'), true)
+  })
+
+  it('键名形状：与 ThingsBoard 的遥测键同形，空白与逗号一律不收', () => {
+    for (const good of ['spl', 'sound_pressure_level', 'main_freq', 'a1', 'x.y-z_1']) {
+      assert.equal(isIngestKey(good), true, good)
+    }
+    for (const bad of ['', '1abc', 'has space', 'a,b', 'a'.repeat(65), undefined, 3]) {
+      assert.equal(isIngestKey(bad), false, String(bad))
+    }
+  })
+
+  it('出厂接入方案：none + 四个指标的规范键 + video_url', () => {
+    const plan = defaultDeviceIngestPlan()
+    assert.equal(plan.protocol, 'none')
+    assert.equal(plan.videoKey, DEFAULT_INGEST_VIDEO_KEY)
+    assert.deepEqual(
+      plan.metricKeys.map((row) => row.metric),
+      [...INGEST_DISPLAY_METRICS]
+    )
+    assert.deepEqual(
+      plan.metricKeys.map((row) => row.key),
+      ['sound_pressure_level', 'main_freq', 'smoothness', 'freq_band_energy_ratio']
+    )
+    assert.deepEqual(defaultIngestMetricKeys(), plan.metricKeys)
+  })
+
+  it('规范化：坏行逐条丢掉、同一指标后写的赢、全空回默认', () => {
+    const normalised = normaliseDeviceIngestPlan({
+      protocol: 'MQTT',
+      metricKeys: [
+        { metric: 'spl', key: 'my_spl' },
+        { metric: 'spl', key: 'spl_again' },
+        { metric: 'nope', key: 'x' },
+        { metric: 'smoothness', key: 'has space' },
+        { metric: 'mainFrequency', key: 'f0' }
+      ],
+      videoKey: 'cam_url'
+    })
+    // 协议坏值 → none；spl 留最后一条；两行坏行丢掉；顺序按第一次出现。
+    assert.equal(normalised.protocol, 'none')
+    assert.deepEqual(normalised.metricKeys, [
+      { metric: 'spl', key: 'spl_again' },
+      { metric: 'mainFrequency', key: 'f0' }
+    ])
+    assert.equal(normalised.videoKey, 'cam_url')
+
+    // 一整行都没有 → 回默认四行（切到 http 时不必先把四个键敲一遍）。
+    assert.deepEqual(normaliseDeviceIngestPlan({ protocol: 'http' }).metricKeys, defaultIngestMetricKeys())
+    // 视频键：空串 = 明确不要这一路；坏值 → 回默认。
+    assert.equal(normaliseDeviceIngestPlan({ videoKey: '' }).videoKey, '')
+    assert.equal(normaliseDeviceIngestPlan({ videoKey: 'has space' }).videoKey, DEFAULT_INGEST_VIDEO_KEY)
+    // 上限：多出来的丢掉。
+    const many = {
+      metricKeys: Array.from({ length: MAX_INGEST_METRIC_KEYS + 5 }, (_, index) => ({
+        metric: 'spl',
+        key: `k${index}`
+      }))
+    }
+    assert.equal(normaliseDeviceIngestPlan(many).metricKeys.length, 1)
+  })
+
+  it('界面用的即时校验：合法方案零问题，重复/坏键各报各的', () => {
+    assert.deepEqual(deviceIngestPlanProblems(defaultDeviceIngestPlan()), [])
+    assert.deepEqual(
+      deviceIngestPlanProblems({
+        protocol: 'http',
+        metricKeys: [
+          { metric: 'spl', key: 'a' },
+          { metric: 'spl', key: 'a' }
+        ],
+        videoKey: ''
+      }),
+      ['metric-duplicate', 'key-duplicate'],
+      '同一个指标、同一个键各报一次'
+    )
+    assert.deepEqual(
+      deviceIngestPlanProblems({
+        protocol: 'http',
+        metricKeys: [{ metric: 'spl', key: 'has space' }],
+        videoKey: 'bad key'
+      }),
+      ['key-invalid', 'video-key-invalid']
+    )
+    assert.deepEqual(
+      deviceIngestPlanProblems({ protocol: 'http', metricKeys: [], videoKey: '' }),
+      ['metric-keys-empty']
+    )
   })
 
   it('绑定地址只认 0.0.0.0 / 127.0.0.1 / 一个 IPv4 字面量', () => {
