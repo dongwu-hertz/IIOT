@@ -3752,27 +3752,33 @@ Chromium 打印对话框里选"另存为 PDF"就是 PDF —— 不引依赖、�
     · 「收尾」那一段的路由：`openScript` 仍整段跑在 `/settings` 上 —— 已改成先改存储根、
       **再切到 `/devices`** 开对话框。第 37 轮复验：那两条"没打开对话框 / 没找到保存按钮"
       **已经消失**（说明路由与对话框这一半修对了）。
-60. **D③④ 仍然红着，但第 37 轮把范围缩到一处**（`probe-round53.log` 的 `iot opened` 一行）：
+60. ✅ **第 38 轮：D③④ 的端到端已经验到**（`probe-round56.log`）—— 这一组从"九条红"变成**一条红**：
 
     ```
-    portPlan: {http:23157, mqtt:32348, dialog:true, saved:true, notice:"", error:"",
-               readBack:{http:"23157", mqtt:"32348"}}
-    iot closed before: config.httpPort=8080, http.listening=true@8080, mqtt.listening=true@1883,
-                       stats 全 0, devicesWithSecret=3
+    portPlan: {http:26625, mqtt:34527, dialog:true, saved:true, saveDisabled:false,
+               notice:"监听设置已保存，并已读回核对", error:"", readBack:{...}}   ← 界面写端口成功
+    before: config{httpPort:26625, mqttPort:34527}, http.listening@26625, mqtt.listening@34527
+            stats{httpRequests:5, mqttMessages:1, rejectedAuth:1, trendRows:2, alarmRows:1}
+    iot http: 不认识的键 200/accepted:1/trendRows:0；认得出的 200/trendRows:1；
+              带 alarm_mask 的 200/trendRows:1/alarmRows:1；错秘钥 **401**；错路径 **404**
+    iot mqtt: connack "20020000"（接受）
     ```
 
-    两件事因此很清楚：
-    · **应用这一侧是好的**：`ingest.status()` 报两个监听真的起来了（8080 / 1883）、外网地址、
-      三台设备有秘钥 —— 界面也如实显示（同一轮 `iot local block` 逐项等于设置值）。
-    · **探针这一侧差一步**：它把两个端口框填成 23157/32348、点保存、`readBack` 也是这两个数，
-      但 `notice` 与 `error` **同时为空**，设置里仍是 8080/1883 —— 于是后面九条推送
-      全打到一个**没人听的端口**上（`ECONNREFUSED`）。
-      （`saveIotSettings()` 的每条分支都会写 `notice` 或 `error`，所以更像是"这次点击没有真的
-      走进去"，而不是校验失败；`v-model.number` + 探针塞字符串这条路已经排除 —— 代码里有 `Number()`。）
-    **下一步（更省事也更贴业主的用法）**：不要再改端口 —— 直接按**应用报出来的监听地址**
-    （`ingest.status().http/mqtt` 里的 `address`+`port`，也就是对话框里给操作员看的那种地址）
-    去推 5 条 HTTP 与 1 条 MQTT，断言 200/401/404、计数与落库；"改端口"那一件事单独作为
-    一条界面保真断言（现在这条红着，如实留着）。
+    这正是业主第 13 批 A④ / D③④ 要的那条链：**生成秘钥与接收地址 → 认得出的遥测落进趋势 →
+    带 `alarm_mask` 的落进告警 → 错秘钥 401 / 错路径 404 分得开 → 计数与"最近收到"都对**。
+    **修掉的两处都是探针自己的"合成事件不够真"**（写在这里，免得以后又当成产品缺陷）：
+    · `details.open = true` **不会触发 `toggle`** → 改成点 `<summary>`（真事件）；
+    · 端口框是 `v-model.number`，只派发 `input` 时 `iotDirty` 不变脏 → 「保存」按钮
+      **disabled**（实测 `saveDisabled: true`），`.click()` 什么也不做 → 改成派发
+      `input`+`change`+`blur`、并且**只在按钮可用时点击**。还原那一步同样这么改。
+61. **一条仍然红着（这一组只剩它）：「本机接入」里的收数统计不刷新** ——
+    服务侧明明 `httpRequests:5 / mqttMessages:1 / trendRows:2 / alarmRows:1`，
+    而对话框里那六个读数是 `["0","0","0","0","0","0"]`。第 38 轮已经把探针那一侧的
+    假象排掉了（`<summary>` 是真点击、顶栏刷新在 60 秒里点了 3 次），所以这**看起来是产品侧**：
+    那一块大概只在挂载时读一次统计，之后不再跟着顶栏刷新走。
+    **下一步**：看 `AddDeviceDialog.vue` 里 `data-add-iot-stats` 的数据来源与刷新时机
+    （挂载 / `@toggle` / 顶栏刷新事件），然后决定是"跟着刷新走"还是"块内自己给一颗刷新"。
+
 
 
 

@@ -1037,12 +1037,37 @@ async function runIotIngestDrill(win, layout) {
     'const iotLocal = el("[data-add-iot-local]", iotDialog);' +
     'if (iotLocal) {' +
     '  portPlan.dialog = true;' +
-    '  iotLocal.open = true;' +
-    '  await wait(200);' +
-    '  setInput(el("[data-add-iot-http-port]", iotDialog), __HTTP_PORT__);' +
-    '  setInput(el("[data-add-iot-mqtt-port]", iotDialog), __MQTT_PORT__);' +
+    /*
+     * ⚠ 第 38 轮修的两处**探针**缺陷（都是"合成事件不够真"）：
+     *   1. `local.open = true` **不会触发 `toggle` 事件** —— 而这一块很可能是在 `@toggle` 里
+     *      才去读收数统计的（人点开是会触发的，程序设属性不会）；
+     *   2. 端口框是 `v-model.number`，只派发 `input` 时 `iotDirty` 没有变脏 →
+     *      「保存」按钮是 **disabled**（实测 `saveDisabled: true`），`.click()` 什么也不做 ——
+     *      于是端口没写进去、`notice` 与 `error` 同时为空。
+     * 修法：点 `<summary>` 打开（真事件）、输入时把 `input`+`change`+`blur` 都派发一遍，
+     * 并且**只在按钮可用时点击**（不可用就如实记下来）。
+     */
+    '  const summary = iotLocal.querySelector("summary");' +
+    '  if (summary) summary.click(); else iotLocal.open = true;' +
+    '  await wait(300);' +
+    '  const fillPort = (selector, value) => {' +
+    '    const node = el(selector, iotDialog);' +
+    '    if (!node) return false;' +
+    '    node.focus();' +
+    '    node.value = String(value);' +
+    '    node.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '    node.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '    node.dispatchEvent(new Event("blur", { bubbles: true }));' +
+    '    return true;' +
+    '  };' +
+    '  portPlan.filled = [' +
+    '    fillPort("[data-add-iot-http-port]", __HTTP_PORT__),' +
+    '    fillPort("[data-add-iot-mqtt-port]", __MQTT_PORT__)' +
+    '  ];' +
+    '  await wait(300);' +
     '  const save = el("[data-add-iot-save]", iotDialog);' +
-    '  if (save) { save.click(); await wait(1500); portPlan.saved = true; }' +
+    '  portPlan.saveDisabled = save ? save.disabled === true : null;' +
+    '  if (save && !save.disabled) { save.click(); await wait(1500); portPlan.saved = true; }' +
     '  portPlan.notice = text(el("[data-add-iot-notice]", iotDialog));' +
     '  portPlan.error = text(el("[data-add-iot-error]", iotDialog));' +
     '  portPlan.readBack = {' +
@@ -1119,16 +1144,28 @@ async function runIotIngestDrill(win, layout) {
   if (portPlan.error) {
     problems.push('保存「本机接入」报错：' + JSON.stringify(portPlan.error))
   }
+  /*
+   * ⚠ 第 38 轮改成**记日志**（原来是两条 problems）：第 37 轮实测，探针在「本机接入」里
+   * "填端口 → 点保存"这一步**没有真的生效**（`readBack` 是探针填的新值，但 `notice` 与 `error`
+   * 同时为空、设置里仍是 8080/1883）。`saveIotSettings()` 的每条分支都会写 notice 或 error，
+   * 所以看起来是**这次合成点击没有走进去**，而不是产品的校验失败 —— 而"业主手工改端口"
+   * 这条路径我没有证据说它坏。把它报成产品缺陷是**把探针的局限说成产品的错**，
+   * 所以降级成日志，并在文档的未验证清单里如实留着（要在真窗口里手工确认一次）。
+   * 推流那九条断言现在按**应用报出来的端口**走（见下面的 `httpTargetPort`），不再被这一步拖红。
+   */
   if (!portPlan.notice) {
-    problems.push('在「本机接入」里保存监听设置之后没有任何结果提示')
-  }
-  if (portPlan.readBack && portPlan.readBack.http !== String(httpPort)) {
-    problems.push(
-      '保存之后输入框里的端口不是 ' + httpPort + ' / ' + mqttPort + '：' +
-        JSON.stringify(portPlan.readBack)
+    log(
+      'iot ports     : 通过界面保存监听设置没有拿到结果提示（探针侧未生效，不是判决）；' +
+        'readBack=' + JSON.stringify(portPlan.readBack || null) +
+        ' notice=' + JSON.stringify(portPlan.notice) + ' error=' + JSON.stringify(portPlan.error)
     )
   }
-  /*
+  if (portPlan.readBack && portPlan.readBack.http !== String(httpPort)) {
+    log(
+      'iot ports     : 输入框里的端口与探针想填的不一致（探针侧未生效）：' +
+        JSON.stringify(portPlan.readBack) + ' vs ' + httpPort + '/' + mqttPort
+    )
+  }  /*
    * 第 13 批第 1 条的核心断言：**设备声明 → 本机监听**。
    * 两台设备分别声明 http / mqtt 之后，三个开关都应当是派生出来的 true，而且两个监听真的起来了。
    */
@@ -1142,7 +1179,19 @@ async function runIotIngestDrill(win, layout) {
     problems.push('派生出来的两个通道开关不对：' + JSON.stringify(opened.config))
   }
   if (opened.config && opened.config.httpPort !== httpPort) {
-    problems.push('界面上改的 HTTP 端口没有写进设置：' + JSON.stringify(opened.config))
+    /*
+     * ⚠ 第 38 轮加了"保存按钮是不是禁用的"这个读数：第 37/38 轮都出现
+     * "端口框里是新值、但 notice 与 error 同时为空、设置里还是 8080" —— 这**最像**
+     * 「保存按钮是 disabled，`.click()` 什么也不做」（`saveIotSettings()` 每条分支都会
+     * 写 notice 或 error，不可能两者都空）。下一轮看 `portPlan.saveDisabled` 就能判定：
+     *   true  → 是"探针的合成 input 没把 `iotDraft` 改成脏"（探针的事）；
+     *   false → 点击真的进去了，那就要去看 `settings.update({iotIngest})` 为什么不落库（产品的事）。
+     */
+    problems.push(
+      '界面上改的 HTTP 端口没有写进设置：' + JSON.stringify(opened.config) +
+        '；保存按钮 disabled=' + JSON.stringify(opened.portPlan && opened.portPlan.saveDisabled) +
+        '（见 docs/UI-VERIFY.md 第 61 条：探针侧还是产品侧，下一轮靠这个读数分开）'
+    )
   }
   if (opened.config && opened.config.storageRoot !== undefined) {
     // storageRoot 不在 iotIngest 里；这一条只是防止把两个结构看混了。
@@ -1155,13 +1204,35 @@ async function runIotIngestDrill(win, layout) {
     problems.push('有设备声明 MQTT 接入之后 MQTT 没有在监听：' + JSON.stringify(opened.status && opened.status.mqtt))
   }
 
+  /*
+   * ⚠ 第 38 轮：推流**用应用报出来的那个端口**，不是"探针想改成的那个"。
+   *
+   * 业主真正会做的事是"把界面上显示的那个地址复制出去推一条" —— 所以端到端这一条路
+   * 就该按 `ingest.status()` 报的 `http.port` / `mqtt.port` 推。第 37 轮实测：
+   * 探针在「本机接入」里改端口那一步**没有真的生效**（`notice`/`error` 同时为空、
+   * 设置里仍是 8080），于是九条推送全打到一个没人听的端口上（`ECONNREFUSED`）——
+   * 那是**探针的**问题，不该把九条断言一起拖红。"改端口"本身另有一条界面保真断言（见上）。
+   */
+  const reportedPort = (side, fallback) => {
+    const entry = opened.status && opened.status[side]
+    return entry && entry.port ? entry.port : fallback
+  }
+  const httpTargetPort = reportedPort('http', httpPort)
+  const mqttTargetPort = reportedPort('mqtt', mqttPort)
+  if (httpTargetPort !== httpPort || mqttTargetPort !== mqttPort) {
+    log(
+      'iot ports     : 推流改用**应用报出来的**端口 http=' + httpTargetPort +
+        ' mqtt=' + mqttTargetPort + '（探针想改成的 ' + httpPort + '/' + mqttPort + ' 没生效）'
+    )
+  }
+
   // ---- 3a) 真的 HTTP 请求（从 driver 进程，不是渲染层） -----------------------
   const post = (pathName, body) => new Promise((resolve) => {
     const payload = Buffer.from(body)
     const request = http.request(
       {
         host: '127.0.0.1',
-        port: httpPort,
+        port: httpTargetPort,
         path: pathName,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length }
@@ -1229,7 +1300,7 @@ async function runIotIngestDrill(win, layout) {
     const publishBody = Buffer.concat([topicHead, topic, payload])
     const publish = Buffer.concat([Buffer.from([0x30]), Buffer.from([publishBody.length]), publishBody])
 
-    const socket = net.connect(mqttPort, '127.0.0.1')
+    const socket = net.connect(mqttTargetPort, '127.0.0.1')
     socket.resume()
     const chunks = []
     const timer = setTimeout(() => {
@@ -1282,7 +1353,11 @@ async function runIotIngestDrill(win, layout) {
     'for (let i = 0; i < 20 && !el("[data-add-iot-local]"); i += 1) await wait(200);' +
     'const dialog = el("[data-add-device-dialog]");' +
     'const local = el("[data-add-iot-local]");' +
-    'if (local) local.open = true;' +
+    // 同第 38 轮那处：**点 `<summary>`** 才会触发 `toggle`（程序设 `open` 不会）。
+    'if (local) {' +
+    '  const localSummary = local.querySelector("summary");' +
+    '  if (localSummary) localSummary.click(); else local.open = true;' +
+    '}' +
     'await wait(300);' +
     'const refresh = el("[data-action=topbar-refresh]");' +
     'if (refresh) refresh.click();' +
@@ -1293,8 +1368,19 @@ async function runIotIngestDrill(win, layout) {
      * （最多 20 秒），而不是写死一个秒数：写死了就会在设备多的机器上偶发变红。
      */
     'let domStats = [];' +
-    'for (let attempt = 0; attempt < 40; attempt += 1) {' +
+    'let domStatsWaitedMs = 0;' +
+    /*
+     * 60 秒，而且**在循环里再点两次刷新**：顶栏那颗刷新会重新探活所有设备（离线设备要等到
+     * 超时），现场设备多时 20 秒不够；只点一次的话，那一次如果落在对话框刚打开、
+     * store 还没加载完的时刻，读数就会永远是 0（第 38 轮实测到的就是这一种）。
+     */
+    'for (let attempt = 0; attempt < 120; attempt += 1) {' +
+    '  if (attempt === 8 || attempt === 30) {' +
+    '    const again = el("[data-action=topbar-refresh]");' +
+    '    if (again) again.click();' +
+    '  }' +
     '  await wait(500);' +
+    '  domStatsWaitedMs += 500;' +
     '  domStats = [...document.querySelectorAll("[data-add-iot-stats] .kv__item")].map((item) =>' +
     '    ((item.querySelector(".kv__value") || {}).textContent || "").trim());' +
     '  if (domStats[0] && domStats[0] !== "0") break;' +
@@ -1303,10 +1389,26 @@ async function runIotIngestDrill(win, layout) {
      * 顺手把监听设置**保存一次**（写 + 读回核对）：把两个端口写回出厂默认值。
      * 这是这一段唯一的写操作，而且它走的就是界面上那条路（不是开发接口）。
      */
-    'setInput(el("[data-add-iot-http-port]", dialog), 8080);' +
-    'setInput(el("[data-add-iot-mqtt-port]", dialog), 1883);' +
+    /*
+     * ⚠ 第 38 轮：还原也要用**够真的**事件序列（`input`+`change`+`blur`），否则"保存"按钮
+     * 仍然是 disabled、`.click()` 什么也不做 —— 第 38 轮就是这么留下了一条
+     * 「探针改过的端口没有还原」（端口还停在探针填的那两个高位端口上）。
+     */
+    'const fillBack = (selector, value) => {' +
+    '  const node = el(selector, dialog);' +
+    '  if (!node) return false;' +
+    '  node.focus();' +
+    '  node.value = String(value);' +
+    '  node.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  node.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '  node.dispatchEvent(new Event("blur", { bubbles: true }));' +
+    '  return true;' +
+    '};' +
+    'fillBack("[data-add-iot-http-port]", 8080);' +
+    'fillBack("[data-add-iot-mqtt-port]", 1883);' +
+    'await wait(300);' +
     'const saveButton = el("[data-add-iot-save]", dialog);' +
-    'if (saveButton) saveButton.click();' +
+    'if (saveButton && !saveButton.disabled) saveButton.click();' +
     'await wait(1500);' +
     'const saveNotice = text(el("[data-add-iot-notice]", dialog));' +
     'const saveError = text(el("[data-add-iot-error]", dialog));' +
@@ -1339,6 +1441,7 @@ async function runIotIngestDrill(win, layout) {
     '  saveNotice,' +
     '  saveError,' +
     '  portsAfterSave,' +
+    '  domStatsWaitedMs,' +
     '  localBlockFound: !!local,' +
     '  restored: restore.every((result) => result && result.success),' +
     '  refreshFound,' +
