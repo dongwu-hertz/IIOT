@@ -3816,7 +3816,15 @@ async function run() {
     '    .map((b) => b.getAttribute("aria-pressed"));' +
     '  out.queriesAfterHide = queryStat();' +
     // ② 再点亮它：回到原样（探针必须把自己改过的状态恢复）。
-    '  document.querySelectorAll("[data-channel-toggle]")[1].click(); await wait(500);' +
+    /*
+     * 点之前**等图例回来**（2026-09-19 实测到一次偶发）：这一页在设备列表/健康状态刷新时会
+     * 重渲染，图例可能正好在两步之间短暂消失，于是 `pressedAfterRestore` 读到空数组、
+     * 报出一串"再点一下没有恢复"的假失败。等待是自适应的（最多 5 秒），
+     * 判据仍然是"恢复后的按下态与起点一致"。
+     */
+    '  for (let i = 0; i < 20 && document.querySelectorAll("[data-channel-toggle]").length < toggles.length; i += 1) await wait(250);' +
+    '  const restoreTarget = document.querySelectorAll("[data-channel-toggle]")[1];' +
+    '  if (restoreTarget) { restoreTarget.click(); await wait(600); }' +
     '  out.pressedAfterRestore = [...document.querySelectorAll("[data-channel-toggle]")]' +
     '    .map((b) => b.getAttribute("aria-pressed"));' +
     '  out.queriesAfterRestore = queryStat();' +
@@ -3828,7 +3836,10 @@ async function run() {
     '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
     '    .map((b) => b.getAttribute("data-metric-toggle"));' +
     '  out.chartCountAfterSecondMetric = document.querySelectorAll("[data-metric-chart]").length;' +
-    '  metricButtons[1].click(); await wait(1200);' +
+    // 与上面同一条理由：点第二次之前等那一排按钮回来（同一个偶发）。
+    '  for (let i = 0; i < 20 && document.querySelectorAll("[data-metric-toggle]").length < metricButtons.length; i += 1) await wait(250);' +
+    '  const metricRestore = document.querySelectorAll("[data-metric-toggle]")[1];' +
+    '  if (metricRestore) { metricRestore.click(); await wait(1200); }' +
     '  out.selectedMetricsRestored = [...document.querySelectorAll("[data-metric-toggle]")]' +
     '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
     '    .map((b) => b.getAttribute("data-metric-toggle"));' +
@@ -6598,6 +6609,92 @@ async function run() {
           JSON.stringify(monitorOffline.contentFlag) + '，角标 ' + monitorOffline.badgePresent
       )
     }
+  }
+
+  /**
+   * 「地址信息支持 GIS 显示」（业主 2026-09-18 第 10 批第 7 条后半）。
+   *
+   * WHY THIS DRILL
+   * 这一条的两个入口**只在点位成对时**出现，而 operator 库里"有点位的设备"是探测器自己
+   * 在那条声呐流程里点出来的 —— 所以先问一次 `devices.list()` 找出有完整点位的那一台，
+   * 再看它的地址信息卡片上有没有那两个入口、点了之后地图页有没有**选中这一台**。
+   * 只读（点链接只是导航）。
+   */
+  const gisCard = await layout('/devices', '(async () => {' +
+    'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const out = {};' +
+    'const listed = await window.api.devices.list();' +
+    'const devices = listed && listed.success ? listed.data : [];' +
+    'const complete = devices.filter((d) => d.installation &&' +
+    '  typeof d.installation.gisLatitude === "number" && typeof d.installation.gisLongitude === "number");' +
+    'const partial = devices.filter((d) => d.installation &&' +
+    '  (typeof d.installation.gisLatitude === "number") !== (typeof d.installation.gisLongitude === "number"));' +
+    'out.completeIds = complete.map((d) => d.id);' +
+    'out.partialIds = partial.map((d) => d.id);' +
+    'out.deviceCount = devices.length;' +
+    'return JSON.stringify(out);' +
+    '})()', 60_000)
+  log('gis card      : ' + JSON.stringify(gisCard))
+
+  if ((gisCard.completeIds || []).length === 0) {
+    log('gis card      : 库里没有一台"点位成对"的设备，这一条没验证到（如实说明，不当成通过）')
+  } else {
+    const target = gisCard.completeIds[0]
+    const detail = await layout('/devices/' + target, '(async () => {' +
+      'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+      'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+      'const out = {};' +
+      'for (let i = 0; i < 40 && !document.querySelector("[data-installation]"); i += 1) await sleep(250);' +
+      'out.cardPresent = !!document.querySelector("[data-installation]");' +
+      'out.point = text(document.querySelector("[data-installation-point]"));' +
+      'const link = document.querySelector("[data-action=open-device-on-map]");' +
+      'out.mapLink = link ? link.getAttribute("href") : null;' +
+      'out.copyButton = !!document.querySelector("[data-action=copy-device-point]");' +
+      'if (link) { link.click(); await sleep(1200); }' +
+      'out.hashAfterClick = location.hash;' +
+      // 地图页选中这一台的证据：那一行 / 那个标记带 `--active`。
+      'out.activeRows = document.querySelectorAll(".map-table__row--active").length;' +
+      'out.activeMarkers = document.querySelectorAll(".map-marker--active").length;' +
+      'out.selectedPoint = text(document.querySelector("[data-installation-point]"));' +
+      'return JSON.stringify(out);' +
+      '})()', 90_000)
+    log('gis detail    : ' + JSON.stringify(detail))
+
+    if (!detail.cardPresent) {
+      problems.push('设备详情页上没有地址信息卡片（[data-installation]）')
+    }
+    if (!String(detail.mapLink || '').includes('/map?device=' + target)) {
+      problems.push('地址信息卡片上那个地图入口的地址不对：' + JSON.stringify(detail.mapLink))
+    }
+    if (!detail.copyButton) problems.push('地址信息卡片上没有「复制坐标」')
+    if (!String(detail.hashAfterClick || '').includes('/map')) {
+      problems.push('点「在地图信息里查看」没有跳到地图信息页：' + JSON.stringify(detail.hashAfterClick))
+    }
+    if (!(detail.activeRows >= 1) || !(detail.activeMarkers >= 1)) {
+      problems.push(
+        '地图页没有选中那一台（`?device=` 没生效）：行 ' + detail.activeRows +
+          '，标记 ' + detail.activeMarkers
+      )
+    }
+  }
+
+  // 点位**只录一半**的设备不许出现那两个入口（半截坐标落不了图）。
+  if ((gisCard.partialIds || []).length > 0) {
+    const partialCheck = await layout('/devices/' + gisCard.partialIds[0], '(async () => {' +
+      'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));' +
+      'for (let i = 0; i < 40 && !document.querySelector("[data-installation]"); i += 1) await sleep(250);' +
+      'return JSON.stringify({' +
+      '  cardPresent: !!document.querySelector("[data-installation]"),' +
+      '  mapLink: !!document.querySelector("[data-action=open-device-on-map]"),' +
+      '  copyButton: !!document.querySelector("[data-action=copy-device-point]")' +
+      '});' +
+      '})()', 90_000)
+    log('gis partial   : ' + JSON.stringify(partialCheck))
+    if (partialCheck.mapLink || partialCheck.copyButton) {
+      problems.push('点位只录了一半的设备上出现了 GIS 入口（半截坐标落不了图）')
+    }
+  } else {
+    log('gis partial   : 库里没有"只录一半"的设备，那一条边界没验证到')
   }
 
   log('problems     : ' + problems.length)

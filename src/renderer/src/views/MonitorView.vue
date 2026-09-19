@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Realtime monitoring (spec section 9.1) — REAL device data.
  *
@@ -2352,7 +2352,7 @@ const sessionLabel = computed(() => {
         为什么没有实时图。口径记在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
       -->
       <template v-else-if="isSonar">
-        <DeviceInstallationCard :installation="selectedDevice?.installation" />
+        <DeviceInstallationCard :installation="selectedDevice?.installation" :device-id="selectedDevice?.id" />
 
         <AuscultationPanel :device-id="selectedDeviceId" />
 

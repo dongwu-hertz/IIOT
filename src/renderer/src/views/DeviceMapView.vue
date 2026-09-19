@@ -51,7 +51,7 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { AlarmEvent, Device } from '@shared/domain/models'
 import type { CameraLiveStatus } from '@shared/domain/camera-live'
 import type { E2AlarmSnapshotView, E2SyncOutcome } from '@shared/ipc/contract'
@@ -62,6 +62,7 @@ import {
   type MapDeviceInput
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
+import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
@@ -69,6 +70,7 @@ import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
 
@@ -466,8 +468,18 @@ onMounted(async () => {
   loading.value = true
   if (devices.devices.length === 0) await devices.load()
   await loadDeviceAlarmFacts()
+  /*
+   * `?device=<id>` 的定位（业主第 10 批第 7 条后半：地址信息要「支持 GIS 显示」）。
+   *
+   * 地址信息卡片上那句「在地图信息里查看」带的就是这个参数，所以这一页必须认它：
+   * 不认的话，那个链接点过来只是"打开了地图页"，而操作员要的是"打开**这一台**在地图上的位置"。
+   * 只在真的有这一台、而且它**有完整点位**时才采用 —— 一个过了期的书签不该把选中的那一台
+   * 换成一台图上没有的设备（那时右边三张表会跟着变成空的，看起来像页面坏了）。
+   */
+  const focusId = deviceMapFocusId(route.query)
+  const focused = focusId === '' ? undefined : layout.value.markers.find((marker) => marker.id === focusId)
   // 默认选第一台**有点位**的设备：一进页面就该有东西可看。
-  const first = layout.value.markers[0]
+  const first = focused ?? layout.value.markers[0]
   if (first) selectDevice(first.id)
   loading.value = false
 })
