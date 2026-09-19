@@ -5788,12 +5788,67 @@ async function run() {
     if (trendZoom.zoomCanvas !== true) {
       log('trend zoom/export: 这个 profile 里一张图都没渲染，"滚轮缩放"没验到')
     } else {
-      if (trendZoom.zoomBarAfterWheel !== 1) {
-        problems.push(
-          '滚轮缩放之后没有出现"当前显示第 a–b 个点"那一行（' +
-            JSON.stringify(trendZoom.zoomBarAfterWheel) + '）'
+      /*
+       * ⚠ 第 37 轮加的一步：**用可信滚轮再量一次**。
+       *
+       * 上面那次是页面里 `canvas.dispatchEvent(new WheelEvent(...))` —— 合成事件，
+       * `isTrusted === false`。它量不到"滚轮缩放"有两个完全不同的可能：zrender 不认合成事件，
+       * 或者第 34 轮加的**手势闸门**（只在捕获阶段的真实 `wheel`/`pointerdown` 上记一次手势）
+       * 把这次缩放丢掉了。判据分不开这两者，而它们的修法完全不同。
+       * 所以这里从**浏览器进程**发一次真滚轮（`webContents.sendInputEvent`，它产生的是
+       * `isTrusted === true` 的事件，位置取画面中央）——这才是操作员真的滚一下。
+       */
+      const wheelProbe = await layout('/trends', '(() => {' +
+        'const canvas = document.querySelector("[data-metric-chart] canvas, .chart__canvas canvas");' +
+        'if (!canvas) return JSON.stringify({ ok: false });' +
+        'const rect = canvas.getBoundingClientRect();' +
+        'return JSON.stringify({ ok: true, x: Math.round(rect.left + rect.width / 2),' +
+        '  y: Math.round(rect.top + rect.height / 2),' +
+        '  before: document.querySelectorAll("[data-trend-zoom-bar]").length });' +
+        '})()', 30_000)
+      if (wheelProbe.ok === true) {
+        win.webContents.sendInputEvent({
+          type: 'mouseWheel',
+          x: wheelProbe.x,
+          y: wheelProbe.y,
+          deltaX: 0,
+          deltaY: -240,
+          wheelTicksX: 0,
+          wheelTicksY: 3,
+          canScroll: false
+        })
+        await sleep(900)
+        const trusted = await layout('/trends', '(() => JSON.stringify({' +
+          '  bars: document.querySelectorAll("[data-trend-zoom-bar]").length,' +
+          '  hint: (document.querySelector("[data-trend-zoom-hint]") || {}).textContent || ""' +
+          '}))()', 30_000)
+        log(
+          'trend zoom/export: 可信滚轮（浏览器进程发出）→ 提示行 ' + trusted.bars +
+            ' 条，文本 ' + JSON.stringify(String(trusted.hint).trim())
         )
+        if (trusted.bars !== 1) {
+          problems.push(
+            '**可信**滚轮（`sendInputEvent`）之后仍然没有"当前显示第 a–b 个点"那一行（' +
+              JSON.stringify({ bars: trusted.bars, before: wheelProbe.before }) +
+              '）—— 合成事件那一次的失败因此不是"事件不可信"，要去看手势闸门与 zrender 的滚轮处理'
+          )
+        }
+      } else {
+        log('trend zoom/export: 可信滚轮没验到（这一屏没有画布）')
       }
+      /*
+       * ⚠ 合成滚轮那一次**不是**判据（第 37 轮实测）：页面里 `dispatchEvent(new WheelEvent(…))`
+       * 产生的是 `isTrusted === false` 的事件，**zrender 不认它**（所以提示行一直是 0）——
+       * 这是探针的局限，不是产品缺陷。真正可信的那一次（上面 `sendInputEvent`）在
+       * `probe-round53.log` 里量到了：
+       * `当前显示第 2–17 个点（共 19 点）：2026/9/14 10:30 ~ 2026/9/17 18:00`
+       * —— 既证明了滚轮缩放能出提示行，也证明了**提示写的是时间范围**（X 轴真的是时间轴）。
+       * 所以这里只记日志，不断言。
+       */
+      log(
+        'trend zoom/export: 合成滚轮（页面派发，isTrusted=false）→ 提示行 ' +
+          trendZoom.zoomBarAfterWheel + '（zrender 不认合成事件，这一条不作判据）'
+      )
       if (trendZoom.zoomBarAfterReset !== 0) {
         problems.push('点了「重置缩放」之后提示行还在：' + trendZoom.zoomBarAfterReset)
       }
