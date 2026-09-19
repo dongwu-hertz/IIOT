@@ -245,8 +245,18 @@ describe('删掉的聚合方式与四张卡片', () => {
   })
 
   it('时间桶本身**没有**被删（删的是"桶里怎么算"的选择器）', () => {
-    // 诊断行与截断提示都在：图是"按桶算出来的"这件事仍然说得出来。
-    assert.match(viewCode, /formatBucketSeconds\(trends\.series\.bucketSeconds\)/, '诊断行里没有桶宽')
+    /*
+     * 第 30 轮：曲线下面那一整行诊断被业主点名删掉了，所以"桶宽"这件事现在只在
+     * **时间颗粒度那一排**上说 —— 「自动（5 分钟）」里的那个括号就是把桶宽写出来。
+     * 判据仍然是"桶宽从查询回话里读出来的"，只是换了个显示位置。
+     */
+    assert.match(viewCode, /const autoBucketText = computed/, '没有把实际桶宽算出来')
+    assert.match(
+      viewCode,
+      /const seconds = trends\.series\?\.bucketSeconds/,
+      '桶宽不是从查询回话里读的'
+    )
+    assert.match(viewCode, /return formatBucketSeconds\(seconds\)/, '桶宽没有格式化成人话')
     assert.match(viewCode, /trends\.series\?\.truncated/, '截断提示不见了')
     // Y 轴名字里仍然写着聚合方式（固定为平均）—— 不写就是把"一桶的平均"说成原始读数。
     assert.match(viewCode, /trendAxisName\(bundle\.metric, trends\.aggregation\)/)

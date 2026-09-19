@@ -308,7 +308,17 @@ describe('打印为 PDF', () => {
 
   it('打印时把界面收起来（打印出来的是证据，不是界面截图）', () => {
     assert.match(viewCode, /@media print \{/, '视图里没有打印样式')
-    assert.match(viewCode, /\.channel-panel,[\s\S]{0,200}?display: none !important/, '没有藏起通道列等')
+    /*
+     * 第 30 轮：通道搬进筛选栏、诊断行删除、时间预设搬进图卡片 ——
+     * 打印规则里那三个指向已删元素的选择器（`.channel-panel` / `.range-bar` / `.diagnostics`）
+     * 一起删掉了（留着一条指向不存在元素的规则会让下一个人以为那些东西还在）。
+     */
+    assert.match(viewCode, /\.filter-bar,[\s\S]{0,160}?display: none !important/, '没有藏起筛选栏等')
+    assert.equal(
+      /\.channel-panel,/.test(viewCode),
+      false,
+      '打印规则里还留着已删的右侧通道列选择器'
+    )
     // 外壳（侧边栏 / 顶栏）在 main.css 里统一藏。
     assert.match(mainCss, /@media print \{[\s\S]{0,400}?\.sidebar,[\s\S]{0,80}?\.topbar/, '外壳没有打印样式')
   })

@@ -53,13 +53,12 @@ import {
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
-import { channelState, channelStateLabelKey, type ChannelState } from '@renderer/lib/channelState'
+import { channelState, type ChannelState } from '@renderer/lib/channelState'
 import {
   EMPTY_VALUE,
   channelLabel,
   formatBytes,
   formatDateTime,
-  formatDuration,
   formatTrendTick,
   fromDateTimeLocalValue,
   toDateTimeLocalValue
@@ -377,6 +376,11 @@ function toggleChannelRow(row: TrendChannelRow): void {
   trends.toggleChannel(row.index)
 }
 
+/** 通道 chip 的悬停说明：这一路现在画不画（点一下会变成另一句）。 */
+function channelChipHint(row: TrendChannelRow): string {
+  return row.visible ? t('trendsUi.channelHide') : t('trendsUi.channelShow')
+}
+
 
 const customRangeIncomplete = computed(
   () =>
@@ -384,32 +388,7 @@ const customRangeIncomplete = computed(
     (trends.customFrom === undefined || trends.customTo === undefined)
 )
 
-const deviceHint = computed(() => {
-  const device = selectedDevice.value
-  if (!device) return t('trendsUi.deviceNotSelected')
-  return `${device.name}（${device.ip || t('trendsUi.noAddress')}）`
-})
-
-/**
- * 筛选行上那句提示：现在说的是**几条通道在图上**，不是一个下拉框的值。
- *
- * 原来的写法是"全部通道 / 通道 N" —— 通道选择变成一排可点亮的通道名之后，
- * 「全部通道」这句话不再对应任何一个控件，留着它比删掉更糟（读者会去找那个下拉）。
- */
-const channelHint = computed(() =>
-  t('trendsUi.channelHintVisible', {
-    shown: trends.visibleChannelIds.length,
-    total: trends.channelIds.length
-  })
-)
-
-const rangeText = computed(() => {
-  const from = trends.queriedFrom
-  const to = trends.queriedTo
-  if (from === null || to === null) return t('trendsUi.notQueried')
-  return `${formatDateTime(from)} ~ ${formatDateTime(to)}`
-})
-
+/** 数据实际覆盖的范围（空态那个"查看可用范围"按钮要用它）。 */
 const coverageText = computed(() => {
   const bounds = trends.coverageBounds
   if (!bounds) return ''
@@ -759,25 +738,6 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
 /**
  * 「上面那四张时间桶卡片删掉了」（业主 2026-09-19 第 13 批第 5 条：
  * 「声压级那四张卡片删除；只显示趋势曲线」）。
- *
- * 删掉的是**最新时间桶 / 区间最低桶 / 区间最高桶 / 空桶数**这四张：它们都是"再换一种说法
- * 说同一件事"，而操作员要的是趋势本身。它们读到的那几个 computed
- * （`latestBucket` / `rangeStats` / `gapCount` / `chartRows`）随之一起删 —— 留着一段
- * 没人读的计算只会让下一个人以为屏幕上还有那四张卡（§15.29.4 记过同一条教训）。
- *
- * **保留**的是下面那行诊断（`dl.diagnostics`）：它不是"另一块内容"，而是"这张图是怎么算出来的"
- * —— 返回了几个点、扫了几个文件、桶多宽、压缩比多少、发了几条查询。业主第 5 条点名删的是
- * 那四张卡片；把诊断行一起删掉会让"图变慢了/被截断了"这两件事重新变成看不见的事。
- */
-
-const reductionText = computed(() => {
-  const series = trends.series
-  if (!series || series.totalRows <= 0 || series.points.length === 0) return EMPTY_VALUE
-  const ratio = series.totalRows / series.points.length
-  return `${ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)} : 1`
-})
-
-// ---------------------------------------------------------------------------
 // 时间轴缩放（第 13 批第 6 条）
 // ---------------------------------------------------------------------------
 
@@ -1131,7 +1091,7 @@ watch(
     <template v-else>
       <section class="card">
         <div class="filter-bar">
-          <label class="field field--wide">
+          <label class="field">
             <span class="field-label">{{ t('trendsUi.filterDevice') }}</span>
             <select v-model="selectedDeviceId" class="select">
               <option v-for="device in devices.devices" :key="device.id" :value="device.id">
@@ -1141,12 +1101,103 @@ watch(
           </label>
 
           <!--
-            通道那一排**从筛选栏搬到右侧那一列**（业主 2026-09-19 第 13 批第 4 条：
-            「声纹场景选设备后**右侧**列出 8 或 2 个通道 CH1…」）。
-            筛选栏只留"选哪台设备 / 看哪些量 / 聚合方式"这类**查询条件**；通道不是查询条件
-            （数据已经一次全取回来，切通道只是画不画那条线），所以它属于图旁边那一列。
-            第 10 批第 2 条那两句话（"点通道名显示/隐藏"）仍然成立，只是换了个位置。
+            通道选择：**紧挨着设备的右侧**（业主 2026-09-19 最新一条：
+            「如果是声纹设备，通道的选择应该放在设备的右侧的位置，趋势图还是占右侧区域的 100%」）。
+
+            这一块原来在图右侧占掉一列（第 13 批第 4 条「右侧列出 8 或 2 个通道」），
+            于是图只能拿到剩下的宽度；业主现在要的是**图占满**，所以通道回到筛选栏这一行、
+            贴在设备后面。第 4 条那几件事一件没少：
+              · 一行一条通道（CH1…CH8，设备几个就是几个）；
+              · **无数据灰显**、**有数据可勾选**（判据都是 `hasData`，见 `channelCheckboxDisabled`）；
+              · 可**重命名**（写设备，`/set_passageway` 的 `dchName`）；
+              · 每一条带着它在这段范围里的最后一个读数与色点（色点与图上那条线同源）。
           -->
+          <div v-if="channelRows.length > 0" class="field field--channels" data-trend-channels>
+            <span class="field-label">{{ t('trendsUi.channelPanelTitle') }}</span>
+            <div class="chip-row channel-chip-row">
+              <span
+                v-for="row in channelRows"
+                :key="row.index"
+                class="channel-chip-wrap"
+                :class="{ 'channel-chip-wrap--nodata': !row.hasData }"
+                :data-trend-channel-row="row.index"
+                :data-trend-channel-nodata="row.hasData ? undefined : 'true'"
+              >
+                <label
+                  class="chip chip--selectable channel-chip"
+                  :class="{ 'channel-chip--active': row.visible }"
+                  :title="row.hasData ? channelChipHint(row) : t('trendsUi.channelNoData')"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="row.visible"
+                    :disabled="channelCheckboxDisabled(row)"
+                    :data-trend-channel-check="row.index"
+                    :aria-label="channelLabel(row.index)"
+                    @change="toggleChannelRow(row)"
+                  />
+                  <span class="channel-chip__dot" :style="{ background: row.color }" aria-hidden="true"></span>
+                  <span class="channel-chip__name">
+                    {{ channelLabel(row.index) }}
+                    <template v-if="row.name">（{{ row.name }}）</template>
+                  </span>
+                  <span class="muted channel-chip__value">
+                    {{ row.value === null ? '—' : trendValueText(trends.metric, row.value) }}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  class="btn btn--ghost btn--icon channel-chip__rename"
+                  :disabled="!channelRenameAvailable"
+                  :title="channelRenameHint"
+                  :data-trend-channel-rename="row.index"
+                  @click="startChannelRename(row)"
+                >
+                  ✎
+                </button>
+              </span>
+              <button
+                type="button"
+                class="chip chip--selectable"
+                data-channel-show-all
+                @click="trends.showAllChannels()"
+              >
+                {{ t('trendsUi.channelShowAll') }}
+              </button>
+            </div>
+            <span class="field-hint" data-channel-panel-summary>
+              {{ t('trendsUi.channelPanelSummary', { withData: channelsWithData, total: channelRows.length }) }}
+            </span>
+            <!-- 改名：一次只改一路（写设备要"读回全部通道 → 合并 → 写回"）。 -->
+            <form
+              v-if="renamingChannel !== null"
+              class="channel-rename-form"
+              data-trend-channel-rename-form
+              @submit.prevent="submitChannelRename"
+            >
+              <input
+                v-model="renameText"
+                class="input channel-rename-form__input"
+                type="text"
+                :maxlength="CHANNEL_NAME_MAX_LENGTH"
+                :placeholder="t('trendsUi.channelRenamePlaceholder')"
+                data-trend-channel-rename-input
+                @keydown.esc="cancelChannelRename"
+              />
+              <button type="submit" class="btn btn--sm btn--primary" :disabled="renameBusy">
+                {{ t('common.save') }}
+              </button>
+              <button type="button" class="btn btn--sm" @click="cancelChannelRename">
+                {{ t('common.cancel') }}
+              </button>
+            </form>
+            <p v-if="renameProblem" class="alert alert--danger" role="alert" data-trend-rename-error>
+              {{ renameProblem }}
+            </p>
+            <p v-if="renameNotice" class="alert alert--success" role="status" data-trend-rename-notice>
+              {{ renameNotice }}
+            </p>
+          </div>
 
           <!--
             量可以**多选**：选中的量各画一张图（见 `chartBundles` 与文件头）。
@@ -1183,87 +1234,44 @@ watch(
               {{ t('trendsUi.metricMultiHint', { count: trends.metrics.length }) }}
             </span>
           </div>
+
           <!--
-            「聚合方式」这个下拉框**删掉了**（业主第 5 条）。理由写在 script 里那段注释：
-            删的是"让操作员选"，桶里怎么算仍然固定是平均，Y 轴名字里照旧写着「（平均）」。
+            **起始 / 结束时间**：业主 2026-09-19 最新一条要它「放在指标的右侧」——
+            它和指标一样是查询条件（"查哪一段时间、哪些量"），本来就在筛选栏这一行里，
+            现在只是从下面那一排挪到指标后面。只有选了「自定义」那一档才出现。
           -->
-        </div>
-
-        <div class="range-bar">
-          <div class="chip-row">
-            <button
-              v-for="preset in TREND_RANGE_OPTIONS"
-              :key="preset.key"
-              type="button"
-              class="chip chip--selectable"
-              :class="{ 'chip--accent': trends.range === preset.key }"
-              :data-trend-range-preset="preset.key"
-              @click="trends.setRange(preset.key)"
-            >
-              {{ t(preset.labelKey) }}
-            </button>
+          <div v-if="trends.range === 'custom'" class="field field--range" data-trend-custom-range>
+            <span class="field-label">{{ t('trendsUi.filterRangeLabel') }}</span>
+            <div class="custom-range">
+              <label class="field">
+                <span class="field-label">{{ t('trendsUi.filterFrom') }}</span>
+                <input
+                  v-model="customFromText"
+                  class="input"
+                  type="datetime-local"
+                  data-trend-range-from
+                  @input="applyCustomRange"
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('trendsUi.filterTo') }}</span>
+                <input
+                  v-model="customToText"
+                  class="input"
+                  type="datetime-local"
+                  data-trend-range-to
+                  @input="applyCustomRange"
+                />
+              </label>
+              <span v-if="customRangeIncomplete" class="field-hint">
+                {{ t('trendsUi.incompleteRange') }}
+              </span>
+            </div>
           </div>
 
           <!--
-            **X 轴的时间颗粒度**（业主第 5 条后半：「X 轴支持自定义缩放时间颗粒度」）。
-
-            它紧挨着时间范围那一排：两排合起来回答"看哪一段时间、每一格多大"这件事，
-            而这两件事本来就一起用（选 30 天 + 1 天/格 = 看月度趋势；选 1 小时 + 1 秒/格 = 看瞬态）。
-            「自动」那一档把主进程实际挑的桶宽写在按钮上（`自动（15 秒）`）——
-            不然"自动"是个黑箱，而它决定了这张图到底有多细。
-          -->
-          <div class="chip-row granularity-row" data-trend-granularity>
-            <span class="field-label">{{ t('trendsUi.granularityLabel') }}</span>
-            <button
-              v-for="option in TREND_GRANULARITY_OPTIONS"
-              :key="option.key"
-              type="button"
-              class="chip chip--selectable"
-              :class="{
-                'chip--accent': trends.granularity === option.key,
-                'chip--auto-hint': autoBucketKey === option.key
-              }"
-              :data-trend-granularity-option="option.key"
-              :aria-pressed="trends.granularity === option.key"
-              :title="granularityHint(option)"
-              @click="granularitySelection = option.key"
-            >
-              {{ t(option.labelKey) }}
-              <template v-if="option.key === 'auto' && autoBucketText">
-                （{{ autoBucketText }}）
-              </template>
-            </button>
-          </div>
-
-          <div v-if="trends.range === 'custom'" class="custom-range">
-            <label class="field">
-              <span class="field-label">{{ t('trendsUi.filterFrom') }}</span>
-              <input
-                v-model="customFromText"
-                class="input"
-                type="datetime-local"
-                @input="applyCustomRange"
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('trendsUi.filterTo') }}</span>
-              <input
-                v-model="customToText"
-                class="input"
-                type="datetime-local"
-                @input="applyCustomRange"
-              />
-            </label>
-            <span v-if="customRangeIncomplete" class="field-hint">
-              {{ t('trendsUi.incompleteRange') }}
-            </span>
-          </div>
-
-          <!--
-            立即落盘：与设备选择放在**同一张卡片**里（产品要求），放在筛选栏末尾并推到右端
-            （`.trend-actions`）——它作用于整组筛选条件，不属于某一个下拉框。
-
-            **「刷新」那一颗已经删掉**（业主 2026-09-19 更正第 4 条：页面里单独的刷新按钮都删掉）。
+            立即落盘：作用于整组筛选条件，所以留在筛选栏这一张卡片里、推到右端
+            （`.trend-actions`）。「刷新」那一颗已经删掉（业主 2026-09-19 更正第 4 条），
             重查当前筛选走顶栏那颗唯一的刷新（见 `stores/uiRefresh.ts` 与下面的 watch）。
           -->
           <div class="btn-row trend-actions">
@@ -1275,32 +1283,18 @@ watch(
       </section>
 
       <!--
-        图的左边、通道列的右边（业主 2026-09-19 第 13 批第 4 条：「右侧列出 8 或 2 个通道」）。
-
-        为什么通道列在**图旁边**而不是筛选栏里：它列的是一条通道**在这段范围里有没有数据**
-        以及"画不画它"，两者都要与图对着看（"CH3 是灰的"这句话只有在图的旁边才有意义）。
+        趋势曲线卡片：**整幅宽**（业主最新一条：「趋势图还是占右侧区域的 100%」）。
+        原来它被 `.trends-body` 分成"图 | 通道列"两栏，图只能拿到剩下的宽度；
+        通道搬回筛选栏之后这里只剩一张卡片，宽度自然就是 100%。
       -->
-      <div class="trends-body">
-        <div class="trends-main">
-
-      <!--
-        「最新时间桶 / 区间最低桶 / 区间最高桶 / 空桶数」四张卡片**删掉了**
-        （业主 2026-09-19 第 13 批第 5 条：「声压级那四张卡片删除；只显示趋势曲线」）。
-        它们读的那几个 computed 一起删了（留下没人读的计算只会让下一个人以为卡片还在）。
-        空桶这件事没有因此变哑：图上它仍然是**断线**（`connectNulls: false`），
-        诊断行里也仍然有"返回点数"与"时间桶"两个数。
-      -->
-
       <section class="chart-panel card">
         <div class="section-header">
           <h3 class="section-title">{{ t('trendsUi.chartTitle') }}</h3>
-          <span class="muted chart-hint">
-            {{ deviceHint }} · {{ channelHint }} · {{ rangeText }}
-          </span>
           <!--
-            第 13 批第 6 条：数据导出与打印（打印对话框里可以"另存为 PDF"）。
-            两颗按钮放在这一张卡片里、靠右：它们作用于**这一屏查到的数据**与**这一屏的图**，
-            而这两样东西就是这张卡片。
+            「设备IP · 通道 · 时间」那一行**删掉了**（业主 2026-09-19 最新一条：
+            「把现在的趋势框中设备IP，通道，时间这个内容移除」）。
+            这三样东西现在分别在：设备下拉（顶栏那一格）、通道选择（筛选栏里贴着设备）、
+            时间范围预设（下面那一排 + 缩放的提示行）—— 同一个信息只在**能改它的那个控件**上说一次。
           -->
           <div class="btn-row chart-actions">
             <button
@@ -1321,6 +1315,50 @@ watch(
               @click="printCharts"
             >
               {{ t('trendsUi.print') }}
+            </button>
+          </div>
+        </div>
+
+        <!--
+          **时间范围预设 + 时间颗粒度**：业主 2026-09-19 最新一条要它们
+          「放在趋势曲线这个卡片中」—— 它们回答的是"这张图画的是哪一段、每一格多大"，
+          与图放在一起比放在筛选栏更贴（筛选栏回答的是"看哪台设备的哪些量"）。
+        -->
+        <div class="chart-range-bar">
+          <div class="chip-row">
+            <button
+              v-for="preset in TREND_RANGE_OPTIONS"
+              :key="preset.key"
+              type="button"
+              class="chip chip--selectable"
+              :class="{ 'chip--accent': trends.range === preset.key }"
+              :data-trend-range-preset="preset.key"
+              @click="trends.setRange(preset.key)"
+            >
+              {{ t(preset.labelKey) }}
+            </button>
+          </div>
+
+          <div class="chip-row granularity-row" data-trend-granularity>
+            <span class="field-label">{{ t('trendsUi.granularityLabel') }}</span>
+            <button
+              v-for="option in TREND_GRANULARITY_OPTIONS"
+              :key="option.key"
+              type="button"
+              class="chip chip--selectable"
+              :class="{
+                'chip--accent': trends.granularity === option.key,
+                'chip--auto-hint': autoBucketKey === option.key
+              }"
+              :data-trend-granularity-option="option.key"
+              :aria-pressed="trends.granularity === option.key"
+              :title="granularityHint(option)"
+              @click="granularitySelection = option.key"
+            >
+              {{ t(option.labelKey) }}
+              <template v-if="option.key === 'auto' && autoBucketText">
+                （{{ autoBucketText }}）
+              </template>
             </button>
           </div>
         </div>
@@ -1415,159 +1453,19 @@ watch(
           @datazoom="(window) => onChartZoom('fallback', window)"
         />
 
-        <dl v-if="trends.series" class="kv diagnostics">
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statPoints') }}</dt>
-            <dd class="kv__value">{{ trends.points.length }}</dd>
-          </div>
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statRows') }}</dt>
-            <dd class="kv__value">{{ trends.series.totalRows }}</dd>
-          </div>
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statBucket') }}</dt>
-            <dd class="kv__value">{{ formatBucketSeconds(trends.series.bucketSeconds) }}</dd>
-          </div>
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statFiles') }}</dt>
-            <dd class="kv__value">{{ trends.series.filesScanned }}</dd>
-          </div>
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statDuration') }}</dt>
-            <dd class="kv__value">{{ formatDuration(trends.series.durationMs) }}</dd>
-          </div>
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statRatio') }}</dt>
-            <dd class="kv__value">{{ reductionText }}</dd>
-          </div>
-          <!--
-            「发了几条查询」在叠加模式下是一个**必须显示**的数字：一次筛选变更会打出
-            `量 × 通道` 条 IPC（4 个量 × 16 通道 = 64 条）。看不见它的话，页面变慢时
-            没人知道原因在这里。
-          -->
-          <div class="kv__item">
-            <dt class="kv__label">{{ t('trendsUi.statQueries') }}</dt>
-            <dd class="kv__value">{{ trends.queriedCount }}</dd>
-          </div>
-        </dl>
-      </section>
-        </div>
-
         <!--
-          **右侧那一列：8 或 2 个通道**（业主 2026-09-19 第 13 批第 4 条）。
+          曲线下方那一行诊断（返回点数 / 原始行数 / 聚合桶大小 / 扫描文件 / 耗时 / 压缩比 /
+          本次查询条数）**删掉了**（业主 2026-09-19 最新一条：「曲线下方的返回点数，这些内容移除」）。
 
-          一行一路，四件事在一行里说清：
-            · 勾选框 —— 这一路的线画不画（**只有有数据的行能勾**，见 `channelCheckboxDisabled`）；
-            · 色点 —— 与图上那条线同一个颜色来源（`trendChannelColor`）；
-            · 名字 —— `CH1`、设备名（有就用）、通道配置状态（不是"已启用"时写明）；
-            · 重命名 —— 写设备（`/set_passageway` 的 `dchName`），失败时显示设备的原话。
-
-          「无数据灰显」用的是 `hasData`（这一段范围里没有任何非空时间桶），
-          **不是**通道配置状态：设备把这一路关掉、与这一路这些天没有读数，是两件事，
-          两者都不能用另一者的样子画出来。
+          这一行在第 26 轮是被**特意保留**的（当时业主只说删四张卡片），现在点名要删 ——
+          冲突按最新一条处理。没有因此变哑的两件事：
+            · 图被截断时那张 `truncated` 提示**留着**（它是报警，不是读数）；
+            · "这张图有多细"由上面的时间颗粒度那一排回答（「自动（5 分钟）」就是把桶宽写在按钮上）。
+          "点一下通道不重新查库"这件事从前是靠这一行里的「本次查询条数」量的，
+          现在改由**源码守卫**（`toggleChannel` 里没有 `query()`）与探针的
+          「点一下之后图上的点数/刻度不变」来保证 —— 见 `tests/trend-channels.test.ts`。
         -->
-        <aside class="card channel-panel" data-trend-channels>
-          <div class="section-header">
-            <h3 class="section-title">{{ t('trendsUi.channelPanelTitle') }}</h3>
-            <span class="muted chart-hint" data-channel-panel-summary>
-              {{ t('trendsUi.channelPanelSummary', { withData: channelsWithData, total: channelRows.length }) }}
-            </span>
-          </div>
-
-          <p v-if="renameNotice" class="alert alert--success" role="status">{{ renameNotice }}</p>
-
-          <ul class="channel-panel__list">
-            <li
-              v-for="row in channelRows"
-              :key="row.index"
-              class="channel-row"
-              :class="{
-                'channel-row--nodata': !row.hasData,
-                'channel-row--off': !row.visible
-              }"
-              :data-trend-channel-row="row.index"
-              :data-trend-channel-nodata="row.hasData ? undefined : 'true'"
-            >
-              <label class="channel-row__check">
-                <input
-                  type="checkbox"
-                  :checked="row.visible"
-                  :disabled="channelCheckboxDisabled(row)"
-                  :data-trend-channel-check="row.index"
-                  :aria-label="channelLabel(row.index)"
-                  :title="
-                    row.hasData
-                      ? row.visible
-                        ? t('trendsUi.channelHide')
-                        : t('trendsUi.channelShow')
-                      : t('trendsUi.channelNoData')
-                  "
-                  @change="toggleChannelRow(row)"
-                />
-                <span class="channel-row__dot" :style="{ background: row.color }" aria-hidden="true"></span>
-                <span class="channel-row__name">
-                  {{ channelLabel(row.index) }}
-                  <template v-if="row.name">（{{ row.name }}）</template>
-                </span>
-                <span class="muted channel-row__state" v-if="row.state !== 'enabled'">
-                  {{ t(channelStateLabelKey(row.state)) }}
-                </span>
-                <span class="channel-row__value">
-                  {{ row.value === null ? '—' : trendValueText(trends.metric, row.value) }}
-                </span>
-              </label>
-
-              <!--
-                改名：点一下把这一行变成输入框（`data-trend-channel-rename-input` 是探针钩子）。
-                Enter 提交、Esc 取消 —— 一个两行的表单不该要求操作员去找鼠标。
-              -->
-              <form v-if="renamingChannel === row.index" class="channel-row__rename" @submit.prevent="submitChannelRename">
-                <input
-                  v-model="renameText"
-                  class="input channel-row__rename-input"
-                  type="text"
-                  :maxlength="CHANNEL_NAME_MAX_LENGTH"
-                  :placeholder="t('trendsUi.channelRenamePlaceholder')"
-                  data-trend-channel-rename-input
-                  @keydown.esc="cancelChannelRename"
-                />
-                <button type="submit" class="btn btn--sm btn--primary" :disabled="renameBusy">
-                  {{ t('common.save') }}
-                </button>
-                <button type="button" class="btn btn--sm" @click="cancelChannelRename">
-                  {{ t('common.cancel') }}
-                </button>
-              </form>
-              <button
-                v-else
-                type="button"
-                class="btn btn--sm btn--ghost channel-row__rename-button"
-                :disabled="!channelRenameAvailable"
-                :title="channelRenameHint"
-                :data-trend-channel-rename="row.index"
-                @click="startChannelRename(row)"
-              >
-                {{ t('trendsUi.channelRename') }}
-              </button>
-
-              <p v-if="renamingChannel === row.index && renameProblem" class="alert alert--danger channel-row__error" role="alert">
-                {{ renameProblem }}
-              </p>
-            </li>
-          </ul>
-
-          <div class="btn-row channel-panel__actions">
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-channel-show-all
-              @click="trends.showAllChannels()"
-            >
-              {{ t('trendsUi.channelShowAll') }}
-            </button>
-          </div>
-        </aside>
-      </div>
+      </section>
     </template>
   </div>
 </template>
@@ -1608,11 +1506,90 @@ watch(
 }
 
 /*
- * 量与通道两排的关系（第 13 批第 4 条之后）。
+ * 通道选择与量那两排都在筛选栏里（第 30 轮：通道回到**设备右侧**，图占满宽度）。
  *
- * 「量」那一排还在筛选栏里（它是查询条件），**通道那一排搬到了图旁边**（见模板注释），
- * 所以这里只剩 `field--metrics`。旧规则 `.field--channels` / `.channel-chip*` 一并删掉：
- * 留着一条没人用的 CSS 会让下一个人以为那一排还在筛选栏里（§15.29.4 记过同一条教训）。
+ * 通道那一排可能很长（8 路 × 一个 chip + 一个改名按钮），所以它**允许换行**、并给它
+ * 一个由内容决定的最小宽度；量那一排照旧占满剩余宽度。
+ */
+.field--channels {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.field--channels .chip-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+/* 一条通道 = 一个 chip（勾选框 + 色点 + 名字 + 最后一个读数）+ 一个改名按钮。 */
+.channel-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/*
+ * 「无数据灰显」：整块降到次要色。**勾选框自己也有 `disabled`**（不是只靠颜色）——
+ * 只看颜色的话，键盘用户仍然能勾上一个没有数据的通道。
+ */
+.channel-chip-wrap--nodata {
+  opacity: 0.55;
+}
+
+.channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* 勾上的那一路：整块用强调色（与图上那条线在画）—— 没勾的就是普通 chip。 */
+.channel-chip--active {
+  border-color: var(--color-accent);
+}
+
+.channel-chip__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.channel-chip__name {
+  white-space: nowrap;
+}
+
+.channel-chip__value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.channel-chip__rename {
+  flex: none;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+/* 改名那一行：展开在通道那一排的下面（一次只改一路）。 */
+.channel-rename-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 100%;
+  margin-top: var(--space-2);
+}
+
+.channel-rename-form__input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+/*
+ * 量与通道两排的关系。
+ * 旧规则 `.channel-chip*` 那一套是第 10 批的写法（在筛选栏里），第 25 轮删过一次、
+ * 第 30 轮又按业主的要求把通道放回这里 —— 名字与结构都与第 10 批不同（那时只有"点一下
+ * 显示/隐藏"，现在带勾选框、读数与改名），所以是**新写的规则**，不是把旧的抄回来。
  */
 .field--metrics {
   min-width: 0;
@@ -1624,140 +1601,6 @@ watch(
   row-gap: 6px;
 }
 
-/*
- * 图（左，占满剩余宽度）+ 通道列（右，定宽）。
- *
- * 通道列给 240px 而不是百分比：它列的是"通道名 + 一个数 + 一个按钮"，
- * 宽度由内容决定；跟着窗口按比例变宽只会把图挤窄。
- * 窄到放不下时（< 2×这个宽度）落回一列，通道列落到图下面 —— 与 `.camera-board` 同一条做法。
- */
-.trends-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
-  gap: var(--space-4);
-  align-items: start;
-}
-
-.trends-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-width: 0;
-}
-
-/* 窄窗口：图在上、通道列在下（这时"右侧"这句话不再成立，但内容一条不少）。 */
-@media (max-width: 1100px) {
-  .trends-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.channel-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  position: sticky;
-  top: var(--space-4);
-}
-
-.channel-panel__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.channel-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 2px;
-  border-radius: var(--radius-sm);
-}
-
-.channel-row:hover {
-  background: var(--color-bg-subtle);
-}
-
-/*
- * 「无数据灰显」：整行降到次要色。**勾选框自己也有 `disabled`**（不是只靠颜色）——
- * 只看颜色的话，键盘用户仍然能勾上一个没有数据的通道。
- */
-.channel-row--nodata {
-  opacity: 0.55;
-}
-
-/* 被取消勾选的通道：名字划掉，但色点仍然有颜色（它还是图上那个颜色）。 */
-.channel-row--off .channel-row__name {
-  text-decoration: line-through;
-}
-
-.channel-row__check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.channel-row__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.channel-row__name {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.channel-row__state {
-  font-size: 11px;
-  flex: none;
-}
-
-.channel-row__value {
-  margin-left: auto;
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  flex: none;
-}
-
-.channel-row__rename {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  flex: 1;
-}
-
-.channel-row__rename-button {
-  flex: none;
-}
-
-/* 改名输入框在**这一行里**，不是整幅宽的表单：它改的就是这一行那一格。 */
-.channel-row__rename-input {
-  flex: 1 1 90px;
-  min-width: 0;
-  padding: 2px 6px;
-  font-size: 12px;
-}
-
-.channel-row__error {
-  flex: 1 1 100%;
-  margin: 4px 0 0;
-  font-size: 11.5px;
-}
-
-.channel-panel__actions {
-  justify-content: flex-end;
-}
 
 /*
  * 时间颗粒度那一排（第 13 批第 5 条）。
@@ -1805,16 +1648,17 @@ watch(
 /*
  * 打印（第 6 条）：只留图与那一行说明。
  *
- * 视图自己的这些东西（筛选栏、通道列、诊断行、按钮）在这里藏掉；应用外壳（侧边栏、顶栏）
+ * 视图自己的这些东西（筛选栏、按钮、缩放提示）在这里藏掉；应用外壳（侧边栏、顶栏）
  * 在 `main.css` 里统一藏 —— 打印出来的东西应当是"证据"，不是"界面截图"。
+ *
+ * `.channel-panel` / `.diagnostics` / `.range-bar` 三个选择器**随它们的目标一起删掉了**
+ * （第 30 轮：通道搬进筛选栏、诊断行删除、时间预设搬进图卡片）—— 留着一条指向不存在元素的
+ * 打印规则，会让下一个人以为那些东西还在。
  */
 @media print {
   .card:not(.chart-panel),
-  .channel-panel,
   .filter-bar,
-  .range-bar,
   .chart-actions,
-  .diagnostics,
   .zoom-bar {
     display: none !important;
   }
@@ -1823,6 +1667,17 @@ watch(
 /* 一个量一张图：图之间用空隙分开，不画分隔线（它们本来就是独立的两张图）。 */
 .metric-chart + .metric-chart {
   margin-top: var(--space-4);
+}
+
+/*
+ * 趋势曲线卡片里的「时间范围 + 时间颗粒度」那一排（第 30 轮从筛选栏搬进来）。
+ */
+.chart-range-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
 }
 
 .range-bar {

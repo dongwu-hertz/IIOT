@@ -590,7 +590,7 @@ export const tr: MessageSchema = {
     metricLimit: 'Aynı anda en çok {count} büyüklük',
     metricMultiHint: '{count} büyüklük seçildi: her biri için bir grafik, hepsinde görünür tüm kanallar',
     metricNoData: 'Bu aralıkta bu büyüklük için okuma yok (cihaz bu aralığı bildirmedi).',
-    statQueries: 'Gönderilen sorgu',
+    filterRangeLabel: 'Zaman aralığı',
     granularityLabel: 'Çözünürlük',
     zoomHint: '{total} noktanın {from}–{to} arası gösteriliyor: {range}',
     zoomReset: 'Yakınlaştırmayı sıfırla',
@@ -605,8 +605,6 @@ export const tr: MessageSchema = {
     filterFrom: 'Başlangıç',
     filterTo: 'Bitiş',
     incompleteRange: 'Hem başlangıç hem bitiş zamanını seçin',
-    deviceNotSelected: 'Cihaz seçilmedi',
-    notQueried: 'Henüz sorgulanmadı',
     chartTitle: 'Eğilim eğrisi',
     truncated: 'Sonuç nokta sınırına ulaştı, bu yüzden yalnızca ilk {count} kova gösteriliyor. Tam eğriyi görmek için zaman aralığını daraltın.',
     noDeviceSelectedTitle: 'Önce bir cihaz seçin',
@@ -620,12 +618,6 @@ export const tr: MessageSchema = {
     noDataNotice: 'Henüz veri sorgulanmadı',
     flushedNotice: '{rows} satır, {files} geçmiş dosyasına yazıldı',
     emptyBufferNotice: 'Arabellek boş; yazılacak veri yok',
-    statPoints: 'Dönen nokta',
-    statRows: 'Ham satır',
-    statBucket: 'Kova boyutu',
-    statFiles: 'Taranan dosya',
-    statDuration: 'Sorgu süresi',
-    statRatio: 'İndirgeme oranı (satır : nokta)'
   },
 
   aggregation: {

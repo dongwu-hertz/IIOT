@@ -266,8 +266,12 @@ describe('文案：新词四种语言齐全，旧的下拉框文案已删', () =
     'trendsUi.channelLines',
     'trendsUi.metricLimit',
     'trendsUi.metricMultiHint',
-    'trendsUi.metricNoData',
-    'trendsUi.statQueries'
+    'trendsUi.metricNoData'
+    /*
+     * `trendsUi.statQueries`（以及曲线下方那一整行诊断的其余七个键）**在第 30 轮删掉了**：
+     * 业主 2026-09-19 最新一条要求「曲线下方的返回点数，这些内容移除」。
+     * 死键不留在目录里，所以它也不在这张清单上。
+     */
   ]
 
   it('每一条在四本目录里都有译文，而且不是照抄中文', () => {

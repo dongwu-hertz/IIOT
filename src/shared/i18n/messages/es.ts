@@ -584,7 +584,7 @@ export const es: MessageSchema = {
     metricLimit: 'Como máximo {count} magnitudes a la vez',
     metricMultiHint: '{count} magnitudes seleccionadas: un gráfico para cada una, con todos los canales visibles',
     metricNoData: 'No hay lectura de esta magnitud en este intervalo (el equipo no la reportó).',
-    statQueries: 'Consultas enviadas',
+    filterRangeLabel: 'Intervalo de tiempo',
     granularityLabel: 'Granularidad',
     zoomHint: 'Mostrando los puntos {from}–{to} de {total}: {range}',
     zoomReset: 'Restablecer zoom',
@@ -599,8 +599,6 @@ export const es: MessageSchema = {
     filterFrom: 'Desde',
     filterTo: 'Hasta',
     incompleteRange: 'Seleccione una hora de inicio y una de fin',
-    deviceNotSelected: 'Ningún equipo seleccionado',
-    notQueried: 'Sin consultar todavía',
     chartTitle: 'Curva de tendencia',
     truncated: 'El resultado alcanzó el límite de puntos, por lo que solo se muestran los primeros {count} intervalos. Reduzca el rango de tiempo para ver la curva completa.',
     noDeviceSelectedTitle: 'Seleccione primero un equipo',
@@ -614,12 +612,6 @@ export const es: MessageSchema = {
     noDataNotice: 'Todavía no se han consultado datos',
     flushedNotice: 'Se escribieron {rows} filas en {files} archivos de historial',
     emptyBufferNotice: 'El búfer está vacío; no hay nada que escribir',
-    statPoints: 'Puntos devueltos',
-    statRows: 'Filas originales',
-    statBucket: 'Tamaño del intervalo',
-    statFiles: 'Archivos analizados',
-    statDuration: 'Tiempo de consulta',
-    statRatio: 'Relación de reducción (filas : puntos)'
   },
 
   aggregation: {

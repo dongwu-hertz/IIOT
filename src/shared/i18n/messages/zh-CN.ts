@@ -752,7 +752,7 @@ export const zhCN = {
     metricLimit: '最多同时显示 {count} 个量',
     metricMultiHint: '已选 {count} 个量：每个量一张图，每张图里是所有可见通道',
     metricNoData: '这个量在这段时间里没有读数（设备没有上报这一段）。',
-    statQueries: '本次查询条数',
+    filterRangeLabel: '时间范围',
     /*
      * `filterAggregation`（「聚合方式」）**删掉了**（第 13 批第 5 条：「删除聚合方式」）：
      * 那个下拉框没有了，桶里怎么算固定是平均，Y 轴名字里照旧写着「（平均）」。
@@ -777,8 +777,6 @@ export const zhCN = {
     filterFrom: '起始时间',
     filterTo: '结束时间',
     incompleteRange: '请选择完整的起始与结束时间',
-    deviceNotSelected: '未选择设备',
-    notQueried: '尚未查询',
     chartTitle: '趋势曲线',
     truncated: '结果已达到最大点数上限，仅显示前 {count} 个时间桶。请缩小时间范围以查看完整曲线。',
     noDeviceSelectedTitle: '请先选择设备',
@@ -792,12 +790,6 @@ export const zhCN = {
     noDataNotice: '尚未查询到数据',
     flushedNotice: '已写入 {rows} 行到 {files} 个历史文件',
     emptyBufferNotice: '缓冲区为空，没有需要写入的数据',
-    statPoints: '返回点数',
-    statRows: '原始行数',
-    statBucket: '聚合桶大小',
-    statFiles: '扫描文件',
-    statDuration: '查询耗时',
-    statRatio: '降采样比（行 : 点）'
   },
 
   aggregation: {

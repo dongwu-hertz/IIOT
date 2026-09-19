@@ -614,7 +614,7 @@ export const en: MessageSchema = {
     metricLimit: 'At most {count} metrics at once',
     metricMultiHint: '{count} metrics selected: one chart each, every chart showing all visible channels',
     metricNoData: 'No reading for this metric in this range (the device did not report it).',
-    statQueries: 'Queries sent',
+    filterRangeLabel: 'Time range',
     /* `filterAggregation` and the four bucket-card keys were removed with the
        selector and the cards (batch 13 item 5). */
     granularityLabel: 'Granularity',
@@ -631,8 +631,6 @@ export const en: MessageSchema = {
     filterFrom: 'From',
     filterTo: 'To',
     incompleteRange: 'Select both a start and an end time',
-    deviceNotSelected: 'No device selected',
-    notQueried: 'Not queried yet',
     chartTitle: 'Trend curve',
     truncated: 'The result hit the point limit, so only the first {count} buckets are shown. Narrow the time range to see the full curve.',
     noDeviceSelectedTitle: 'Select a device first',
@@ -646,12 +644,6 @@ export const en: MessageSchema = {
     noDataNotice: 'No data has been queried yet',
     flushedNotice: 'Wrote {rows} rows to {files} history files',
     emptyBufferNotice: 'The buffer is empty; nothing to write',
-    statPoints: 'Points returned',
-    statRows: 'Raw rows',
-    statBucket: 'Bucket size',
-    statFiles: 'Files scanned',
-    statDuration: 'Query time',
-    statRatio: 'Downsampling ratio (rows : points)'
   },
 
   aggregation: {

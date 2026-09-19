@@ -139,16 +139,16 @@ describe('通道名判定：三条"不该写设备"的边界', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. 右侧那一列：判据只有一个来源
+// 2. 通道选择：判据只有一个来源（第 30 轮起它在**设备右侧**，不再是图表右侧一列）
 // ---------------------------------------------------------------------------
 
-describe('右侧通道列', () => {
-  it('是一列 8 或 2 行的列表，行上带通道号的探针钩子', () => {
-    assert.match(viewTemplate, /data-trend-channels/, '没有那一列（data-trend-channels）')
+describe('通道选择（贴着设备那一排）', () => {
+  it('一行一条通道，行上带通道号的探针钩子', () => {
+    assert.match(viewTemplate, /data-trend-channels/, '没有通道选择那一块（data-trend-channels）')
     assert.match(
       viewTemplate,
-      /v-for="row in channelRows"[\s\S]{0,600}?:data-trend-channel-row="row\.index"/,
-      '行不是按 channelRows 逐个渲染的'
+      /v-for="row in channelRows"[\s\S]{0,700}?:data-trend-channel-row="row\.index"/,
+      '通道不是按 channelRows 逐个渲染的'
     )
     // 行数来自设备返回的通道表（8 或 2 都由它决定），不是写死的 8。
     assert.match(viewCode, /const channelRows = computed<TrendChannelRow\[\]>/)
@@ -165,7 +165,7 @@ describe('右侧通道列', () => {
     // 灰显读的是 hasData（不是通道配置状态 —— 那是另一件事）。
     assert.match(
       viewTemplate,
-      /'channel-row--nodata': !row\.hasData/,
+      /'channel-chip-wrap--nodata': !row\.hasData/,
       '灰显没有绑在 hasData 上'
     )
   })
@@ -194,20 +194,34 @@ describe('右侧通道列', () => {
     )
   })
 
-  it('面板排在图的**后面**（= 窗口里在右边）', () => {
-    const chart = viewCode.indexOf('data-metric-chart')
-    const panel = viewCode.indexOf('data-trend-channels')
-    assert.ok(chart > 0 && panel > 0, '找不到图或通道列')
-    assert.ok(chart < panel, '通道列没有排在图之后（网格里它在右边）')
-    // 两栏网格：左 1fr（图）、右定宽（通道列）。
-    assert.match(viewCode, /\.trends-body \{[\s\S]{0,200}?grid-template-columns:/)
+  it('通道选择排在**设备的右侧**、指标之前；趋势图占满宽度（业主最新一条）', () => {
+    /*
+     * 原话：「如果是声纹设备，通道的选择应该放在设备的右侧的位置，趋势图还是占右侧区域的 100%」。
+     *
+     * 第 25 轮那一版把通道放在**图的右侧一列**（第 13 批第 4 条的"右侧列出 8 或 2 个通道"），
+     * 于是图只能拿到剩下的宽度；现在通道回到筛选栏、贴在设备后面，图自己就是那张卡片的全宽。
+     */
+    const device = viewTemplate.indexOf('trendsUi.filterDevice')
+    const channels = viewTemplate.indexOf('data-trend-channels')
+    const metrics = viewTemplate.indexOf('data-metric-picker')
+    const chart = viewTemplate.indexOf('data-metric-chart')
+    assert.ok(device > 0 && channels > 0 && metrics > 0 && chart > 0, '找不到设备 / 通道 / 指标 / 图')
+    assert.ok(device < channels, '通道选择没有排在设备之后')
+    assert.ok(channels < metrics, '通道选择没有排在指标之前（"设备的右侧"）')
+    assert.ok(channels < chart, '通道选择跑到了图后面')
+    // 两栏网格（图 | 通道列）**整块删掉**：图占 100% 宽度。
+    assert.equal(/\.trends-body/.test(viewCode), false, '两栏网格还在（图就被挤窄了）')
+    assert.equal(/\.channel-panel/.test(viewCode), false, '旧的右侧通道列样式还在')
   })
 
-  it('旧的"筛选栏里那一排通道 chip"整块删掉了', () => {
-    assert.equal(viewCode.includes('channel-chip'), false, '通道 chip 的样式/标记还在')
+  it('旧的两栏结构（右侧一列）整块删掉了，通道现在是筛选栏里的一排 chip', () => {
+    assert.equal(viewCode.includes('channel-row__'), false, '旧的行样式还在')
     assert.equal(viewCode.includes('data-channel-legend'), false, '旧图例容器还在')
-    assert.equal(viewCode.includes('field--channels'), false, '筛选栏里那一格还在')
-    // 但"全部显示"这个动作留着（它现在在通道列底部）。
+    // 通道 chip 就在 `[data-trend-channels]` 那一块里（一行一条，带勾选、色点、读数、改名）。
+    assert.match(viewTemplate, /class="chip-row channel-chip-row"/)
+    assert.match(viewTemplate, /:data-trend-channel-check="row\.index"/)
+    assert.match(viewTemplate, /:data-trend-channel-rename="row\.index"/)
+    // 「全部显示」这个动作留着（它跟着通道那一排走）。
     assert.match(viewTemplate, /data-channel-show-all/)
   })
 })
