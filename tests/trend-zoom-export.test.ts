@@ -584,4 +584,43 @@ describe('缩放回声：程序写入之后的 dataZoom 事件不许再改状态
       '`resize()` 没有按取整后的像素判断（亚像素抖动会一直触发）'
     )
   })
+
+  /**
+   * **根治那一条**（2026-09-20）：只有**用户手势**引起的缩放才记状态。
+   *
+   * 前面几条判据都在猜"回声什么时候来"（时间窗、"与最后写进去的窗口相同"、爆发上限），
+   * 而 `probe-round41.log` 实测它们**都差一点点**：那条环恰好转在"2 秒 8 次"的门槛之下，
+   * 安全阀一次都没触发，卡死照旧。真正的判据是**来源**：`EChart.vue` 在图上用**捕获阶段**
+   * 监听 `wheel` / `pointerdown`，一次手势只让**一条** `dataZoom` 带上 `userDriven: true`。
+   */
+  it('userDriven 手势闸门：回声（非用户驱动）一律不记状态', () => {
+    const chart = stripComments(read('src/renderer/src/components/EChart.vue'))
+    assert.match(
+      chart,
+      /@wheel\.capture="noteGesture"/,
+      '容器上没有捕获阶段的 wheel 手势标记（冒泡阶段会晚于 ECharts 自己的处理）'
+    )
+    assert.match(chart, /@pointerdown\.capture="noteGesture"/, '容器上没有捕获阶段的按下手势标记')
+    assert.match(
+      chart,
+      /const userDriven = gesturePending[\s\S]{0,80}?gesturePending = false/,
+      '一次手势没有"只认领一条事件"（回声会被当成用户缩放）'
+    )
+    assert.match(chart, /userDriven\b[\s\S]{0,200}?emit\('datazoom'/, 'emit 里没有带上 userDriven')
+    /*
+     * 视图那一侧必须**先**看这个字段（放在最前面）：晚一步就又会走进"猜回声"的老路。
+     */
+    const view = stripComments(read('src/renderer/src/views/TrendsView.vue'))
+    const zoomFn = /function onChartZoom\([\s\S]*?\n}/.exec(view)
+    assert.ok(zoomFn, '找不到 onChartZoom()')
+    assert.match(
+      zoomFn[0],
+      /if \(window\.userDriven !== true\) return/,
+      'onChartZoom() 没有先判 userDriven —— 程序写入选项的回声又会驱动状态'
+    )
+    assert.ok(
+      zoomFn[0].indexOf('userDriven !== true') < zoomFn[0].indexOf('trendZoomShouldRecord('),
+      'userDriven 那道闸门必须排在"猜回声"的判据前面'
+    )
+  })
 })

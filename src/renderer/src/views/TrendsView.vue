@@ -838,20 +838,26 @@ const zoomHint = computed(() => {
 
 function onChartZoom(
   metric: string,
-  window: { start: number; end: number; startValue: number | null; endValue: number | null }
+  window: {
+    start: number
+    end: number
+    startValue: number | null
+    endValue: number | null
+    userDriven?: boolean
+  }
 ): void {
   /*
-   * **同一次缩放只记一次，而且我们自己写选项的回声一律丢掉。**
+   * ── 第一条判据：**只有用户手势引起的缩放才记**（2026-09-20 定位到的那条死循环的根治）──
    *
-   * 判据在 `trendZoomShouldRecord()` 里（纯函数，四语言之外的那一层单测钉着它），
-   * 三条按顺序：刚写过选项 → 丢掉；"整段" → 只有在缩放着时才记；同一段 → 丢掉。
-   *
-   * 为什么必须有"刚写过选项"这一条：ECharts 应用我们写进选项的窗口之后会**再发一次**
-   * `dataZoom`，而在时间轴 + `filterMode: 'filter'` 下它回出来的窗口与写进去的**不是同一段**
-   * （写 `1/99`、它按过滤后的轴回"整段"）—— 只看"百分比有没有变"是断不开这条环的。
-   * 真窗口里那条环的表现是：**一个核心占满、定时器被饿死、页面照旧出帧、`executeJavaScript`
-   * 不再 settle**（探针看到的就是"渲染进程不响应"，第 28–33 轮都栽在这上面）。
+   * 我们写进选项的窗口，ECharts 应用之后会**再发一次** `dataZoom`（形状与用户缩放一模一样），
+   * 于是"事件 → 改状态 → 重算选项 → `setOption` → 事件"会一直转：一个核心被占满、
+   * 页面里的定时器被饿死、`executeJavaScript` 再也不 settle（探针里就是"渲染进程不响应"）。
+   * 前两条判据（"刚写过选项"的时间窗、"与最后写进去的窗口相同"）都是**猜回声什么时候来**，
+   * 30x 的实测里总差一点点（`probe-round41.log`：安全阀一次没触发，因为它恰好转在
+   * 2 秒 8 次的门槛之下）。真正的判据是**来源**：`EChart.vue` 在图上捕获滚轮/按下，
+   * 一次手势只让**一条**事件带上 `userDriven` —— 回声永远不可能是用户驱动的。
    */
+  if (window.userDriven !== true) return
   const msSinceWrite = Date.now() - zoomWrittenAt
   if (!trendZoomShouldRecord(zoomWindow.value, window, msSinceWrite, zoomWriteTarget)) return
   /*

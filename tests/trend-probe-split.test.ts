@@ -43,16 +43,17 @@ const driver = read('scripts/demo-shot-driver.cjs')
  * `coverage`（跳到有数据的范围）排在它前面：它是唯一能拿到"有图那一屏"的一支，
  * 而它落到的状态与 `range` 是同一个（`range='custom'` + 两个边界都有值）。
  */
-const STEP_NAMES = ['measure', 'toggle', 'metrics', 'granularity', 'coverage', 'range'] as const
+const STEP_NAMES = ['measure', 'toggle', 'metrics', 'granularity', 'preset', 'coverage', 'range'] as const
 
 type StepName = (typeof STEP_NAMES)[number]
 
-/** 支名 → driver 里的变量名（`coverage` 那一支叫 `trendCoverageRange`，不是机械拼接出来的）。 */
+/** 支名 → driver 里的变量名（不都是机械拼接出来的）。 */
 const STEP_VARS: Record<StepName, string> = {
   measure: 'trendMeasure',
   toggle: 'trendToggle',
   metrics: 'trendMetrics',
   granularity: 'trendGranularity',
+  preset: 'trendPresetRange',
   coverage: 'trendCoverageRange',
   range: 'trendRange'
 }
@@ -98,12 +99,15 @@ async function probeScripts(): Promise<ProbeScript[]> {
     'layout',
     'log',
     'problems',
+    // 卡死诊断那一套（第 33/34 轮加的）：段落里会引用它，所以也当参数传进去（这里是 null）。
+    'driverDebugger',
     'return (async () => {\n' +
       body +
       '\nreturn { measure: trendMeasure, toggle: trendToggle, metrics: trendMetrics,' +
-      ' granularity: trendGranularity, coverage: trendCoverageRange, range: trendRange };\n})()'
+      ' granularity: trendGranularity, preset: trendPresetRange, coverage: trendCoverageRange,' +
+      ' range: trendRange };\n})()'
   )
-  const steps = await factory(layoutStub, () => undefined, [])
+  const steps = await factory(layoutStub, () => undefined, [], null)
   for (const name of STEP_NAMES) {
     assert.ok(steps[name], '第 ' + name + ' 支不存在了（变量名被改过或那一支被删了）')
   }

@@ -51,6 +51,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let deliberateRendererCrash = false
 
 /**
+ * V8 调试器的三个动作（`Debugger.pause` / `resume`、`Profiler.start` / `stop`）。
+ *
+ * 挂在模块级是因为：注册在应用启动那一段（`main()`），而用它的是 `run()` 里的恢复块。
+ * 没挂上时是 `null`，调用方要判空。
+ */
+let driverDebugger = null
+
+/**
  * 假的听诊盒子（E2 / 2023 版）——**只在这台探针进程里**，用来把「拉」通道走完整条路。
  *
  * 为什么要有它（业主 2026-09-16 第①项：「端到端可用」）：
@@ -656,7 +664,26 @@ app.on('browser-window-created', (_event, win) => {
    */
   try {
     win.webContents.debugger.attach('1.3')
+    /*
+     * `scriptId → url`：`Debugger.paused` 的帧里 `frame.url` **经常是空的**（第 33 轮就是，
+     * 于是只知道"是哪个渲染函数"、不知道"是哪个 chunk/组件"）。把 `Debugger.scriptParsed`
+     * 收下来就能把行号对回具体文件。
+     */
+    const scriptUrls = new Map()
+    const shortUrl = (url) => {
+      const text = String(url || '')
+      if (!text) return '(inline)'
+      return text.split('/').pop().split('?')[0]
+    }
+    const frameWhere = (frame) => {
+      const url = frame.url || scriptUrls.get(frame.location && frame.location.scriptId) || ''
+      return shortUrl(url) + ':' + frame.location.lineNumber
+    }
     win.webContents.debugger.on('message', (_event, method, params) => {
+      if (method === 'Debugger.scriptParsed') {
+        if (params && params.scriptId !== undefined) scriptUrls.set(params.scriptId, params.url)
+        return
+      }
       if (method !== 'Debugger.paused') return
       const frames = Array.isArray(params && params.callFrames) ? params.callFrames : []
       log(
@@ -664,8 +691,7 @@ app.on('browser-window-created', (_event, win) => {
           JSON.stringify(
             frames.slice(0, 22).map((frame) => ({
               fn: frame.functionName || '(anonymous)',
-              // 我们自己的源码才留文件名（打包后的 chunk 名字能直接对上 `TrendsView` / `EChart`）。
-              where: String(frame.url || '').split('/').pop().split('?')[0] + ':' + frame.location.lineNumber
+              where: frameWhere(frame)
             }))
           )
       )
@@ -673,6 +699,64 @@ app.on('browser-window-created', (_event, win) => {
       win.webContents.debugger.sendCommand('Debugger.resume').catch(() => {})
     })
     win.webContents.debugger.sendCommand('Debugger.enable').catch(() => {})
+    win.webContents.debugger.sendCommand('Profiler.enable').catch(() => {})
+
+    /**
+     * 采一份 CPU profile，把**自耗时最高**的函数（以及它的调用链）打出来。
+     *
+     * 为什么需要它：调用栈只告诉我们"卡住时在渲染/patch 里"，**看不出是谁在 flush 期间写状态**
+     * （那才是环的驱动端）。CPU profile 的自耗时排行会把"转得最多"的那几个函数直接列出来，
+     * 配合 `scriptId → url` 就能对上文件与行号。
+     */
+    const profileTop = (profile) => {
+      const nodes = new Map()
+      for (const node of profile.nodes || []) nodes.set(node.id, node)
+      const parent = new Map()
+      for (const node of profile.nodes || []) {
+        for (const child of node.children || []) parent.set(child, node.id)
+      }
+      const self = new Map()
+      const samples = profile.samples || []
+      const deltas = profile.timeDeltas || []
+      for (let i = 0; i < samples.length; i += 1) {
+        const delta = typeof deltas[i] === 'number' && deltas[i] > 0 ? deltas[i] : 1000
+        self.set(samples[i], (self.get(samples[i]) || 0) + delta)
+      }
+      const ranked = [...self.entries()]
+        .map(([id, micros]) => ({ node: nodes.get(id), micros }))
+        .filter((entry) => entry.node)
+        .sort((left, right) => right.micros - left.micros)
+        .slice(0, 10)
+      return ranked.map((entry) => {
+        const chain = []
+        let cursor = entry.node.id
+        for (let depth = 0; depth < 6 && cursor !== undefined; depth += 1) {
+          const node = nodes.get(cursor)
+          if (!node) break
+          chain.push(
+            (node.callFrame.functionName || '(anonymous)') + '@' + frameWhere(node.callFrame)
+          )
+          cursor = parent.get(cursor)
+        }
+        return {
+          selfMs: Math.round(entry.micros / 1000),
+          totalMs: Math.round(
+            (profile.samples || []).filter((id) => id === entry.node.id).length *
+              ((profile.endTime - profile.startTime) / Math.max(1, (profile.samples || []).length))
+          ),
+          chain
+        }
+      })
+    }
+    driverDebugger = {
+      pause: () => win.webContents.debugger.sendCommand('Debugger.pause'),
+      resume: () => win.webContents.debugger.sendCommand('Debugger.resume'),
+      startProfile: () => win.webContents.debugger.sendCommand('Profiler.start'),
+      stopProfile: async () => {
+        const result = await win.webContents.debugger.sendCommand('Profiler.stop')
+        return result && result.profile ? profileTop(result.profile) : []
+      }
+    }
   } catch (error) {
     log('DEBUGGER attach failed: ' + error.message)
   }
@@ -4883,7 +4967,68 @@ async function run() {
     // 60 秒：这一支只发两次查询（点 1 分钟档、点回自动），比原来那一整段（30+ 条查询）轻得多。
     '})()', 60_000)
   /*
-   * 第 5 支：跳到"有数据的那个范围"（`[data-trend-use-coverage]`），再看一遍有图的那一屏。
+   * 在**最容易卡死的那一支**之前打开 CPU profiler（第 34 轮）。
+   *
+   * 为什么放在这里：第 33 轮把卡死定位到"渲染 + patch 的循环"，但调用栈只说明"卡住时在渲染"，
+   * **看不出是谁在 flush 期间写状态**（环的驱动端）。CPU profile 的自耗时排行会把它列出来，
+   * 配合 `scriptId → url` 就能对回文件与行号。前面的四支不会卡（毫秒级返回），
+   * 所以 profiler 开着也不会把它们的读数搅混。
+   */
+  if (driverDebugger) {
+    await driverDebugger
+      .startProfile()
+      .catch((error) => log('Profiler.start failed: ' + error.message))
+  }
+  /*
+   * 第 5 支：**用预设**进入"有数据那一屏"（第 34 轮加的，用来把两件事分开）。
+   *
+   * 这一支问的是一个很具体的问题：卡死到底需要**"自定义范围"那块界面**，还是只要
+   * **"图真的画出来"**就够了？
+   *   · 点一档预设（`7d` 覆盖住库里那几天）→ 图会画出来，但**没有** `range='custom'`、
+   *     也没有那两个 `datetime-local` 输入框；
+   *   · 如果它**不卡**，那卡死就与"自定义范围那块界面"绑在一起（下一次只改那一块）；
+   *   · 如果它**也卡**，那卡死只需要"图 + 数据"，与自定义范围无关。
+   * 顺带它还是唯一能真正量到 C⑤ 那两条（声压级 Y 轴 0–100、"多条通道画在同一根轴上"）的机会
+   * —— 第 28–33 轮一直是"这个 profile 里一张图都没渲染"。
+   */
+  const trendPresetRange = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    'await waitFor(() => document.querySelector(\'[data-trend-range-preset="7d"]\') !== null, 15000);' +
+    'const activeNow = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    'out.presetBefore = activeNow ? activeNow.getAttribute("data-trend-range-preset") : null;' +
+    'const week = document.querySelector(\'[data-trend-range-preset="7d"]\');' +
+    'mark("preset:click");' +
+    'if (week) week.click();' +
+    'await waitFor(() => document.querySelectorAll("[data-metric-chart]").length > 0, 20000);' +
+    'await wait(1500);' +
+    'mark("preset:charts");' +
+    'out.rangeAfterPreset = (function(){' +
+    '  const chip = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    '  return chip ? chip.getAttribute("data-trend-range-preset") : null;' +
+    '})();' +
+    'out.chartCount = document.querySelectorAll("[data-metric-chart]").length;' +
+    'out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
+    '  .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
+    'out.chartHints = [...document.querySelectorAll("[data-metric-chart] .chart-hint")]' +
+    '  .map((el) => text(el));' +
+    'out.chartCanvas = [...document.querySelectorAll("[data-metric-chart] canvas")]' +
+    '  .map((el) => Math.round(el.getBoundingClientRect().width) + "x" +' +
+    '    Math.round(el.getBoundingClientRect().height));' +
+    'out.metricEmpty = [...document.querySelectorAll("[data-metric-empty]")]' +
+    '  .map((el) => el.getAttribute("data-metric-empty"));' +
+    'out.panelSummary = text(document.querySelector("[data-channel-panel-summary]"));' +
+    'out.summaryWithData = out.panelSummary;' +
+    'out.dataRowsWithData = document.querySelectorAll(' +
+    '  "[data-trend-channel-row]:not([data-trend-channel-nodata])").length;' +
+    'out.pressedWithData = checkStates();' +
+    /* 真的还活着吗：连等 3 秒并逐个打点（卡死时这些 mark 一个都不会到）。 */
+    'for (let i = 1; i <= 3; i += 1) { await wait(1000); mark("preset:alive-" + i); }' +
+    'mark("done");' +
+    'return finish();' +
+    // 90 秒：一发查询 + 等 ECharts 画第一帧 + 3 秒存活观察。
+    '})()', 90_000)
+  /*
+   * 第 6 支：跳到"有数据的那个范围"（`[data-trend-use-coverage]`），再看一遍有图的那一屏。
    *
    * 为什么要有这一支（第 33 轮）：
    *   1. 它是**业主真的会点**的按钮 —— 空态里写着"库里有数据的范围是 X ~ Y，点这里跳过去"；
@@ -4899,8 +5044,7 @@ async function run() {
    * 所以第 1 支那份仍然原样保留在日志里（`layout /trends : {...}`）。
    */
   const trendCoverageRange = await layout('/trends', '(async () => {' +
-    TREND_PROBE_HEAD +
-    'await waitFor(() => document.querySelector("[data-trend-use-coverage]") !== null, 20000);' +
+    TREND_PROBE_HEAD +    'await waitFor(() => document.querySelector("[data-trend-use-coverage]") !== null, 20000);' +
     'const button = document.querySelector("[data-trend-use-coverage]");' +
     'out.coverageButton = !!button;' +
     'if (button) {' +
@@ -5031,6 +5175,7 @@ async function run() {
     ['toggle', trendToggle],
     ['metrics', trendMetrics],
     ['granularity', trendGranularity],
+    ['preset', trendPresetRange],
     ['coverage', trendCoverageRange],
     ['range', trendRange]
   ]
@@ -5080,7 +5225,28 @@ async function run() {
     return answer !== false
   }
   if (await pingPage(5_000)) {
-    log('trend channels: 渲染进程不响应了 —— 先取一次 JS 调用栈（V8 中断），再重载窗口')
+    log('trend channels: 渲染进程不响应了 —— 先取 CPU profile 与 JS 调用栈')
+    /*
+     * **先停 profiler**：`Profiler.stop` 需要渲染进程应答，所以套上限；拿不到就如实说。
+     * 拿到的话，自耗时排行就是"谁在转"的答案（含调用链，能看出是谁在写状态）。
+     */
+    if (driverDebugger) {
+      try {
+        const top = await Promise.race([
+          driverDebugger.stopProfile(),
+          sleep(8_000).then(() => null)
+        ])
+        if (top === null) log('CPU profile: Profiler.stop 超时（渲染进程不应答）')
+        else if (top.length === 0) log('CPU profile: 没有采到样本')
+        else {
+          for (const entry of top) {
+            log('CPU profile: self=' + entry.selfMs + 'ms ← ' + entry.chain.join(' ← '))
+          }
+        }
+      } catch (error) {
+        log('CPU profile: 失败 ' + error.message)
+      }
+    }
     /*
      * **先取栈**：`Debugger.pause` 是 V8 的中断，卡住的循环里也能把调用栈取出来。
      * 这一条比"CPU/内存画像"更直接 —— 它会告诉我们到底是哪几帧在转

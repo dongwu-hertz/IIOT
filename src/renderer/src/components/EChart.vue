@@ -61,7 +61,18 @@ const emit = defineEmits<{
    */
   (
     event: 'datazoom',
-    window: { start: number; end: number; startValue: number | null; endValue: number | null }
+    window: {
+      start: number
+      end: number
+      startValue: number | null
+      endValue: number | null
+      /**
+       * 这一条事件是不是**用户手势**引起的（滚轮/按下）。见 `noteGesture()` 与 emit 处的注释：
+       * 父组件只认 `true`，因为程序写入选项之后 ECharts 也会回一条形状一样的事件，
+       * 而那条回声正是"改状态 → 重算选项 → setOption → 再回声"这条死循环的燃料。
+       */
+      userDriven: boolean
+    }
   ): void
 }>()
 
@@ -82,6 +93,14 @@ let lastSize = { width: -1, height: -1 }
  *
  * 判据取整到像素：亚像素抖动不触发 resize（那种抖动不会让图变得更好看，只会多画一帧）。
  */
+/** 最近一次**用户手势**（滚轮 / 按下）有没有还没被某条 `dataZoom` 认领。见下面的 emit。 */
+let gesturePending = false
+
+/** 用户在图上做了动作（`@wheel.capture` / `@pointerdown.capture` 调用）。 */
+function noteGesture(): void {
+  gesturePending = true
+}
+
 function resize(): void {
   const element = container.value
   if (!chart || !element) return
@@ -122,11 +141,25 @@ onMounted(() => {
     if (!first) return
     const asNumber = (value: unknown): number | null =>
       typeof value === 'number' && Number.isFinite(value) ? value : null
+    /*
+     * **一次用户手势只认一条 `dataZoom`。**（2026-09-20 定位到的那条死循环的根治）
+     *
+     * 我们没法从 ECharts 的载荷里分辨"用户缩放"与"程序写入选项之后的回声"（两者形状一样），
+     * 但**回声永远跟在用户的动作之后**：`wheel` / `pointerdown` 是在渲染进程里能拿到的事实。
+     * 于是：手势发生 → 置位；下一条 `dataZoom` 认领并**清掉**置位 —— 之后所有回声（不管几条、
+     * 隔多久）都不再是"用户驱动"，父组件因此不会把窗口再写回选项，环就断了。
+     *
+     * 为什么要在**捕获阶段**监听：ECharts 的滚轮处理挂在它自己的画布上，冒泡阶段我们这句
+     * 会晚于它；晚一步就会出现"真的滚了一下，置位还没来，于是这次缩放被丢掉"。
+     */
+    const userDriven = gesturePending
+    gesturePending = false
     emit('datazoom', {
       start: Number(first.start ?? 0),
       end: Number(first.end ?? 100),
       startValue: asNumber(first.startValue),
-      endValue: asNumber(first.endValue)
+      endValue: asNumber(first.endValue),
+      userDriven
     })
   })
   window.addEventListener('resize', resize)
@@ -156,7 +189,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="chart" :style="{ height }">
-    <div ref="container" class="chart__canvas"></div>
+    <div
+      ref="container"
+      class="chart__canvas"
+      @wheel.capture="noteGesture"
+      @pointerdown.capture="noteGesture"
+    ></div>
     <div v-if="placeholder" class="chart__placeholder">{{ placeholder }}</div>
   </div>
 </template>
