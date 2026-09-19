@@ -303,7 +303,6 @@ describe('四语言词条', () => {
     'trendsUi.channelPanelTitle',
     'trendsUi.channelPanelSummary',
     'trendsUi.channelNoData',
-    'trendsUi.channelRename',
     'trendsUi.channelRenameHint',
     'trendsUi.channelRenameOffline',
     'trendsUi.channelRenamePlaceholder',
@@ -311,7 +310,7 @@ describe('四语言词条', () => {
     'trendsUi.channelRenamed'
   ]
 
-  it('九条新词在四本目录里都有译文，且不是照抄中文', () => {
+  it('八条新词在四本目录里都有译文，且不是照抄中文', () => {
     for (const key of REQUIRED) {
       for (const locale of Object.keys(CATALOGUES)) {
         const message = messageAt(locale, key)
@@ -346,5 +345,51 @@ describe('四语言词条', () => {
         `${locale} 里还留着 trendsUi.filterChannel`
       )
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. 筛选栏的版面：通道那一排必须**留在设备右边**（第 32 轮的真窗口读数）
+// ---------------------------------------------------------------------------
+
+/**
+ * 第 32 轮，趋势页那一段探针终于跑到了几何断言（第 28–31 轮都停在超时上），量到的是：
+ *
+ * ```
+ * panelTop=168  deviceTop=120   ← 通道那一排**换到了下一行**
+ * panelLeft=273 panelRight=1399 barWidth=1127   ← 它占满整行，而不是"设备的右侧"
+ * deviceRight=537（下拉 265px，不是 200px）
+ * ```
+ *
+ * 两处成因，各自都不报错、只在真窗口里看得出来，所以钉在源码这一层：
+ *   1. 设备那个 `<label>` 丢了 `field--wide` → 下拉按最宽的选项自己撑到 265px；
+ *   2. `.field--channels` 的 `flex: 0 1 auto` → **base size 是内容宽度**（8 路实测 1126px），
+ *      而 `flex-wrap` 判断"换不换行"看的正是 base：它永远放不进设备右边那一段，
+ *      于是只能另起一行。业主那条「通道的选择应该放在设备的右侧」从来没成立过。
+ */
+describe('筛选栏：设备与通道同一行（第 32 轮的真窗口读数）', () => {
+  it('设备下拉带 `field--wide`（宽度钉在 200px，不吃通道那一排的空间）', () => {
+    assert.match(
+      viewTemplate,
+      /<label class="field field--wide">\s*\n\s*<span class="field-label">\{\{ t\('trendsUi\.filterDevice'\) \}\}<\/span>/,
+      '设备那个 label 又丢了 `field--wide` —— 下拉会按最宽的选项撑到 ~265px'
+    )
+    assert.match(
+      viewCode,
+      /\.field--wide \.select \{[\s\S]*?max-width: 200px/,
+      '`.field--wide .select` 不再把宽度钉在 200px'
+    )
+  })
+
+  it('通道那一排的 flex base 压到 320px（大 base 一定会换行）', () => {
+    const block = /\.field--channels \{[\s\S]*?\}/.exec(viewCode)
+    assert.ok(block, '找不到 `.field--channels` 的样式块')
+    assert.match(block[0], /flex:\s*1 1 320px/, '`.field--channels` 的 flex 不是 `1 1 320px`')
+    assert.equal(
+      /flex:\s*0 1 auto/.test(block[0]),
+      false,
+      '`.field--channels` 又回到 `flex: 0 1 auto`：base = 内容宽度（8 路 1126px），' +
+        '于是它必然换到下一行，通道就不在设备的右侧了'
+    )
   })
 })

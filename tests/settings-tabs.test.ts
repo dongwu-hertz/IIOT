@@ -95,6 +95,31 @@ describe('③ 设置页的页签', () => {
     )
   })
 
+  /**
+   * 第 32 轮补的一条：**探针里那份页签期望也必须跟着改**。
+   *
+   * 为什么值得单独钉：这一轮第一次跑完整支 GUI 探针时，问题清单里立刻出现
+   * 「设置页的页签不是 8 个：7」—— 界面是对的（第 13 批第 1 条删掉了那个页签），
+   * 是**探针里那份清单没跟着改**，而它前面 4 轮都因为趋势页超时、从来没跑到打印汇总那一步，
+   * 所以谁都没看见。一条断言换掉一次这样的来回。
+   */
+  it('GUI 探针里那份页签期望与本文件一致（7 个，且不许再出现 iot）', () => {
+    const driver = read('scripts/demo-shot-driver.cjs')
+    assert.ok(
+      driver.includes(`settingsTabs.tabs !== ${TABS.length}`),
+      `探针里的页签数期望不是 ${TABS.length}`
+    )
+    assert.equal(
+      /settingsTabs\.tabs !== 8/.test(driver),
+      false,
+      '探针里又写回了 8 个页签'
+    )
+    assert.ok(
+      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'account', 'about']`),
+      '探针里那份页签 id 清单与这里不一致'
+    )
+  })
+
   it('每一页都被 activeTab 门住（否则七个页签的内容会同时显示）', () => {
     const panelStart = settings.indexOf('class="settings-tabs"')
     const template = settings.slice(panelStart)

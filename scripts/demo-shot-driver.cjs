@@ -42,6 +42,15 @@ const log = (m) => { process.stdout.write('[demo] ' + m + '\n') }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * 探针**自己**杀掉渲染进程时置位（趋势页卡死之后的恢复，见 `forcefullyCrashRenderer()`）。
+ *
+ * 为什么是个模块级的开关：`render-process-gone` 的监听器在应用启动那一段注册，恢复动作在
+ * `run()` 里执行 —— 两处不在同一个函数里。没有这个开关，问题清单里就会多出一条
+ * `render-process-gone: {"reason":"crashed"}`，读起来像"应用崩了"，其实是我们在救人。
+ */
+let deliberateRendererCrash = false
+
+/**
  * 假的听诊盒子（E2 / 2023 版）——**只在这台探针进程里**，用来把「拉」通道走完整条路。
  *
  * 为什么要有它（业主 2026-09-16 第①项：「端到端可用」）：
@@ -582,6 +591,19 @@ app.on('browser-window-created', (_event, win) => {
   } catch {
     // 老版本没有这个方法：那时只能靠 window.focus()，不影响后面的断言。
   }
+  /**
+   * 页面自己的**步骤痕迹**：页面里 `console.log('[trend-probe] ...')` 的内容抄进 driver 日志。
+   *
+   * 为什么需要（第 32 轮）：趋势页点「自定义」范围会把渲染进程的 JS 线程卡死，那一支探针
+   * **永远不返回** —— 于是 `out.timings` 与 `document.body.dataset.probeStep`（两个都在页面里）
+   * 一个都读不到，只能知道"这一支超时了"，不知道停在哪一步。
+   * console 消息不一样：它在**产生的那一刻**就送到主进程（主进程当时是活的），
+   * 所以卡死之前走过的每一步都留在日志里。
+   */
+  const logProbeTrace = (message) => {
+    const text = typeof message === 'string' ? message : String(message ?? '')
+    if (text.startsWith('[trend-probe]')) log('probe trace : ' + text)
+  }
   win.webContents.on('console-message', (...a) => {
     /*
      * 两种签名都要认，而且**两边的 level 都可能是字符串或数字**。
@@ -598,15 +620,28 @@ app.on('browser-window-created', (_event, win) => {
     }
     const d = a[0]
     if (d && typeof d === 'object' && 'level' in d) {
+      logProbeTrace(d.message)
       if (isBad(d.level)) {
         problems.push('console[' + String(d.level) + '] ' + d.message + ' (' + d.sourceId + ':' + d.lineNumber + ')')
       }
       return
     }
+    logProbeTrace(a[1])
     if (isBad(a[0])) problems.push('console[' + String(a[0]) + '] ' + a[1] + ' (' + a[3] + ':' + a[2] + ')')
   })
   win.webContents.on('preload-error', (_e, p, err) => problems.push('preload-error ' + p + ': ' + err.message))
-  win.webContents.on('render-process-gone', (_e, details) => problems.push('render-process-gone: ' + JSON.stringify(details)))
+  win.webContents.on('render-process-gone', (_e, details) => {
+    /*
+     * 我们自己**故意**杀掉渲染进程时（趋势页卡死之后的恢复，见下面 `forcefullyCrashRenderer()`），
+     * 这条事件照样会来 —— 那是探针的动作，不是缺陷。不加这个开关的话，问题清单里会出现一条
+     * `render-process-gone: {"reason":"crashed"}`，读起来像"应用崩了"，而实际上是我们在救人。
+     */
+    if (deliberateRendererCrash) {
+      log('render-process-gone: 探针自己杀的渲染进程（恢复用）→ ' + JSON.stringify(details))
+      return
+    }
+    problems.push('render-process-gone: ' + JSON.stringify(details))
+  })
   win.webContents.on('did-fail-load', (_e, code, desc, url) => problems.push('did-fail-load ' + code + ' ' + desc + ' ' + url))
 })
 
@@ -2002,17 +2037,33 @@ async function run() {
    * 判据刻意选"根节点出现了"而不是"文字出现了"：一句加载中的文字也会让 `textContent`
    * 非空，那等于什么都没等。等待有上限（`LAYOUT_SETTLE_MAX_MS`），到点就照常往下走 ——
    * 于是"页面根本没渲染"仍然会被那条内容断言抓住，而不是把整次运行挂在这里。
+   *
+   * ⚠ 2026-09-20（第 32 轮）补的那一层：**这一句 `executeJavaScript` 自己也要有上限**。
+   * 第 32 轮把趋势页拆成五支之后定位到：点「自定义」时间范围会让**渲染进程的 JS 线程**
+   * 彻底不响应（主进程还在打健康检查日志），于是 `executeJavaScript` 的 Promise
+   * **永远不 settle** —— 上面那个 `Date.now() >= deadline` 根本轮不到执行，
+   * 整支探针连"超时"都报不出来，就这么停在那里（第 32 轮那次跑就是这样停住的）。
+   * 套上 5 秒的上限之后，"渲染进程不响应"会变成一次**有界的**失败：
+   * 循环照常走到 deadline、返回 false、`layout()` 推一条问题，后面的页继续跑。
    */
   const LAYOUT_SETTLE_MAX_MS = 20_000
   const LAYOUT_SETTLE_STEP_MS = 250
+  /** 单次"问一下页面"的上限：超过了就认为渲染进程这一轮不响应。 */
+  const LAYOUT_PING_TIMEOUT_MS = 5_000
 
   const waitForPageRoot = async () => {
     const deadline = Date.now() + LAYOUT_SETTLE_MAX_MS
     for (;;) {
-      const present = await win.webContents.executeJavaScript(
-        '!!document.querySelector(".app-content .page, .app-content .login, .app-content [data-route-root]")'
-      )
+      const present = await Promise.race([
+        win.webContents.executeJavaScript(
+          '!!document.querySelector(".app-content .page, .app-content .login, .app-content [data-route-root]")'
+        ),
+        sleep(LAYOUT_PING_TIMEOUT_MS).then(() => 'unresponsive')
+      ])
       if (present === true) return true
+      if (present === 'unresponsive') {
+        log('layout ping : 渲染进程 ' + LAYOUT_PING_TIMEOUT_MS + 'ms 没有应答')
+      }
       if (Date.now() >= deadline) return false
       await sleep(LAYOUT_SETTLE_STEP_MS)
     }
@@ -3073,19 +3124,31 @@ async function run() {
     '})()')
   log('settings tabs: ' + JSON.stringify(settingsTabs))
 
-  if (settingsTabs.tabs !== 8) {
-    problems.push('设置页的页签不是 8 个：' + settingsTabs.tabs)
+  /*
+   * 7 个页签：`iot`（设备接入）那一个**撤掉了** —— 业主第 13 批 A①要求「数据接入」
+   * 搬进「设备管理 → 添加设备」，于是「本机接入（监听设置与收数）」现在在
+   * `AddDeviceDialog.vue` 里，不再是设置页的一个页签（四语言的 `settingsUi.tabIot` 也删了）。
+   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 7 个）。
+   */
+  if (settingsTabs.tabs !== 7) {
+    problems.push('设置页的页签不是 7 个：' + settingsTabs.tabs)
   } else {
-    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'iot', 'account', 'about']
+    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'account', 'about']
     if (JSON.stringify(settingsTabs.ids) !== JSON.stringify(expectedIds)) {
       problems.push('设置页页签的顺序/名字不对：' + JSON.stringify(settingsTabs.ids))
+    }
+    /*
+     * 反向断言：`iot` 页签**不许**再出现（搬走之后又长回来，是这一条最容易的回归方式）。
+     */
+    if ((settingsTabs.ids || []).includes('iot')) {
+      problems.push('设置页又出现了 `iot` 页签 —— 「本机接入」应在「添加设备」里')
     }
     /*
      * 只有**内联**在这四个页签里的卡片不许有 `h3.section-title`（业主 ③：不要每张卡片都
      * 写名字）。告警/邮箱/账号三页装的是独立组件，它们自己的卡片标题是各自子域的名字
      * （例如"告警联动"），不是对页签名的重复。
      */
-    const inlineTabs = new Set(['language', 'storage', 'video', 'iot', 'about'])
+    const inlineTabs = new Set(['language', 'storage', 'video', 'about'])
     for (const tab of settingsTabs.results) {
       if (tab.cards === 0) problems.push('页签 ' + tab.id + ' 点下去一张卡片都没有（是空的）')
       if (tab.controls === 0) problems.push('页签 ' + tab.id + ' 里一个可操作控件都没有')
@@ -4319,46 +4382,76 @@ async function run() {
    *     趋势历史写在 Parquet 里、不在被复制的那个 SQLite 里），所以图上走的是
    *     「该设备暂无历史数据」空态。探针会如实报 `historyFiles`，不把它当通过。
    */
-  const trendChannels = await layout('/trends', '(async () => {' +
+  /*
+   * ── 趋势页：拆成五支小探针（第 32 轮）──
+   *
+   * 为什么拆：第 28–31 轮这一整段（一支 240 秒的脚本）连续超时，而 `layout()` 超时只回
+   * `{probeTimeout: true}` —— `timings` 与 `document.body.dataset.probeStep` 一起丢掉，
+   * 连"卡在哪一步、每一步花了多久"都读不到。拆开之后每一支各有一个 60 秒的上限：
+   * 超时只丢掉**那一支**的读数，而且问题清单里会点名是哪一支超的。
+   *
+   * 五支的分工：
+   *   measure     只读：几何（通道在设备右侧 / 曲线卡片占满内容宽度）、结构（筛选栏里
+   *               没有"聚合方式"、图上没有四张卡片、颗粒度那排、声压级 Y 轴 0–100）。
+   *   toggle      ① 点灭再点亮一条通道（只改显示，不重新查库）。
+   *   range       ③ 切到一段没有读数的区间，量"灰显 + 不可勾选"，再还原。
+   *   metrics     ④ 多选第二个量，再取消。
+   *   granularity ⑤ 点一档固定颗粒度，再点回自动。
+   *
+   * 共用开头 `TREND_PROBE_HEAD`：
+   *   · 每一步在 `document.body.dataset.probeStep` 上留一个标记，并记下耗时（`timings`）；
+   *   · 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条，第 30 轮又搬到设备右侧）：
+   *     现在是筛选栏里一排 chip 里的**勾选框**（`[data-trend-channel-check]` + `checked`）。
+   *     判据没变（点一下只改"画哪几条线"），变的是钩子与"按下态"的读法；
+   *   · `withTimeout`：宁可少一个读数，也不能让整支探针挂住。
+   */
+  const TREND_PROBE_HEAD =
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
-    /*
-     * 每一步在 `document.body.dataset.probeStep` 上留一个标记，并**记下耗时**。
-     *
-     * 为什么：第 28 轮这一段连续两次在 120/180 秒上超时，而超时之后 driver 只拿到
-     * `{probeTimeout: true}` —— 连"卡在哪一步、每一步花了多久"都不知道。
-     * `timings` 随结果一起返回，所以即使总时长顶到上限，也能看出是哪一步吃掉的
-     * （第 31 轮实测：这一段要发 30+ 条 DuckDB 查询，慢的是查询本身，不是死循环）。
-     */
     'const t0 = Date.now();' +
     'const timings = {};' +
-    'const mark = (step) => { timings[step] = Date.now() - t0;' +
-    '  try { document.body.dataset.probeStep = step; } catch (e) {} };' +
-    'mark("start");' +
     /*
-     * 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条，第 30 轮又搬到设备右侧）：
-     * 现在是筛选栏里一排 chip 里的**勾选框**（`[data-trend-channel-check]` + `checked`）。
-     * 判据没变（点一下只改"画哪几条线"），变的是钩子与"按下态"的读法。
+     * 每一步既记在页面里（`timings` / `document.body.dataset.probeStep`），也**立刻**用
+     * `console.log` 报给主进程。后者是关键：如果这一支把渲染进程卡死了，页面里的那两份
+     * 都读不到，而 console 消息在产生的那一刻就已经送出去了 —— 于是日志里能看到"它走到哪一步"。
+     * 前缀 `[trend-probe]` 由 driver 的 `console-message` 钩子捞出来（见 `logProbeTrace`）。
      */
+    'const mark = (step) => { timings[step] = Date.now() - t0;' +
+    '  try { document.body.dataset.probeStep = step; } catch (e) {}' +
+    '  try { console.log("[trend-probe] " + step); } catch (e) {} };' +
+    'mark("start");' +
     'const checks = () => [...document.querySelectorAll("[data-trend-channel-check]")];' +
     'const checkStates = () => checks().map((c) => (c.checked ? "true" : "false"));' +
     'const metricButtons = [...document.querySelectorAll("[data-metric-toggle]")];' +
-    /*
-     * **先问设备状态**（一个 IPC），再开始点任何东西。
-     *
-     * 为什么把它挪到最前面（第 31 轮的诊断）：这一页每换一次筛选会打出
-     * `量 × 通道` 条 DuckDB 查询（8 通道 1 个量 = 8 条），而**主进程要一条条跑完**
-     * 才轮到后面的 IPC。原来这一条放在三段交互之后，于是探针的 `devices.list()`
-     * 排在几十条查询后面 —— 整段 `layout('/trends')` 因此在 120/180/240 秒上连续超时，
-     * 看起来像"探针卡死"，其实是**查询队列**。
-     *
-     * 另外给它套一个超时：探针宁可少一个读数，也不能整段挂住。
-     */
     'const out = {};' +
     'const withTimeout = (promise, ms, label) => Promise.race([' +
     '  promise,' +
     '  wait(ms).then(() => ({ __timeout: label }))' +
     ']);' +
+    /*
+     * 第 30 轮起曲线下方那一整行诊断被业主删掉了，所以"本次查询条数"这个读数没有了。
+     * `queryStat` 保留成常量 null，免得后面每一处都要判空（那个数已经不存在了）。
+     */
+    'const queryStat = () => null;' +
+    // 等到控件真的渲染出来为止（这一页在设备列表/健康状态刷新时会重渲染，控件会短暂消失）。
+    'const waitFor = async (fn, ms) => {' +
+    '  const until = Date.now() + ms;' +
+    '  for (;;) { if (fn()) return true; if (Date.now() >= until) return false; await wait(200); }' +
+    '};' +
+    'const finish = () => { out.timings = timings; return JSON.stringify(out); };'
+  /*
+   * 第 1 支：**只读**的几何与结构 —— 一次点击都不发。
+   *
+   * **先问设备状态**（一个 IPC），再读别的东西。为什么放在最前面（第 31 轮的诊断）：
+   * 这一页每换一次筛选会打出 `量 × 通道` 条 DuckDB 查询（8 通道 1 个量 = 8 条），而
+   * **主进程要一条条跑完**才轮到后面的 IPC；原来这一条放在三段交互之后，于是探针的
+   * `devices.list()` 排在几十条查询后面 —— 那一整段在 120/180/240 秒上连续超时，
+   * 看起来像"探针卡死"，其实是**查询队列**。
+   *
+   * 另外给它套一个 20 秒的上限：宁可少一个读数，也不能整支挂住。
+   */
+  const trendMeasure = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
     'const listedNow = await withTimeout(window.api.devices.list(), 20000, "devices.list");' +
     'out.devicesListTimedOut = !!(listedNow && listedNow.__timeout);' +
     'out.deviceStatus = (function(){' +
@@ -4376,12 +4469,6 @@ async function run() {
     '  chartCount: document.querySelectorAll("[data-metric-chart]").length,' +
     '  historyEmpty: !!document.querySelector(".page .empty .empty__title")' +
     '});' +
-    /*
-     * 第 30 轮起曲线下方那一整行诊断被业主删掉了，所以"本次查询条数"这个读数没有了。
-     * 现在用它量的是**桶宽**（颗粒度那排的「自动（5 分钟）」）—— 见下面的 out.autoBucket*。
-     * `queryStat` 保留成常量 null，免得后面每一处都要判空。
-     */
-    'const queryStat = () => null;' +
     'out.queriesBefore = queryStat();' +
     /*
      * **带数据的 series 有几条**：这是"多条通道真的画在同一根轴上"的唯一硬证据。
@@ -4406,6 +4493,32 @@ async function run() {
     'out.panelExists = !!panel;' +
     'out.panelRightOfDevice = !!(panel && deviceSelect)' +
     '  && panel.getBoundingClientRect().left >= deviceSelect.getBoundingClientRect().right - 2;' +
+    /*
+     * 第 32 轮实测这一条曾经是 `false`（**没有真窗口证据之前看不出来**）。光知道"false"没法判断
+     * 是"被挤到下一行了"还是"同一行但从设备下拉底下开始"，所以把四个坐标一起量出来。
+     *
+     * ⚠ `sameRow` 比的是**通道区块的 top** 与**设备下拉的 top** —— 而设备下拉在一个
+     * `<label>` 里，标签文字在它上面，所以下拉自己的 top 天然比这一行的 top 低 ~70px
+     * （第 32 轮修好之后仍读到 `sameRow: false`、`panelTop: 97`、`deviceTop: 169`）。
+     * **判据不许用 `sameRow`** —— 真正的判据是 `panelLeft >= deviceRight`（见上面
+     * `panelRightOfDevice`）。`sameRow` 只留着当诊断，别把它读成"不在同一行"。
+     */
+    'out.geometry = (function(){' +
+    '  if (!panel || !deviceSelect) return null;' +
+    '  const p = panel.getBoundingClientRect();' +
+    '  const d = deviceSelect.getBoundingClientRect();' +
+    '  const deviceField = document.querySelector(".filter-bar .field--wide");' +
+    '  return {' +
+    '    panelLeft: Math.round(p.left), panelRight: Math.round(p.right), panelTop: Math.round(p.top),' +
+    '    deviceLeft: Math.round(d.left), deviceRight: Math.round(d.right), deviceTop: Math.round(d.top),' +
+    '    deviceFieldTop: deviceField ? Math.round(deviceField.getBoundingClientRect().top) : null,' +
+    '    sameRowAsSelect: Math.abs(p.top - d.top) < 8,' +
+    '    sameRowAsField: deviceField' +
+    '      ? Math.abs(p.top - deviceField.getBoundingClientRect().top) < 8 : null,' +
+    '    barWidth: (function(){ const b = document.querySelector(".filter-bar");' +
+    '      return b ? Math.round(b.getBoundingClientRect().width) : -1; })()' +
+    '  };' +
+    '})();' +
     'out.chartCardWidthRatio = !!(chartCard && content)' +
     '  ? Math.round((chartCard.getBoundingClientRect().width / content.getBoundingClientRect().width) * 100)' +
     '  : null;' +
@@ -4425,6 +4538,48 @@ async function run() {
     '  const b = document.querySelector("[data-trend-channel-rename]");' +
     '  return b ? (b.getAttribute("title") || "") : "";' +
     '})();' +
+    /*
+     * ── 第 13 批第 5 条：删聚合方式与四张卡片、颗粒度、声压级 Y 轴 0–100 ──
+     *
+     * 几何/结构（都能量）：
+     *   · 筛选栏里**没有** "聚合方式" 那个 `<select>`（它原来在指标后面）；
+     *   · 图表卡片上**没有** `.card-grid--stats` 那四张卡片；
+     *   · 有一排颗粒度按钮（`[data-trend-granularity-option]`），第一档是自动；
+     *   · 声压级那张图的 `data-y-range` 必须是 `0-100`，其余的量是 `auto`。
+     * 这里只读；"点一档固定颗粒度再点回自动"那一段在第 5 支（granularity）。
+     */
+    'out.aggregationSelect = [...document.querySelectorAll(".filter-bar select")]' +
+    '  .filter((s) => [...s.options].some((o) => /平均|Average|Media|Ortalama/.test(o.textContent || "")))' +
+    '  .length;' +
+    'out.statCards = document.querySelectorAll(".card-grid--stats").length;' +
+    'out.granularityButtons = document.querySelectorAll("[data-trend-granularity-option]").length;' +
+    'out.granularityKeys = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
+    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
+    'out.granularityPressed = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
+    '  .filter((b) => b.getAttribute("aria-pressed") === "true")' +
+    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
+    'out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
+    '  .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
+    'const bucketText = () => {' +
+    '  const auto = document.querySelector(\'[data-trend-granularity-option="auto"]\');' +
+    '  if (!auto) return null;' +
+    '  const match = /[（(]([^）)]+)[）)]/.exec(text(auto));' +
+    '  return match ? match[1] : null;' +
+    '};' +
+    'out.bucketBefore = bucketText();' +
+    'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
+    'mark("done");' +
+    'return finish();' +
+    // 60 秒：这一支只读页面、外加一个 20 秒上限的 IPC，读不完就是页面线程被查询队列占住了。
+    '})()', 60_000)
+  /*
+   * 第 2 支：① 点灭**第二条**通道（只改显示，不重新查库），再点亮它还原到起点。
+   */
+  const trendToggle = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    'await waitFor(() => checks().length > 1, 15000);' +
+    'out.legendCount = checks().length;' +
+    'out.pressedAtStart = checkStates();' +
     // ① 点灭**第二条**通道：只改显示（勾选框取消勾选，不重新查库）。
     'if (checks().length > 1 && !checks()[1].disabled) {' +
     '  checks()[1].click(); await wait(500);' +
@@ -4446,98 +4601,57 @@ async function run() {
     '  out.pressedAfterHide = null;' +
     '  out.skipReason = checks().length > 1 ? "checkbox-disabled" : "not-enough-channels";' +
     '}' +
-    /*
-     * ③ 「无数据灰显 + 不可勾选」：把范围切到一段**很久以前**（2000-01-01 那两天），
-     * 那一段一定没有读数。判据三条：每一行都有 `data-trend-channel-nodata`、
-     * 每个勾选框都 `disabled`、面板小结是 "0 / N 路有数据"。
-     * 量完把范围**还原**成原来那个预设（这一条是只读探针，不许留下改动）。
-     */
-    'const activePreset = document.querySelector("[data-trend-range-preset].chip--accent");' +
-    'out.rangeBefore = activePreset ? activePreset.getAttribute("data-trend-range-preset") : null;' +
-    'const customPreset = document.querySelector(\'[data-trend-range-preset="custom"]\');' +
-    'if (customPreset) {' +
-    '  customPreset.click(); await wait(400);' +
-    '  const pickers = [...document.querySelectorAll(".custom-range input.input")];' +
-    '  if (pickers.length === 2) {' +
-    '    const setValue = (el, value) => {' +
-    '      el.value = value;' +
-    '      el.dispatchEvent(new Event("input", { bubbles: true }));' +
-    '    };' +
-    '    setValue(pickers[0], "2000-01-01T00:00");' +
-    '    setValue(pickers[1], "2000-01-02T00:00");' +
-    '    await wait(2500);' +
-    '  }' +
-    '  out.emptyRows = document.querySelectorAll("[data-trend-channel-row][data-trend-channel-nodata]").length;' +
-    '  out.emptyChecksDisabled = checks().map((c) => c.disabled);' +
-    '  out.emptySummary = text(document.querySelector("[data-channel-panel-summary]"));' +
-    /*
-     * ⚠ 选择器是 `.page .empty`，不是 `.empty-state` —— `EmptyState.vue` 的根元素是
-     * `<div class="empty">`。第 25 轮之前这里（以及上面 `historyEmpty`）用的是
-     * `.empty-state, [data-empty-state]`，**从来没匹配上过**：那两处读数一直是假的 `false`。
-     * 这是探针自己的缺陷，不是界面的。
-     */
-    '  out.emptyStateTitle = text(document.querySelector(".page .empty .empty__title"));' +
-    '  out.emptyRangeEmptyState = out.emptyStateTitle.length > 0;' +
-    '  if (activePreset) { activePreset.click(); await wait(1500); }' +
-    /*
-     * 还原之后**轮询等数据回来**：这一段查询走 DuckDB/Parquet，第一次往往要比 1.5 秒久
-     * （本机实测：切回预设之后 3–4 秒才重新出数）。等待是有上限的，判据仍然是"数据回来了"。
-     */
-    '  const dataRows = () =>' +
-    '    document.querySelectorAll("[data-trend-channel-row]:not([data-trend-channel-nodata])").length;' +
-    '  for (let i = 0; i < 24 && dataRows() === 0; i += 1) await wait(250);' +
-    '  out.rangeAfter = (function(){' +
-    '    const chip = document.querySelector("[data-trend-range-preset].chip--accent");' +
-    '    return chip ? chip.getAttribute("data-trend-range-preset") : null;' +
-    '  })();' +
-    '  out.rowsAfterRestore = document.querySelectorAll("[data-trend-channel-row]").length;' +
-    '  out.dataRowsAfterRestore = dataRows();' +
-    '  out.summaryAfterRestore = text(document.querySelector("[data-channel-panel-summary]"));' +
-    '  out.rangeEmptyStateAfterRestore = text(document.querySelector(".page .empty .empty__title"));' +
-    '}' +
+    'mark("done");' +
+    'return finish();' +
+    '})()', 60_000)
+  /*
+   * 第 3 支：④ 多选一个量（图都应多一份），再取消，回到一个量。
+   *
+   * ⚠ 顺序上，这一支与"颗粒度"那一支都排在"①/③ 换范围"那一支**前面**，而"换范围"排最后 ——
+   * 这是第 32 轮实测之后的安排：**点「自定义」范围会让渲染进程卡死**（详见文件末尾那一支的注释），
+   * 一旦它卡住，排在它后面的支就全都拿不到读数（`waitForPageRoot()` 已经加了 5 秒上限，
+   * 所以不会再把整次运行挂住，但仍然白白浪费一支的证据）。把风险最大的那一步放到最后，
+   * 前面四支的读数就一定是干净的。
+   */
+  const trendMetrics = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    // `metricButtons` 是脚本开头那一瞬间的快照，等它变多是没有意义的 —— 这里重新取一次活的。
+    'await waitFor(() => document.querySelectorAll("[data-metric-toggle]").length > 1, 15000);' +
+    'const metricToggles = [...document.querySelectorAll("[data-metric-toggle]")];' +
+    'out.metricButtonsBefore = metricToggles.length;' +
     // ④ 多选一个量：图都应多一份。
     'mark("metrics");' +
-    'if (metricButtons.length > 1) {' +
-    '  metricButtons[1].click(); await wait(1200);' +
+    'if (metricToggles.length > 1) {' +
+    '  metricToggles[1].click(); await wait(1200);' +
     '  out.selectedMetrics = [...document.querySelectorAll("[data-metric-toggle]")]' +
     '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
     '    .map((b) => b.getAttribute("data-metric-toggle"));' +
     '  out.chartCountAfterSecondMetric = document.querySelectorAll("[data-metric-chart]").length;' +
     // 与上面同一条理由：点第二次之前等那一排按钮回来（同一个偶发）。
-    '  for (let i = 0; i < 20 && document.querySelectorAll("[data-metric-toggle]").length < metricButtons.length; i += 1) await wait(250);' +
+    '  for (let i = 0; i < 20 && document.querySelectorAll("[data-metric-toggle]").length < metricToggles.length; i += 1) await wait(250);' +
     '  const metricRestore = document.querySelectorAll("[data-metric-toggle]")[1];' +
     '  if (metricRestore) { metricRestore.click(); await wait(1200); }' +
     '  out.selectedMetricsRestored = [...document.querySelectorAll("[data-metric-toggle]")]' +
     '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
     '    .map((b) => b.getAttribute("data-metric-toggle"));' +
+    '} else {' +
+    // 如实记下"为什么没验到"（这一支跑了，只是页面上没有第二个量可点）。
+    '  out.metricButtonsSkipped = metricToggles.length;' +
     '}' +
-    /*
-     * ── 第 13 批第 5 条：删聚合方式与四张卡片、颗粒度、声压级 Y 轴 0–100 ──
-     *
-     * 几何/结构（都能量）：
-     *   · 筛选栏里**没有** "聚合方式" 那个 `<select>`（它原来在指标后面）；
-     *   · 图表卡片上**没有** `.card-grid--stats` 那四张卡片；
-     *   · 有一排颗粒度按钮（`[data-trend-granularity-option]`），第一档是自动；
-     *   · 声压级那张图的 `data-y-range` 必须是 `0-100`，其余的量是 `auto`。
-     * 交互：点一档固定颗粒度 → 诊断行里的"时间桶"必须变成那一档 → 查询条数 +1；
-     *       再点回自动 → 桶宽回到原值（探针必须还原自己改过的状态）。
-     */
-    'out.aggregationSelect = [...document.querySelectorAll(".filter-bar select")]' +
-    '  .filter((s) => [...s.options].some((o) => /平均|Average|Media|Ortalama/.test(o.textContent || "")))' +
-    '  .length;' +
-    'out.statCards = document.querySelectorAll(".card-grid--stats").length;' +
-    'out.granularityButtons = document.querySelectorAll("[data-trend-granularity-option]").length;' +
-    'out.granularityKeys = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
-    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
-    'out.granularityPressed = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
-    '  .filter((b) => b.getAttribute("aria-pressed") === "true")' +
-    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
-    'out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
-    '  .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
-    /*
-     * 桶宽现在从**时间颗粒度那一排的「自动」按钮**上读（第 30 轮：曲线下方的诊断行被业主删了，
-     * 「自动（5 分钟）」里的那个括号就是把桶宽写出来的地方）。
-     */
+    'mark("done");' +
+    'return finish();' +
+    // 60 秒：这一支只点两次（多选、取消），两次都是本页状态变更。
+    '})()', 60_000)
+  /*
+   * 第 4 支：⑤ 点一档固定颗粒度，再点回自动。
+   *
+   * 桶宽从**时间颗粒度那一排的「自动」按钮**上读（第 30 轮：曲线下方那一整行诊断被业主删了，
+   * 「自动（5 分钟）」里的那个括号就是把桶宽写出来的地方）。
+   * 选固定档之后「自动」那个括号会消失（自动档没在跑），所以那一步等的是**按钮变成选中**。
+   */
+  const trendGranularity = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    'await waitFor(() => document.querySelector("[data-trend-granularity-option]") !== null, 15000);' +
     'const bucketText = () => {' +
     '  const auto = document.querySelector(\'[data-trend-granularity-option="auto"]\');' +
     '  if (!auto) return null;' +
@@ -4559,16 +4673,205 @@ async function run() {
     '    out.bucketAfterAuto = bucketText();' +
     '  }' +
     '}' +
-    'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
     'mark("done");' +
-    'out.timings = timings;' +
-    'return JSON.stringify(out);' +
-    // 240 秒：这一段要发 30+ 条 DuckDB 查询（8 条通道 × 四次筛选变更），本机 120/180 秒
-    // 都顶到过上限（第 28–30 轮）。超时会把这一段所有读数丢掉，所以给足余量。
-    '})()', 240_000)
+    'return finish();' +
+    // 60 秒：这一支只发两次查询（点 1 分钟档、点回自动），比原来那一整段（30+ 条查询）轻得多。
+    '})()', 60_000)
+  /*
+   * 第 5 支（**故意排在最后**）：③ 「无数据灰显 + 不可勾选」：把范围切到一段**很久以前**
+   * （2000-01-01 那两天），那一段一定没有读数。判据三条：每一行都有 `data-trend-channel-nodata`、
+   * 每个勾选框都 `disabled`、面板小结是 "0 / N 路有数据"。
+   * 量完把范围**还原**成原来那个预设（探针不许留下改动）。
+   *
+   * ── 为什么排最后（第 32 轮实测）──
+   * 第 31 轮那一支（240 秒、五件事串在一起）连续超时，拆开之后第一次跑就定位到了这一步：
+   *   `[demo] layout /trends  : {"...measure...}` → 立刻返回
+   *   `[demo] layout /trends  : {"...toggle..."}` → 立刻返回
+   *   `[demo] layout /trends  : TIMEOUT after 90000ms`  ← 就是这一支
+   * 而且超时窗口里主进程**一条 `Trend query complete` 都没有**（只有每 5 秒一次的设备健康检查），
+   * 说明卡的不是 DuckDB：是**渲染进程的 JS 线程自己不响应了**（点「自定义」→ 页面卡死，
+   * 之后的 `executeJavaScript` 全部不 settle，连 `waitForPageRoot()` 都停住）。
+   * 这一条是**产品缺陷**（业主点「自定义」时间范围就会遇到），不是探针的问题；
+   * 记在 `docs/UI-VERIFY.md` 第 32 轮那一节，探针这边只做两件事：
+   * 把这一步排到最后（别拖累别的读数）、给 `waitForPageRoot()` 加 5 秒上限（别把整次运行挂住）。
+   */
+  const trendRange = await layout('/trends', '(async () => {' +
+    TREND_PROBE_HEAD +
+    'await waitFor(() => document.querySelector("[data-trend-range-preset]") !== null, 15000);' +
+    // 这一支自己再量一次"起点有几行"：万一第 1 支超时，这里的判据仍然成立。
+    'out.panelRowsBeforeRange = document.querySelectorAll("[data-trend-channel-row]").length;' +
+    'out.summaryAtStart = text(document.querySelector("[data-channel-panel-summary]"));' +
+    'const activePreset = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    'out.rangeBefore = activePreset ? activePreset.getAttribute("data-trend-range-preset") : null;' +
+    'const customPreset = document.querySelector(\'[data-trend-range-preset="custom"]\');' +
+    'if (customPreset) {' +
+    '  mark("range:preset-click");' +
+    '  customPreset.click(); await wait(400);' +
+    '  mark("range:preset-clicked");' +
+    '  const pickers = [...document.querySelectorAll(".custom-range input.input")];' +
+    '  out.customPickers = pickers.length;' +
+    '  if (pickers.length === 2) {' +
+    '    const setValue = (el, value) => {' +
+    '      mark("range:set-" + (el === pickers[0] ? "from" : "to"));' +
+    '      el.value = value;' +
+    '      el.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '      mark("range:set-" + (el === pickers[0] ? "from" : "to") + "-done");' +
+    '    };' +
+    '    setValue(pickers[0], "2000-01-01T00:00");' +
+    '    setValue(pickers[1], "2000-01-02T00:00");' +
+    '    await wait(2500);' +
+    '  }' +
+    '  mark("range:read-empty");' +
+    '  out.emptyRows = document.querySelectorAll("[data-trend-channel-row][data-trend-channel-nodata]").length;' +
+    '  out.emptyChecksDisabled = checks().map((c) => c.disabled);' +
+    '  out.emptySummary = text(document.querySelector("[data-channel-panel-summary]"));' +
+    /*
+     * ⚠ 选择器是 `.page .empty`，不是 `.empty-state` —— `EmptyState.vue` 的根元素是
+     * `<div class="empty">`。第 25 轮之前这里（以及上面 `historyEmpty`）用的是
+     * `.empty-state, [data-empty-state]`，**从来没匹配上过**：那两处读数一直是假的 `false`。
+     * 这是探针自己的缺陷，不是界面的。
+     */
+    '  out.emptyStateTitle = text(document.querySelector(".page .empty .empty__title"));' +
+    '  out.emptyRangeEmptyState = out.emptyStateTitle.length > 0;' +
+    '  mark("range:restore-click");' +
+    '  if (activePreset) { activePreset.click(); await wait(1500); }' +
+    '  mark("range:restored");' +
+    /*
+     * 还原之后**轮询等数据回来**：这一段查询走 DuckDB/Parquet，第一次往往要比 1.5 秒久
+     * （本机实测：切回预设之后 3–4 秒才重新出数）。等待是有上限的，判据仍然是"数据回来了"。
+     */
+    '  const dataRows = () =>' +
+    '    document.querySelectorAll("[data-trend-channel-row]:not([data-trend-channel-nodata])").length;' +
+    '  for (let i = 0; i < 24 && dataRows() === 0; i += 1) await wait(250);' +
+    '  mark("range:read-after-restore");' +
+    '  out.rangeAfter = (function(){' +
+    '    const chip = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    '    return chip ? chip.getAttribute("data-trend-range-preset") : null;' +
+    '  })();' +
+    '  out.rowsAfterRestore = document.querySelectorAll("[data-trend-channel-row]").length;' +
+    '  out.dataRowsAfterRestore = dataRows();' +
+    '  out.summaryAfterRestore = text(document.querySelector("[data-channel-panel-summary]"));' +
+    '  out.rangeEmptyStateAfterRestore = text(document.querySelector(".page .empty .empty__title"));' +
+    '}' +
+    'mark("done");' +
+    'return finish();' +
+    /*
+     * 90 秒：这一支要点两次范围、等两轮查询（本机实测切回预设之后 3–4 秒才重新出数）；
+     * 而如果它真的把渲染进程卡住了，`layout()` 会在 90 秒后照常报超时，整次运行继续往下走。
+     */
+    '})()', 90_000)
+  /*
+   * 五支的结果合并成原来的 `trendChannels`：下面的断言块继续按原来的字段读，
+   * 而"哪一支超时了"单独列出来（超时那一支没有字段，合并时跳过它）。
+   */
+  const trendSteps = [
+    ['measure', trendMeasure],
+    ['toggle', trendToggle],
+    ['metrics', trendMetrics],
+    ['granularity', trendGranularity],
+    ['range', trendRange]
+  ]
+  const trendChannels = {}
+  const trendTimeouts = []
+  for (const step of trendSteps) {
+    if (step[1] && step[1].probeTimeout === true) {
+      trendTimeouts.push(step[0])
+      continue
+    }
+    if (step[1]) Object.assign(trendChannels, step[1])
+  }
+  log(
+    'trend steps : ' +
+      JSON.stringify(
+        trendSteps.map((s) => [
+          s[0],
+          s[1] && s[1].probeTimeout === true ? 'TIMEOUT' : Object.keys(s[1] || {}).length
+        ])
+      )
+  )
   log('trend channels: ' + JSON.stringify(trendChannels))
-  if (trendChannels.probeTimeout === true) {
-    problems.push('趋势页的多通道探针超时 —— 这一段没有任何结论')
+  /*
+   * ── 如果趋势页把渲染进程卡死了，把窗口重载回来再继续 ──
+   *
+   * 第 32 轮实测：点「自定义」时间范围会让**渲染进程的 JS 线程**不再应答（主进程还在每 5 秒
+   * 打一次设备健康检查，一条 `Trend query complete` 都没有），而这一页之后还有别的探针要跑。
+   * 不重载的话，后面每一支都会停在 `waitForPageRoot()`（现在有 5 秒上限，所以是有界地失败，
+   * 但会白白报一串"这一页什么都没渲染"的假问题）。
+   *
+   * 判据：问页面一句 `1+1`，5 秒不回来就算卡死。**卡死本身照旧记一条问题** ——
+   * 恢复只是让后面的页面还能验，不是把这件事抹掉。
+   *
+   * 第 32 轮实测的第二步：`webContents.reload()` **不够** —— 卡死的渲染进程连"重载"这件事
+   * 都没法配合，重载之后 4 次 `1+1` 全部 5 秒无应答（`layout ping` 四条）。所以第二级是
+   * `forcefullyCrashRenderer()`：把渲染进程**杀掉**再重载。这一条也踩得值：它同时说明
+   * 那个卡死比"JS 死循环"更硬（死循环的进程被杀掉/重启后一定会恢复）。
+   */
+  const pingPage = async (ms) => {
+    const answer = await Promise.race([
+      win.webContents.executeJavaScript('1 + 1').then(
+        () => false,
+        () => 'rejected'
+      ),
+      sleep(ms).then(() => true)
+    ])
+    return answer !== false
+  }
+  if (await pingPage(5_000)) {
+    log('trend channels: 渲染进程不响应了 —— 先重载窗口，让后面的页面还能验')
+    problems.push(
+      '趋势页把**渲染进程**卡死了（点「自定义」时间范围之后页面不再应答，主进程仍在打日志）—— ' +
+        '趋势页这一段之后的读数全部作废；驱动已重载窗口继续跑其余页面'
+    )
+    /*
+     * 卡死时留一张截图：这是"业主会看到什么"的唯一证据（页面停在哪个状态、有没有转圈）。
+     * `capturePage()` 也走渲染进程，所以同样套一个上限 —— 拿不到就如实记一句，不假装有。
+     */
+    try {
+      const shot = await Promise.race([win.webContents.capturePage(), sleep(8_000).then(() => null)])
+      if (shot && !shot.isEmpty()) {
+        const frozenPath = path.join(OUT, 'frozen-trends.png')
+        fs.writeFileSync(frozenPath, shot.toPNG())
+        log('trend channels: 卡死时的截图 → ' + frozenPath)
+      } else {
+        log('trend channels: 卡死时连截图也拿不到（渲染进程不响应）')
+      }
+    } catch (error) {
+      log('trend channels: 卡死时截图失败：' + error.message)
+    }
+    win.webContents.reload()
+    await sleep(6_000)
+    if (await pingPage(5_000)) {
+      log('trend channels: 重载也没能救回来 —— 杀掉渲染进程再重载')
+      deliberateRendererCrash = true
+      win.webContents.forcefullyCrashRenderer()
+      await sleep(3_000)
+      win.webContents.reload()
+      await sleep(6_000)
+      /*
+       * 渲染进程被杀掉之后，页面里的登录态（Pinia）也没了。这里再登一次：
+       * 会话在主进程里，工厂管理员也已经在开头建好了，所以这一次只会拿回同一个会话。
+       * 失败也不当问题报 —— 后面那些页面的断言本来就会报"没渲染"，那才是要看的信号。
+       */
+      const relogin = await win.webContents
+        .executeJavaScript(
+          '(async () => {' +
+            "  const r = await window.api.auth.login({ username: 'admin', password: 'Hz@123456' });" +
+            "  return r && r.success ? 'ok' : JSON.stringify(r && r.error ? r.error.code : r);" +
+            '})()'
+        )
+        .catch((error) => 'threw: ' + error.message)
+      log('trend channels: 重载后重新登录 → ' + relogin)
+    }
+    await waitForPageRoot()
+  }
+  if (trendTimeouts.length > 0) {
+    problems.push(
+      '趋势页的多通道探针有 ' + trendTimeouts.length + ' 支超时（' + trendTimeouts.join('、') +
+        '）—— 这几支的读数没有任何结论，其余的照旧'
+    )
+  }
+  if (trendChannels.legendCount === undefined) {
+    log('trend channels: 第 1 支（只读几何/结构）没有回来，这一段跳过')
   } else if (trendChannels.legendCount === 0) {
     // 一次性 profile 里没有设备时这一页走空态，如实跳过（与上面 trends chrome 同一条口径）。
     log('trend channels: skipped（没有设备，通道那一列不渲染）')
@@ -4670,7 +4973,10 @@ async function run() {
     }
     if (trendChannels.panelRightOfDevice !== true) {
       problems.push(
-        '通道选择不在设备的右侧（业主最新一条：「通道的选择应该放在设备的右侧的位置」）'
+        '通道选择不在设备的右侧（业主最新一条：「通道的选择应该放在设备的右侧的位置」）；' +
+          '实测几何（判据是 `panelLeft >= deviceRight`；`sameRowAsSelect` 只作诊断，' +
+          '下拉在一个带标签文字的 label 里，top 天然更低）' +
+          JSON.stringify(trendChannels.geometry)
       )
     }
     if (trendChannels.chartCardWidthRatio !== null && trendChannels.chartCardWidthRatio < 95) {
@@ -4714,11 +5020,16 @@ async function run() {
       problems.push('改名按钮没有说明"为什么不能改"（置灰而没有原因的按钮就是一个谜）')
     }
     if (trendChannels.rangeBefore !== null && trendChannels.rangeBefore !== undefined) {
+      /*
+       * 基准行数取自**第 3 支自己**测到的那个数（`panelRowsBeforeRange`）：五支是分开跑的，
+       * 万一第 1 支（只读几何）超时，`panelRows` 就没有值，那时拿它当基准会立刻报一条假失败。
+       */
+      const rowsForEmpty = trendChannels.panelRowsBeforeRange || trendChannels.panelRows
       // 「无数据灰显 + 不可勾选」：切到 2000 年那一段之后，每一行都该是灰的且勾不动。
-      if (trendChannels.panelRows > 0 && trendChannels.emptyRows !== trendChannels.panelRows) {
+      if (rowsForEmpty > 0 && trendChannels.emptyRows !== rowsForEmpty) {
         problems.push(
           '把范围切到一段没有数据的区间之后，灰显的行数是 ' + trendChannels.emptyRows +
-            '（应为 ' + trendChannels.panelRows + '）—— 「无数据灰显」没有按 hasData 走'
+            '（应为 ' + rowsForEmpty + '）—— 「无数据灰显」没有按 hasData 走'
         )
       }
       if ((trendChannels.emptyChecksDisabled || []).some((flag) => flag !== true)) {
@@ -4750,9 +5061,9 @@ async function run() {
           '探针没有把时间范围还原：' + trendChannels.rangeBefore + ' → ' + trendChannels.rangeAfter
         )
       }
-      if (trendChannels.rowsAfterRestore !== trendChannels.panelRows) {
+      if (trendChannels.rowsAfterRestore !== rowsForEmpty) {
         problems.push(
-          '还原范围之后通道行数不对：' + trendChannels.rowsAfterRestore + '/' + trendChannels.panelRows
+          '还原范围之后通道行数不对：' + trendChannels.rowsAfterRestore + '/' + rowsForEmpty
         )
       }
       /*
@@ -4815,6 +5126,11 @@ async function run() {
           trendChannels.selectedMetricsRestored.length !== 1) {
         problems.push('取消多选之后没有回到一个量：' + JSON.stringify(trendChannels.selectedMetricsRestored))
       }
+    } else if (trendChannels.metricButtonsSkipped !== undefined) {
+      log(
+        'trend channels/④: 注意 —— 量的按钮只有 ' + trendChannels.metricButtonsSkipped +
+          ' 个（这一支跑了，只是页面上没有第二个量可点），多选这一条没验到'
+      )
     }
     if (trendChannels.chartCount === 0) {
       log(

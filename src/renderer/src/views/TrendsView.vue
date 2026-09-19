@@ -1119,7 +1119,14 @@ watch(
     <template v-else>
       <section class="card">
         <div class="filter-bar">
-          <label class="field">
+          <!--
+            `field--wide` 是**必须**的（第 32 轮补回来）：那一条 CSS 把下拉钉在 200px
+            （见下面 `.field--wide .select`），第 30 轮重排筛选栏时这个类名被漏掉了，
+            于是下拉按"最宽的那个选项"自己撑到 **265px**，把右边的空间吃掉一大块 ——
+            通道那一排因此被挤到**下一行**（第 32 轮探针量到的正是这一条：
+            `panelTop=168` vs `deviceTop=120`，`panelRight` 几乎等于整行宽）。
+          -->
+          <label class="field field--wide">
             <span class="field-label">{{ t('trendsUi.filterDevice') }}</span>
             <select v-model="selectedDeviceId" class="select">
               <option v-for="device in devices.devices" :key="device.id" :value="device.id">
@@ -1538,10 +1545,18 @@ watch(
  *
  * 通道那一排可能很长（8 路 × 一个 chip + 一个改名按钮），所以它**允许换行**、并给它
  * 一个由内容决定的最小宽度；量那一排照旧占满剩余宽度。
+ *
+ * ⚠ 第 32 轮修正：`flex: 0 1 auto`（原来那样）+ `max-width: 100%` 会让它**换到下一行**。
+ * `flex-wrap` 判断"换不换行"看的是每一项的 **base size**，而 `auto` 的 base 是内容宽度
+ * （8 路实测 1126px，整行才 1127px）—— 于是它永远放不进设备右边那一段，只能另起一行，
+ * 业主那条「通道的选择应该放在设备的右侧」在真窗口里**从来没成立过**（第 32 轮探针量到：
+ * `panelTop=168` vs `deviceTop=120`，`panelLeft` 等于整行的左边界）。
+ * 改法：base 压到 320px（一定能和设备待在同一行），`flex-grow: 1` 让它吃掉这一行的剩余宽度；
+ * 里面那排 chip 自己在剩下的宽度里换行（`.channel-chip-row { flex-wrap: wrap }`）。
  */
 .field--channels {
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 320px;
   max-width: 100%;
 }
 

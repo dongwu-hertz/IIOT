@@ -270,7 +270,6 @@ describe('文案：新词四种语言齐全，旧的下拉框文案已删', () =
     'trendsUi.channelHide',
     'trendsUi.channelShow',
     'trendsUi.channelShowAll',
-    'trendsUi.channelHintVisible',
     'trendsUi.channelLines',
     'trendsUi.metricLimit',
     'trendsUi.metricMultiHint',
@@ -298,7 +297,6 @@ describe('文案：新词四种语言齐全，旧的下拉框文案已删', () =
 
   it('带占位符的句子在四种语言里占位符一致', () => {
     for (const key of [
-      'trendsUi.channelHintVisible',
       'trendsUi.channelLines',
       'trendsUi.metricLimit',
       'trendsUi.metricMultiHint'
