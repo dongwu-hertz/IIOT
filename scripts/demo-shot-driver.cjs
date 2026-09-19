@@ -1363,6 +1363,18 @@ async function runIotIngestDrill(win, layout) {
     'if (refresh) refresh.click();' +
     'const refreshFound = !!refresh;' +
     /*
+     * ⚠ 第 39 轮：读数要用**这一块自己的那颗「重新读取」**（`[data-add-iot-reload]`）。
+     *
+     * 「本机接入」的收数统计是**打开对话框时读一次、之后不轮询**的（源码里写着这条设计），
+     * 顶栏那颗刷新刷的是**设备状态**，不覆盖这块读数。第 38 轮那条
+     * 「屏幕全 0 vs 服务 5/1/1/0/2/1」就是探针点错了按钮：它只点了顶栏刷新，
+     * 然后等 60 秒等一块"本来就不会自己变"的读数变 —— 那是**探针的错**，不是界面的错。
+     * （界面给了 refresh 的手段，只是在这一块自己身上。）
+     */
+    'const reloadStats = el("[data-add-iot-reload]", dialog);' +
+    'if (reloadStats) reloadStats.click();' +
+    'const reloadFound = !!reloadStats;' +
+    /*
      * 顶栏那颗刷新先**重新探活所有设备**（`devices.refreshStatus()`，其中离线设备要等到
      * 请求超时），所以"点了之后多久读数才变"取决于现场有几台设备不通 —— 这里**自适应地等**
      * （最多 20 秒），而不是写死一个秒数：写死了就会在设备多的机器上偶发变红。
@@ -1376,7 +1388,7 @@ async function runIotIngestDrill(win, layout) {
      */
     'for (let attempt = 0; attempt < 120; attempt += 1) {' +
     '  if (attempt === 8 || attempt === 30) {' +
-    '    const again = el("[data-action=topbar-refresh]");' +
+    '    const again = el("[data-add-iot-reload]", dialog);' +
     '    if (again) again.click();' +
     '  }' +
     '  await wait(500);' +
@@ -1442,6 +1454,7 @@ async function runIotIngestDrill(win, layout) {
     '  saveError,' +
     '  portsAfterSave,' +
     '  domStatsWaitedMs,' +
+    '  reloadFound,' +
     '  localBlockFound: !!local,' +
     '  restored: restore.every((result) => result && result.success),' +
     '  refreshFound,' +
