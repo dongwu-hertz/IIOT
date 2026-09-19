@@ -4301,14 +4301,21 @@ async function run() {
   const trendChannels = await layout('/trends', '(async () => {' +
     'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
     'const text = (el) => (el ? (el.textContent || "").trim() : "");' +
-    'const toggles = [...document.querySelectorAll("[data-channel-toggle]")];' +
+    /*
+     * 通道控件**搬家了**（业主 2026-09-19 第 13 批第 4 条）：原来是筛选栏里一排 chip
+     * （`[data-channel-toggle]` + `aria-pressed`），现在是图右侧那一列里的**勾选框**
+     * （`[data-trend-channel-check]` + `checked`）。判据没变（点一下只改"画哪几条线"），
+     * 变的是钩子与"按下态"的读法。
+     */
+    'const checks = () => [...document.querySelectorAll("[data-trend-channel-check]")];' +
+    'const checkStates = () => checks().map((c) => (c.checked ? "true" : "false"));' +
     'const metricButtons = [...document.querySelectorAll("[data-metric-toggle]")];' +
     'const out = {' +
-    '  legendCount: toggles.length,' +
+    '  legendCount: checks().length,' +
     '  metricCount: metricButtons.length,' +
-    '  pressedAtStart: toggles.map((b) => b.getAttribute("aria-pressed")),' +
+    '  pressedAtStart: checkStates(),' +
     '  chartCount: document.querySelectorAll("[data-metric-chart]").length,' +
-    '  historyEmpty: !!document.querySelector(".page .empty-state, .page [data-empty-state]")' +
+    '  historyEmpty: !!document.querySelector(".page .empty .empty__title")' +
     '};' +
     // 诊断行里的"本次查询条数"。空态时诊断行不渲染，这时给 null（而不是 0）。
     'const statValue = (pattern) => {' +
@@ -4330,27 +4337,111 @@ async function run() {
     'out.statPoints = statValue(/返回点数|Points/);' +
     'out.chartHints = [...document.querySelectorAll("[data-metric-chart] .chart-hint")]' +
     '  .map((el) => text(el));' +
-    // ① 点灭**第二条**通道：只改显示。
-    'if (toggles.length > 1) {' +
-    '  toggles[1].click(); await wait(500);' +
-    '  out.pressedAfterHide = [...document.querySelectorAll("[data-channel-toggle]")]' +
-    '    .map((b) => b.getAttribute("aria-pressed"));' +
+    /*
+     * ── 第 13 批第 4 条：右侧那一列（8 或 2 个通道 + 重命名 + 无数据灰显 + 有数据可勾选）──
+     *
+     * 几何：通道列必须在上边那张图的**右边**（`left` 比图的 `right` 大）。
+     * 这是"右侧"这句话在真实窗口里的唯一判据（模板顺序只是必要条件）。
+     */
+    'const panel = document.querySelector("[data-trend-channels]");' +
+    'const chartCard = document.querySelector("[data-metric-chart], .chart-panel.card");' +
+    'out.panelExists = !!panel;' +
+    'out.panelRightOfChart = !!(panel && chartCard)' +
+    '  && panel.getBoundingClientRect().left >= chartCard.getBoundingClientRect().right - 2;' +
+    'out.panelRows = document.querySelectorAll("[data-trend-channel-row]").length;' +
+    'out.panelSummary = text(document.querySelector("[data-channel-panel-summary]"));' +
+    'out.summaryAtStart = out.panelSummary;' +
+    'out.rowChecks = checks().length;' +
+    'out.renameButtons = document.querySelectorAll("[data-trend-channel-rename]").length;' +
+    /*
+     * 离线设备上改名按钮必须**置灰**并且说明原因：改名是写设备（`/set_passageway`），
+     * 点一次必然失败。这里同时量"禁用"与"有 title"，缺一个都不是完整的做法。
+     */
+    'out.renameDisabled = [...document.querySelectorAll("[data-trend-channel-rename]")]' +
+    '  .map((b) => b.disabled);' +
+    'out.renameTitle = (function(){' +
+    '  const b = document.querySelector("[data-trend-channel-rename]");' +
+    '  return b ? (b.getAttribute("title") || "") : "";' +
+    '})();' +
+    'out.deviceStatus = await (async () => {' +
+    '  const listed = await window.api.devices.list();' +
+    '  const all = listed && listed.success ? listed.data : [];' +
+    '  const option = document.querySelector(".page .field--wide .select option:checked");' +
+    '  const label = option ? text(option) : "";' +
+    '  const hit = all.find((d) => label.indexOf(d.name) >= 0);' +
+    '  return hit ? String(hit.status) : null;' +
+    '})();' +
+    // ① 点灭**第二条**通道：只改显示（勾选框取消勾选，不重新查库）。
+    'if (checks().length > 1 && !checks()[1].disabled) {' +
+    '  checks()[1].click(); await wait(500);' +
+    '  out.pressedAfterHide = checkStates();' +
     '  out.queriesAfterHide = queryStat();' +
     // ② 再点亮它：回到原样（探针必须把自己改过的状态恢复）。
     /*
-     * 点之前**等图例回来**（2026-09-19 实测到一次偶发）：这一页在设备列表/健康状态刷新时会
-     * 重渲染，图例可能正好在两步之间短暂消失，于是 `pressedAfterRestore` 读到空数组、
+     * 点之前**等勾选框回来**（2026-09-19 实测到一次偶发）：这一页在设备列表/健康状态刷新时会
+     * 重渲染，那一列可能正好在两步之间短暂消失，于是 `pressedAfterRestore` 读到空数组、
      * 报出一串"再点一下没有恢复"的假失败。等待是自适应的（最多 5 秒），
-     * 判据仍然是"恢复后的按下态与起点一致"。
+     * 判据仍然是"恢复后的勾选态与起点一致"。
      */
-    '  for (let i = 0; i < 20 && document.querySelectorAll("[data-channel-toggle]").length < toggles.length; i += 1) await wait(250);' +
-    '  const restoreTarget = document.querySelectorAll("[data-channel-toggle]")[1];' +
+    '  for (let i = 0; i < 20 && checks().length < out.legendCount; i += 1) await wait(250);' +
+    '  const restoreTarget = checks()[1];' +
     '  if (restoreTarget) { restoreTarget.click(); await wait(600); }' +
-    '  out.pressedAfterRestore = [...document.querySelectorAll("[data-channel-toggle]")]' +
-    '    .map((b) => b.getAttribute("aria-pressed"));' +
+    '  out.pressedAfterRestore = checkStates();' +
     '  out.queriesAfterRestore = queryStat();' +
+    '} else {' +
+    '  out.pressedAfterHide = null;' +
+    '  out.skipReason = checks().length > 1 ? "checkbox-disabled" : "not-enough-channels";' +
     '}' +
-    // ③ 多选一个量：图例/图都应多一份。
+    /*
+     * ③ 「无数据灰显 + 不可勾选」：把范围切到一段**很久以前**（2000-01-01 那两天），
+     * 那一段一定没有读数。判据三条：每一行都有 `data-trend-channel-nodata`、
+     * 每个勾选框都 `disabled`、面板小结是 "0 / N 路有数据"。
+     * 量完把范围**还原**成原来那个预设（这一条是只读探针，不许留下改动）。
+     */
+    'const activePreset = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    'out.rangeBefore = activePreset ? activePreset.getAttribute("data-trend-range-preset") : null;' +
+    'const customPreset = document.querySelector(\'[data-trend-range-preset="custom"]\');' +
+    'if (customPreset) {' +
+    '  customPreset.click(); await wait(400);' +
+    '  const pickers = [...document.querySelectorAll(".custom-range input.input")];' +
+    '  if (pickers.length === 2) {' +
+    '    const setValue = (el, value) => {' +
+    '      el.value = value;' +
+    '      el.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '    };' +
+    '    setValue(pickers[0], "2000-01-01T00:00");' +
+    '    setValue(pickers[1], "2000-01-02T00:00");' +
+    '    await wait(2500);' +
+    '  }' +
+    '  out.emptyRows = document.querySelectorAll("[data-trend-channel-row][data-trend-channel-nodata]").length;' +
+    '  out.emptyChecksDisabled = checks().map((c) => c.disabled);' +
+    '  out.emptySummary = text(document.querySelector("[data-channel-panel-summary]"));' +
+    /*
+     * ⚠ 选择器是 `.page .empty`，不是 `.empty-state` —— `EmptyState.vue` 的根元素是
+     * `<div class="empty">`。第 25 轮之前这里（以及上面 `historyEmpty`）用的是
+     * `.empty-state, [data-empty-state]`，**从来没匹配上过**：那两处读数一直是假的 `false`。
+     * 这是探针自己的缺陷，不是界面的。
+     */
+    '  out.emptyStateTitle = text(document.querySelector(".page .empty .empty__title"));' +
+    '  out.emptyRangeEmptyState = out.emptyStateTitle.length > 0;' +
+    '  if (activePreset) { activePreset.click(); await wait(1500); }' +
+    /*
+     * 还原之后**轮询等数据回来**：这一段查询走 DuckDB/Parquet，第一次往往要比 1.5 秒久
+     * （本机实测：切回预设之后 3–4 秒才重新出数）。等待是有上限的，判据仍然是"数据回来了"。
+     */
+    '  const dataRows = () =>' +
+    '    document.querySelectorAll("[data-trend-channel-row]:not([data-trend-channel-nodata])").length;' +
+    '  for (let i = 0; i < 24 && dataRows() === 0; i += 1) await wait(250);' +
+    '  out.rangeAfter = (function(){' +
+    '    const chip = document.querySelector("[data-trend-range-preset].chip--accent");' +
+    '    return chip ? chip.getAttribute("data-trend-range-preset") : null;' +
+    '  })();' +
+    '  out.rowsAfterRestore = document.querySelectorAll("[data-trend-channel-row]").length;' +
+    '  out.dataRowsAfterRestore = dataRows();' +
+    '  out.summaryAfterRestore = text(document.querySelector("[data-channel-panel-summary]"));' +
+    '  out.rangeEmptyStateAfterRestore = text(document.querySelector(".page .empty .empty__title"));' +
+    '}' +
+    // ④ 多选一个量：图都应多一份。
     'if (metricButtons.length > 1) {' +
     '  metricButtons[1].click(); await wait(1200);' +
     '  out.selectedMetrics = [...document.querySelectorAll("[data-metric-toggle]")]' +
@@ -4367,22 +4458,136 @@ async function run() {
     '}' +
     'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
     'return JSON.stringify(out);' +
-    '})()', 90_000)
+    '})()', 120_000)
   log('trend channels: ' + JSON.stringify(trendChannels))
   if (trendChannels.probeTimeout === true) {
     problems.push('趋势页的多通道探针超时 —— 这一段没有任何结论')
   } else if (trendChannels.legendCount === 0) {
     // 一次性 profile 里没有设备时这一页走空态，如实跳过（与上面 trends chrome 同一条口径）。
-    log('trend channels: skipped（没有设备，通道图例不渲染）')
+    log('trend channels: skipped（没有设备，通道那一列不渲染）')
   } else {
     if (trendChannels.legendCount < 2) {
       problems.push(
-        '通道图例只有 ' + trendChannels.legendCount + ' 条：默认选中的设备是多通道设备，' +
-        '应当每条通道一格（设备：' + JSON.stringify(trendChannels.deviceName) + '）'
+        '通道列只有 ' + trendChannels.legendCount + ' 条：默认选中的设备是多通道设备，' +
+        '应当每条通道一行（设备：' + JSON.stringify(trendChannels.deviceName) + '）'
       )
     }
     if (trendChannels.metricCount !== 7) {
       problems.push('量的可选按钮不是 7 个：' + trendChannels.metricCount)
+    }
+    /*
+     * ── 第 13 批第 4 条：右侧那一列 ──
+     *
+     * 全部**无条件**断言（除"改名按钮置灰"那一条要按设备在线状态分档，见下）。
+     */
+    if (trendChannels.panelExists !== true) {
+      problems.push('趋势页没有右侧的通道列（[data-trend-channels]）')
+    }
+    if (trendChannels.panelRightOfChart !== true) {
+      problems.push('通道列不在图的右边（业主第 4 条：「右侧列出 8 或 2 个通道」）')
+    }
+    if (trendChannels.panelRows !== trendChannels.legendCount) {
+      problems.push(
+        '通道列的行数与勾选框数不一致：行 ' + trendChannels.panelRows +
+          ' vs 勾选框 ' + trendChannels.legendCount
+      )
+    }
+    if (trendChannels.panelRows < 2) {
+      problems.push('通道列只有 ' + trendChannels.panelRows + ' 行（多通道设备应当列出每一路）')
+    }
+    if (trendChannels.renameButtons !== trendChannels.panelRows) {
+      problems.push(
+        '改名按钮数（' + trendChannels.renameButtons + '）与通道行数（' +
+          trendChannels.panelRows + '）不一致'
+      )
+    }
+    /*
+     * 改名是**写设备**：设备不在线时必须置灰并且给出原因。
+     * 这一条按在线状态分档 —— 在线设备上按钮该是可用的（那种情况下探针不点它，
+     * 因为点一下会真的改设备上的名字）。
+     */
+    const renameDisabled = trendChannels.renameDisabled || []
+    if (String(trendChannels.deviceStatus || '').toUpperCase() === 'ONLINE') {
+      if (renameDisabled.some(Boolean)) {
+        log(
+          'trend channels: 注意 —— 设备在线而改名按钮是禁用的：' +
+            JSON.stringify(trendChannels.renameTitle)
+        )
+      }
+    } else if (renameDisabled.length > 0 && renameDisabled.some((flag) => flag !== true)) {
+      problems.push('设备离线时改名按钮仍然可用（点一次必然失败的按钮）')
+    }
+    if (renameDisabled.length > 0 && String(trendChannels.renameTitle || '').trim() === '') {
+      problems.push('改名按钮没有说明"为什么不能改"（置灰而没有原因的按钮就是一个谜）')
+    }
+    if (trendChannels.rangeBefore !== null && trendChannels.rangeBefore !== undefined) {
+      // 「无数据灰显 + 不可勾选」：切到 2000 年那一段之后，每一行都该是灰的且勾不动。
+      if (trendChannels.panelRows > 0 && trendChannels.emptyRows !== trendChannels.panelRows) {
+        problems.push(
+          '把范围切到一段没有数据的区间之后，灰显的行数是 ' + trendChannels.emptyRows +
+            '（应为 ' + trendChannels.panelRows + '）—— 「无数据灰显」没有按 hasData 走'
+        )
+      }
+      if ((trendChannels.emptyChecksDisabled || []).some((flag) => flag !== true)) {
+        problems.push(
+          '没有数据的那几路勾选框仍然可勾（勾上只会画出一条空线）：' +
+            JSON.stringify(trendChannels.emptyChecksDisabled)
+        )
+      }
+      if (!/^0\s*\//.test(String(trendChannels.emptySummary || ''))) {
+        problems.push('空区间的面板小结不是 "0 / N 路有数据"：' + JSON.stringify(trendChannels.emptySummary))
+      }
+      /*
+       * 整页的"这一段没有数据"必须与那一列**同一句话**：所有可见通道都没数据时才该出现。
+       * 这一条是第 25 轮探针抓到的真缺陷：`rangeIsEmpty` 原来只看**第一条通道**，
+       * 于是"8 路里只有一路有读数（而那一路不是第一条）"时，页面左边说"这一段没有数据"、
+       * 右边说"1 / 8 路有数据"。
+       */
+      if (trendChannels.emptyRangeEmptyState !== true) {
+        problems.push('所有通道都没有数据的区间里，页面没有给出"这一段没有数据"的空态')
+      } else if (/暂无历史数据|no history/i.test(String(trendChannels.emptyStateTitle || ''))) {
+        problems.push(
+          '这一段没有数据，页面却说"该设备暂无历史数据"（两句话说的是不同的事实）：' +
+            JSON.stringify(trendChannels.emptyStateTitle)
+        )
+      }
+      // 还原：范围回到原来那个预设，读数行也回来了。
+      if (trendChannels.rangeAfter !== trendChannels.rangeBefore) {
+        problems.push(
+          '探针没有把时间范围还原：' + trendChannels.rangeBefore + ' → ' + trendChannels.rangeAfter
+        )
+      }
+      if (trendChannels.rowsAfterRestore !== trendChannels.panelRows) {
+        problems.push(
+          '还原范围之后通道行数不对：' + trendChannels.rowsAfterRestore + '/' + trendChannels.panelRows
+        )
+      }
+      /*
+       * 数据回没回来：起点有几路有数据，还原之后就该有几路 —— 拿"起点小结"当基准，
+       * 这样在"这个 profile 本来就没有读数"的机器上不会假红（那种情况只记日志）。
+       */
+      const startHadData = !/^0\s*\//.test(String(trendChannels.summaryAtStart || ''))
+      if (!startHadData) {
+        log(
+          'trend channels: 注意 —— 这个 profile 起点就没有读数（' + trendChannels.summaryAtStart +
+            '），"还原之后数据回来"这一条没验到'
+        )
+      } else if (trendChannels.dataRowsAfterRestore === 0) {
+        problems.push(
+          '还原时间范围之后一路数据都没有（起点 ' + trendChannels.summaryAtStart + '，还原后 ' +
+            trendChannels.summaryAfterRestore + '）'
+        )
+      } else if (trendChannels.rangeEmptyStateAfterRestore) {
+        problems.push(
+          '还原时间范围之后页面仍然显示空态（' + trendChannels.rangeEmptyStateAfterRestore +
+            '），而那一列说有数据'
+        )
+      } else {
+        log(
+          'trend channels/④: 空区间 0/N → 灰显 ' + trendChannels.emptyRows + ' 行、勾选框禁用 ' +
+            JSON.stringify(trendChannels.emptyChecksDisabled) + '；还原后 ' + trendChannels.summaryAfterRestore
+        )
+      }
     }
     // ① 点灭一条通道：只有它变 false，其余不变。
     if (trendChannels.pressedAfterHide) {
@@ -4872,7 +5077,12 @@ async function run() {
      */
     '    deviceCount: (function(){ const el = document.querySelector(".topbar .indicator__value");' +
     '      return el ? Number((el.textContent || "").trim()) : -1; })(),' +
-    '    emptyState: document.querySelectorAll(".empty-state, [data-empty-state]").length,' +
+    /*
+     * ⚠ `.empty` 而不是 `.empty-state`：`EmptyState.vue` 的根元素是 `<div class="empty">`。
+     * 这一处（以及趋势页那一段的 `historyEmpty`）以前写的选择器从来没匹配上过，
+     * 读数一直是假的 0/false（第 25 轮改正）。
+     */
+    '    emptyState: document.querySelectorAll(".page .empty").length,' +
     '    selectedOption: (function(){ const s = document.querySelector("#topbar-page-slot select");' +
     '      return s && s.selectedOptions[0] ? (s.selectedOptions[0].textContent || "").trim() : null; })(),' +
     /*

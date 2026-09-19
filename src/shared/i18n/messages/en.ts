@@ -587,12 +587,29 @@ export const en: MessageSchema = {
     noDeviceTitle: 'Add a device first',
     goToDevices: 'Go to Devices',
     filterDevice: 'Device',
-    filterChannel: 'Channel',
+    /* `filterChannel` was removed with the channel row: channels are a column
+       beside the chart now (batch 13 item 4). */
     noAddress: 'no address',
     filterMetric: 'Metric',
     channelHide: 'Hide this channel',
     channelShow: 'Show this channel',
     channelShowAll: 'Show all',
+    /*
+     * Batch 13 item 4: channels became a RIGHT-HAND COLUMN (8 or 2 channels, CH1…)
+     * with rename, grey-out when there is no data, and a checkbox when there is.
+     */
+    channelPanelTitle: 'Channels',
+    channelPanelSummary: '{withData} / {total} with data',
+    channelNoData: 'No reading on this channel in this range; ticking it would only draw an empty line',
+    channelRename: 'Rename',
+    channelRenameHint: 'Rename this channel (written to the device; the others are untouched)',
+    channelRenameOffline: 'Renaming writes to the device: it needs an online acoustic box',
+    channelRenamePlaceholder: 'Channel name',
+    channelRenameFailed: 'Rename failed (the device did not confirm)',
+    channelRenamed: '{channel} renamed',
+    channelNameError_empty: 'A channel name cannot be empty',
+    channelNameError_tooLong: 'A channel name is at most {count} characters',
+    channelNameError_unchanged: 'The name did not change',
     channelHintVisible: '{shown} of {total} channels on the chart',
     channelLines: '{count} channel(s)',
     metricLimit: 'At most {count} metrics at once',

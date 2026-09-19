@@ -34,12 +34,18 @@ import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
 import {
+  CHANNEL_NAME_MAX_LENGTH,
+  CHANNEL_NAME_PROBLEM_KEYS,
+  normaliseChannelName
+} from '@shared/domain/channel-name'
+import {
   TREND_METRIC_MAX_SELECTED,
   TREND_RANGE_OPTIONS,
   useTrendsStore
 } from '@renderer/stores/trends'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import { channelState, channelStateLabelKey, type ChannelState } from '@renderer/lib/channelState'
 import {
   EMPTY_VALUE,
@@ -71,6 +77,7 @@ const router = useRouter()
 const devices = useDevicesStore()
 const trends = useTrendsStore()
 const uiRefresh = useUiRefreshStore()
+const deviceConfig = useDeviceConfigStore()
 
 const selectedDeviceId = ref('')
 /** Local text mirrors of the custom bounds, so typing is never fought by a re-render. */
@@ -155,20 +162,36 @@ watch(
 )
 
 /**
- * 图例：一条通道一格，颜色与图上那条线**同一个来源**（`trendChannelColor`），
- * 点一下切换"画不画它"。
+ * 右侧那一列：**一条通道一行**（业主 2026-09-19 第 13 批第 4 条）。
  *
- * 值取**主量 × 这条通道**的最后一个非空时间桶：图例上给一个数比只给名字有用得多
- * （"哪条通道现在高"是看图时的第一个问题）。没有数据时是 `—`，不是 0。
+ * 业主原话：「声纹场景选设备后右侧列出 8 或 2 个通道 CH1…支持重命名、无数据灰显、
+ * 有数据可勾选」。
+ *
+ * 这一列同时承担三件事，因此每一行的判据都必须来自**已经取回来的数据**，不能另查一次：
+ *   · `hasData` —— 这一段范围里这一路**有没有任何非空时间桶**（选了多个量时，只要有一个量
+ *     有数据就算有）。它是"无数据灰显"与"有数据可勾选"的**同一个**判据：两处各算一次，
+ *     迟早会出现"灰着但能勾"这种自相矛盾的行；
+ *   · `visible` —— 这一路的线画不画（点勾选框切换，与图上那条线同一个颜色来源）；
+ *   · `value` —— 主量最后一个非空桶，给一个数比只给名字有用（"哪条通道现在高"）。
+ *
+ * `hasData === false` 的行**不许被勾选**：一段范围里没有这一路的读数，勾上它只会得到一条空线，
+ * 而空线看起来像"这一路这些值是 0"。
  */
-interface ChannelLegendEntry extends ChannelOption {
+interface TrendChannelRow extends ChannelOption {
   color: string
   visible: boolean
+  hasData: boolean
   value: number | null
 }
 
-const channelLegend = computed<ChannelLegendEntry[]>(() =>
+const channelRows = computed<TrendChannelRow[]>(() =>
   channelOptions.value.map((channel) => {
+    // 有数据 = 任一**已选中的量**在这一路有至少一个有限值。
+    const hasData = trends.metrics.some((targetMetric) =>
+      (trends.seriesFor(targetMetric, channel.index)?.points ?? []).some((point) =>
+        Number.isFinite(point.value)
+      )
+    )
     const series = trends.seriesFor(trends.metrics[0] ?? trends.metric, channel.index)
     let latest: number | null = null
     for (const point of series?.points ?? []) {
@@ -178,10 +201,140 @@ const channelLegend = computed<ChannelLegendEntry[]>(() =>
       ...channel,
       color: trendChannelColor(channel.index),
       visible: trends.isChannelVisible(channel.index),
+      hasData,
       value: latest
     }
   })
 )
+
+/** 有数据的那几路（面板上一句"几路有数据"，也是"全部显示"的作用范围）。 */
+const channelsWithData = computed(() => channelRows.value.filter((row) => row.hasData).length)
+
+/**
+ * 勾选框能不能用：**这一路有数据**。
+ *
+ * 业主原话就是"无数据灰显、**有数据**可勾选"，所以判据严格是 `hasData`。
+ *
+ * 想过另一种写法（"没有数据但当前勾着的那一行也保持可用"），理由是"否则会锁死"——
+ * 但那是个假问题：**唯一**会变成"不可用"的情形是"这一路在这段范围里没有数据"，
+ * 而那时它本来就没有线可画；范围一旦改回有数据的那一段，它自己就恢复可勾了。
+ * 反过来，放宽判据会真的伤到业主点名的那条规则：一段没有数据的区间里，
+ * 八个勾选框看起来全都能勾，勾上却什么也画不出来。
+ */
+function channelCheckboxDisabled(row: TrendChannelRow): boolean {
+  return !row.hasData
+}
+
+/**
+ * 这一整段范围里**所有可见通道**都没有数据 —— 只有这时才该显示"这一段没有数据"。
+ *
+ * 为什么不直接用 store 的 `trends.rangeIsEmpty`：那一个是按**第一条通道**（主量的
+ * `series`，即 `channelIds[0]`）算的。设备的历史只落在某一条非首通道上时（真机上见过：
+ * 8 路里只有一路有读数），页面会显示"这一段范围里没有数据"，而它右边那一列同时写着
+ * "1 / 8 路有数据" —— 同一屏上两句话互相矛盾，且操作员一定会去猜哪一个是真的。
+ *
+ * 判据改成"可见通道里**没有任何一条**有数据"：与那一列的灰显用的是同一个 `hasData`。
+ */
+const rangeEmptyForChannels = computed(
+  () => trends.rangeIsEmpty && channelsWithData.value === 0
+)
+
+// ---------------------------------------------------------------------------
+// 重命名（第 13 批第 4 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 正在改名的那一路；`null` = 没有在改。
+ *
+ * 一次只允许改一路：改名要写设备（`/set_passageway`），而设备的写法是
+ * "读回全部通道 → 只在被改的行上合并 → 写回"，两路同时改会让两次读回互相覆盖。
+ */
+const renamingChannel = ref<number | null>(null)
+const renameText = ref('')
+const renameProblem = ref('')
+const renameNotice = ref('')
+const renameBusy = ref(false)
+
+/**
+ * 这一台能不能改名：必须是**声纹设备**（`acousticBox`）**且在线**。
+ *
+ * 三条理由，缺一条都不行：
+ *   1. 相机的通道是它自己的五路视频，`/get_passageway` 在那台设备上不存在；
+ *   2. SN-16 声呐的通道表是我们本地那一行（`refreshChannels` 不去问设备），
+ *      改它等于改一个我们自己编的名字；
+ *   3. 改名是**写设备**，设备不在线时必然失败 —— 与其让操作员点一次必然失败的按钮，
+ *      不如把按钮置灰并说明原因（原因挂在 `title` 上）。
+ */
+const channelRenameAvailable = computed(
+  () =>
+    selectedDevice.value?.kind === 'acousticBox' && selectedDevice.value?.status === 'ONLINE'
+)
+
+/** 改名按钮的悬停说明：可用时说"改什么"，不可用时说"为什么不能改"。 */
+const channelRenameHint = computed(() =>
+  channelRenameAvailable.value
+    ? t('trendsUi.channelRenameHint')
+    : t('trendsUi.channelRenameOffline')
+)
+
+function startChannelRename(row: TrendChannelRow): void {
+  if (!channelRenameAvailable.value) return
+  renamingChannel.value = row.index
+  renameText.value = row.name
+  renameProblem.value = ''
+  renameNotice.value = ''
+}
+
+function cancelChannelRename(): void {
+  renamingChannel.value = null
+  renameText.value = ''
+  renameProblem.value = ''
+}
+
+/**
+ * 提交改名：先在本地判（`normaliseChannelName`，可单测），再写设备，再刷新缓存。
+ *
+ * 缓存刷新是**必须**的一步：这一列的名字来自 `devices.channelsOf()`（我们库里那份，
+ * 由 `refreshChannels()` 从设备读回来），而改名走的是设备配置那条路 ——
+ * 不重新读一次，这一页会继续显示旧名字（"改成功了但界面上没变"）。
+ */
+async function submitChannelRename(): Promise<void> {
+  const index = renamingChannel.value
+  if (index === null) return
+  const current = channelOptions.value.find((channel) => channel.index === index)?.name ?? ''
+  const verdict = normaliseChannelName(renameText.value, current)
+  if (!verdict.ok) {
+    // `count` 只被 `channelNameError_tooLong` 用；多传一个参数对其余两条无害。
+    renameProblem.value = t(CHANNEL_NAME_PROBLEM_KEYS[verdict.problem], {
+      count: CHANNEL_NAME_MAX_LENGTH
+    })
+    return
+  }
+
+  renameProblem.value = ''
+  renameBusy.value = true
+  const updated = await deviceConfig.updateChannel(selectedDeviceId.value, index, {
+    name: verdict.value
+  })
+  renameBusy.value = false
+  if (!updated) {
+    // 设备的原话优先（可能是它自己的长度/字符限制，我们编不出来）。
+    renameProblem.value = deviceConfig.error || t('trendsUi.channelRenameFailed')
+    return
+  }
+
+  renamingChannel.value = null
+  renameText.value = ''
+  await devices.loadChannels(selectedDeviceId.value, true)
+  renameNotice.value = t('trendsUi.channelRenamed', { channel: channelLabel(index) })
+}
+
+/** 勾选框切换：只改"画哪几条线"，不重新查库（数据已经一次全取回来了）。 */
+function toggleChannelRow(row: TrendChannelRow): void {
+  if (channelCheckboxDisabled(row)) return
+  trends.toggleChannel(row.index)
+}
+
 
 const customRangeIncomplete = computed(
   () =>
@@ -722,52 +875,12 @@ watch(
           </label>
 
           <!--
-            通道：**不是一个下拉框，而是一排可以点亮的通道名**（业主 2026-09-18 追加要求：
-            「只是通过点击通道名称实现是显示这个通道还是隐藏这个通道」）。
-            点一下只改"画哪几条线"，不重新查库（数据已经一次全取回来了）。
-            色点与图上那条线同一个颜色来源。
+            通道那一排**从筛选栏搬到右侧那一列**（业主 2026-09-19 第 13 批第 4 条：
+            「声纹场景选设备后**右侧**列出 8 或 2 个通道 CH1…」）。
+            筛选栏只留"选哪台设备 / 看哪些量 / 聚合方式"这类**查询条件**；通道不是查询条件
+            （数据已经一次全取回来，切通道只是画不画那条线），所以它属于图旁边那一列。
+            第 10 批第 2 条那两句话（"点通道名显示/隐藏"）仍然成立，只是换了个位置。
           -->
-          <div class="field field--channels">
-            <span class="field-label">{{ t('trendsUi.filterChannel') }}</span>
-            <div class="chip-row" data-channel-legend>
-              <button
-                v-for="channel in channelLegend"
-                :key="channel.index"
-                type="button"
-                class="chip chip--selectable channel-chip"
-                :class="{ 'chip--accent': channel.visible, 'channel-chip--off': !channel.visible }"
-                :data-channel-toggle="channel.index"
-                :aria-pressed="channel.visible"
-                :title="
-                  channel.visible ? t('trendsUi.channelHide') : t('trendsUi.channelShow')
-                "
-                @click="trends.toggleChannel(channel.index)"
-              >
-                <span
-                  class="channel-chip__dot"
-                  :style="{ background: channel.color }"
-                  aria-hidden="true"
-                ></span>
-                {{ channelLabel(channel.index) }}
-                <template v-if="channel.name">（{{ channel.name }}）</template>
-                <template v-if="channel.state !== 'enabled'">
-                  （{{ t(channelStateLabelKey(channel.state)) }}）
-                </template>
-                <span class="muted channel-chip__value">
-                  {{ channel.value === null ? '—' : trendValueText(trends.metric, channel.value) }}
-                </span>
-              </button>
-              <button
-                v-if="channelLegend.length > 1"
-                type="button"
-                class="chip chip--selectable"
-                data-channel-show-all
-                @click="trends.showAllChannels()"
-              >
-                {{ t('trendsUi.channelShowAll') }}
-              </button>
-            </div>
-          </div>
 
           <!--
             量可以**多选**：选中的量各画一张图（见 `chartBundles` 与文件头）。
@@ -827,6 +940,7 @@ watch(
               type="button"
               class="chip chip--selectable"
               :class="{ 'chip--accent': trends.range === preset.key }"
+              :data-trend-range-preset="preset.key"
               @click="trends.setRange(preset.key)"
             >
               {{ t(preset.labelKey) }}
@@ -871,6 +985,15 @@ watch(
           </div>
         </div>
       </section>
+
+      <!--
+        图的左边、通道列的右边（业主 2026-09-19 第 13 批第 4 条：「右侧列出 8 或 2 个通道」）。
+
+        为什么通道列在**图旁边**而不是筛选栏里：它列的是一条通道**在这段范围里有没有数据**
+        以及"画不画它"，两者都要与图对着看（"CH3 是灰的"这句话只有在图的旁边才有意义）。
+      -->
+      <div class="trends-body">
+        <div class="trends-main">
 
       <section v-if="trends.hasPoints" class="card-grid card-grid--stats">
         <div class="card">
@@ -932,7 +1055,7 @@ watch(
         </EmptyState>
 
         <EmptyState
-          v-else-if="trends.rangeIsEmpty"
+          v-else-if="rangeEmptyForChannels"
           :title="t('trendsUi.emptyRangeTitle')"
         >
           <button v-if="coverageText" type="button" class="btn" @click="useCoverageRange">
@@ -1012,6 +1135,123 @@ watch(
           </div>
         </dl>
       </section>
+        </div>
+
+        <!--
+          **右侧那一列：8 或 2 个通道**（业主 2026-09-19 第 13 批第 4 条）。
+
+          一行一路，四件事在一行里说清：
+            · 勾选框 —— 这一路的线画不画（**只有有数据的行能勾**，见 `channelCheckboxDisabled`）；
+            · 色点 —— 与图上那条线同一个颜色来源（`trendChannelColor`）；
+            · 名字 —— `CH1`、设备名（有就用）、通道配置状态（不是"已启用"时写明）；
+            · 重命名 —— 写设备（`/set_passageway` 的 `dchName`），失败时显示设备的原话。
+
+          「无数据灰显」用的是 `hasData`（这一段范围里没有任何非空时间桶），
+          **不是**通道配置状态：设备把这一路关掉、与这一路这些天没有读数，是两件事，
+          两者都不能用另一者的样子画出来。
+        -->
+        <aside class="card channel-panel" data-trend-channels>
+          <div class="section-header">
+            <h3 class="section-title">{{ t('trendsUi.channelPanelTitle') }}</h3>
+            <span class="muted chart-hint" data-channel-panel-summary>
+              {{ t('trendsUi.channelPanelSummary', { withData: channelsWithData, total: channelRows.length }) }}
+            </span>
+          </div>
+
+          <p v-if="renameNotice" class="alert alert--success" role="status">{{ renameNotice }}</p>
+
+          <ul class="channel-panel__list">
+            <li
+              v-for="row in channelRows"
+              :key="row.index"
+              class="channel-row"
+              :class="{
+                'channel-row--nodata': !row.hasData,
+                'channel-row--off': !row.visible
+              }"
+              :data-trend-channel-row="row.index"
+              :data-trend-channel-nodata="row.hasData ? undefined : 'true'"
+            >
+              <label class="channel-row__check">
+                <input
+                  type="checkbox"
+                  :checked="row.visible"
+                  :disabled="channelCheckboxDisabled(row)"
+                  :data-trend-channel-check="row.index"
+                  :aria-label="channelLabel(row.index)"
+                  :title="
+                    row.hasData
+                      ? row.visible
+                        ? t('trendsUi.channelHide')
+                        : t('trendsUi.channelShow')
+                      : t('trendsUi.channelNoData')
+                  "
+                  @change="toggleChannelRow(row)"
+                />
+                <span class="channel-row__dot" :style="{ background: row.color }" aria-hidden="true"></span>
+                <span class="channel-row__name">
+                  {{ channelLabel(row.index) }}
+                  <template v-if="row.name">（{{ row.name }}）</template>
+                </span>
+                <span class="muted channel-row__state" v-if="row.state !== 'enabled'">
+                  {{ t(channelStateLabelKey(row.state)) }}
+                </span>
+                <span class="channel-row__value">
+                  {{ row.value === null ? '—' : trendValueText(trends.metric, row.value) }}
+                </span>
+              </label>
+
+              <!--
+                改名：点一下把这一行变成输入框（`data-trend-channel-rename-input` 是探针钩子）。
+                Enter 提交、Esc 取消 —— 一个两行的表单不该要求操作员去找鼠标。
+              -->
+              <form v-if="renamingChannel === row.index" class="channel-row__rename" @submit.prevent="submitChannelRename">
+                <input
+                  v-model="renameText"
+                  class="input channel-row__rename-input"
+                  type="text"
+                  :maxlength="CHANNEL_NAME_MAX_LENGTH"
+                  :placeholder="t('trendsUi.channelRenamePlaceholder')"
+                  data-trend-channel-rename-input
+                  @keydown.esc="cancelChannelRename"
+                />
+                <button type="submit" class="btn btn--sm btn--primary" :disabled="renameBusy">
+                  {{ t('common.save') }}
+                </button>
+                <button type="button" class="btn btn--sm" @click="cancelChannelRename">
+                  {{ t('common.cancel') }}
+                </button>
+              </form>
+              <button
+                v-else
+                type="button"
+                class="btn btn--sm btn--ghost channel-row__rename-button"
+                :disabled="!channelRenameAvailable"
+                :title="channelRenameHint"
+                :data-trend-channel-rename="row.index"
+                @click="startChannelRename(row)"
+              >
+                {{ t('trendsUi.channelRename') }}
+              </button>
+
+              <p v-if="renamingChannel === row.index && renameProblem" class="alert alert--danger channel-row__error" role="alert">
+                {{ renameProblem }}
+              </p>
+            </li>
+          </ul>
+
+          <div class="btn-row channel-panel__actions">
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-channel-show-all
+              @click="trends.showAllChannels()"
+            >
+              {{ t('trendsUi.channelShowAll') }}
+            </button>
+          </div>
+        </aside>
+      </div>
     </template>
   </div>
 </template>
@@ -1052,47 +1292,155 @@ watch(
 }
 
 /*
- * 通道那一排（可点亮的通道名）。
+ * 量与通道两排的关系（第 13 批第 4 条之后）。
  *
- * 它比一个下拉框宽得多（8 条通道 = 8 个 chip，16 通道更多），所以给一个**上限宽度**并允许
- * 换行：挤成一行会把「刷新 / 立即落盘」两个按钮推出筛选栏。
+ * 「量」那一排还在筛选栏里（它是查询条件），**通道那一排搬到了图旁边**（见模板注释），
+ * 所以这里只剩 `field--metrics`。旧规则 `.field--channels` / `.channel-chip*` 一并删掉：
+ * 留着一条没人用的 CSS 会让下一个人以为那一排还在筛选栏里（§15.29.4 记过同一条教训）。
  */
-.field--channels,
 .field--metrics {
   min-width: 0;
   flex: 1 1 100%;
 }
 
-.field--channels .chip-row,
 .field--metrics .chip-row {
   flex-wrap: wrap;
   row-gap: 6px;
 }
 
-.channel-chip {
-  display: inline-flex;
+/*
+ * 图（左，占满剩余宽度）+ 通道列（右，定宽）。
+ *
+ * 通道列给 240px 而不是百分比：它列的是"通道名 + 一个数 + 一个按钮"，
+ * 宽度由内容决定；跟着窗口按比例变宽只会把图挤窄。
+ * 窄到放不下时（< 2×这个宽度）落回一列，通道列落到图下面 —— 与 `.camera-board` 同一条做法。
+ */
+.trends-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.trends-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* 窄窗口：图在上、通道列在下（这时"右侧"这句话不再成立，但内容一条不少）。 */
+@media (max-width: 1100px) {
+  .trends-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.channel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  position: sticky;
+  top: var(--space-4);
+}
+
+.channel-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.channel-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+}
+
+.channel-row:hover {
+  background: var(--color-bg-subtle);
 }
 
 /*
- * 被点掉的通道：整块降到次要色。**留一个色点在外**（点仍然是有颜色的）会让"隐藏"看起来
- * 像"只是字变淡了"，而图上少了一条线是件明确的事。
+ * 「无数据灰显」：整行降到次要色。**勾选框自己也有 `disabled`**（不是只靠颜色）——
+ * 只看颜色的话，键盘用户仍然能勾上一个没有数据的通道。
  */
-.channel-chip--off {
+.channel-row--nodata {
   opacity: 0.55;
 }
 
-.channel-chip__dot {
+/* 被取消勾选的通道：名字划掉，但色点仍然有颜色（它还是图上那个颜色）。 */
+.channel-row--off .channel-row__name {
+  text-decoration: line-through;
+}
+
+.channel-row__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.channel-row__dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   flex: none;
 }
 
-.channel-chip__value {
+.channel-row__name {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-row__state {
   font-size: 11px;
+  flex: none;
+}
+
+.channel-row__value {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.channel-row__rename {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.channel-row__rename-button {
+  flex: none;
+}
+
+/* 改名输入框在**这一行里**，不是整幅宽的表单：它改的就是这一行那一格。 */
+.channel-row__rename-input {
+  flex: 1 1 90px;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.channel-row__error {
+  flex: 1 1 100%;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+}
+
+.channel-panel__actions {
+  justify-content: flex-end;
 }
 
 /* 一个量一张图：图之间用空隙分开，不画分隔线（它们本来就是独立的两张图）。 */

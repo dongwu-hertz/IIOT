@@ -718,12 +718,36 @@ export const zhCN = {
     noDeviceTitle: '请先添加设备',
     goToDevices: '前往设备管理',
     filterDevice: '设备',
-    filterChannel: '通道',
+    /*
+     * 这里原来还有 `filterChannel: '通道'`（筛选栏里那一排通道名前面的标签）。
+     * 第 13 批第 4 条把通道搬到**图右侧那一列**（那一列自己有标题 `channelPanelTitle`），
+     * 筛选栏里不再有通道控件，所以这个键四本目录一起删 —— 留着就是死键。
+     */
     noAddress: '无地址',
     filterMetric: '指标',
     channelHide: '隐藏这条通道',
     channelShow: '显示这条通道',
     channelShowAll: '全部显示',
+    /*
+     * 第 13 批第 4 条：通道改成**右侧一列**（8 或 2 个通道 CH1…），可重命名、无数据灰显、
+     * 有数据可勾选。下面这一组是那一列与改名用的词条。
+     */
+    channelPanelTitle: '通道',
+    channelPanelSummary: '{withData} / {total} 路有数据',
+    channelNoData: '这一段范围里这一路没有读数，勾选它只会得到一条空线',
+    channelRename: '重命名',
+    channelRenameHint: '改这一路的名称（写进设备，其余通道不变）',
+    channelRenameOffline: '改名要写设备：设备在线、且是声纹设备时才能改',
+    channelRenamePlaceholder: '通道名称',
+    channelRenameFailed: '改名失败（设备没有确认）',
+    channelRenamed: '{channel} 已改名',
+    /*
+     * 三条判定失败的说明（键名后缀与 `@shared/domain/channel-name.ts` 的
+     * `CHANNEL_NAME_PROBLEM_KEYS` 一一对应）。
+     */
+    channelNameError_empty: '通道名称不能为空',
+    channelNameError_tooLong: '通道名称最多 {count} 个字符',
+    channelNameError_unchanged: '名称没有变化',
     channelHintVisible: '图上 {shown} / {total} 条通道',
     channelLines: '{count} 条通道',
     metricLimit: '最多同时显示 {count} 个量',
