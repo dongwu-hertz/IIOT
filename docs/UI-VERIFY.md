@@ -1858,7 +1858,10 @@ IP 地址 / **未确认告警**（有就说条数，没有就明说没有 "没�
   角标 `200`、`deviceAlarmRows 20`、同一路 IPC `total 200 / rows 20` —— **三个数对得上**；
   `deviceAlarmEmpty false`（确实有告警可列）。
   地图页：`smoothnessColumn ["—","—","—"]`、`stabilityHint null`（"没有数据源"那句真的没了）。
-- **出包**：见本节末（本轮末重出一次）。
+- **出包**：`npm run dist:win:offline` →
+  `release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+  （**127,106,794 字节**，sha256 `C2FA19DAB1F107A2FD16F6F5F965BB2CD2DA4A7084F510A5940C4BBD3A90CFE7`）；
+  `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 
 ### DD 段：这一段**没验证**的
 
