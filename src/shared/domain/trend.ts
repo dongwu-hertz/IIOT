@@ -140,3 +140,50 @@ export function trendChannelColor(index: number): string {
   const safe = Number.isFinite(index) && index >= 0 ? Math.floor(index) : 0
   return TREND_CHANNEL_COLORS[safe % TREND_CHANNEL_COLORS.length] as string
 }
+
+// ---------------------------------------------------------------------------
+// Y 轴的取值范围（第 13 批第 5 条）
+// ---------------------------------------------------------------------------
+
+/**
+ * 声压级 Y 轴的固定上限/下限（业主原话：「声压级 Y 轴 0–100 dB」）。
+ *
+ * 为什么声压级要固定、别的量不固定：声压级**有物理边界**（这一族设备的量程就是
+ * 0–100 dB），固定之后两次查询、两台设备的图可以直接对比（"这条线在 70 dB 上下"
+ * 这句话在两张图之间才有意义）；而平稳度、频带能量比是无量纲比值，范围随数据走，
+ * 写死一根轴只会把变化压成一条直线（第 6 条要的"Y 轴弹性变化"正是为它们准备的）。
+ *
+ * **手册未说明**：手册没有规定趋势图的纵轴范围（这一族设备的量程上限见设备参数一节，
+ * 但"图上怎么画"是我们的设计）。100 这个数就是这台设备的量程上限，不是我们挑的。
+ */
+export const SPL_AXIS_MIN = 0
+export const SPL_AXIS_MAX = 100
+
+/** 一根 Y 轴的范围；两个字段都不给 = **弹性**（ECharts 按数据自适应）。 */
+export interface TrendAxisRange {
+  min?: number
+  max?: number
+}
+
+/**
+ * 这个量的 Y 轴范围。
+ *
+ * 只有声压级是固定的；其余的量返回空对象（= 交给 ECharts 自适应）。做成纯函数是为了
+ * 能在没有浏览器的情况下断言"声压级确实是 0–100"—— 探针只能看到画布，看不到坐标轴配置。
+ */
+export function trendAxisRange(metric: TrendMetric): TrendAxisRange {
+  if (metric === 'spl') return { min: SPL_AXIS_MIN, max: SPL_AXIS_MAX }
+  return {}
+}
+
+/**
+ * Y 轴范围给探针看的文本（`0-100` / `auto`）。
+ *
+ * 单独一个函数而不是在模板里拼：探针断言的字符串与图里那根轴**同一个来源**，
+ * 两处各写一遍的话，"图上固定 0–100"与"探针读到 0-100"可以同时成立而其实不相关。
+ */
+export function trendAxisRangeText(metric: TrendMetric): string {
+  const range = trendAxisRange(metric)
+  if (range.min === undefined && range.max === undefined) return 'auto'
+  return `${range.min ?? 'auto'}-${range.max ?? 'auto'}`
+}

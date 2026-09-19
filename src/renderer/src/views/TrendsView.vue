@@ -33,6 +33,8 @@ import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT } from '@shared/domain/models'
+import { trendAxisRange, trendAxisRangeText } from '@shared/domain/trend'
+import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
 import {
   CHANNEL_NAME_MAX_LENGTH,
   CHANNEL_NAME_PROBLEM_KEYS,
@@ -57,7 +59,6 @@ import {
   toDateTimeLocalValue
 } from '@renderer/lib/format'
 import {
-  TREND_AGGREGATION_OPTIONS,
   TREND_METRIC_META,
   TREND_METRIC_OPTIONS,
   formatBucketSeconds,
@@ -69,7 +70,6 @@ import {
 } from '@renderer/lib/trendMetrics'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import EChart from '@renderer/components/EChart.vue'
-import MetricCard from '@renderer/components/MetricCard.vue'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -111,15 +111,50 @@ function toggleMetric(targetMetric: TrendMetric): void {
   trends.toggleMetric(targetMetric)
 }
 
-const aggregationSelection = computed({
-  get: () => trends.aggregation as string,
-  set: (value: string) => {
-    const option = TREND_AGGREGATION_OPTIONS.find((item) => item.key === value)
-    if (!option) return
-    trends.aggregation = option.key
-    trends.query()
-  }
+/**
+ * 「聚合方式」那个下拉框**删掉了**（业主 2026-09-19 第 13 批第 5 条：
+ * 「下方的指标删除聚合方式、直接呈现所有结果」）。
+ *
+ * 删的是**让操作员选**：一个时间桶里面怎么算仍然存在（后端按 `aggregation` 算，固定平均），
+ * 而且 Y 轴名字里照旧写着「（平均）」—— 不写就是把"一桶的平均值"说成了"原始读数"。
+ * 换个说法：桶里面的算法规格只有一种时，再多一个下拉框只是让操作员以为
+ * "换一种聚合方式能得到不同的数据"，而数据是同一批。
+ */
+const granularitySelection = computed({
+  get: () => trends.granularity,
+  set: (value: string) => trends.setGranularity(value)
 })
+
+/**
+ * 「自动」那一档旁边要把**主进程实际挑的桶宽**写出来。
+ *
+ * 不回显的话"自动"就是一个黑箱，而它恰恰决定了这张图有多细（第 5 条要的是"自定义缩放
+ * 时间颗粒度"—— 要看得出自己在哪一档上）。桶宽来自后端回话（`series.bucketSeconds`）。
+ */
+const autoBucketText = computed(() => {
+  const seconds = trends.series?.bucketSeconds
+  if (seconds === undefined) return ''
+  return formatBucketSeconds(seconds)
+})
+
+/**
+ * 「自动」这一档时，主进程挑中的桶宽正好等于界面上的某一档 —— 就把那一档也标一下
+ * （`title` 里说"自动挑的就是这一档"），让"自动"与手动那六档之间的关系看得见。
+ * 挑中的桶宽不在那六档里（例如 15 秒）时给 `null`，界面上不加任何标记。
+ */
+const autoBucketKey = computed(() =>
+  trends.granularity === 'auto' ? granularityKeyForSeconds(trends.series?.bucketSeconds) : null
+)
+
+/** 颗粒度按钮的悬停说明；自动那一档顺带把实际桶宽写进去。 */
+function granularityHint(option: { key: string; seconds: number | null }): string {
+  if (option.key === 'auto') {
+    return autoBucketText.value
+      ? t('granularity.autoHint', { bucket: autoBucketText.value })
+      : t('granularity.autoLabel')
+  }
+  return t('granularity.fixedHint')
+}
 
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
 
@@ -544,6 +579,16 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
   const axisName = trendAxisName(bundle.metric, trends.aggregation)
   const tickFormatter = meta.tickFormatter
   const pointCount = bundle.labels.length
+  /*
+   * Y 轴范围（业主第 5 条：「声压级 Y 轴 0–100 dB」）。
+   *
+   * `trendAxisRange()` 只对声压级给出 0–100，其余的量返回空对象 —— 空对象时 `scale: true`
+   * 让 ECharts 按数据自适应（第 6 条要的"Y 轴弹性变化"就是这一支）。
+   * **固定了 min/max 就不能再开 `scale`**：ECharts 的 `scale` 只在没给 min/max 时有意义，
+   * 一起给会被读成"作者想要弹性"，而图上是 0–100 —— 那种半对的状态最难查。
+   */
+  const range = trendAxisRange(bundle.metric)
+  const fixedRange = range.min !== undefined || range.max !== undefined
 
   return {
     // Real measurements, not a dashboard toy: an animated line implies the data
@@ -551,7 +596,7 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
     animation: false,
     grid: { left: 58, right: 18, top: 34, bottom: 30 },
     tooltip: { trigger: 'axis', formatter: trendTooltipFor(bundle) },
-    // ECharts 自带的图例在这里**关掉**：图例是页面上的那一排通道按钮（点一下切换
+    // ECharts 自带的图例在这里**关掉**：图例是页面上的那一列通道（点一下切换
     // 显示/隐藏），两处各画一份的话，用户会看到两个"看起来一样但行为不同"的图例。
     legend: { show: false },
     xAxis: {
@@ -567,7 +612,9 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
       // 平均 and as 95分位 are two different measurements.
       name: axisName,
       type: 'value',
-      scale: true,
+      scale: !fixedRange,
+      ...(range.min !== undefined ? { min: range.min } : {}),
+      ...(range.max !== undefined ? { max: range.max } : {}),
       nameTextStyle: { color: TEXT_SECONDARY, fontSize: 10, align: 'left' },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -604,6 +651,9 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
   const meta = TREND_METRIC_META[trends.metric]
   const axisName = trendAxisName(trends.metric, trends.aggregation)
   const tickFormatter = meta.tickFormatter
+  // 与多通道那几张图**同一把尺子**：声压级固定 0–100，其余的量交给 ECharts 自适应。
+  const range = trendAxisRange(trends.metric)
+  const fixedRange = range.min !== undefined || range.max !== undefined
 
   return {
     animation: false,
@@ -641,7 +691,9 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
     yAxis: {
       name: axisName,
       type: 'value',
-      scale: true,
+      scale: !fixedRange,
+      ...(range.min !== undefined ? { min: range.min } : {}),
+      ...(range.max !== undefined ? { max: range.max } : {}),
       nameTextStyle: { color: TEXT_SECONDARY, fontSize: 10, align: 'left' },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -672,40 +724,18 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
 // ---------------------------------------------------------------------------
 
 /**
- * Bucket-level summary shown above the chart.
+ * 「上面那四张时间桶卡片删掉了」（业主 2026-09-19 第 13 批第 5 条：
+ * 「声压级那四张卡片删除；只显示趋势曲线」）。
  *
- * These are MIN/MAX OF THE AGGREGATED BUCKETS, not of the raw samples — a 15 s
- * average can never show a raw peak — so the labels say 时间桶 rather than
- * implying a raw measurement. Gaps (`null`) are skipped and counted instead of
- * being treated as zero.
+ * 删掉的是**最新时间桶 / 区间最低桶 / 区间最高桶 / 空桶数**这四张：它们都是"再换一种说法
+ * 说同一件事"，而操作员要的是趋势本身。它们读到的那几个 computed
+ * （`latestBucket` / `rangeStats` / `gapCount` / `chartRows`）随之一起删 —— 留着一段
+ * 没人读的计算只会让下一个人以为屏幕上还有那四张卡（§15.29.4 记过同一条教训）。
+ *
+ * **保留**的是下面那行诊断（`dl.diagnostics`）：它不是"另一块内容"，而是"这张图是怎么算出来的"
+ * —— 返回了几个点、扫了几个文件、桶多宽、压缩比多少、发了几条查询。业主第 5 条点名删的是
+ * 那四张卡片；把诊断行一起删掉会让"图变慢了/被截断了"这两件事重新变成看不见的事。
  */
-const latestBucket = computed<TrendChartRow | null>(() => {
-  let found: TrendChartRow | null = null
-  for (const row of chartRows.value) {
-    if (row.value !== null) found = row
-  }
-  return found
-})
-
-const rangeStats = computed<{ min: number | null; max: number | null }>(() => {
-  let min: number | null = null
-  let max: number | null = null
-  for (const row of chartRows.value) {
-    if (row.value === null) continue
-    min = min === null ? row.value : Math.min(min, row.value)
-    max = max === null ? row.value : Math.max(max, row.value)
-  }
-  return { min, max }
-})
-
-/** Time buckets the device reported nothing in; rendered as gaps, never as 0. */
-const gapCount = computed(() => {
-  let gaps = 0
-  for (const row of chartRows.value) {
-    if (row.value === null) gaps += 1
-  }
-  return gaps
-})
 
 const reductionText = computed(() => {
   const series = trends.series
@@ -917,19 +947,10 @@ watch(
               {{ t('trendsUi.metricMultiHint', { count: trends.metrics.length }) }}
             </span>
           </div>
-
-          <label class="field">
-            <span class="field-label">{{ t('trendsUi.filterAggregation') }}</span>
-            <select v-model="aggregationSelection" class="select">
-              <option
-                v-for="option in TREND_AGGREGATION_OPTIONS"
-                :key="option.key"
-                :value="option.key"
-              >
-                {{ trendAggregationLabel(option.key) }}
-              </option>
-            </select>
-          </label>
+          <!--
+            「聚合方式」这个下拉框**删掉了**（业主第 5 条）。理由写在 script 里那段注释：
+            删的是"让操作员选"，桶里怎么算仍然固定是平均，Y 轴名字里照旧写着「（平均）」。
+          -->
         </div>
 
         <div class="range-bar">
@@ -944,6 +965,37 @@ watch(
               @click="trends.setRange(preset.key)"
             >
               {{ t(preset.labelKey) }}
+            </button>
+          </div>
+
+          <!--
+            **X 轴的时间颗粒度**（业主第 5 条后半：「X 轴支持自定义缩放时间颗粒度」）。
+
+            它紧挨着时间范围那一排：两排合起来回答"看哪一段时间、每一格多大"这件事，
+            而这两件事本来就一起用（选 30 天 + 1 天/格 = 看月度趋势；选 1 小时 + 1 秒/格 = 看瞬态）。
+            「自动」那一档把主进程实际挑的桶宽写在按钮上（`自动（15 秒）`）——
+            不然"自动"是个黑箱，而它决定了这张图到底有多细。
+          -->
+          <div class="chip-row granularity-row" data-trend-granularity>
+            <span class="field-label">{{ t('trendsUi.granularityLabel') }}</span>
+            <button
+              v-for="option in TREND_GRANULARITY_OPTIONS"
+              :key="option.key"
+              type="button"
+              class="chip chip--selectable"
+              :class="{
+                'chip--accent': trends.granularity === option.key,
+                'chip--auto-hint': autoBucketKey === option.key
+              }"
+              :data-trend-granularity-option="option.key"
+              :aria-pressed="trends.granularity === option.key"
+              :title="granularityHint(option)"
+              @click="granularitySelection = option.key"
+            >
+              {{ t(option.labelKey) }}
+              <template v-if="option.key === 'auto' && autoBucketText">
+                （{{ autoBucketText }}）
+              </template>
             </button>
           </div>
 
@@ -995,40 +1047,13 @@ watch(
       <div class="trends-body">
         <div class="trends-main">
 
-      <section v-if="trends.hasPoints" class="card-grid card-grid--stats">
-        <div class="card">
-          <MetricCard
-            :label="t('trendsUi.latestBucket')"
-            :value="trendValueText(trends.metric, latestBucket?.value ?? null)"
-            :hint="latestBucket ? latestBucket.fullLabel : t('trendsUi.emptyBuckets')"
-          />
-        </div>
-        <div class="card">
-          <MetricCard
-            :label="t('trendsUi.rangeMinBucket')"
-            :value="trendValueText(trends.metric, rangeStats.min)"
-            :hint="`${trendMetricLabel(trends.metric)}（${trendAggregationLabel(trends.aggregation)}）`"
-          />
-        </div>
-        <div class="card">
-          <MetricCard
-            :label="t('trendsUi.rangeMaxBucket')"
-            :value="trendValueText(trends.metric, rangeStats.max)"
-            :hint="`${trendMetricLabel(trends.metric)}（${trendAggregationLabel(trends.aggregation)}）`"
-          />
-        </div>
-        <!--
-          The gap count is shown rather than hidden: an empty bucket means the
-          device reported nothing in that window, which is a different fact from
-          a reading of zero, and the chart draws it as a break for that reason.
-        -->
-        <div class="card">
-          <MetricCard
-            :label="t('trendsUi.emptyBuckets')"
-            :value="String(gapCount)"
-          />
-        </div>
-      </section>
+      <!--
+        「最新时间桶 / 区间最低桶 / 区间最高桶 / 空桶数」四张卡片**删掉了**
+        （业主 2026-09-19 第 13 批第 5 条：「声压级那四张卡片删除；只显示趋势曲线」）。
+        它们读的那几个 computed 一起删了（留下没人读的计算只会让下一个人以为卡片还在）。
+        空桶这件事没有因此变哑：图上它仍然是**断线**（`connectNulls: false`），
+        诊断行里也仍然有"返回点数"与"时间桶"两个数。
+      -->
 
       <section class="chart-panel card">
         <div class="section-header">
@@ -1073,6 +1098,7 @@ watch(
             :key="bundle.metric"
             class="metric-chart"
             :data-metric-chart="bundle.metric"
+            :data-y-range="trendAxisRangeText(bundle.metric)"
           >
             <div class="section-header">
               <h4 class="section-title">{{ trendMetricLabel(bundle.metric) }}</h4>
@@ -1441,6 +1467,34 @@ watch(
 
 .channel-panel__actions {
   justify-content: flex-end;
+}
+
+/*
+ * 时间颗粒度那一排（第 13 批第 5 条）。
+ *
+ * 它与时间范围那一排同一行，所以需要一个视觉分隔（`border-left` + 左内边距）：
+ * 没有分隔时"最近 1 小时 / 24 小时 / …"与"自动 / 1 秒 / …"看起来是一排按钮的延续，
+ * 而它们回答的是两个不同的问题（看哪一段 vs 每一格多大）。
+ */
+.granularity-row {
+  align-items: center;
+  gap: 6px;
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border);
+}
+
+.granularity-row .field-label {
+  margin-right: 2px;
+}
+
+/*
+ * 自动那一档挑中的桶宽正好等于界面上某一档时，把那一档标一下（`title` 里说明来源）。
+ * 用虚线边框而不是强调色：强调色在这里表示"当前选中的那一档"，两者不是同一件事
+ * （自动模式下选中的是"自动"，而这一档只是"自动挑中的值")。
+ */
+.chip--auto-hint {
+  border-style: dashed;
 }
 
 /* 一个量一张图：图之间用空隙分开，不画分隔线（它们本来就是独立的两张图）。 */

@@ -592,16 +592,12 @@ export const tr: MessageSchema = {
     metricMultiHint: '{count} büyüklük seçildi: her biri için bir grafik, hepsinde görünür tüm kanallar',
     metricNoData: 'Bu aralıkta bu büyüklük için okuma yok (cihaz bu aralığı bildirmedi).',
     statQueries: 'Gönderilen sorgu',
-    filterAggregation: 'Toplama',
+    granularityLabel: 'Çözünürlük',
     filterFrom: 'Başlangıç',
     filterTo: 'Bitiş',
     incompleteRange: 'Hem başlangıç hem bitiş zamanını seçin',
     deviceNotSelected: 'Cihaz seçilmedi',
     notQueried: 'Henüz sorgulanmadı',
-    latestBucket: 'En son kova',
-    rangeMinBucket: 'Aralık en düşük',
-    rangeMaxBucket: 'Aralık en yüksek',
-    emptyBuckets: 'Boş kovalar',
     chartTitle: 'Eğilim eğrisi',
     truncated: 'Sonuç nokta sınırına ulaştı, bu yüzden yalnızca ilk {count} kova gösteriliyor. Tam eğriyi görmek için zaman aralığını daraltın.',
     noDeviceSelectedTitle: 'Önce bir cihaz seçin',
@@ -628,6 +624,19 @@ export const tr: MessageSchema = {
     min: 'En düşük',
     max: 'En yüksek',
     p95: '95. yüzdelik'
+  },
+
+  granularity: {
+    auto: 'Otomatik',
+    autoLabel: 'Zaman aralığına göre kova seç',
+    autoHint: 'Otomatik seçilen kova: {bucket}',
+    fixedHint: 'Bir kovanın süresini sabitle (daha ince, ham okumalara daha yakın)',
+    sec1: '1 saniye',
+    sec10: '10 saniye',
+    min1: '1 dakika',
+    min5: '5 dakika',
+    hour1: '1 saat',
+    day1: '1 gün'
   },
 
   bucket: {

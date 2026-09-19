@@ -4456,6 +4456,53 @@ async function run() {
     '    .filter((b) => b.getAttribute("aria-pressed") === "true")' +
     '    .map((b) => b.getAttribute("data-metric-toggle"));' +
     '}' +
+    /*
+     * ── 第 13 批第 5 条：删聚合方式与四张卡片、颗粒度、声压级 Y 轴 0–100 ──
+     *
+     * 几何/结构（都能量）：
+     *   · 筛选栏里**没有** "聚合方式" 那个 `<select>`（它原来在指标后面）；
+     *   · 图表卡片上**没有** `.card-grid--stats` 那四张卡片；
+     *   · 有一排颗粒度按钮（`[data-trend-granularity-option]`），第一档是自动；
+     *   · 声压级那张图的 `data-y-range` 必须是 `0-100`，其余的量是 `auto`。
+     * 交互：点一档固定颗粒度 → 诊断行里的"时间桶"必须变成那一档 → 查询条数 +1；
+     *       再点回自动 → 桶宽回到原值（探针必须还原自己改过的状态）。
+     */
+    'out.aggregationSelect = [...document.querySelectorAll(".filter-bar select")]' +
+    '  .filter((s) => [...s.options].some((o) => /平均|Average|Media|Ortalama/.test(o.textContent || "")))' +
+    '  .length;' +
+    'out.statCards = document.querySelectorAll(".card-grid--stats").length;' +
+    'out.granularityButtons = document.querySelectorAll("[data-trend-granularity-option]").length;' +
+    'out.granularityKeys = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
+    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
+    'out.granularityPressed = [...document.querySelectorAll("[data-trend-granularity-option]")]' +
+    '  .filter((b) => b.getAttribute("aria-pressed") === "true")' +
+    '  .map((b) => b.getAttribute("data-trend-granularity-option"));' +
+    'out.yRanges = [...document.querySelectorAll("[data-metric-chart]")]' +
+    '  .map((el) => el.getAttribute("data-metric-chart") + "=" + el.getAttribute("data-y-range"));' +
+    'const bucketText = () => {' +
+    '  const items = [...document.querySelectorAll(".diagnostics .kv__item")];' +
+    // 中文那一行是「聚合桶大小」（`trendsUi.statBucket`），英文是 "Bucket size" ——
+    // 第一版只找"时间桶"，于是这一条在这个 profile 里静默地什么都没量到。
+    '  const hit = items.find((li) => /聚合桶|时间桶|Bucket size/i.test(text(li)));' +
+    '  if (!hit) return null;' +
+    '  const value = hit.querySelector(".kv__value");' +
+    '  return value ? text(value) : null;' +
+    '};' +
+    'out.bucketBefore = bucketText();' +
+    'const granularityButtons = [...document.querySelectorAll("[data-trend-granularity-option]")];' +
+    'const fixedButton = granularityButtons.find((b) => b.getAttribute("data-trend-granularity-option") === "1m");' +
+    'const autoButton = granularityButtons.find((b) => b.getAttribute("data-trend-granularity-option") === "auto");' +
+    'if (fixedButton) {' +
+    '  fixedButton.click();' +
+    '  for (let i = 0; i < 24 && bucketText() === out.bucketBefore; i += 1) await wait(250);' +
+    '  out.bucketAfterFixed = bucketText();' +
+    '  out.queriesAfterFixed = queryStat();' +
+    '  if (autoButton) {' +
+    '    autoButton.click();' +
+    '    for (let i = 0; i < 24 && bucketText() !== out.bucketBefore; i += 1) await wait(250);' +
+    '    out.bucketAfterAuto = bucketText();' +
+    '  }' +
+    '}' +
     'out.deviceName = text(document.querySelector(".page .field--wide .select option:checked"));' +
     'return JSON.stringify(out);' +
     '})()', 120_000)
@@ -4474,6 +4521,99 @@ async function run() {
     }
     if (trendChannels.metricCount !== 7) {
       problems.push('量的可选按钮不是 7 个：' + trendChannels.metricCount)
+    }
+    /*
+     * ── 第 13 批第 5 条 ──
+     */
+    if (trendChannels.aggregationSelect !== 0) {
+      problems.push(
+        '筛选栏里还有"聚合方式"那个下拉框（' + trendChannels.aggregationSelect +
+          ' 个）—— 业主第 5 条要求删除聚合方式'
+      )
+    }
+    if (trendChannels.statCards !== 0) {
+      problems.push(
+        '图表上方还有四张时间桶卡片（.card-grid--stats 出现 ' + trendChannels.statCards +
+          ' 次）—— 业主第 5 条要求删掉、只留趋势曲线'
+      )
+    }
+    if (trendChannels.granularityButtons < 2) {
+      problems.push('找不到 X 轴的时间颗粒度按钮：' + trendChannels.granularityButtons)
+    }
+    const pressedGranularity = trendChannels.granularityPressed || []
+    if (pressedGranularity.length !== 1) {
+      problems.push('颗粒度按钮里选中的不是恰好一个：' + JSON.stringify(pressedGranularity))
+    } else if (pressedGranularity[0] !== 'auto') {
+      problems.push('颗粒度的默认档不是"自动"：' + JSON.stringify(pressedGranularity))
+    }
+    /*
+     * 声压级 Y 轴 0–100：只在"图的提示里确实有 spl 那张"时才断言（没有数据的 profile 上
+     * 一张图都不渲染，那时量不到不是缺陷，如实记日志）。
+     */
+    const yRanges = trendChannels.yRanges || []
+    if (yRanges.length === 0) {
+      log('trend channels/⑤: 这个 profile 里一张图都没渲染，"声压级 Y 轴 0–100"没验到')
+    } else {
+      const splEntry = yRanges.find((entry) => String(entry).startsWith('spl='))
+      if (!splEntry) {
+        problems.push('没有量到声压级那张图的 Y 轴范围：' + JSON.stringify(yRanges))
+      } else if (!String(splEntry).endsWith('=0-100')) {
+        problems.push('声压级那张图的 Y 轴不是 0–100：' + JSON.stringify(splEntry))
+      }
+      for (const entry of yRanges) {
+        if (String(entry).startsWith('spl=')) continue
+        if (!String(entry).endsWith('=auto')) {
+          problems.push('非声压级的量不该固定 Y 轴：' + JSON.stringify(entry))
+        }
+      }
+    }
+    if (trendChannels.bucketBefore && trendChannels.bucketAfterFixed) {
+      // 板上钉钉的一条：点了"1 分钟"这一档之后，诊断行里的桶宽必须变成 1 分钟。
+      const after = String(trendChannels.bucketAfterFixed)
+      if (!/1\s*(分钟|min|minuto|dakika)/i.test(after)) {
+        problems.push(
+          '选了"1 分钟"这一档之后时间桶不是 1 分钟：' + JSON.stringify(after) +
+            '（原来是 ' + JSON.stringify(trendChannels.bucketBefore) + '）'
+        )
+      }
+      /*
+       * "换了颗粒度真的重查了一次"这件事的证据是**桶宽变了**（那一格读的是查询回话，
+       * 没重查的话它会一直显示上一次的桶宽）。
+       *
+       * ⚠ 不能拿"查询条数变多"当判据：`queriedCount` 是**最近一次**查询发出的条数
+       * （量 × 通道 = 8），不是累计值 —— 第一版就是这么写错的，报了一条假失败。
+       * 这里改为断言"重查之后的条数仍然是同一组 量×通道"（说明那次是完整的一次重查，
+       * 不是半截的）。
+       */
+      if (
+        trendChannels.queriesBefore !== null &&
+        trendChannels.queriesAfterFixed !== null &&
+        trendChannels.queriesAfterFixed !== trendChannels.queriesBefore
+      ) {
+        problems.push(
+          '换颗粒度之后"本次查询条数"变了（' + trendChannels.queriesBefore + ' → ' +
+            trendChannels.queriesAfterFixed + '）：重查的应当还是同一组 量×通道'
+        )
+      }
+      if (
+        trendChannels.bucketAfterAuto &&
+        trendChannels.bucketAfterAuto !== trendChannels.bucketBefore
+      ) {
+        problems.push(
+          '点回"自动"之后桶宽没有还原：' + JSON.stringify(trendChannels.bucketAfterAuto) +
+            '（应为 ' + JSON.stringify(trendChannels.bucketBefore) + '）'
+        )
+      }
+      log(
+        'trend channels/⑤: 桶宽 ' + JSON.stringify(trendChannels.bucketBefore) + ' → 1 分钟档 ' +
+          JSON.stringify(trendChannels.bucketAfterFixed) + ' → 自动 ' +
+          JSON.stringify(trendChannels.bucketAfterAuto) + '；Y 轴 ' + JSON.stringify(yRanges)
+      )
+    } else {
+      log(
+        'trend channels/⑤: 量不到诊断行里的桶宽（这个 profile 没有数据），' +
+          '换颗粒度那一步没验到'
+      )
     }
     /*
      * ── 第 13 批第 4 条：右侧那一列 ──

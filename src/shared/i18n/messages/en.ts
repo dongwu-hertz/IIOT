@@ -616,16 +616,14 @@ export const en: MessageSchema = {
     metricMultiHint: '{count} metrics selected: one chart each, every chart showing all visible channels',
     metricNoData: 'No reading for this metric in this range (the device did not report it).',
     statQueries: 'Queries sent',
-    filterAggregation: 'Aggregation',
+    /* `filterAggregation` and the four bucket-card keys were removed with the
+       selector and the cards (batch 13 item 5). */
+    granularityLabel: 'Granularity',
     filterFrom: 'From',
     filterTo: 'To',
     incompleteRange: 'Select both a start and an end time',
     deviceNotSelected: 'No device selected',
     notQueried: 'Not queried yet',
-    latestBucket: 'Latest bucket',
-    rangeMinBucket: 'Range minimum',
-    rangeMaxBucket: 'Range maximum',
-    emptyBuckets: 'Empty buckets',
     chartTitle: 'Trend curve',
     truncated: 'The result hit the point limit, so only the first {count} buckets are shown. Narrow the time range to see the full curve.',
     noDeviceSelectedTitle: 'Select a device first',
@@ -652,6 +650,20 @@ export const en: MessageSchema = {
     min: 'Minimum',
     max: 'Maximum',
     p95: '95th percentile'
+  },
+
+  /* X-axis time granularity (batch 13 item 5). The six steps are our own design. */
+  granularity: {
+    auto: 'Auto',
+    autoLabel: 'Pick a bucket from the time span',
+    autoHint: 'Bucket chosen automatically: {bucket}',
+    fixedHint: 'Fix the time span of one bucket (finer is closer to the raw readings)',
+    sec1: '1 second',
+    sec10: '10 seconds',
+    min1: '1 minute',
+    min5: '5 minutes',
+    hour1: '1 hour',
+    day1: '1 day'
   },
 
   bucket: {

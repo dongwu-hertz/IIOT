@@ -586,16 +586,12 @@ export const es: MessageSchema = {
     metricMultiHint: '{count} magnitudes seleccionadas: un gráfico para cada una, con todos los canales visibles',
     metricNoData: 'No hay lectura de esta magnitud en este intervalo (el equipo no la reportó).',
     statQueries: 'Consultas enviadas',
-    filterAggregation: 'Agregación',
+    granularityLabel: 'Granularidad',
     filterFrom: 'Desde',
     filterTo: 'Hasta',
     incompleteRange: 'Seleccione una hora de inicio y una de fin',
     deviceNotSelected: 'Ningún equipo seleccionado',
     notQueried: 'Sin consultar todavía',
-    latestBucket: 'Último intervalo',
-    rangeMinBucket: 'Mínimo del rango',
-    rangeMaxBucket: 'Máximo del rango',
-    emptyBuckets: 'Intervalos vacíos',
     chartTitle: 'Curva de tendencia',
     truncated: 'El resultado alcanzó el límite de puntos, por lo que solo se muestran los primeros {count} intervalos. Reduzca el rango de tiempo para ver la curva completa.',
     noDeviceSelectedTitle: 'Seleccione primero un equipo',
@@ -622,6 +618,19 @@ export const es: MessageSchema = {
     min: 'Mínimo',
     max: 'Máximo',
     p95: 'Percentil 95'
+  },
+
+  granularity: {
+    auto: 'Automática',
+    autoLabel: 'Elegir el intervalo según el rango de tiempo',
+    autoHint: 'Intervalo elegido automáticamente: {bucket}',
+    fixedHint: 'Fijar la duración de un intervalo (más fino se acerca a las lecturas originales)',
+    sec1: '1 segundo',
+    sec10: '10 segundos',
+    min1: '1 minuto',
+    min5: '5 minutos',
+    hour1: '1 hora',
+    day1: '1 día'
   },
 
   bucket: {

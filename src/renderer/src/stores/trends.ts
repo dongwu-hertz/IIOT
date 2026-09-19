@@ -46,6 +46,11 @@ import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { i18n } from '@renderer/i18n'
 import { TREND_METRIC_OPTIONS } from '@renderer/lib/trendMetrics'
 import { TREND_METRIC_MAX_SELECTED } from '@shared/domain/trend'
+import {
+  TREND_GRANULARITY_DEFAULT_KEY,
+  granularityBucketSeconds,
+  granularityOption
+} from '@shared/domain/trend-granularity'
 
 /**
  * 量的稳定顺序（与下拉/图例的排列同一个来源，不另抄一份）。
@@ -111,7 +116,21 @@ export const useTrendsStore = defineStore('trends', () => {
   /** `undefined` means 全部通道 — the query omits `channelId` entirely. */
   const channelId = ref<number | undefined>(undefined)
   const metric = ref<TrendMetric>('spl')
+  /**
+   * 一个时间桶**里面**怎么算。
+   *
+   * ⚠ 业主 2026-09-19 第 13 批第 5 条删掉了「聚合方式」那个下拉框，所以这个值**在界面上不可改**：
+   * 它固定是平均。保留成 ref（而不是常量）是因为契约里它仍然是一个字段、后端也仍然按它算，
+   * 而且 Y 轴名字里照旧写着「（平均）」—— 删的是"让操作员选"，不是"这件事不存在"。
+   */
   const aggregation = ref<TrendAggregation>('avg')
+  /**
+   * X 轴的时间颗粒度（业主第 5 条：「X 轴支持自定义缩放时间颗粒度」）。
+   *
+   * 存的是 `TREND_GRANULARITY_OPTIONS` 的 key（默认 'auto' = 由主进程按跨度挑）。
+   * 桶越窄越接近原始读数，越宽趋势越清楚 —— 它是"这张图有多细"这件事的唯一控件。
+   */
+  const granularity = ref<string>(TREND_GRANULARITY_DEFAULT_KEY)
   const range = ref<TrendRangePreset>('24h')
   /** Custom bounds, epoch ms. Resolved only when `range === 'custom'`. */
   const customFrom = ref<number | undefined>(undefined)
@@ -376,6 +395,10 @@ export const useTrendsStore = defineStore('trends', () => {
         from: bounds.from,
         to: bounds.to,
         aggregation: aggregation.value,
+        // 颗粒度：'auto' 时**不发这个字段**（主进程按跨度挑），否则发这一档的秒数。
+        ...(granularityBucketSeconds(granularity.value) !== undefined
+          ? { bucketSeconds: granularityBucketSeconds(granularity.value) }
+          : {}),
         // 全部通道 omits the field: the main process then aggregates every channel
         // instead of silently defaulting to CH1.
         ...(targetChannel !== undefined ? { channelId: targetChannel } : {})
@@ -442,6 +465,19 @@ export const useTrendsStore = defineStore('trends', () => {
     if (preset === 'custom' && (customFrom.value === undefined || customTo.value === undefined)) {
       seedCustomRange()
     }
+    query()
+  }
+
+  /**
+   * 换一档时间颗粒度（业主第 5 条：「X 轴支持自定义缩放时间颗粒度」）。
+   *
+   * 认不出来的 key **不写**（与 `channelState()` 拒绝把"没读到"当"已启用"同一条规矩）：
+   * 一个拼错的 key 会让"点了一下什么都没发生"变成"桶宽变成了某个没人知道的数"。
+   */
+  function setGranularity(key: string): void {
+    if (!granularityOption(key)) return
+    if (granularity.value === key) return
+    granularity.value = key
     query()
   }
 
@@ -582,6 +618,7 @@ export const useTrendsStore = defineStore('trends', () => {
     channelId,
     metric,
     aggregation,
+    granularity,
     range,
     customFrom,
     customTo,
@@ -615,6 +652,7 @@ export const useTrendsStore = defineStore('trends', () => {
     toggleChannel,
     showAllChannels,
     setRange,
+    setGranularity,
     setCustomRange,
     loadCoverage,
     loadStats,

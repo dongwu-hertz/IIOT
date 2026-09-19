@@ -754,16 +754,19 @@ export const zhCN = {
     metricMultiHint: '已选 {count} 个量：每个量一张图，每张图里是所有可见通道',
     metricNoData: '这个量在这段时间里没有读数（设备没有上报这一段）。',
     statQueries: '本次查询条数',
-    filterAggregation: '聚合方式',
+    /*
+     * `filterAggregation`（「聚合方式」）**删掉了**（第 13 批第 5 条：「删除聚合方式」）：
+     * 那个下拉框没有了，桶里怎么算固定是平均，Y 轴名字里照旧写着「（平均）」。
+     * 接着往下 `latestBucket` / `rangeMinBucket` / `rangeMaxBucket` / `emptyBuckets`
+     * 四个键也删了 —— 它们只被那四张被删掉的卡片用（业主：「声压级那四张卡片删除；
+     * 只显示趋势曲线」）。四本目录同步删，理由见 §15.82。
+     */
+    granularityLabel: '颗粒度',
     filterFrom: '起始时间',
     filterTo: '结束时间',
     incompleteRange: '请选择完整的起始与结束时间',
     deviceNotSelected: '未选择设备',
     notQueried: '尚未查询',
-    latestBucket: '最新时间桶',
-    rangeMinBucket: '区间最低桶',
-    rangeMaxBucket: '区间最高桶',
-    emptyBuckets: '空缺时间桶',
     chartTitle: '趋势曲线',
     truncated: '结果已达到最大点数上限，仅显示前 {count} 个时间桶。请缩小时间范围以查看完整曲线。',
     noDeviceSelectedTitle: '请先选择设备',
@@ -790,6 +793,26 @@ export const zhCN = {
     min: '最小',
     max: '最大',
     p95: '95分位'
+  },
+
+  /*
+   * X 轴的时间颗粒度（业主 2026-09-19 第 13 批第 5 条：「X 轴支持自定义缩放时间颗粒度」）。
+   *
+   * 六档 + 自动，档位的划分是**本仓库的设计**（手册未说明，见
+   * `src/shared/domain/trend-granularity.ts` 的文件头）：秒级看瞬态、分钟级看班次、
+   * 小时/天级看长期趋势。「自动」那一档旁边会把主进程实际挑的桶宽写出来。
+   */
+  granularity: {
+    auto: '自动',
+    autoLabel: '按时间跨度自动挑一格',
+    autoHint: '自动挑的桶宽：{bucket}',
+    fixedHint: '固定每一格的时间跨度（越细越接近原始读数）',
+    sec1: '1 秒',
+    sec10: '10 秒',
+    min1: '1 分钟',
+    min5: '5 分钟',
+    hour1: '1 小时',
+    day1: '1 天'
   },
 
   bucket: {
