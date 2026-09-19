@@ -84,7 +84,7 @@ export const tr: MessageSchema = {
       devices: 'Cihazlar',
       monitor: 'Canlı izleme',
       trends: 'Eğilimler',
-      alarms: 'Alarmlar',
+      alarms: 'Alarm merkezi',
       /**
        * Harita bilgileri (GIS). «Cihaz haritası» adından değiştirildi ve doğrudan Genel bakış'ın
        * altına taşındı (10. parti, 12. madde: sayfa artık bir GIS servisi ya da kat planı da
@@ -410,6 +410,9 @@ export const tr: MessageSchema = {
     notifyDetailUnacknowledged: 'Alarmın onayı kaldırıldı',
     filterSeverity: 'Önem derecesi',
     filterAllSeverities: 'Tüm önem dereceleri',
+    moreFilters: 'Daha fazla filtre',
+    hideMoreFilters: 'Daha fazla filtreyi gizle',
+    moreFiltersActive: 'Daha fazla filtre ({count} etkin)',
     columnSeverity: 'Önem derecesi',
     severitySectionTitle: 'Önem derecesi',
     noteSectionTitle: 'Not',
@@ -1754,7 +1757,7 @@ export const tr: MessageSchema = {
       deleteRecordings: 'Kayıtları silme (bu sürümde henüz böyle bir kanal yok; kod açıklamasına bakın)',
       downloadDetectFiles: 'Algılama sonucu dosyalarını cihazdan bu makineye indirme',
       viewDevices: 'Cihaz listesi, cihaz ayrıntısı, cihaz bilgisi ve kanal tablosu',
-      viewAlarms: 'Alarm kayıtları, bağlantı motoru durumu ve bekleyen alarmlar',
+      viewAlarms: 'Alarm merkezi, bağlantı motoru durumu ve bekleyen alarmlar',
       viewRecordings: 'Ses/video kayıt listeleri, oynatma verileri ve kayıt oynatma adresleri',
       viewTrends: 'Geçmiş eğilim sorguları, kapsam ve istatistikler',
       viewEvents: 'Olay ve alarm merkezi sorguları ile kamera algılama kitaplığı'
@@ -1944,7 +1947,7 @@ export const tr: MessageSchema = {
     entryHint:
       'Stratejiler ve koşullar cihazda geçerlidir; bu sayfa yalnızca okur ve düzenler.',
     noAlarms: 'Bu makinede bu kamera için henüz alarm kaydı yok.',
-    goAlarmList: 'Alarm kayıtlarını aç',
+    goAlarmList: 'Alarm merkezini aç',
     // `subtitle` gösterilen uyarı satırıyla birlikte kaldırıldı; `refresh` eski
     // yenile düğmesinin metniydi, düğme artık yalnızca simge olduğu için adı
     // `refreshIcon` (aria-label + title) üzerinden veriliyor.
@@ -2434,7 +2437,7 @@ export const tr: MessageSchema = {
     deviceAlarmsTitle: 'Cihaz alarmları',
     deviceAlarmsEmpty: 'Onaylanmamış cihaz alarmı yok',
     deviceAlarmAcknowledge: 'Onayla',
-    deviceAlarmsMore: 'Listelenmeyen {count} kayıt daha var (tümü için Alarm kayıtları)',
+    deviceAlarmsMore: 'Listelenmeyen {count} kayıt daha var (tümü için Alarm merkezi)',
     pendingTitle: 'Bekleyen alarmlar',
     pendingEmpty: 'Şu anda alarm yok',
     pendingAcknowledge: 'Onayla',

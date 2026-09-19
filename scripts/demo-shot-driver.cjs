@@ -2564,7 +2564,7 @@ async function run() {
   }
 
   /**
-   * 告警记录的等级与备注（v6）。
+   * 告警记录的等级与备注（v6）+ 「告警中心」这一轮的三条改动（2026-09-19）。
    *
    * 一次性 profile 里**没有告警行**，所以能验证的是「控件真的渲染出来了」这一层：
    * 筛选器里有没有等级下拉、下拉里是不是四档、表头有没有「等级」这一列。着色与备注
@@ -2573,29 +2573,166 @@ async function run() {
    *
    * 之所以要这一项：`problems` 曾经 0 而页面上根本没有控件——只要有记录才报错的话，
    * 「控件没渲染」与「没有数据」看起来完全一样。
+   *
+   * 2026-09-19 追加三件事（业主当天的第 2 条要求）：
+   *   · 页面名是**告警中心**（侧栏 + 顶栏标题）；
+   *   · **筛选卡在最上面**（在计数/批量动作那一行之前）——用 DOM 顺序判，不看源码；
+   *   · **更多筛选默认收起**，点一下展开出四个控件，再点一下收回去。
+   *     「收起」的判据是那一块**在不在 DOM 里**（v-if），不是"看不见"。
    */
-  const alarmsLayout = await layout('/alarms', '(() => {' +
-    'const labels = [...document.querySelectorAll(".filter-bar .field-label")].map((n) => n.textContent.trim());' +
-    'const selects = [...document.querySelectorAll(".filter-bar select")];' +
+  const alarmsLayout = await layout('/alarms', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (node) => (node ? (node.textContent || "").trim() : "");' +
+    'const setInput = (node, value) => { if (!node) return false;' +
+    '  node.value = String(value);' +
+    '  node.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  return true; };' +
+    'const countOf = () => {' +
+    '  const m = /共 (\\d+) 条/.exec(text(document.querySelector(".page-subtitle")));' +
+    '  return m ? Number(m[1]) : null;' +
+    '};' +
+    'const labels = [...document.querySelectorAll("[data-alarm-simple-filters] .field-label")]' +
+    '  .map((n) => n.textContent.trim());' +
+    'const selects = [...document.querySelectorAll("[data-alarm-simple-filters] select")];' +
     'const severitySelect = selects.find((s) =>' +
     '  [...s.options].some((o) => o.textContent.trim() === "全部等级"));' +
     'const heads = [...document.querySelectorAll("table thead th")].map((n) => n.textContent.trim());' +
+    'const page = document.querySelector(".page");' +
+    'const card = page ? page.querySelector("section.card") : null;' +
+    'const header = document.querySelector(".page-header");' +
+    /*
+     * 「筛选卡在最上面」的判据是 DOM 顺序：`compareDocumentPosition` 里
+     * `DOCUMENT_POSITION_FOLLOWING` 表示"另一个节点排在我后面"。
+     */
+    'const filterCardFirst = !!(card && header && card.contains(document.querySelector("[data-alarm-filters]")) &&' +
+    '  (document.querySelector("[data-alarm-filters]").compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&' +
+    '  !(header.compareDocumentPosition(document.querySelector("[data-alarm-filters]")) & Node.DOCUMENT_POSITION_FOLLOWING));' +
+    'const navItem = [...document.querySelectorAll(".sidebar__nav a.nav-item")]' +
+    '  .find((a) => (a.getAttribute("href") || "").replace(/^#/, "") === "/alarms");' +
+    'const toggle = document.querySelector("[data-action=toggle-alarm-filters]");' +
+    'const moreBefore = !!document.querySelector("[data-alarm-more-filters]");' +
+    'const expandedBefore = toggle ? toggle.getAttribute("aria-expanded") : null;' +
+    'if (toggle) { toggle.click(); await wait(300); }' +
+    'const moreAfterOpen = !!document.querySelector("[data-alarm-more-filters]");' +
+    'const expandedAfterOpen = toggle ? toggle.getAttribute("aria-expanded") : null;' +
+    'const moreLabels = [...document.querySelectorAll("[data-alarm-more-filters] .field-label")]' +
+    '  .map((n) => n.textContent.trim());' +
+    'const moreControls = document.querySelectorAll("[data-alarm-more-filters] input, [data-alarm-more-filters] select").length;' +
+    'if (toggle) { toggle.click(); await wait(300); }' +
+    'const moreAfterClose = !!document.querySelector("[data-alarm-more-filters]");' +
+    /*
+     * 「收起之后那四个仍然生效」这一条**必须真的做一次**，否则整块"更多筛选"只是排版。
+     *
+     * 做法：展开 → 把「开始时间」设成一个未来时刻（2099 年，库里不可能有）→ 命中数必须变成 0，
+     * 而且**收起状态下的按钮上要出现生效项数**（列表变短的唯一解释）→ 清空 → 命中数回到原值。
+     * 全程只改筛选（不写库、不写设备）。
+     */
+    'const totalBefore = countOf();' +
+    'if (toggle) { toggle.click(); await wait(300); }' +
+    'const fromInput = document.querySelector("[data-alarm-more-filters] input[type=datetime-local]");' +
+    'setInput(fromInput, "2099-01-01T00:00");' +
+    'await wait(1200);' +
+    'const totalFiltered = countOf();' +
+    'const rowsFiltered = document.querySelectorAll("table tbody tr.is-clickable").length;' +
+    'if (toggle) { toggle.click(); await wait(300); }' +
+    'const labelWhenCollapsed = toggle ? toggle.textContent.trim() : "";' +
+    'if (toggle) { toggle.click(); await wait(400); }' +
+    'const clearTarget = document.querySelector("[data-alarm-more-filters] input[type=datetime-local]");' +
+    'const clearApplied = setInput(clearTarget, "");' +
+    'await wait(1200);' +
+    'const totalRestored = countOf();' +
     'return JSON.stringify({' +
     '  filterLabels: labels,' +
     '  severityOptionCount: severitySelect ? severitySelect.options.length - 1 : 0,' +
     '  severityOptions: severitySelect ? [...severitySelect.options].slice(1).map((o) => o.textContent.trim()) : [],' +
-    '  heads' +
+    '  heads,' +
+    '  navLabel: navItem ? (navItem.textContent || "").trim() : null,' +
+    '  topbarTitle: (document.querySelector(".topbar__heading") || {}).textContent || null,' +
+    '  filterCardFirst,' +
+    '  moreBefore, extraExpanded: expandedBefore,' +
+    '  moreAfterOpen, expandedAfterOpen, moreLabels, moreControls, moreAfterClose,' +
+    '  totalBefore, totalFiltered, rowsFiltered, labelWhenCollapsed, totalRestored,' +
+    '  clearApplied' +
     '});})()')
   log('alarms controls: ' + JSON.stringify(alarmsLayout))
   if (!alarmsLayout.filterLabels.includes('告警等级')) {
-    problems.push('告警记录的筛选栏里没有「告警等级」下拉：' + JSON.stringify(alarmsLayout.filterLabels))
+    problems.push('告警中心的简单筛选里没有「告警等级」下拉：' + JSON.stringify(alarmsLayout.filterLabels))
   }
   if (alarmsLayout.severityOptionCount !== 4) {
     problems.push('等级下拉有 ' + alarmsLayout.severityOptionCount + ' 个档位，应为 4：' +
       JSON.stringify(alarmsLayout.severityOptions))
   }
   if (!alarmsLayout.heads.includes('等级')) {
-    problems.push('告警记录的表头里没有「等级」列：' + JSON.stringify(alarmsLayout.heads))
+    problems.push('告警中心的表头里没有「等级」列：' + JSON.stringify(alarmsLayout.heads))
+  }
+
+  // ① 页面名（侧栏 + 顶栏标题）都是「告警中心」。
+  if (alarmsLayout.navLabel !== '告警中心') {
+    problems.push('侧栏里这一页不叫「告警中心」：' + JSON.stringify(alarmsLayout.navLabel))
+  }
+  if (String(alarmsLayout.topbarTitle ?? '').trim() !== '告警中心') {
+    problems.push('顶栏标题不是「告警中心」：' + JSON.stringify(alarmsLayout.topbarTitle))
+  }
+
+  // ② 筛选卡在最上面（DOM 顺序判）。
+  if (!alarmsLayout.filterCardFirst) {
+    problems.push('筛选卡不在「计数 + 批量动作」那一行之前（业主第 2 条要求放在最上面）')
+  }
+
+  // ③ 更多筛选默认收起，开关真的能展开 / 收回。
+  if (alarmsLayout.moreBefore) {
+    problems.push('「更多筛选」默认没有收起（[data-alarm-more-filters] 一开始就在 DOM 里）')
+  }
+  if (alarmsLayout.extraExpanded !== 'false') {
+    problems.push('「更多筛选」开关初始 aria-expanded 不是 false：' + JSON.stringify(alarmsLayout.extraExpanded))
+  }
+  if (!alarmsLayout.moreAfterOpen) {
+    problems.push('点了「更多筛选」之后那四个控件没有出现')
+  }
+  if (alarmsLayout.expandedAfterOpen !== 'true') {
+    problems.push('展开之后 aria-expanded 不是 true：' + JSON.stringify(alarmsLayout.expandedAfterOpen))
+  }
+  if (alarmsLayout.moreControls !== 4) {
+    problems.push('「更多筛选」里的控件不是 4 个（开始/结束/通道/类型）：' + alarmsLayout.moreControls +
+      ' ' + JSON.stringify(alarmsLayout.moreLabels))
+  }
+  for (const label of ['开始时间', '结束时间', '通道', '告警类型']) {
+    if (!(alarmsLayout.moreLabels || []).includes(label)) {
+      problems.push('「更多筛选」里没有「' + label + '」：' + JSON.stringify(alarmsLayout.moreLabels))
+    }
+  }
+  if (alarmsLayout.moreAfterClose) {
+    problems.push('再点一次「更多筛选」之后没有收回去')
+  }
+  /*
+   * 收起的筛选**仍然生效**（这一条是"简单/更多"这个区分真正的风险点）：
+   * 未来时刻的开始时间必须把命中数打到 0，收起来之后按钮上要能看出有一项在生效，
+   * 清空之后必须回到原来的数。
+   */
+  if (alarmsLayout.totalBefore === null) {
+    problems.push('读不到筛选结果的条数（.page-subtitle 的格式变了？）')
+  } else {
+    if (alarmsLayout.totalFiltered !== 0) {
+      problems.push(
+        '「更多筛选」里的开始时间没有生效：设成 2099 年之后命中 ' +
+          JSON.stringify(alarmsLayout.totalFiltered) + ' 条（应为 0）'
+      )
+    }
+    if (alarmsLayout.rowsFiltered !== 0) {
+      problems.push('筛成 0 条之后表格里还有 ' + alarmsLayout.rowsFiltered + ' 行')
+    }
+    if (!/1/.test(String(alarmsLayout.labelWhenCollapsed))) {
+      problems.push(
+        '收起之后按钮上没有生效项数（列表变短没有解释）：' +
+          JSON.stringify(alarmsLayout.labelWhenCollapsed)
+      )
+    }
+    if (alarmsLayout.totalRestored !== alarmsLayout.totalBefore) {
+      problems.push(
+        '清空「更多筛选」之后命中数没有回到原值：' + alarmsLayout.totalRestored +
+          ' vs ' + alarmsLayout.totalBefore
+      )
+    }
   }
 
   /**

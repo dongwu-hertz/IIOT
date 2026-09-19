@@ -106,7 +106,7 @@ export const zhCN = {
       devices: '设备管理',
       monitor: '实时监测',
       trends: '历史趋势',
-      alarms: '告警记录',
+      alarms: '告警中心',
       /**
        * 地图信息（GIS）（业主 2026-09-17 第 8 批建的页；2026-09-18 第 10 批第 12 条改名并挪位置）。
        *
@@ -507,6 +507,9 @@ export const zhCN = {
     notifyDetailUnacknowledged: '该告警已取消确认',
     filterSeverity: '告警等级',
     filterAllSeverities: '全部等级',
+    moreFilters: '更多筛选',
+    hideMoreFilters: '收起更多筛选',
+    moreFiltersActive: '更多筛选（{count} 项生效）',
     columnSeverity: '等级',
     severitySectionTitle: '告警等级',
     noteSectionTitle: '备注',
@@ -1425,7 +1428,7 @@ export const zhCN = {
     columnMetrics: "特征",
     columnActions: "操作",
     loading: "正在加载…",
-    empty: "样本库还是空的。可以在「告警记录」或「录音文件」里把一条记录加入样本库。",
+    empty: "样本库还是空的。可以在「告警中心」或「录音文件」里把一条记录加入样本库。",
     unlabelled: "未标注",
     metricsCount: "{count} 维",
     metricsHint: "设备报过的特征维度；缺的维度不会补 0",
@@ -1948,7 +1951,7 @@ export const zhCN = {
       deleteRecordings: '删除录像（本版本还没有这条通道，见代码注释）',
       downloadDetectFiles: '把设备上的检测结果文件下载到本机',
       viewDevices: '设备列表、设备详情、设备信息与通道表',
-      viewAlarms: '告警记录、联动引擎状态与待处理告警',
+      viewAlarms: '告警中心、联动引擎状态与待处理告警',
       viewRecordings: '录音/录像列表、回放数据与录像播放地址',
       viewTrends: '历史趋势查询、覆盖范围与统计',
       viewEvents: '事件与告警中心的查询与相机检测库'
@@ -2151,7 +2154,7 @@ export const zhCN = {
     /** 实时监测页那张「告警」卡片（与相机控制并排）的说明与出口。 */
     entryHint: '告警策略与告警条件在设备侧生效，这里只读取与修改它们。',
     noAlarms: '本机还没有这台相机的告警记录。',
-    goAlarmList: '查看告警记录',
+    goAlarmList: '查看告警中心',
     // `subtitle`（「设备 {name}：告警策略与告警条件（一条策略只关联一个条件）。」）
     // 已按产品要求删除：对话框里不再出现这句话，四种语言里的这一条也一并删掉，
     // 免得留一个没人渲染的死键。同一个约束仍然成立（策略只能绑一条条件），
@@ -2708,7 +2711,7 @@ export const zhCN = {
     deviceAlarmsTitle: '设备告警',
     deviceAlarmsEmpty: '当前没有未确认的设备告警',
     deviceAlarmAcknowledge: '确认',
-    deviceAlarmsMore: '另有 {count} 条未列出（到「告警记录」看全部）',
+    deviceAlarmsMore: '另有 {count} 条未列出（到「告警中心」看全部）',
     pendingTitle: '待处理告警',
     pendingEmpty: '当前无告警',
     pendingAcknowledge: '确认',

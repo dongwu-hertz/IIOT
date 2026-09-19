@@ -76,7 +76,7 @@ export const es: MessageSchema = {
       devices: 'Equipos',
       monitor: 'Monitorización en vivo',
       trends: 'Tendencias',
-      alarms: 'Alarmas',
+      alarms: 'Centro de alarmas',
       /**
        * Información de mapas (GIS). Renombrado desde «Mapa de dispositivos» y movido justo
        * debajo de Resumen (lote 10, punto 12: la página también lleva un servicio GIS o un
@@ -402,6 +402,9 @@ export const es: MessageSchema = {
     notifyDetailUnacknowledged: 'Confirmación de la alarma retirada',
     filterSeverity: 'Gravedad',
     filterAllSeverities: 'Todas las gravedades',
+    moreFilters: 'Más filtros',
+    hideMoreFilters: 'Ocultar más filtros',
+    moreFiltersActive: 'Más filtros ({count} activos)',
     columnSeverity: 'Gravedad',
     severitySectionTitle: 'Gravedad',
     noteSectionTitle: 'Nota',
@@ -1749,7 +1752,7 @@ export const es: MessageSchema = {
       deleteRecordings: 'Eliminar grabaciones (esta versión aún no tiene ese canal; véase el comentario del código)',
       downloadDetectFiles: 'Descargar a este equipo los archivos de resultados de detección del dispositivo',
       viewDevices: 'Lista de dispositivos, detalle, información del dispositivo y tabla de canales',
-      viewAlarms: 'Registros de alarma, estado del motor de vinculación y alarmas pendientes',
+      viewAlarms: 'Centro de alarmas, estado del motor de vinculación y alarmas pendientes',
       viewRecordings: 'Listas de grabaciones de audio/vídeo, datos de reproducción y direcciones de reproducción',
       viewTrends: 'Consultas de tendencias históricas, cobertura y estadísticas',
       viewEvents: 'Consultas del centro de eventos y alarmas y la biblioteca de detección de la cámara'
@@ -1939,7 +1942,7 @@ export const es: MessageSchema = {
     entryHint:
       'Las estrategias y condiciones se aplican en el equipo; esta página solo las lee y las edita.',
     noAlarms: 'Aún no hay registros de alarma de esta cámara en este equipo.',
-    goAlarmList: 'Abrir el registro de alarmas',
+    goAlarmList: 'Abrir el centro de alarmas',
     // `subtitle` se eliminó junto con el aviso que se mostraba; `refresh` era el
     // texto del antiguo botón de actualizar, ahora solo con icono y por tanto
     // nombrado por `refreshIcon` (aria-label + title).
@@ -2432,7 +2435,7 @@ export const es: MessageSchema = {
     deviceAlarmsTitle: 'Alarmas de equipos',
     deviceAlarmsEmpty: 'No hay alarmas de equipos sin confirmar',
     deviceAlarmAcknowledge: 'Confirmar',
-    deviceAlarmsMore: 'Hay {count} más sin listar (vea Registro de alarmas)',
+    deviceAlarmsMore: 'Hay {count} más sin listar (vea Centro de alarmas)',
     pendingTitle: 'Alarmas pendientes',
     pendingEmpty: 'No hay alarmas en este momento',
     pendingAcknowledge: 'Confirmar',

@@ -75,7 +75,7 @@ export const en: MessageSchema = {
       devices: 'Devices',
       monitor: 'Live monitoring',
       trends: 'Trends',
-      alarms: 'Alarms',
+      alarms: 'Alarm center',
       /**
        * Map information (GIS). Renamed from "Device map" and moved to sit directly under
        * Overview (owner batch 10, item 12: the page also carries a GIS service or floor plan,
@@ -410,6 +410,9 @@ export const en: MessageSchema = {
     notifyDetailUnacknowledged: 'Alarm unacknowledged',
     filterSeverity: 'Severity',
     filterAllSeverities: 'All severities',
+    moreFilters: 'More filters',
+    hideMoreFilters: 'Hide more filters',
+    moreFiltersActive: 'More filters ({count} active)',
     columnSeverity: 'Severity',
     severitySectionTitle: 'Severity',
     noteSectionTitle: 'Note',
@@ -1766,7 +1769,7 @@ export const en: MessageSchema = {
       deleteRecordings: 'Deleting recordings (this version has no such channel yet; see the code comment)',
       downloadDetectFiles: 'Downloading detection result files from a device to this machine',
       viewDevices: 'Device list, device detail, device information and the channel table',
-      viewAlarms: 'Alarm records, linkage engine status and pending alarms',
+      viewAlarms: 'Alarm center, linkage engine status and pending alarms',
       viewRecordings: 'Audio/video recording lists, playback data and recording playback addresses',
       viewTrends: 'Historical trend queries, coverage and statistics',
       viewEvents: 'Event and alarm centre queries and the camera detection library'
@@ -1965,7 +1968,7 @@ export const en: MessageSchema = {
     /** The alarm card on the live-monitoring page (side by side with camera control). */
     entryHint: 'Strategies and conditions take effect on the device; this page only reads and edits them.',
     noAlarms: 'No alarm records for this camera on this machine yet.',
-    goAlarmList: 'Open the alarm list',
+    goAlarmList: 'Open the alarm center',
     // `subtitle` was deleted with the notice line it rendered; `refresh` was the
     // text label of the old refresh button, which is now icon-only and therefore
     // named by `refreshIcon` (aria-label + title).
@@ -2461,7 +2464,7 @@ export const en: MessageSchema = {
     deviceAlarmsTitle: 'Device alarms',
     deviceAlarmsEmpty: 'No unacknowledged device alarms',
     deviceAlarmAcknowledge: 'Acknowledge',
-    deviceAlarmsMore: '{count} more not listed (see Alarm records for all)',
+    deviceAlarmsMore: '{count} more not listed (see Alarm center for all)',
     pendingTitle: 'Pending alarms',
     pendingEmpty: 'No alarms right now',
     pendingAcknowledge: 'Acknowledge',

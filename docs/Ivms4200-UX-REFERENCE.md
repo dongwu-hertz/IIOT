@@ -5178,6 +5178,51 @@ GUI 探针 **0 problems**。逐页实测：侧栏地图那一项 = 「地图信�
 - 关掉之后两个监听都停、端口还原；
 - 推来的那条告警进库了（未确认告警 201 → 202）。
 
+### 15.63 「告警中心」与两档筛选（2026-09-19 第 15 轮）
+
+业主原话三条（同一条消息里）：
+1. 「告警记录修改为 告警中心」；
+2. 「筛选的卡片放在最上面的」；
+3. 「可以做一个简单筛选，和更多筛选内容的区分，更多筛选默认收起」。
+
+#### 15.63.1 改名（四种语言 + 四处引用）
+
+| 键 | 中文 | English | Español | Türkçe |
+|---|---|---|---|---|
+| `app.nav.alarms`（页面名） | 告警中心 | Alarm center | Centro de alarmas | Alarm merkezi |
+| `cameraAlarmUi.goAlarmList`（相机页链接） | 查看告警中心 | Open the alarm center | Abrir el centro de alarmas | Alarm merkezini aç |
+| `linkage.deviceAlarmsMore`（面板里那句"到…看全部"） | 到「告警中心」看全部 | see Alarm center for all | vea Centro de alarmas | tümü için Alarm merkezi |
+| `domain.permissionScope.viewAlarms`（权限适用范围） | 告警中心、… | Alarm center, … | Centro de alarmas, … | Alarm merkezi, … |
+| `samplesUi.empty`（样本库空态里提到的地方） | 可以在「告警中心」… | （en 本来就写 alarm list） | — | — |
+
+`alarmsUi` 里那些讲**数据**的句子（`empty`「没有符合条件的告警记录」、`retention`「告警记录上限」、
+`resetConfirmBody`、`restoreKeeps`…）**没有改**：它们说的是"告警记录"这种东西，不是这一页的名字。
+
+#### 15.63.2 页面顺序
+
+```
+筛选卡（card，第一个块）
+  ├─ 简单筛选：设备 / 告警等级 / 确认状态 ………… 一直显示
+  └─ 更多筛选：开始时间 / 结束时间 / 通道 / 告警类型  默认收起（v-if）
+计数 + 批量动作（.page-header：共 N 条 / 已选 M 条 / 确认 / 取消确认 / 加入样本库）
+提示条 → 表格 → 分页 → 详情抽屉
+```
+
+「更多筛选」的开关是 `[data-action=toggle-alarm-filters]`，带 `aria-expanded` 与
+`aria-controls="alarm-more-filters"`；收起时它显示生效项数（`alarmsUi.moreFiltersActive`）。
+
+#### 15.63.3 顺手修掉的一个既有缺陷（探针抓到的）
+
+`alarms.applyQuery(patch)` 是**合并补丁**（`{ ...query, ...patch }`），而 `AlarmsView.buildQuery()`
+原来写成"有值才带上"。两者配合的结果是：**清空某一格筛选不会生效** —— 那一格根本不在补丁里，
+上一次的值原样留在 store 的 query 上。受影响的六格：`severity` / `channelId` / `alarmType` /
+`acknowledged` / `from` / `to`；「重置」按钮同样清不掉这六格（界面上看起来清空了，列表还是筛过的）。
+
+现在 `buildQuery()` **每一格都显式给出**（清空 = `undefined`）。探针实测：把「开始时间」设成
+2099 年 → 命中 0 条；清空 → 回到 200 条。判据写在 `tests/alarm-center-round.test.ts`
+（"每一格必须显式进 query"）与 `tests/alarm-severity-ui.test.ts`（severity 那一格的写法）。
+
+
 
 
 

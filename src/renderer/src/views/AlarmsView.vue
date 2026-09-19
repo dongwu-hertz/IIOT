@@ -1,10 +1,16 @@
 <script setup lang="ts">
 /**
- * Alarm records (spec section 10.1).
+ * Alarm records (spec section 10.1) — 界面上的名字是「告警中心」
+ * （业主 2026-09-19：「告警记录修改为 告警中心」）。
  *
  * Hard rule from the spec: "Vue 页面禁止直接做 bit 判断". The raw `alarmMask` is
  * never inspected here — labels come from `describeAlarmMask()`, and per-row
  * chips come from the decoded `alarmTypes` array on the domain model.
+ *
+ * 筛选分两档（业主 2026-09-19 同一条）：
+ *   · **简单筛选**一直显示（设备 / 等级 / 确认状态）—— 值守时最常用的三个；
+ *   · **更多筛选**默认收起（时间起止 / 通道 / 告警类型）—— 偶尔才用一次。
+ *   收起的那些**仍然在起作用**，所以按钮上带着生效项数（否则列表变短没人解释得了）。
  *
  * The detail drawer embeds the shared `RecordingPlayer`, which loads the alarm's
  * local recording through `window.api.playback.load(recordingId)`. An alarm only
@@ -82,6 +88,38 @@ const filters = reactive<FilterState>({
  * 而是"我们没判"（理由见 `event-center.ts` 的等级说明）。
  */
 const SEVERITY_FILTER_OPTIONS: readonly EventSeverity[] = ['critical', 'warning', 'info', 'unknown']
+
+/**
+ * 「更多筛选」是否展开（业主 2026-09-19 第 2 条：更多筛选默认收起）。
+ *
+ * 用组件内的 ref 而不是持久化：这一页是"进来看一眼就走"的地方，记住上次展开过
+ * 反而会让下一次进来看到一个不是默认状态的筛选区。
+ */
+const moreOpen = ref(false)
+
+/**
+ * 收起的「更多筛选」里当前有几项在生效。
+ *
+ * 这个数字是**必须**的：面板收起来之后筛选仍然生效，而列表变短在屏幕上只有这一个解释。
+ * 不显示它，操作员会以为"库里没有数据"（业主 2026-09-19 那条要求里"区分"两个字的落点）。
+ */
+const advancedFilterCount = computed(() => {
+  let count = 0
+  if (filters.channelId !== '') count += 1
+  if (filters.alarmType !== '') count += 1
+  if (filters.from !== '') count += 1
+  if (filters.to !== '') count += 1
+  return count
+})
+
+/** 收起状态下的按钮文案（有生效项时把数字带上）。 */
+const moreFiltersLabel = computed(() =>
+  moreOpen.value
+    ? t('alarmsUi.hideMoreFilters')
+    : advancedFilterCount.value > 0
+      ? t('alarmsUi.moreFiltersActive', { count: advancedFilterCount.value })
+      : t('alarmsUi.moreFilters')
+)
 
 const selectedIds = ref<string[]>([])
 const detail = ref<AlarmEvent | null>(null)
@@ -176,21 +214,32 @@ const channelOptions = computed<ChannelOption[]>(() => {
   }))
 })
 
+/**
+ * 把界面上的筛选变成一次查询。
+ *
+ * ⚠ **每一格都必须显式给出**（清空时给 `undefined`），不能"有值才带上"。
+ *
+ * 原因在 store 那边：`alarms.applyQuery(patch)` 做的是
+ * `query.value = { ...query.value, ...patch, offset: 0 }` —— 一个**合并补丁**。
+ * 于是"把某一格清空"这件事在补丁里表现为**那个键根本不在**，合并之后**上一次的值原样留着**：
+ * 界面上下拉回到了"全部等级"、时间框空了，而列表仍然按旧条件过滤。
+ *
+ * 这个缺陷是 2026-09-19 第 15 轮的 GUI 探针抓到的（把「开始时间」设成 2099 年 → 0 条，
+ * 再清空 → **仍然是 0 条**）。当时 `severity` / `channelId` / `alarmType` / `acknowledged` /
+ * `to` 五格都只能"加条件"、不能"去条件"，`reset()` 也一样清不掉。
+ */
 function buildQuery(): Partial<AlarmQuery> {
-  const query: Partial<AlarmQuery> = {
+  return {
     deviceId: filters.deviceId || undefined,
+    channelId: filters.channelId === '' ? undefined : Number(filters.channelId),
+    alarmType: filters.alarmType === '' ? undefined : (Number(filters.alarmType) as AlarmType),
+    severity: filters.severity === '' ? undefined : filters.severity,
+    from: fromDateTimeLocalValue(filters.from),
+    to: fromDateTimeLocalValue(filters.to),
+    acknowledged: filters.ack === 'all' ? undefined : filters.ack === 'true',
     limit: ALARM_PAGE_SIZE,
     offset: 0
   }
-  if (filters.channelId !== '') query.channelId = Number(filters.channelId)
-  if (filters.alarmType !== '') query.alarmType = Number(filters.alarmType) as AlarmType
-  if (filters.severity !== '') query.severity = filters.severity
-  const from = fromDateTimeLocalValue(filters.from)
-  if (from !== undefined) query.from = from
-  const to = fromDateTimeLocalValue(filters.to)
-  if (to !== undefined) query.to = to
-  if (filters.ack !== 'all') query.acknowledged = filters.ack === 'true'
-  return query
 }
 
 async function reload(): Promise<void> {
@@ -450,8 +499,119 @@ function openDevice(deviceId: string): void {
 <template>
   <div class="page">
     <!--
-      没有页面标题（产品要求：外层框架已经写了「告警记录」）。留下的是**副标题**（共 N 条 /
-      已选 M 条）与批量按钮：那不是标题，是这一屏自己的状态与动作。
+      筛选卡在**最上面**（业主 2026-09-19 第 2 条：筛选的卡片放在最上面的）。
+      它原来在「共 N 条 / 已选 M 条 + 批量动作」那一行**下面**，所以进页面第一眼看到的是
+      计数与按钮，而不是"我在看哪一批"。现在顺序是：先选范围，再看结果与动作。
+    -->
+    <section class="card" data-alarm-filters>
+      <!--
+        简单筛选：值守时最常用的三个（设备 / 等级 / 确认状态）。**一直显示** ——
+        把它们也收起来会让"看一眼未确认的告警"变成两次点击。
+      -->
+      <div class="filter-bar" data-alarm-simple-filters>
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterDevice') }}</span>
+          <select v-model="filters.deviceId" class="select">
+            <option value="">{{ t('alarmsUi.filterAllDevices') }}</option>
+            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
+              {{ device.name }}
+            </option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterSeverity') }}</span>
+          <select v-model="filters.severity" class="select">
+            <option value="">{{ t('alarmsUi.filterAllSeverities') }}</option>
+            <option v-for="level in SEVERITY_FILTER_OPTIONS" :key="level" :value="level">
+              {{ eventSeverityLabel(level) }}
+            </option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterAck') }}</span>
+          <select v-model="filters.ack" class="select">
+            <option value="all">{{ t('alarmsUi.ackAll') }}</option>
+            <option value="false">{{ t('alarmsUi.ackUnacknowledged') }}</option>
+            <option value="true">{{ t('alarmsUi.ackAcknowledged') }}</option>
+          </select>
+        </label>
+
+        <!--
+          「更多筛选」开关。`aria-expanded` 不是装饰：读屏要能说出它是开着还是收着，
+          而它下面**真的**多出四个控件（v-if，不是 v-show —— 收着的时候那些控件不在 DOM 里，
+          也不会被 Tab 走到）。
+        -->
+        <button
+          type="button"
+          class="btn btn--sm filter-more-toggle"
+          data-action="toggle-alarm-filters"
+          :aria-expanded="moreOpen"
+          :aria-controls="'alarm-more-filters'"
+          @click="moreOpen = !moreOpen"
+        >
+          {{ moreFiltersLabel }}
+        </button>
+
+        <button
+          type="button"
+          class="btn filter-reset"
+          data-action="reset-alarm-filters"
+          @click="reset"
+        >
+          {{ t('common.reset') }}
+        </button>
+      </div>
+
+      <!--
+        更多筛选（默认收起）：时间起止 / 通道 / 告警类型。
+        这三样是"翻旧账"时才用的（通道与类型各有 8 / 14 个取值），日常值守不需要它们占一行。
+      -->
+      <div
+        v-if="moreOpen"
+        id="alarm-more-filters"
+        class="filter-bar filter-bar--more"
+        data-alarm-more-filters
+      >
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterFrom') }}</span>
+          <input v-model="filters.from" class="input" type="datetime-local" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterTo') }}</span>
+          <input v-model="filters.to" class="input" type="datetime-local" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterChannel') }}</span>
+          <select v-model="filters.channelId" class="select">
+            <option value="">{{ t('alarmsUi.filterAllChannels') }}</option>
+            <option v-for="channel in channelOptions" :key="channel.index" :value="channel.index">
+              {{ channelLabel(channel.index) }}<template v-if="channel.name">（{{ channel.name }}）</template>
+              <!-- 未启用的通道照样可以查历史（过去的数据仍在），但必须看得出来它现在没开。 -->
+              <template v-if="channel.state !== 'enabled'">（{{ t(channelStateLabelKey(channel.state)) }}）</template>
+            </option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ t('alarmsUi.filterType') }}</span>
+          <select v-model="filters.alarmType" class="select">
+            <option value="">{{ t('alarmsUi.filterAllTypes') }}</option>
+            <option v-for="type in ALARM_TYPE_OPTIONS" :key="type" :value="type">
+              {{ alarmTypeLabel(type) }}
+            </option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <!--
+      计数与批量动作。放在筛选卡**下面**：它描述的是"这一批结果"，而范围在上面已经选好了。
+      没有页面标题（产品要求：外层框架已经写了「告警中心」），留下的是**副标题**
+      （共 N 条 / 已选 M 条）与批量按钮。
     -->
     <div class="page-header">
       <p class="page-subtitle">
@@ -491,73 +651,6 @@ function openDevice(deviceId: string): void {
 
     <p v-if="alarms.error" class="alert alert--danger" role="alert">{{ alarms.error }}</p>
     <p v-else-if="notice" class="alert alert--success" role="status">{{ notice }}</p>
-
-    <section class="card">
-      <div class="filter-bar">
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterDevice') }}</span>
-          <select v-model="filters.deviceId" class="select">
-            <option value="">{{ t('alarmsUi.filterAllDevices') }}</option>
-            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-              {{ device.name }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterChannel') }}</span>
-          <select v-model="filters.channelId" class="select">
-            <option value="">{{ t('alarmsUi.filterAllChannels') }}</option>
-            <option v-for="channel in channelOptions" :key="channel.index" :value="channel.index">
-              {{ channelLabel(channel.index) }}<template v-if="channel.name">（{{ channel.name }}）</template>
-              <!-- 未启用的通道照样可以查历史（过去的数据仍在），但必须看得出来它现在没开。 -->
-              <template v-if="channel.state !== 'enabled'">（{{ t(channelStateLabelKey(channel.state)) }}）</template>
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterType') }}</span>
-          <select v-model="filters.alarmType" class="select">
-            <option value="">{{ t('alarmsUi.filterAllTypes') }}</option>
-            <option v-for="type in ALARM_TYPE_OPTIONS" :key="type" :value="type">
-              {{ alarmTypeLabel(type) }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterSeverity') }}</span>
-          <select v-model="filters.severity" class="select">
-            <option value="">{{ t('alarmsUi.filterAllSeverities') }}</option>
-            <option v-for="level in SEVERITY_FILTER_OPTIONS" :key="level" :value="level">
-              {{ eventSeverityLabel(level) }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterFrom') }}</span>
-          <input v-model="filters.from" class="input" type="datetime-local" />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterTo') }}</span>
-          <input v-model="filters.to" class="input" type="datetime-local" />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterAck') }}</span>
-          <select v-model="filters.ack" class="select">
-            <option value="all">{{ t('alarmsUi.ackAll') }}</option>
-            <option value="false">{{ t('alarmsUi.ackUnacknowledged') }}</option>
-            <option value="true">{{ t('alarmsUi.ackAcknowledged') }}</option>
-          </select>
-        </label>
-
-        <button type="button" class="btn" @click="reset">{{ t('common.reset') }}</button>
-      </div>
-    </section>
 
     <div class="table-wrap">
       <table class="table">
@@ -841,6 +934,21 @@ function openDevice(deviceId: string): void {
 </template>
 
 <style scoped>
+/*
+ * 筛选条：简单那一行与「更多筛选」那一行**同一套排版**，但两行之间留一条细线 ——
+ * 它们不是同一档（一个常显、一个收起），靠留白区分太弱。
+ */
+.filter-bar--more {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+/* 两个按钮推到这一行的右端：左边是筛选条件，右边是两个动作（更多筛选 / 重置）。 */
+.filter-more-toggle {
+  margin-left: auto;
+}
+
 /*
  * 等级配色。四档都要有，`unknown` 也**必须**有自己的样子：它不是"最轻的一档"，
  * 而是"我们没判"（设备不给等级，见 `ALARM_SEVERITY_BY_TYPE`），所以用中性灰而不是
