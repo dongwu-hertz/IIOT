@@ -92,6 +92,7 @@ import {
   type Fa371EnergyTarget,
   type Fa371FftFrame,
   type Fa371Frame,
+  type Fa371InfraredFrame,
   type Fa371HandshakeCertainty,
   type Fa371LayoutWarning,
   type Fa371PcmFrame,
@@ -204,6 +205,8 @@ export interface Fa371DecodeCandidate {
   pcmChannels?: number
   /** `/pcmData`：每帧样本数；0 = 由帧长决定。 */
   pcmFrameSamples?: number
+  /** `/inrared_data`：每帧 float32 数量（手册 §5.3.6 固定 4 个）。 */
+  infraredValues?: number
 }
 
 /**
@@ -374,6 +377,17 @@ export const FA371_DECODE_CANDIDATES: Readonly<Record<Fa371StreamKind, readonly 
       elementBits: 8,
       signed: false
     }
+  ],
+  infraredData: [
+    {
+      id: 'float32-le-4',
+      description: '4 个 little-endian float32：发射率 / 中心温 / 最高温 / 最低温（16 B）',
+      specRef: '声温成像仪手册 §5.3.6（路径原文 /inrared_data；频率与查询方式未给出）',
+      endianness: 'little',
+      elementBits: 32,
+      signed: true,
+      infraredValues: 4
+    }
   ]
 }
 
@@ -388,7 +402,8 @@ export const FA371_DEFAULT_DECODE_IDS: Readonly<Record<Fa371StreamKind, string>>
   voiceprintData: 'jpeg-image-600x400',
   energyData: 'int32-le-groups5',
   pcmData: 'float32-le-mono-4800',
-  detectFeedback: 'json-text-frame'
+  detectFeedback: 'json-text-frame',
+  infraredData: 'float32-le-4'
 }
 
 export interface Fa371DecodeOptions {
@@ -398,6 +413,7 @@ export interface Fa371DecodeOptions {
   energyData?: string
   pcmData?: string
   detectFeedback?: string
+  infraredData?: string
 }
 
 /** 给未知 id 时回落默认，而不是抛错（配置可能来自设备记录）。 */
@@ -682,6 +698,36 @@ export function decodePcmFrame(
 }
 
 /**
+ * 解码 `/inrared_data`（声温成像仪手册 §5.3.6）。
+ *
+ * 手册给出 4 个 float32 的顺序（发射率 / 中心温 / 最高温 / 最低温），但没有说明单位；
+ * 单位来自设备 `ir_unit` 配置，解码层不做换算。帧短于 4 个 float 时缺的字段留空，不补 0。
+ */
+export function decodeInfraredFrame(
+  bytes: Uint8Array,
+  candidate: Fa371DecodeCandidate,
+  meta: { receivedAt: number; sequence: number }
+): Fa371InfraredFrame {
+  const values = decodeFloat32(payloadOf(bytes, candidate), candidate.endianness)
+  const emissivity = values[0]
+  const centerTemp = values[1]
+  const maxTemp = values[2]
+  const minTemp = values[3]
+  return {
+    kind: 'infraredData',
+    bytes,
+    values,
+    ...(emissivity !== undefined ? { emissivity } : {}),
+    ...(centerTemp !== undefined ? { centerTemp } : {}),
+    ...(maxTemp !== undefined ? { maxTemp } : {}),
+    ...(minTemp !== undefined ? { minTemp } : {}),
+    profile: profileOf(candidate),
+    receivedAt: meta.receivedAt,
+    sequence: meta.sequence
+  }
+}
+
+/**
  * 解码 `/detectFeedback`（§5.2.3）。
  *
  * 文本帧与二进制帧**都收**：手册一边说 "JSON strings" 一边说 "parsed in byte
@@ -756,6 +802,10 @@ export function expectedFrameBytes(candidate: Fa371DecodeCandidate): number | un
   if (candidate.energyGroupSize !== undefined) {
     // 目标个数由帧长决定（手册说最多 3 个），所以只能校验"是不是整数个组"。
     return undefined
+  }
+
+  if (candidate.infraredValues !== undefined) {
+    return header + candidate.infraredValues * bytesPerElement
   }
 
   const declaredSamples = candidate.pcmFrameSamples ?? 0
@@ -1271,6 +1321,12 @@ export class Fa371WsClient extends EventEmitter {
           this.pcmBuffer?.push(decoded.samples)
           this.recordFrame(kind, frame.bytes.length)
           this.emit('frame:pcmData', decoded)
+          break
+        }
+        case 'infraredData': {
+          const decoded = decodeInfraredFrame(frame.bytes, candidate, meta)
+          this.recordFrame(kind, frame.bytes.length)
+          this.emit('frame:infraredData', decoded)
           break
         }
         case 'detectFeedback': {

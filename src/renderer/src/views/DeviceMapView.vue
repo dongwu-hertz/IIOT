@@ -10,7 +10,8 @@
  *      （图上 N 台 / 共 M 台 / 在线 K / 离线 J / 未确认告警 P）；
  *   ② 地图**下方**：左**设备列表**（序号 / 设备名称 / 状态，每页 10 台）+
  *      右**告警列表**（高度与左边那张卡完全一致）；
- *   ③ 最后是整幅宽的实时数据列表（分贝 / 平稳度 / 方位）。
+ *   ③ 最后是**实时监测工作台**（Live Monitor，业主 2026-09-20 规格）：
+ *      当前聚焦设备的 Header + 三栏模板 + 能力驱动的底部动作。
  *
  * 第 11 批第 4 条点名删掉了地图区上面的三样东西（「图上 N 台 / 共 M 台」那一行读数、
  * 三个色调的图例与计数、「还没有任何设备录入点位…」那一句），并把那些数字搬进了状态栏；
@@ -24,8 +25,10 @@
  * ---------------------------------------------------------------------------
  * 三件必须说清楚的事
  * ---------------------------------------------------------------------------
- * 1. **底图是我们自己画的**（`shared/domain/device-map.ts`）。渲染层不联网、仓库里也没有
- *    地图库，所以图上只有经纬度网格与落点，没有街道与建筑。业主选的就是这一条。
+ * 1. **底图默认是我们自己画的离线平面图**（`shared/domain/device-map.ts`）：渲染层不联网，
+ *    图上只有经纬度网格与落点，没有街道与建筑。业主 2026-09-19 追加第 1 条之后，可以在
+ *    「设置 → 地图」里**显式开启**在线 XYZ 底图（见 `@shared/domain/map-tiles`）：只允许
+ *    https、默认关闭、按电脑时区推中心、缩放固定 2–18；关着时这一页与过去完全一样。
  * 2. **没录点位的设备画不在图上**，但它们在**设备列表里**（那份列表是设备表的全部，
  *    不是"图上的那几台"）—— 状态栏里"图上 N 台 / 共 M 台"两个数不相等时，差额就是它们。
  * 3. **抓图有三种状态，界面分开说**：有图 / 设备上本来就没有（`not-captured`）/
@@ -45,15 +48,24 @@
  * 三个颜色都配一句文字（图例 + 每一行的状态列），不靠颜色单独承载信息。
  *
  * ---------------------------------------------------------------------------
- * 实时数据列表里那一列「平稳度」（业主第 17 条给的三列之一）
+ * 实时监测工作台的数据口径（业主 2026-09-20 规格 V1.0）
  * ---------------------------------------------------------------------------
- * 业主给的三列是 分贝 / 稳定度 / 方位。**用词在 2026-09-19 定下来了**：他说「用**平稳度**表示」，
- * 也就是这一列取本仓库的 `smoothness`（设备随每条告警上报的一个真实测量值，
- * `AlarmEvent.smoothness`）。
+ * 第三行已经从"整幅宽的实时数据表格（分贝 / 平稳度 / 方位）"改成一台**当前聚焦设备**
+ * 的工作台。口径随之固定：
+ *   - `selectedId` 是整页唯一的 currentFocusDeviceId（规格 §27）：点地图落点、设备行、
+ *     告警行都只改它；实时工作台不自己存第二份选中状态；
+ *   - SPL / 平稳度仍然取**最近一条真实告警**（与原来的表格同源），经
+ *     `lib/realtimeAdapters.ts` 归一成 `RealtimeFrame`；FA8 在线时另有每秒一帧的
+ *     实时特征值，优先于 last-known；
+ *   - 方位角仍是**录入的安装方位**。空气声呐的**实时方向只在 Event 模式、且告警原文里
+ *     确实有 horizontal/vertical 时出现**（规格 §20：Live 不显示不断变化的方向角）；
+ *   - 缺失值一律 `value: null` + `quality: 'nodata'`，界面显示 `—`，绝不写 0（规格 §31）。
  *
- * 所以这一列**不再是空的**：它与分贝取自**同一条告警**，两列永远对应同一时刻。
- * 在此之前这里恒为「—」，并写着"手册未说明这个量"—— 那段说明随这次澄清一起下架
- * （当时的判断没错，是当时的用词没定）。
+ * **版面比例的决定（业主 2026-09-20）**：规格 V1.0 里给的 1920×1080 基准行高与
+ * "1920×1080 不产生纵向滚动"验收项**不采用**。业主明确选择沿用本页既有的第 13 条口径：
+ * **地图 16:9、占满内容宽度**，下方设备/告警列表与实时工作台按内容自然排布；
+ * 实时工作台自己的 Default 312 / Collapsed 56 / Expanded 480 / 拖拽上限 55vh 继续保留。
+ * 地图比例、SVG 画布、瓦片排布与相关测试都**不动**。
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -69,6 +81,19 @@ import {
   type MapDeviceInput
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
+import {
+  MAX_TILE_ZOOM,
+  MIN_TILE_ZOOM,
+  TILE_SIZE,
+  clampTileZoom,
+  panMapCenter,
+  projectToViewport,
+  timeZoneCenter,
+  viewTiles,
+  type MapCenter,
+  type MapTilePlacement,
+  type MapTilesConfig
+} from '@shared/domain/map-tiles'
 import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
 import {
   DEVICE_MAP_PAGE_SIZE,
@@ -77,15 +102,21 @@ import {
   listPageSlice
 } from '@renderer/lib/listPaging'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { useSettingsStore } from '@renderer/stores/settings'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
+import RealtimeMonitor from '@renderer/components/realtime/RealtimeMonitor.vue'
+import { useRealtimeMonitorStore } from '@renderer/stores/realtimeMonitor'
+import type { RealtimeActionId } from '@shared/domain/realtime-monitor'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
+const settings = useSettingsStore()
+const realtime = useRealtimeMonitorStore()
 
 /**
  * 画布的逻辑尺寸：SVG 用 `viewBox` 缩放到容器宽度，所以这是一套"逻辑坐标"。
@@ -181,6 +212,187 @@ function gridLineX(longitude: number): number {
   return project.value ? project.value.x(longitude) : 0
 }
 
+// ---------------------------------------------------------------------------
+// 在线底图（GIS；业主 2026-09-19 追加第 1 条）
+// ---------------------------------------------------------------------------
+/**
+ * 设置里的地图配置。只有**显式打开**时才返回它；关着时整块在线底图不渲染，
+ * 这一页与过去完全一样（本机 SVG 网格，不出网）。**默认关闭**是离线优先的硬约束。
+ */
+const tilesEnabled = computed(() => tileConfig.value !== null)
+
+const tileConfig = computed<MapTilesConfig | null>(() => {
+  const config = settings.settings?.mapTiles
+  return config?.enabled ? config : null
+})
+
+/** 电脑时区（IANA 名）；取不到就退回 UTC（查表会落到世界中心，缩放 2）。 */
+const systemTimeZone = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+})()
+
+/**
+ * 时区→中心表在共享层（**手册未说明**，是我们的取值：见 @shared/domain/map-tiles）。
+ * 地图页只负责把结果放进取景框，不自己维护第二份城市表。
+ */
+const timeZoneView = timeZoneCenter(systemTimeZone)
+
+/**
+ * 当前视野。
+ *
+ * **普通 ref + 普通事件处理器**：绝不在 patch 期间写它（第 36 轮那条硬规矩）。
+ * 开关打开时从时区中心起；设备可能不在中心附近，操作员用缩放/拖拽自己找。
+ */
+const mapView = ref<MapCenter | null>(null)
+const tileErrors = ref<string[]>([])
+watch(
+  tilesEnabled,
+  (enabled) => {
+    mapView.value = enabled ? { ...timeZoneView } : null
+    tileErrors.value = []
+  },
+  { immediate: true }
+)
+const activeCenter = computed<MapCenter>(() => mapView.value ?? timeZoneView)
+const mapZoom = computed(() => activeCenter.value.zoom)
+
+/** 当前视口需要的瓦片；配置关着时是空数组。 */
+const tilePlacements = computed<MapTilePlacement[]>(() => {
+  const config = tileConfig.value
+  if (!config) return []
+  return viewTiles(config, activeCenter.value, mapZoom.value, CANVAS.width, CANVAS.height)
+})
+
+/** 失败瓦片用**键**记录：重新铺瓦片后旧键不再参与计数（避免异步 error 串台）。 */
+const tileFailureCount = computed(
+  () => tilePlacements.value.filter((tile) => tileErrors.value.includes(tile.key)).length
+)
+
+function onTileError(key: string): void {
+  if (!tileErrors.value.includes(key)) tileErrors.value = [...tileErrors.value, key]
+}
+
+/** 瓦片位置：百分比（与 SVG 的 1280×720 逻辑坐标同一套）。 */
+function tileStyle(tile: MapTilePlacement): Record<string, string> {
+  return {
+    left: `${((tile.left / CANVAS.width) * 100).toFixed(4)}%`,
+    top: `${((tile.top / CANVAS.height) * 100).toFixed(4)}%`,
+    width: `${((TILE_SIZE / CANVAS.width) * 100).toFixed(4)}%`,
+    height: `${((TILE_SIZE / CANVAS.height) * 100).toFixed(4)}%`
+  }
+}
+
+const zoomInDisabled = computed(() => mapZoom.value >= MAX_TILE_ZOOM)
+const zoomOutDisabled = computed(() => mapZoom.value <= MIN_TILE_ZOOM)
+
+function zoomBy(delta: number): void {
+  if (!tileConfig.value) return
+  const current = activeCenter.value
+  const zoom = clampTileZoom(current.zoom + delta)
+  if (zoom === current.zoom) return
+  mapView.value = { ...current, zoom }
+}
+
+function onMapWheel(event: WheelEvent): void {
+  if (!tileConfig.value) return
+  event.preventDefault()
+  zoomBy(event.deltaY < 0 ? 1 : -1)
+}
+
+/** 拖拽状态用**普通对象**：它不需要响应式，也不是模板 ref（第 36 轮的教训）。 */
+const drag = {
+  active: false,
+  startX: 0,
+  startY: 0,
+  center: null as MapCenter | null
+}
+
+function onMapPointerDown(event: PointerEvent): void {
+  if (!tileConfig.value || event.button !== 0) return
+  drag.active = true
+  drag.startX = event.clientX
+  drag.startY = event.clientY
+  drag.center = { ...activeCenter.value }
+  const target = event.currentTarget as HTMLElement | null
+  target?.setPointerCapture?.(event.pointerId)
+}
+
+function onMapPointerMove(event: PointerEvent): void {
+  if (!drag.active || !drag.center) return
+  const target = event.currentTarget as HTMLElement | null
+  if (!target) return
+  const rect = target.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const dx = ((event.clientX - drag.startX) * CANVAS.width) / rect.width
+  const dy = ((event.clientY - drag.startY) * CANVAS.height) / rect.height
+  if (dx === 0 && dy === 0) return
+  mapView.value = panMapCenter(drag.center, dx, dy)
+}
+
+function onMapPointerUp(event: PointerEvent): void {
+  if (!drag.active) return
+  drag.active = false
+  drag.center = null
+  const target = event.currentTarget as HTMLElement | null
+  target?.releasePointerCapture?.(event.pointerId)
+}
+
+/**
+ * `?device=` 进来时把这一台放到视野中心。
+ * 时区中心是默认起点，但它与设备位置是两件事：不居中的话，那个链接点过来
+ * 只会"选中一台在屏幕外的设备"，操作员看不到它。
+ */
+function centerOnDevice(deviceId: string): void {
+  if (!tileConfig.value) return
+  const device = mapInputs.value.find((item) => item.id === deviceId)
+  if (!device || device.latitude === undefined || device.longitude === undefined) return
+  mapView.value = {
+    latitude: device.latitude,
+    longitude: device.longitude,
+    zoom: clampTileZoom(Math.max(mapZoom.value, 8))
+  }
+}
+
+/** 回到电脑时区推出来的默认中心（与放大/缩小共用的入口）。 */
+function resetMapView(): void {
+  mapView.value = { ...timeZoneView }
+}
+
+/**
+ * 显示用落点：离线模式沿用原来的"按设备范围铺满"；在线模式用 Web Mercator 投影。
+ * 两种模式共用同一套 SVG 标记与色调，只是坐标来源不同。
+ */
+const displayMarkers = computed(() => {
+  const config = tileConfig.value
+  if (!config) return layout.value.markers
+  return mapInputs.value
+    .filter(
+      (device): device is MapDeviceInput & { latitude: number; longitude: number } =>
+        device.latitude !== undefined && device.longitude !== undefined
+    )
+    .map((device) => {
+      const point = projectToViewport(
+        activeCenter.value,
+        device.latitude,
+        device.longitude,
+        CANVAS.width,
+        CANVAS.height
+      )
+      return {
+        id: device.id,
+        name: device.name,
+        x: Math.round(point.x * 100) / 100,
+        y: Math.round(point.y * 100) / 100,
+        latitude: device.latitude,
+        longitude: device.longitude
+      }
+    })
+})
+
 const selectedDevice = computed<Device | undefined>(() =>
   selectedId.value === '' ? undefined : devices.byId(selectedId.value)
 )
@@ -212,7 +424,7 @@ function markerTone(device: Device): 'alarm' | 'online' | 'offline' {
 /** 图上每一个标记的色调（按 id 查一次，模板里不用重复算）。 */
 const markerTones = computed<Record<string, 'alarm' | 'online' | 'offline'>>(() => {
   const out: Record<string, 'alarm' | 'online' | 'offline'> = {}
-  for (const marker of layout.value.markers) {
+  for (const marker of displayMarkers.value) {
     const device = devices.byId(marker.id)
     out[marker.id] = device ? markerTone(device) : 'offline'
   }
@@ -251,29 +463,6 @@ function alarmCell(deviceId: string): string {
   const facts = alarmFacts.value[deviceId]
   if (!facts || facts.pending < 0) return t('mapUi.notRead')
   return String(facts.pending)
-}
-
-/** 实时数据那一行：分贝取最近一条告警上报的声压级。 */
-function liveDb(deviceId: string): string {
-  const facts = alarmFacts.value[deviceId]
-  if (!facts || facts.total < 0) return t('mapUi.notRead')
-  return facts.latestSpl === undefined ? t('mapUi.none') : `${formatNumber(facts.latestSpl, 1)} dB`
-}
-
-/**
- * 实时数据那一行的**平稳度**：最近一条告警上报的 `smoothness`。
- *
- * 业主 2026-09-19 澄清「用平稳度表示」之后，这一列**不再是恒为「—」的空列** ——
- * 他说的「稳定度」就是本仓库的 `smoothness`（设备随每条告警上报的一个真实测量值）。
- * 它与分贝取自**同一条告警**，所以两列永远对应同一时刻（这也是把它们放在同一行、
- * 同一句 `mapUi.liveHint` 里的原因）。
- */
-function liveSmoothness(deviceId: string): string {
-  const facts = alarmFacts.value[deviceId]
-  if (!facts || facts.total < 0) return t('mapUi.notRead')
-  return facts.latestSmoothness === undefined
-    ? t('mapUi.none')
-    : formatNumber(facts.latestSmoothness, 3)
 }
 
 /**
@@ -342,8 +531,38 @@ function selectDevice(deviceId: string): void {
   selectedId.value = deviceId
   selectedAlarmId.value = ''
   snapshots.value = null
+  // 规格 §27：整页只有一个 currentFocusDeviceId；实时工作台与设备列表都由它驱动。
+  realtime.selectDevice(deviceId)
   void loadAlarms(deviceId)
   void closeSnapshots()
+}
+
+/** 实时工作台的底部动作：没有能力就不显示，显示的都有去处。 */
+function onRealtimeAction(action: RealtimeActionId): void {
+  const device = selectedDevice.value
+  if (!device) return
+  switch (action) {
+    case 'liveView':
+    case 'listen':
+      void router.push({ path: '/monitor', query: { device: device.id } })
+      return
+    case 'history':
+    case 'analysis':
+      void router.push({ path: '/trends', query: { device: device.id } })
+      return
+    case 'ptz':
+    case 'configuration':
+      void router.push({ path: `/devices/${device.id}` })
+      return
+  }
+}
+
+/** Event -> Live（规格 §28）：告警选中与快照都收掉，回到当前设备的实时数据。 */
+function onRealtimeReturnToLive(): void {
+  selectedAlarmId.value = ''
+  snapshots.value = null
+  void closeSnapshots()
+  realtime.returnToLive()
 }
 
 /** 双击一行设备 = 进这一台的详情页（业主第 16 条；声纹设备与相机都走这一条）。 */
@@ -409,7 +628,7 @@ function closeHover(): void {
 const hoverStyle = computed(() => {
   const device = hoveredDevice.value
   if (!device) return {}
-  const marker = layout.value.markers.find((item) => item.id === device.id)
+  const marker = displayMarkers.value.find((item) => item.id === device.id)
   if (!marker) return {}
   return {
     left: `${((marker.x / CANVAS.width) * 100).toFixed(3)}%`,
@@ -499,6 +718,8 @@ async function openSnapshots(alarm: AlarmEvent): Promise<void> {
   if (!device) return
   selectedAlarmId.value = alarm.id
   snapshots.value = null
+  // 点告警 = 进入 Event 模式（规格 §27/§28）；实时工作台切到这条告警的上下文。
+  realtime.selectEvent(alarm.id, device.id)
   snapshotsLoading.value = true
   const result = await callApi(() => window.api.e2.alarmSnapshots(device.id, alarm.id))
   snapshotsLoading.value = false
@@ -516,6 +737,8 @@ async function closeSnapshots(): Promise<void> {
 
 onMounted(async () => {
   loading.value = true
+  // 地图配置与开关都在设置里；进这一页也要能自己读到（settings 是共享 store，不会重复请求）。
+  if (!settings.loaded) await settings.load()
   if (devices.devices.length === 0) await devices.load()
   await loadDeviceAlarmFacts()
   /*
@@ -528,9 +751,18 @@ onMounted(async () => {
    */
   const focusId = deviceMapFocusId(route.query)
   const focused = focusId === '' ? undefined : layout.value.markers.find((marker) => marker.id === focusId)
-  // 默认选第一台**有点位**的设备：一进页面就该有东西可看。
-  const first = focused ?? layout.value.markers[0]
-  if (first) selectDevice(first.id)
+  /*
+   * 规格 §35：**没有选中任何设备时不要默认选第一台**（"Select a device to view live data"）。
+   * 默认选一台会让操作员以为眼前这块实时数据就是自己关心的那台 —— 地图页又是多设备场景，
+   * 误读的代价比"一开始空着"大得多。只有 `?device=` 指向一台图上有的设备时才自动选中。
+   * 上一次进入这一页留下的选中状态也要清掉（它是上一个会话的上下文）。
+   */
+  realtime.clearSelection()
+  if (focused) {
+    selectDevice(focused.id)
+    // 在线底图下，时区中心不一定看得到这一台；?device= 要把它居中。
+    centerOnDevice(focused.id)
+  }
   loading.value = false
 })
 
@@ -573,7 +805,46 @@ onUnmounted(() => {
           而**画布本身照旧画出来**（空的经纬度网格）—— 地图区不该在"还没有点位"时整块消失，
           那看起来像页面坏了。所以画布的条件是"这一页有设备"，而不是"图上有落点"。
         -->
-        <div class="map-canvas-frame" data-map-canvas-frame>
+        <div
+          class="map-canvas-frame"
+          :class="{ 'map-canvas-frame--tile': tileConfig }"
+          data-map-canvas-frame
+          :data-map-tiles-enabled="tileConfig ? 'yes' : 'no'"
+          :data-map-zoom="tileConfig ? mapZoom : null"
+          :data-map-center="tileConfig ? activeCenter.latitude.toFixed(5) + ',' + activeCenter.longitude.toFixed(5) : null"
+          :data-map-timezone="tileConfig ? systemTimeZone : null"
+          @wheel="onMapWheel"
+          @pointerdown="onMapPointerDown"
+          @pointermove="onMapPointerMove"
+          @pointerup="onMapPointerUp"
+          @pointercancel="onMapPointerUp"
+        >
+          <!--
+            在线底图（业主 2026-09-19 追加第 1 条）：只有设置里显式打开才渲染。
+            瓦片是普通 <img>（connect-src 仍是 none，因此不能变成 fetch 数据通道）；
+            署名固定在地图右下角，放大/缩小/拖拽在控制条与画布手势上。
+          -->
+          <div v-if="tileConfig" class="map-tile-layer" data-map-tiles>
+            <img
+              v-for="tile in tilePlacements"
+              :key="tile.key"
+              class="map-tile"
+              :src="tile.url"
+              :style="tileStyle(tile)"
+              alt=""
+              draggable="false"
+              data-map-tile
+              :data-tile-key="tile.key"
+              @error="onTileError(tile.key)"
+            />
+            <!--
+              某些瓦片加载失败（没有外网、服务拒绝）时如实说一句，而不是留一块白，
+              更不能把失败说成"这里没有地图"。点位与设备列表不依赖瓦片。
+            -->
+            <div v-if="tileFailureCount > 0" class="map-tile-error" data-map-tile-error role="status">
+              {{ t('mapUi.tilesError', { failed: tileFailureCount, total: tilePlacements.length }) }}
+            </div>
+          </div>
           <svg
             class="map-canvas"
             :viewBox="`0 0 ${CANVAS.width} ${CANVAS.height}`"
@@ -582,7 +853,7 @@ onUnmounted(() => {
             :aria-label="t('mapUi.canvasLabel')"
             data-map-canvas
           >
-            <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" />
+            <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" :class="{ 'map-canvas__bg--transparent': tileConfig }" />
             <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。**没有落点时没有视野**，网格随之缺席。 -->
             <g v-if="project" class="map-grid">
               <line
@@ -603,7 +874,7 @@ onUnmounted(() => {
               />
             </g>
             <g
-              v-for="marker in layout.markers"
+              v-for="marker in displayMarkers"
               :key="marker.id"
               class="map-marker"
               :class="[
@@ -628,6 +899,41 @@ onUnmounted(() => {
               <text class="map-marker__label" x="12" y="4">{{ marker.name }}</text>
             </g>
           </svg>
+
+          <!--
+            署名与缩放控制放在 SVG **外面**（同一层、z-index 更高）：
+            它们在瓦片层之上、可点；瓦片本身永远不会被控制条挡住。
+          -->
+          <div v-if="tileConfig?.attribution" class="map-attribution" data-map-attribution>
+            {{ tileConfig?.attribution }}
+          </div>
+          <div v-if="tileConfig" class="map-zoom-controls" data-map-zoom-controls @pointerdown.stop @wheel.stop>
+            <button
+              type="button"
+              class="btn"
+              data-map-zoom-out
+              :aria-label="t('mapUi.zoomOut')"
+              :disabled="zoomOutDisabled"
+              @click="zoomBy(-1)"
+            >−</button>
+            <span class="map-zoom-level" data-map-zoom-level>
+              {{ t('mapUi.zoomLevel', { zoom: mapZoom }) }}
+            </span>
+            <button
+              type="button"
+              class="btn"
+              data-map-zoom-in
+              :aria-label="t('mapUi.zoomIn')"
+              :disabled="zoomInDisabled"
+              @click="zoomBy(1)"
+            >+</button>
+            <button
+              type="button"
+              class="btn"
+              data-map-zoom-reset
+              @click="resetMapView"
+            >{{ t('mapUi.zoomReset') }}</button>
+          </div>
 
           <!--
             悬停浮层（业主第 15、16 条）：
@@ -948,38 +1254,28 @@ onUnmounted(() => {
       </section>
       </div>
 
-      <!-- ④ 实时数据列表（第三张）：分贝 / 平稳度 / 方位。 -->
-      <section class="card map-block" data-map-live>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('mapUi.liveTitle') }}</h3>
-        </div>
-        <table class="table map-table">
-          <thead>
-            <tr>
-              <th scope="col">{{ t('devices.name') }}</th>
-              <th scope="col" class="map-table__num">{{ t('mapUi.colDb') }}</th>
-              <th scope="col" class="map-table__num">{{ t('mapUi.colStability') }}</th>
-              <th scope="col" class="map-table__num">{{ t('mapUi.colAzimuth') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="device in devices.devices" :key="device.id" :data-live-row="device.id">
-              <td>
-                <span class="map-table__tone" :class="`map-table__tone--${markerTone(device)}`"
-                  :title="t('mapUi.legendAlarm')" aria-hidden="true"></span>
-                {{ device.name }}
-              </td>
-              <td class="map-table__num">{{ liveDb(device.id) }}</td>
-              <!-- 平稳度：最近一条告警上报的 `smoothness`（业主 2026-09-19 澄清「用平稳度表示」）。 -->
-              <td class="map-table__num" :data-live-smoothness="liveSmoothness(device.id)">
-                {{ liveSmoothness(device.id) }}
-              </td>
-              <td class="map-table__num">{{ liveAzimuth(device) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p class="muted map-panel__hint" data-live-hint>{{ t('mapUi.liveHint') }}</p>
-      </section>
+      <!--
+        ④ 实时监测 / Live Monitor（业主 2026-09-20《GIS Realtime Data UX/UI Spec V1.0》）。
+
+        这一块从"整幅宽的三列表格（分贝 / 平稳度 / 方位）"改成一台**当前聚焦设备**的
+        实时监测工作台：Header + 模板三栏（主数据 / 主可视化 / 分析详情）+ 能力驱动的底部动作。
+        它不再一次列全部设备：设备/告警列表已经把"哪一台"选好了，工作台只回答"这一台现在
+        在发生什么"（规格 §2：不要叫"实时数据列表"，它是一个工作台）。
+
+        数据出处仍然只有一条口径：`alarms` 是选中设备最近 20 条告警（last-known 值），
+        `alarmFacts[selectedId].pending` 是未确认条数（Header 的告警色只看它，不按数值猜）；
+        FA8 的实时值由 `useRealtimeMonitorFeed()` 从既有 monitor 会话取。没有的字段显示
+        `—`，不编 0（规格 §31）。
+      -->
+      <RealtimeMonitor
+        data-map-live
+        class="map-block"
+        :device="selectedDevice"
+        :alarms="alarms"
+        :pending-alarms="alarmFacts[selectedId]?.pending ?? -1"
+        @action="onRealtimeAction"
+        @return-to-live="onRealtimeReturnToLive"
+      />
     </template>
   </div>
 </template>
@@ -1106,6 +1402,106 @@ onUnmounted(() => {
  *      （标记都在画布内部，即使有也不该因为一条读数而点不到）。
  *   3. `z-index: 4`：低于悬停浮层（5），高于画布。
  */
+/*
+ * 在线底图（GIS，业主 2026-09-19 追加第 1 条）。
+ *
+ * 层次：瓦片层 0 -> SVG（底色透明后只剩落点）1 -> 控制条/署名 3；状态栏与浮层继续用
+ * 原来的 4/5。瓦片层 `pointer-events: none`，所以滚轮/拖拽落在画布框上，按钮照常可点。
+ */
+.map-canvas-frame--tile {
+  cursor: grab;
+}
+
+.map-canvas-frame--tile:active {
+  cursor: grabbing;
+}
+
+.map-tile-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.map-tile {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 在线底图自带道路与地名，再叠一层经纬度网格会像一张坏掉的坐标纸。 */
+.map-canvas-frame--tile .map-grid {
+  display: none;
+}
+
+/* SVG 必须压住瓦片层，落点才能点到；底色矩形在 tile 模式下透明。 */
+.map-canvas {
+  position: relative;
+  z-index: 1;
+}
+
+.map-canvas__bg--transparent {
+  fill: transparent;
+}
+
+/* 法定署名固定在地图右下角；不参与点击，因此不会挡住落点。 */
+.map-attribution {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  pointer-events: none;
+  max-width: 62%;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.8);
+  background: color-mix(in srgb, var(--color-bg) 80%, transparent);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.map-zoom-controls {
+  position: absolute;
+  left: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.86);
+  background: color-mix(in srgb, var(--color-bg) 86%, transparent);
+}
+
+.map-zoom-level {
+  min-width: 52px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 有些瓦片失败时如实说一句；它压在画布左上角，不吃鼠标事件。 */
+.map-tile-error {
+  position: absolute;
+  left: var(--space-2);
+  top: var(--space-2);
+  z-index: 3;
+  max-width: 62%;
+  padding: 4px 8px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
 .map-status {
   position: absolute;
   top: var(--space-2);

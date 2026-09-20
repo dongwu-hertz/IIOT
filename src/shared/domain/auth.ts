@@ -286,7 +286,9 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
      */
     'e2:ptz',
     'e2:ptz-update',
-    'e2:nvt-time-sync'
+    'e2:nvt-time-sync',
+    /** SN-16 实时回调写回设备（notify_url / is_send_realtime_value）。 */
+    'e2:realtime-callback-update'
   ],
   controlCameras: [
     'camera-live:start',
@@ -325,7 +327,14 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
    */
   deleteRecordings: [],
   downloadDetectFiles: ['event-center:download-detect-file'],
-  viewDevices: ['device:list', 'device:get', 'device:get-info', 'device:get-channels'],
+  viewDevices: [
+    'device:list',
+    'device:get',
+    'device:get-info',
+    'device:get-channels',
+    /** SN-16 实时回调状态（只读设备参数，见 E2_REALTIME_CALLBACK）。 */
+    'e2:realtime-callback'
+  ],
   /**
    * 告警这一路的读 + **确认** + **备注/改判等级**。
    *

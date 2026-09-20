@@ -36,6 +36,7 @@ import type {
   Fa371DetectFeedbackPreview,
   Fa371EnergyPreview,
   Fa371FftPreview,
+  Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
   Fa371RunModeValue,
@@ -60,6 +61,7 @@ import type {
   SpectrumFrameEvent,
   StreamStatusEvent
 } from '@shared/domain/monitoring'
+import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 import type {
   AddDeviceInput,
   AlarmQuery,
@@ -206,7 +208,12 @@ const api: RendererApi = {
     /** 某条告警的抓图（本机文件，回环地址）+ 关掉端点。 */
     alarmSnapshots: (deviceId: string, alarmId: string) =>
       ipcRenderer.invoke(IpcChannels.E2_ALARM_SNAPSHOTS, deviceId, alarmId),
-    closeSnapshots: () => ipcRenderer.invoke(IpcChannels.E2_SNAPSHOT_CLOSE)
+    closeSnapshots: () => ipcRenderer.invoke(IpcChannels.E2_SNAPSHOT_CLOSE),
+    /** SN-16 每秒实时回调：读状态 / 写设备并读回核对。 */
+    realtimeCallback: (deviceId: string) =>
+      ipcRenderer.invoke(IpcChannels.E2_REALTIME_CALLBACK, deviceId),
+    setRealtimeCallback: (deviceId: string, enabled: boolean) =>
+      ipcRenderer.invoke(IpcChannels.E2_REALTIME_CALLBACK_UPDATE, deviceId, enabled)
   },
 
   recordings: {
@@ -573,6 +580,9 @@ const onFa371Energy = (callback: (event: Fa371EnergyPreview) => void): Unsubscri
 const onFa371Pcm = (callback: (event: Fa371PcmPreview) => void): Unsubscribe =>
   subscribe(PushChannels.FA371_PCM, callback)
 
+const onFa371Infrared = (callback: (event: Fa371InfraredPreview) => void): Unsubscribe =>
+  subscribe(PushChannels.FA371_INFRARED, callback)
+
 const onFa371DetectFeedback = (
   callback: (event: Fa371DetectFeedbackPreview) => void
 ): Unsubscribe => subscribe(PushChannels.FA371_DETECT_FEEDBACK, callback)
@@ -595,6 +605,10 @@ const onNetworkProgress = (callback: (event: NetworkProgressEvent) => void): Uns
  */
 const onLinkagePending = (callback: (event: PendingAlarmSnapshot) => void): Unsubscribe =>
   subscribe(PushChannels.LINKAGE_PENDING, callback)
+
+/** SN-16 ealtime_value：主进程 HTTP 回调监听收到后推给渲染层。 */
+const onE2RealtimeValue = (callback: (event: E2RealtimeValueEvent) => void): Unsubscribe =>
+  subscribe(PushChannels.E2_REALTIME_CALLBACK_VALUE, callback)
 
 /**
  * 检测结果文件的下载进度（阶段，不是百分比）。
@@ -640,11 +654,13 @@ contextBridge.exposeInMainWorld('events', {
   onFa371Voiceprint,
   onFa371Energy,
   onFa371Pcm,
+  onFa371Infrared,
   onFa371DetectFeedback,
   onFa371StreamStatus,
   onFa371StreamState,
   onNetworkProgress,
   onLinkagePending,
+  onE2RealtimeValue,
   onEventCenterDownloadProgress,
   onCameraUpgradeProgress,
   onAuthSession

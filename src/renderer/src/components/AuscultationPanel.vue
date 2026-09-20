@@ -12,7 +12,7 @@
  *   3. **`/system` 读失败单独说**：模式读到了、参数没读到是可能的，合并成一句"读取失败"
  *      会让操作员以为整台设备没回应。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { E2DeviceStatus, E2SyncOutcome } from '@shared/ipc/contract'
 import {
@@ -23,8 +23,11 @@ import {
   E2_SENSITIVE_PARAMS,
   isE2WorkMode
 } from '@shared/domain/e2'
+import type { E2RealtimeCallbackStatus } from '@shared/domain/e2-callback'
+import { useSessionStore } from '@renderer/stores/session'
+import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
-import { formatDateTime } from '@renderer/lib/format'
+import { formatDateTime, formatNumber } from '@renderer/lib/format'
 
 const props = defineProps<{ deviceId: string }>()
 
@@ -36,6 +39,13 @@ const error = ref('')
 const syncing = ref(false)
 const outcome = ref<E2SyncOutcome | null>(null)
 const notice = ref('')
+const callback = ref<E2RealtimeCallbackStatus | null>(null)
+const callbackBusy = ref(false)
+const callbackNotice = ref('')
+const session = useSessionStore()
+const e2Realtime = useE2RealtimeStore()
+const canConfigureCallback = computed(() => session.isAdmin)
+const realtimeValue = computed(() => e2Realtime.latestFor(props.deviceId))
 /** 同步时是否连时频谱图一起拉（默认关：一条告警最多 10 张图 = 10 次请求）。 */
 const withSpectrograms = ref(false)
 
@@ -50,9 +60,45 @@ async function load(): Promise<void> {
   }
   error.value = ''
   status.value = unwrap(result) ?? null
+  if (status.value?.variant === 'airSonar') await loadCallback()
 }
 
-onMounted(load)
+/** SN-16 realtime callback status; only Air Sonar has this block. */
+async function loadCallback(): Promise<void> {
+  const result = await callApi(() => window.api.e2.realtimeCallback(props.deviceId))
+  if (!result.success) {
+    callbackNotice.value = resultMessage(result)
+    return
+  }
+  callbackNotice.value = ''
+  callback.value = unwrap(result) ?? null
+}
+
+/** Enable/disable local reception; write the device then read the status back. */
+async function toggleCallback(): Promise<void> {
+  if (callbackBusy.value) return
+  callbackBusy.value = true
+  const enable = !(callback.value?.pointsToUs && callback.value?.isSendRealtimeValue === 1)
+  try {
+    const result = await callApi(() => window.api.e2.setRealtimeCallback(props.deviceId, enable))
+    if (!result.success) {
+      callbackNotice.value = resultMessage(result)
+      return
+    }
+    const outcome = unwrap(result)
+    callbackNotice.value = outcome?.allApplied ? '' : t('e2CallbackUi.partialReadback')
+    await loadCallback()
+  } finally {
+    callbackBusy.value = false
+  }
+}
+
+onMounted(() => {
+  e2Realtime.acquire()
+  void load()
+})
+
+onBeforeUnmount(() => e2Realtime.release())
 
 async function sync(): Promise<void> {
   syncing.value = true
@@ -249,6 +295,89 @@ function paramLabel(key: string): string {
     <p v-else class="muted">{{ t('common.loading') }}</p>
   </section>
 
+  <!--
+    SN-16 每秒实时值（业主规格 §20）。
+    设备把数值 POST 到 notify_url；本机复用「本机接入」的 HTTP 监听收下它。
+    这一块只负责显示设备指向哪里、本机监听是否在跑、最近收到什么，以及把本机地址写进设备。
+  -->
+  <section v-if="isAirSonar" class="card" data-e2-callback-card>
+    <div class="section-header">
+      <h3 class="section-title">{{ t('e2CallbackUi.title') }}</h3>
+      <button
+        v-if="canConfigureCallback"
+        type="button"
+        class="btn btn--sm"
+        data-action="e2-callback-toggle"
+        :disabled="callbackBusy"
+        @click="toggleCallback"
+      >
+        {{ callback?.pointsToUs && callback?.isSendRealtimeValue === 1 ? t('e2CallbackUi.stop') : t('e2CallbackUi.start') }}
+      </button>
+    </div>
+    <p class="muted callback-hint">{{ t('e2CallbackUi.hint') }}</p>
+    <p v-if="callbackNotice" class="alert alert--warning" role="status">{{ callbackNotice }}</p>
+
+    <dl v-if="callback" class="kv">
+      <div class="kv__item">
+        <dt class="kv__label">{{ t('e2CallbackUi.deviceUrl') }}</dt>
+        <dd class="kv__value" data-e2-callback-device-url>
+          {{
+            callback.notifyUrl
+              ? callback.pointsToUs
+                ? t('e2CallbackUi.pointsToUs')
+                : t('e2CallbackUi.pointsElsewhere')
+              : t('e2CallbackUi.notConfigured')
+          }}
+        </dd>
+      </div>
+      <div class="kv__item">
+        <dt class="kv__label">{{ t('e2CallbackUi.flag') }}</dt>
+        <dd class="kv__value" data-e2-callback-flag>{{ callback.isSendRealtimeValue ?? '—' }}</dd>
+      </div>
+      <div class="kv__item">
+        <dt class="kv__label">{{ t('e2CallbackUi.listener') }}</dt>
+        <dd
+          class="kv__value"
+          :data-e2-callback-listener="callback.listener.listening ? 'listening' : 'stopped'"
+        >
+          {{
+            callback.listener.listening
+              ? t('e2CallbackUi.listening', { port: callback.listener.port ?? '—' })
+              : t('e2CallbackUi.stopped')
+          }}
+        </dd>
+      </div>
+    </dl>
+    <p v-if="callback?.listener.error" class="alert alert--danger" role="alert">
+      {{ callback.listener.error }}
+    </p>
+    <p v-if="!canConfigureCallback" class="muted">{{ t('e2CallbackUi.adminOnly') }}</p>
+
+    <div class="realtime-value" data-e2-realtime-value>
+      <template v-if="realtimeValue">
+        <p class="muted realtime-value__time">
+          {{ t('e2CallbackUi.receivedAt', { time: formatDateTime(realtimeValue.at) }) }}
+        </p>
+        <p v-if="realtimeValue.value.maxDbValue !== undefined" class="realtime-value__row">
+          <span>{{ t('e2CallbackUi.maxDbValue') }}</span>
+          <strong>{{ formatNumber(realtimeValue.value.maxDbValue, 1) }} dB</strong>
+        </p>
+        <p v-if="realtimeValue.value.maxDbChannel !== undefined" class="realtime-value__row">
+          <span>{{ t('e2CallbackUi.maxChannel') }}</span>
+          <strong>CH{{ realtimeValue.value.maxDbChannel }}</strong>
+        </p>
+        <p v-if="realtimeValue.value.maxTdrValue !== undefined" class="realtime-value__row">
+          <span>{{ t('e2CallbackUi.tde') }}</span>
+          <strong>{{ formatNumber(realtimeValue.value.maxTdrValue, 5) }}</strong>
+        </p>
+        <p v-if="realtimeValue.value.maxFdrValue !== undefined" class="realtime-value__row">
+          <span>{{ t('e2CallbackUi.fde') }}</span>
+          <strong>{{ formatNumber(realtimeValue.value.maxFdrValue, 2) }}</strong>
+        </p>
+      </template>
+      <p v-else class="muted">{{ t('e2CallbackUi.noValue') }}</p>
+    </div>
+  </section>
   <section class="card">
     <div class="section-header">
       <h3 class="section-title">{{ t('e2Ui.syncTitle') }}</h3>
@@ -363,4 +492,30 @@ function paramLabel(key: string): string {
   font-size: 11.5px;
   color: var(--color-danger);
 }
-</style>
+.callback-hint {
+  margin: 0 0 var(--space-2);
+  font-size: 11.5px;
+}
+
+.realtime-value {
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.realtime-value__time {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.realtime-value__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: 12.5px;
+}</style>

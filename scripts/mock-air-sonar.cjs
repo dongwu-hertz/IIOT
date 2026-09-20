@@ -228,3 +228,40 @@ server.listen(args.port, '127.0.0.1', () => {
   // 给脚本一个可读的"随机端口"，便于 shell 抓取。
   void randomBytes
 })
+
+/**
+ * 每秒向设备当前的 `notify_url` 推一条 `realtime_value` —— 这就是真机行为。
+ *
+ * 应用把 `notify_url` 写成它的本机接入端点之后，这条循环会让 GIS 的 SN-16 实时值
+ * 有数据可测；目标不可达（还没配置、或那是另一个地址）时静默失败，不刷日志。
+ */
+let realtimeTick = 0
+setInterval(() => {
+  const notifyUrl = typeof params.notify_url === 'string' ? params.notify_url : ''
+  if (!notifyUrl) return
+  realtimeTick += 1
+  const body = JSON.stringify({
+    message_type: 'realtime_value',
+    max_db_chn: (realtimeTick % 16) + 1,
+    max_db_value: 62 + Math.sin(realtimeTick / 9) * 6,
+    max_fdr_value: 40 + Math.cos(realtimeTick / 7) * 8,
+    max_tdr_value: 0.0004 + (realtimeTick % 5) * 0.00001
+  })
+  try {
+    const request = http.request(
+      notifyUrl,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      },
+      (response) => response.resume()
+    )
+    request.on('error', () => {})
+    request.end(body)
+  } catch {
+    // 配置里的 URL 还不是合法地址：等应用写回一个能用的。
+  }
+}, 1000)

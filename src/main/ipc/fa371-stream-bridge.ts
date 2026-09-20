@@ -43,6 +43,7 @@ export const FA371_PUSH_CHANNELS: Readonly<Record<Fa371StreamKind, string>> = {
   voiceprintData: PushChannels.FA371_VOICEPRINT,
   energyData: PushChannels.FA371_ENERGY,
   pcmData: PushChannels.FA371_PCM,
+  infraredData: PushChannels.FA371_INFRARED,
   detectFeedback: PushChannels.FA371_DETECT_FEEDBACK
 }
 

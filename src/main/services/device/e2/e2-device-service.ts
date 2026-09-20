@@ -26,6 +26,20 @@ import {
 } from '@shared/domain/e2-ptz'
 import type { E2DeviceStatus, E2SyncOutcome, E2SyncRequest, E2AlarmSnapshotView } from '@shared/ipc/contract'
 import { AppError, ErrorCodes } from '@shared/errors'
+import {
+  defaultDeviceIngestPlan,
+  defaultIotIngestConfig,
+  httpPushUrl,
+  type IotIngestConfig,
+  type IotIngestLocalAddress
+} from '@shared/domain/iot-ingest'
+import {
+  pickE2CallbackAddress,
+  type E2RealtimeCallbackListener,
+  type E2RealtimeCallbackOutcome,
+  type E2RealtimeCallbackStatus
+} from '@shared/domain/e2-callback'
+import { listLocalAddresses } from '../../ingest/local-addresses'
 import type { AlarmRepository, RecordingRepository } from '../../database/alarm-repository'
 import type { StorageService } from '../../storage/storage-service'
 import type { DeviceService } from '../device-service'
@@ -48,6 +62,12 @@ export interface E2DeviceServiceOptions {
    * 的推理只需要在一处成立；两个实现就意味着两条安全边界要各自维护。
    */
   files: ImageSetServer
+  /** iotIngest listener config; injected so tests do not depend on a real settings file. */
+  getIngestConfig?: () => IotIngestConfig
+  /** Local candidate addresses; injected for the same reason. */
+  listLocalAddresses?: () => IotIngestLocalAddress[]
+  /** Current HTTP listener status for the callback card. */
+  getRealtimeListener?: () => E2RealtimeCallbackListener
 }
 
 /** 只需要 `serveImages`：接口写窄一点，测试里给一个假实现就够。 */
@@ -64,6 +84,9 @@ export class E2DeviceService {
   private readonly recordings: RecordingRepository
   private readonly storage: StorageService
   private readonly files: ImageSetServer
+  private readonly getIngestConfig: () => IotIngestConfig
+  private readonly listLocalAddresses: () => IotIngestLocalAddress[]
+  private readonly getRealtimeListener: () => E2RealtimeCallbackListener
   /**
    * 当前打开着的抓图端点（一次只留一个）。
    *
@@ -78,6 +101,10 @@ export class E2DeviceService {
     this.recordings = options.recordings
     this.storage = options.storage
     this.files = options.files
+    this.getIngestConfig = options.getIngestConfig ?? defaultIotIngestConfig
+    this.listLocalAddresses = options.listLocalAddresses ?? listLocalAddresses
+    this.getRealtimeListener =
+      options.getRealtimeListener ?? (() => ({ enabled: false, listening: false }))
   }
 
   /**
@@ -284,6 +311,94 @@ export class E2DeviceService {
     }
   }
 
+
+  /**
+   * SN-16 realtime_value callback status.
+   *
+   * Read-only: current device notify_url / is_send_realtime_value, the local HTTP listener
+   * state, and whether notify_url points at this machine's ingest endpoint. The secret is
+   * never echoed; "points to us" is decided by comparing host + port + path prefix.
+   */
+  async realtimeCallbackStatus(deviceId: string): Promise<E2RealtimeCallbackStatus> {
+    const device = this.requireAuscultation(deviceId)
+    const client = this.devices.e2ClientFor(device)
+    const params = await client.getSystem()
+    const supported = client.resolvedVariant === 'airSonar'
+    const notifyUrl = readString(params.notify_url)
+    const flag = readInteger(params.is_send_realtime_value)
+    return {
+      deviceId,
+      supported,
+      ...(notifyUrl !== undefined ? { notifyUrl } : {}),
+      ...(flag !== undefined ? { isSendRealtimeValue: flag } : {}),
+      pointsToUs: supported && notifyUrl !== undefined && this.pointsToLocalListener(notifyUrl),
+      listener: this.getRealtimeListener()
+    }
+  }
+
+  /**
+   * Enable/disable local reception of SN-16 realtime_value.
+   *
+   * Enable: make this device declare HTTP ingest (this is what opens the shared listener),
+   * pick a local address on the device subnet, write device notify_url + is_send_realtime_value=1,
+   * then GET /system and compare. Disable: write is_send_realtime_value=0 only; notify_url stays
+   * because alarm callbacks may use it too.
+   */
+  async setRealtimeCallback(deviceId: string, enabled: boolean): Promise<E2RealtimeCallbackOutcome> {
+    const device = this.requireAuscultation(deviceId)
+    const client = await this.requireAirSonar(device)
+    const before = await client.getSystem()
+    const merged: Record<string, unknown> = { ...before, is_send_realtime_value: enabled ? 1 : 0 }
+
+    let callbackUrl: string | undefined
+    if (enabled) {
+      const plan = defaultDeviceIngestPlan()
+      plan.protocol = 'http'
+      this.devices.update({ id: deviceId, ingest: plan })
+      const endpoint = this.devices.ingestEndpoint(deviceId)
+      const address = pickE2CallbackAddress(device.ip, endpoint.localAddresses)
+      callbackUrl = httpPushUrl(address, endpoint.httpPort, endpoint.secret)
+      merged.notify_url = callbackUrl
+    }
+
+    await client.putSystem(merged)
+    const after = await client.getSystem()
+    const notifyUrl = readString(after.notify_url)
+    const flag = readInteger(after.is_send_realtime_value)
+    const fields: E2RealtimeCallbackOutcome['fields'] = [
+      ...(enabled ? [{ field: 'notifyUrl' as const, ok: notifyUrl === callbackUrl }] : []),
+      { field: 'isSendRealtimeValue' as const, ok: flag === (enabled ? 1 : 0) }
+    ]
+    deviceLog().info('SN-16 realtime callback configured and read back', {
+      deviceId,
+      enabled,
+      notifyUrl: notifyUrl === undefined ? '(none)' : sanitiseUrl(notifyUrl),
+      fields: fields.map((entry) => `${entry.field}:${entry.ok ? 'ok' : 'mismatch'}`).join(',')
+    })
+    return {
+      enabled,
+      ...(callbackUrl !== undefined ? { callbackUrl } : {}),
+      ...(notifyUrl !== undefined ? { notifyUrl } : {}),
+      ...(flag !== undefined ? { isSendRealtimeValue: flag } : {}),
+      fields,
+      allApplied: fields.every((entry) => entry.ok)
+    }
+  }
+
+  /** True when the URL targets one of this machine's addresses, the ingest HTTP port, and /api/v1/. */
+  private pointsToLocalListener(url: string): boolean {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:') return false
+      if (!parsed.pathname.startsWith('/api/v1/')) return false
+      const wantedPort = parsed.port === '' ? 80 : Number(parsed.port)
+      if (!Number.isInteger(wantedPort) || wantedPort !== this.getIngestConfig().httpPort) return false
+      return this.listLocalAddresses().some((entry) => entry.address === parsed.hostname)
+    } catch {
+      return false
+    }
+  }
+
   /**
    * 与球机对时（`PUT /time_sync_with_nvt`）。
    *
@@ -351,3 +466,21 @@ export class E2DeviceService {
  * 而"哪一张是设备的抓图"这件事必须有一个判据 —— 判据就是设备自己的命名规则。
  */
 const SNAPSHOT_NAME = /^\d{1,3}\.(jpg|jpeg|png)$/i
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
+function readInteger(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return Math.trunc(parsed)
+  }
+  return undefined
+}
+
+/** Log a callback URL without the per-device secret. */
+function sanitiseUrl(url: string): string {
+  return url.replace(/(\/api\/v1\/)[^/]+/, '$1***')
+}

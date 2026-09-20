@@ -177,6 +177,56 @@ export const zhCN = {
     tabVideo: '视频与缓冲',
     tabAlarm: '告警',
     tabEmail: '邮箱',
+
+    /*
+     * GIS / 在线底图（业主 2026-09-19 追加第 1 条）。
+     *
+     * 手册未说明：手册没有地图与瓦片服务这一章。页面名、全球供应商预置、授权边界、默认关闭、
+     * 只允许 https、时区推中心与缩放 2–18 都是本软件自己定的，规则见 @shared/domain/map-tiles。
+     */
+    tabMap: '地图',
+
+    mapGroupService: '底图服务（在线瓦片）',
+    mapEnable: '启用在线底图',
+    mapEnableHint: '默认关闭：关着时地图页仍用本机离线网格图，不访问网络。启用后只允许 https 的 XYZ 瓦片地址，并且必须填写署名。',
+    mapPresetsLabel: '免费服务预置',
+    mapPresetsHint: "预置按「免费公开 → 全球商业 / 自带 key → 中国区域 → 自定义」排列；商业服务的模板按公开文档预填，使用前请与服务商文档核对。",
+    mapPresetOsm: 'OpenStreetMap 标准瓦片',
+    mapPresetCarto: 'CARTO Basemaps',
+    mapPresetTianditu: '天地图',
+    mapPresetCustom: '自定义 XYZ',
+    mapPresetOpentopomap: "OpenTopoMap（地形）",
+    mapPresetEsri: "Esri World Street Map",
+    mapPresetMaptiler: "MapTiler Cloud",
+    mapPresetMapbox: "Mapbox",
+    mapPresetTomtom: "TomTom Maps",
+    mapPresetStadia: "Stadia Maps（Stamen 系）",
+    mapBoundaryOsm: '授权边界：免费；必须署名「© OpenStreetMap contributors」。Tile Usage Policy 不允许高流量或批量使用，也不接受把它当作默认底图；本软件默认关闭这一层。',
+    mapBoundaryCarto: '授权边界：免费底图，必须署名「© CARTO © OpenStreetMap contributors」。商用 / 高流量条款我们没有确认到明确写法，标为待确认，不要当成可以商用。',
+    mapBoundaryTianditu: '授权边界：免费，但要业主自己申请 key，有配额；商用另需授权。本软件不能替你申请 key，也不能保证配额够用。',
+    mapBoundaryCustom: '授权边界：由你选择的 XYZ 服务方规定。本软件只校验 https 与占位符，不判断授权是否覆盖你的用途。',
+    mapBoundaryOpentopomap: "授权边界：免费；必须署名「Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)」。使用政策类似 OSM：不接受高流量 / 批量使用，不做默认。",
+    mapBoundaryKeyProvider: "授权边界：{service} 通常需要你自己注册并申请 key（有免费额度，也可能收费）；署名、流量 / 并发限制、商用条件都由该服务商条款决定。本软件不代申请、不保证配额或可用性，也不判断你的授权是否覆盖用途。",
+    mapBoundaryEsri: "授权边界：Esri 公共底图服务；我们未确认到可免费商用的明确条款，标为待确认。使用前请按 Esri 主协议 / 账号授权自行核对；需要 token 时请用自定义模板加 key 占位符。本软件不做默认。",
+    mapGroupTemplate: 'XYZ 模板与署名',
+    mapUrlTemplate: 'XYZ 模板',
+    mapUrlHint: '必须包含 z、x、y 三个占位符；可用 s 轮换子域、用 key 引用下面的密钥。只允许 https://。',
+    mapKey: '密钥（可选）',
+    mapKeyHint: '天地图等需要 key 的服务把 key 放在这里；密钥保存在本机设置库中，不写进日志。',
+    mapAttribution: '署名文本',
+    mapAttributionHint: '会显示在地图右下角；启用时不能留空。',
+    mapTimezone: '中心点（按时区自动）',
+    mapTimezoneValue: '电脑时区 {zone} → {center}，初始缩放 {zoom}',
+    mapTimezoneHint: '手册未说明：中心点表与初始缩放是本软件自己的取值，缩放范围固定 2–18；时区无法识别时落到 0, 0（缩放 2）。',
+    mapErrTemplateRequired: '启用在线底图时必须填写 XYZ 模板',
+    mapErrTemplateProtocol: '只允许 https:// 地址（不允许 http、file 或其它协议）',
+    mapErrTemplateTokens: 'XYZ 模板必须包含 z、x、y 三个占位符',
+    mapErrTemplateTokenUnknown: '模板里有不认识的占位符（只允许 z、x、y、s、key）',
+    mapErrTemplateInvalid: 'XYZ 模板不是合法地址（检查是否有空格或过长）',
+    mapErrKeyRequired: '模板里用了 key 占位符，请填写密钥',
+    mapErrKeyInvalid: '密钥不合法（不能含换行，最长 512 字符）',
+    mapErrAttributionRequired: '启用在线底图时必须填写署名文本',
+    restoreItemMapTiles: '在线地图底图（开关、XYZ 模板、密钥与署名）',
     tabAccount: '账号',
     tabAbout: '关于与维护',
 
@@ -1435,6 +1485,147 @@ export const zhCN = {
    * 所以不能写"地图加载失败/正在加载地图"这类会被读成"网络问题"的话。
    * 抓图那三句是**三种不同的事实**，不能合并（见 `E2AlarmSnapshotView` 的注释）。
    */
+  /**
+   * GIS 实时监测工作台 / Live Monitor（业主 2026-09-20 规格 V1.0）。
+   *
+   * 与其它目录同一条规则：**任何一条消息都不得包含 `@`**（i18n 测试会逐条编译）。
+   * 模板与状态名不在这里重复设备型号：型号只影响 `resolveRealtimeProfile()`。
+   */
+  realtimeUi: {
+    title: '实时监测',
+    primary: '主数据',
+    detail: '分析 / 详情',
+    realtime: '实时数据',
+    directionRadar: '方向雷达',
+    signalTrend: '信号趋势',
+    channels: '通道',
+    channelsHint: '点一个通道，中间与右栏跟着切换；没有读到数据的通道显示 —。',
+    featuresTitle: '{channel} 特征',
+    channelIssue: '通道异常',
+    aboveLimit: '超限',
+    emptyTrend: '还没有收到这一通道的数据。',
+    spectrumWaiting: '等待频谱数据…',
+    spectrumUnknownAxis: '设备未提供频率轴：横轴按谱线序号显示。',
+    voiceprintPending: '该通道暂时没有声纹变化图；7 项特征读数在右栏。',
+    waveformPending: '该设备暂未提供实时波形。',
+    prpdUnavailable: '现有设备接口未提供 PRPD 相位分辨数据；这里是明确的无数据状态。',
+    pdProbability: '局放概率',
+    pdProbabilityEmpty: '设备未提供局放类型概率。',
+    leakAnalysis: '泄漏分析',
+    leakAnalysisEmpty: '设备接口暂未提供实时泄漏分析字段。',
+    pdClass: {
+      corona: '电晕',
+      creepage: '沿面',
+      suspended: '悬浮',
+      noise: '噪声'
+    },
+    tempUnitHint: '单位以设备红外配置为准。',
+    noTarget: '无目标',
+    signalTrendPending: '等待接入实时数据点表；当前显示可插拔的 Signal Trend 占位。',
+    connectionPending: '等待完整通信协议后绑定连接与通道字段。',
+    selectDeviceTitle: '请选择设备查看实时数据',
+    selectDeviceHint: '从地图、设备列表或告警列表中选择一台设备。',
+    unsupportedTitle: '此型号暂无实时监测模板',
+    unsupportedHint: 'V1 为声学相机、FA8 声纹盒与空气声呐提供实时工作台；该设备仍可在实时监测页查看。',
+    openMonitor: '打开实时监测',
+    resize: '拖动调整实时区高度',
+    location: '位置',
+    updatedAt: '更新于 {time}',
+    dataDelay: '数据延迟',
+    collapse: '折叠',
+    expand: '展开',
+    offline: '设备离线',
+    lastCommunication: '最后通信：{time}',
+    lastKnownValue: '最后有效值：{value}',
+    noDataTitle: '暂无实时数据',
+    noDataHint: '设备在线后会自动开始接收；当前不会用 0 代替缺失值。',
+    returnToLive: '返回实时',
+    status: {
+      live: '实时',
+      warning: '警告',
+      alarm: '告警',
+      offline: '离线',
+      dataDelay: '数据延迟'
+    },
+    quality: {
+      good: '正常',
+      stale: '延迟',
+      invalid: '无效',
+      nodata: '无数据'
+    },
+    mode: {
+      label: '显示模式',
+      pd: '局部放电',
+      leak: '泄漏'
+    },
+    tabs: {
+      label: '主可视化选择',
+      trend: '趋势',
+      spectrum: '频谱',
+      voiceprint: '声纹',
+      waveform: '波形',
+      prpd: 'PRPD'
+    },
+    actions: {
+      liveView: '实时画面',
+      listen: '监听',
+      ptz: '云台',
+      history: '历史',
+      analysis: '分析',
+      configuration: '配置'
+    },
+    template: {
+      acousticCameraPD: '声学相机 · 局部放电',
+      acousticCameraLeak: '声学相机 · 泄漏',
+      voiceprint: '声纹引擎',
+      airSonar: '空气声呐',
+      gasLeakMonitor: '气井泄漏监测'
+    },
+    metric: {
+      maxSpl: '最大声压级',
+      soundEnergy: '声音能量',
+      pdType: '放电类型',
+      confidence: '置信度',
+      maxTemp: '最高温度',
+      leakRate: '泄漏速率',
+      loss: '泄漏损失',
+      frequencyBand: '频带',
+      detectionDistance: '检测距离',
+      centerTemp: '中心温度',
+      minTemp: '最低温度',
+      maxChannel: '最大通道',
+      event: '事件',
+      ptz: '云台',
+      azimuth: '方位角',
+      tdeRatio: '时域能量比',
+      fdeRatio: '频域能量比',
+      horizontal: '水平角',
+      vertical: '垂直角',
+      leakStatus: '泄漏状态',
+      edgeAi: '边缘推理',
+      connection: '连接',
+      lastAnalysis: '最近分析',
+      channels: '通道',
+      target: '目标',
+      peakSpl: '峰值声压级'
+    },
+    event: {
+      none: '无',
+      alarm: '告警'
+    },
+    ptz: {
+      tracking: '跟踪中'
+    },
+    leakStatus: {
+      unknown: '未知'
+    },
+    channelStatus: {
+      normal: '正常',
+      warning: '警告',
+      alarm: '告警',
+      nodata: '无数据'
+    }
+  },
   mapUi: {
     canvasLabel: '设备落点图',
     /**
@@ -1458,7 +1649,6 @@ export const zhCN = {
      * 「在线」「离线」两档直接复用 `devices.status.*`（同一件事只有一处措辞），
      * 这里只补"有告警"那一档。颜色不单独承载信息，所以图例上各带一个数。
      */
-    legendAlarm: '有未确认告警',
     /** 设备列表（第 17 条的第一张）。 */
     devicesTitle: '设备列表',
     devicesCount: '{count} 台',
@@ -1479,10 +1669,6 @@ export const zhCN = {
     alarmsTitle: '告警列表',
     alarmsFor: '选中设备：{name}',
     /** 实时数据列表（第三张）。 */
-    liveTitle: '实时数据列表',
-    colDb: '分贝',
-    colStability: '平稳度',
-    colAzimuth: '方位',
     /**
      * 三列各取自哪里（业主 2026-09-19 澄清「用平稳度表示」之后写的）。
      *
@@ -1490,7 +1676,6 @@ export const zhCN = {
      * （告警上报的一个真实测量值，`AlarmEvent.smoothness`）。所以这一列**有数据源**了 ——
      * 原来那句"手册未说明、所以这一列恒为 —"的说明随之下架。
      */
-    liveHint: '分贝与平稳度都取该设备最近一条告警上报的声压级与平稳度，没有告警时是「—」；方位取录入的方位角（不是当前帧的声源方位）。',
     hoverStream: '当前视频流',
     hoverAlarm: '{count} 条未确认告警',
     hoverNoAlarm: '没有未确认告警',
@@ -1510,6 +1695,11 @@ export const zhCN = {
     snapshotLoading: '读取抓图中…',
     snapshotNotCaptured: '这条告警在设备上没有抓图（同步时没下载，或球机未开启「告警时保存抓图」）。',
     snapshotFilesGone: '库里记着这条告警有抓图，但文件已经不在本地了（换过存储目录，或被清理）。',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    zoomReset: '回到时区中心',
+    zoomLevel: '缩放 {zoom}',
+    tilesError: '底图有 {failed} / {total} 块没有加载出来（网络不可用或服务拒绝）；设备点位与列表不受影响。',
     sonarHint: '空气声呐的抓图来自联动的球机：每 1 秒一张，最多 3 张。'
   },
 
@@ -1636,6 +1826,31 @@ export const zhCN = {
    * 换一个中文说法会让"界面上的词"与"手册里的词"对不上，而排查时要对着手册看。
    * 认不出的键在组件里**直接显示原键名**（`paramLabel()`），所以这里不必穷举。
    */
+  /**
+   * SN-16 每秒实时值回调（设备 POST 到 notify_url，本机复用接入监听接收）。
+   */
+  e2CallbackUi: {
+    title: 'SN-16 实时值回调',
+    hint: '设备按秒把 max_db_value / max_db_chn / TDE / FDE 发到 notify_url；本机复用「本机接入」的 HTTP 监听接收。开启时会把本机地址写入设备（管理员操作）。',
+    start: '在本机接收',
+    stop: '停止接收',
+    deviceUrl: '设备回调地址',
+    flag: 'is_send_realtime_value',
+    listener: '本机监听',
+    listening: '监听中（端口 {port}）',
+    stopped: '未监听',
+    pointsToUs: '已指向本机',
+    pointsElsewhere: '指向其它地址',
+    notConfigured: '设备未配置',
+    adminOnly: '写入设备需要管理员权限。',
+    partialReadback: '设备已写入，但读回核对没有全部一致；请刷新确认。',
+    receivedAt: '最近收到：{time}',
+    maxDbValue: '最大声压级',
+    maxChannel: '最大通道',
+    tde: '时域能量比',
+    fde: '频域能量比',
+    noValue: '还没有收到实时值。'
+  },
   e2Ui: {
     statusTitle: '设备状态',
     variant: '协议代次',
@@ -2172,6 +2387,10 @@ export const zhCN = {
    */
   cameraStreamUi: {
     stop: '停止接收',
+    startSpectrum: '接收频谱',
+    startWaveform: '接收波形',
+    startVoiceprint: '接收声纹图',
+    onDemandHint: 'GIS 不会自动开相机数据流：点「接收」后才会建立该通道连接；切换 Tab 或离开页面会停止。',
     adminOnlyHint: '开启与停止相机数据流属于管理员操作。',
     noDevice: '请先选择一台相机。',
     sessionIdle: '数据流未启动',

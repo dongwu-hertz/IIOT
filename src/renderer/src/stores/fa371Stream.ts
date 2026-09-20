@@ -34,6 +34,7 @@ import type {
   Fa371DetectFeedbackPreview,
   Fa371EnergyPreview,
   Fa371FftPreview,
+  Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
   Fa371StreamKind,
@@ -100,6 +101,8 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
   const fft = ref<Fa371FftPreview | null>(null)
   const voiceprint = ref<Fa371VoiceprintPreview | null>(null)
   const energy = ref<Fa371EnergyPreview | null>(null)
+  /** 声温成像仪红外温度（/inrared_data），只在明确订阅时才有值。 */
+  const infrared = ref<Fa371InfraredPreview | null>(null)
   const pcm = ref<Fa371PcmPreview | null>(null)
   /** Recent envelopes, oldest first, capped at FA371_PCM_ENVELOPE_LIMIT. */
   const pcmEnvelopes = ref<Fa371PcmPreview[]>([])
@@ -114,7 +117,8 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     voiceprintData: 0,
     energyData: 0,
     pcmData: 0,
-    detectFeedback: 0
+    detectFeedback: 0,
+    infraredData: 0
   })
   /** Clock used by the stale computation; bumped by every frame so computeds re-evaluate. */
   const now = ref(Date.now())
@@ -201,6 +205,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     fft.value = null
     voiceprint.value = null
     energy.value = null
+    infrared.value = null
     pcm.value = null
     pcmEnvelopes.value = []
     detectLogs.value = []
@@ -212,7 +217,8 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
       voiceprintData: 0,
       energyData: 0,
       pcmData: 0,
-      detectFeedback: 0
+      detectFeedback: 0,
+      infraredData: 0
     }
     lastFrameAt.value = {}
   }
@@ -248,6 +254,12 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     if (!belongs(preview.deviceId)) return
     energy.value = preview
     markArrival('energyData')
+  }
+
+  function handleInfrared(preview: Fa371InfraredPreview): void {
+    if (!belongs(preview.deviceId)) return
+    infrared.value = preview
+    markArrival('infraredData')
   }
 
   function handlePcm(preview: Fa371PcmPreview): void {
@@ -301,6 +313,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
       events.onFa371Fft(handleFft),
       events.onFa371Voiceprint(handleVoiceprint),
       events.onFa371Energy(handleEnergy),
+      events.onFa371Infrared(handleInfrared),
       events.onFa371Pcm(handlePcm),
       events.onFa371DetectFeedback(handleDetectFeedback),
       events.onFa371StreamStatus(handleStreamStatus),
@@ -451,6 +464,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     fft,
     voiceprint,
     energy,
+    infrared,
     pcm,
     pcmEnvelopes,
     detectLogs,

@@ -1193,3 +1193,62 @@ describe('界面接线（源码守卫）', () => {
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// E2 callback: SN-16 realtime_value shares the ingest HTTP endpoint
+// ---------------------------------------------------------------------------
+
+describe('E2 callback (SN-16 realtime_value) 走同一条接入端点', () => {
+  it('realtime_value 推给订阅者、不进趋势表，HTTP 响应注明 e2Realtime', async () => {
+    const sink = makeIntake()
+    const { service, httpPort } = await startService(sink)
+    const events: Array<{ deviceId: string; value: Record<string, unknown> }> = []
+    service.on('e2-realtime', (event: { deviceId: string; value: Record<string, unknown> }) => {
+      events.push(event)
+    })
+    try {
+      const response = await postJson(
+        httpPort,
+        telemetryPath(SECRET),
+        JSON.stringify({
+          message_type: 'realtime_value',
+          max_db_chn: '13',
+          max_db_value: '68.6',
+          max_fdr_value: 41.94,
+          max_tddr_value: '0.00043'
+        })
+      )
+      assert.equal(response.status, 200)
+      assert.equal(response.json.e2Realtime, 1)
+      assert.equal(response.json.trendRows, 0)
+      assert.equal(sink.features.length, 0, 'realtime_value 不该被写进趋势表')
+      assert.equal(events.length, 1)
+      assert.equal(events[0]?.deviceId, DEVICE.id)
+      assert.deepEqual(events[0]?.value, {
+        maxDbChannel: 13,
+        maxDbValue: 68.6,
+        maxFdrValue: 41.94,
+        maxTdrValue: 0.00043
+      })
+      assert.equal(service.status.stats.lastDeviceId, DEVICE.id)
+    } finally {
+      await service.dispose()
+    }
+  })
+
+  it('没有 message_type 但带 max_* 键时也认（文档两种写法都收）', async () => {
+    const sink = makeIntake()
+    const { service, httpPort } = await startService(sink)
+    try {
+      const response = await postJson(
+        httpPort,
+        telemetryPath(SECRET),
+        JSON.stringify({ max_db_value: 61.2, max_tdr_value: 0.001 })
+      )
+      assert.equal(response.status, 200)
+      assert.equal(response.json.e2Realtime, 1)
+    } finally {
+      await service.dispose()
+    }
+  })
+})

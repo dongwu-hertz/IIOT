@@ -55,18 +55,44 @@ export type { StreamState }
  * 这些标识符同时也是"哪一路"的枚举，**不是**可翻译文案，
  * 所以不放进 i18n catalogue。
  */
-export type Fa371StreamKind = 'fftData' | 'voiceprintData' | 'energyData' | 'pcmData' | 'detectFeedback'
+export type Fa371StreamKind =
+  | 'fftData'
+  | 'voiceprintData'
+  | 'energyData'
+  | 'pcmData'
+  | 'detectFeedback'
+  /**
+   * 声温成像仪的红外温度（手册 §5.3.6，路径 /inrared_data —— 原文拼写少一个 f，
+   * 按手册原样保留）。四个 little-endian float32：发射率 / 中心温 / 最高温 / 最低温。
+   * 它不在默认五路会话里，只有明确要求时才建立连接。
+   */
+  | 'infraredData'
 
 /**
  * 运行时清单。与联合类型写在一起，两者不可能漂移；
  * 标注为全量是为了"以后再加一路却忘了改这里"能在编译期暴露。
  */
-export const FA371_STREAM_KINDS: readonly Fa371StreamKind[] = [
+export const FA371_CORE_STREAM_KINDS: readonly Fa371StreamKind[] = [
   'fftData',
   'voiceprintData',
   'energyData',
   'pcmData',
   'detectFeedback'
+]
+
+/**
+ * 默认五路声学通道。
+ *
+ * 保留旧名字 FA371_STREAM_KINDS：既有监听页、GIS 与测试都以五路为单位；
+ * 红外温度是扩展通道（FA371_ALL_STREAM_KINDS），不能因为类型加了一项就让
+ * 每一台相机在不知道红外是否可用时都去开连接。
+ */
+export const FA371_STREAM_KINDS: readonly Fa371StreamKind[] = FA371_CORE_STREAM_KINDS
+
+/** 协议支持的全部通道（含声温成像仪的红外温度）。 */
+export const FA371_ALL_STREAM_KINDS: readonly Fa371StreamKind[] = [
+  ...FA371_CORE_STREAM_KINDS,
+  'infraredData'
 ]
 
 /** 手册 §5.2 给出的路径（大小写必须逐字一致，否则 404）。 */
@@ -75,7 +101,9 @@ export const FA371_STREAM_PATHS: Readonly<Record<Fa371StreamKind, string>> = {
   voiceprintData: '/voiceprintData',
   energyData: '/energyData',
   pcmData: '/pcmData',
-  detectFeedback: '/detectFeedback'
+  detectFeedback: '/detectFeedback',
+  // 手册 §5.3.6 原文就是 /inrared_data（少一个 f）；真机若回 404 只改这一行。
+  infraredData: '/inrared_data'
 }
 
 /** 通道的载荷种类，供渲染层决定用哪个面板显示。 */
@@ -145,6 +173,13 @@ export const FA371_STREAM_MEASURED: Readonly<Record<Fa371StreamKind, Fa371Stream
     bytesPerFrame: 0,
     fixedFrameBytes: false,
     layout: '6 s 窗口内 0 帧（事件流：一次检测一包，无检测即无帧，实测无法判定帧类型）'
+  },
+  infraredData: {
+    // 手册 §5.3.6 未给频率，只写设备会实时返回；这里不编一个 fps。
+    fps: 0,
+    bytesPerFrame: 16,
+    fixedFrameBytes: true,
+    layout: '4 个 little-endian float32（发射率 / 中心温 / 最高温 / 最低温），共 16 B；频率未给出'
   }
 }
 
@@ -198,6 +233,13 @@ export const FA371_STREAM_SPECS: Readonly<Record<Fa371StreamKind, Fa371StreamSpe
     payload: 'json',
     cadence: '每次检测结束后一包（§5.2.3）；实测 6 s 内 0 帧（事件流）',
     specRefs: '§8.4 D7（文本帧还是二进制帧未定义）、D11'
+  },
+  infraredData: {
+    kind: 'infraredData',
+    path: '/inrared_data',
+    payload: 'float32',
+    cadence: '声温成像仪手册 §5.3.6：设备会实时返回；频率未给出',
+    specRefs: '§5.3.6（四个 float32：发射率 / 中心温 / 最高温 / 最低温；路径原文拼写为 /inrared_data）'
   }
 }
 
@@ -378,6 +420,28 @@ export interface Fa371PcmFrame {
  * `rawRet`/`rawMsg` 原样保留：手册没有规定失败包的形状（D7/D11），
  * 与其猜，不如把包络交给调用方判读。
  */
+/**
+ * `/inrared_data`：声温成像仪红外温度（手册 §5.3.6）。
+ *
+ * 文档给出的顺序是 `{emissivity, fAvrTmp, fMaxTmp, fMinTmp}`，都是 32 位
+ * little-endian float32。**单位沿用设备当前的 `ir_unit` 设置**（摄氏 / 华氏 /
+ * 开尔文），本层不做换算——设备说是什么单位就是什么单位；拿不到配置时不标单位。
+ *
+ * 字段缺失（帧短于 4 个 float）时对应字段留空，而不是补 0：0 ℃ 也是一个真实温度。
+ */
+export interface Fa371InfraredFrame {
+  kind: 'infraredData'
+  bytes: Uint8Array
+  values: Float32Array
+  emissivity?: number
+  centerTemp?: number
+  maxTemp?: number
+  minTemp?: number
+  profile: Fa371DecodeProfile
+  receivedAt: number
+  sequence: number
+}
+
 export interface Fa371DetectFeedbackFrame {
   kind: 'detectFeedback'
   bytes: Uint8Array
@@ -399,6 +463,7 @@ export type Fa371Frame =
   | Fa371VoiceprintFrame
   | Fa371EnergyFrame
   | Fa371PcmFrame
+  | Fa371InfraredFrame
   | Fa371DetectFeedbackFrame
 
 // ---------------------------------------------------------------------------
@@ -506,6 +571,17 @@ export interface Fa371PcmPreview {
   frameMs: number
 }
 
+/** `/inrared_data` 预览：一帧温度；设备没给的字段留空。 */
+export interface Fa371InfraredPreview {
+  deviceId: string
+  kind: 'infraredData'
+  timestamp: number
+  emissivity?: number
+  centerTemp?: number
+  maxTemp?: number
+  minTemp?: number
+}
+
 export interface Fa371DetectFeedbackPreview {
   deviceId: string
   kind: 'detectFeedback'
@@ -521,6 +597,7 @@ export type Fa371StreamPreview =
   | Fa371VoiceprintPreview
   | Fa371EnergyPreview
   | Fa371PcmPreview
+  | Fa371InfraredPreview
   | Fa371DetectFeedbackPreview
 
 // ---------------------------------------------------------------------------

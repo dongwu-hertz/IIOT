@@ -117,6 +117,58 @@ export const es: MessageSchema = {
     tabVideo: 'Vídeo y búfer',
     tabAlarm: 'Alarmas',
     tabEmail: 'Correo',
+
+    /*
+     * GIS / mapa base en línea (propietario 2026-09-19, punto adicional 1).
+     *
+     * No figura en el manual: el manual no tiene capítulo de mapas ni de servicios de teselas.
+     * El nombre de la página, los ajustes de proveedores globales, los límites de licencia, el valor predeterminado
+     * desactivado, solo https, el centro por zona horaria y el zoom 2–18 son decisiones de este
+     * software; las reglas están en @shared/domain/map-tiles.
+     */
+    tabMap: 'Mapa',
+
+    mapGroupService: 'Servicio de mapa base (teselas en línea)',
+    mapEnable: 'Activar mapa base en línea',
+    mapEnableHint: 'Desactivado por defecto: mientras está así, la página usa la rejilla local sin conexión y no accede a la red. Al activarlo solo se aceptan direcciones XYZ https y la atribución es obligatoria.',
+    mapPresetsLabel: 'Servicios gratuitos predefinidos',
+    mapPresetsHint: "Los preajustes están ordenados: gratuitos públicos, comerciales globales con clave propia, regional de China y personalizado. Las plantillas comerciales se rellenan desde documentación pública; verifícalas con la documentación del proveedor antes de usarlas.",
+    mapPresetOsm: 'Teselas estándar de OpenStreetMap',
+    mapPresetCarto: 'CARTO Basemaps',
+    mapPresetTianditu: 'Tianditu',
+    mapPresetCustom: 'XYZ personalizado',
+    mapPresetOpentopomap: "OpenTopoMap (terreno)",
+    mapPresetEsri: "Esri World Street Map",
+    mapPresetMaptiler: "MapTiler Cloud",
+    mapPresetMapbox: "Mapbox",
+    mapPresetTomtom: "TomTom Maps",
+    mapPresetStadia: "Stadia Maps (familia Stamen)",
+    mapBoundaryOsm: 'Límite de licencia: gratuito; la atribución © OpenStreetMap contributors es obligatoria. La Tile Usage Policy prohíbe el uso masivo o de gran volumen y no acepta este servicio como mapa base predeterminado; este programa entrega la capa desactivada.',
+    mapBoundaryCarto: 'Límite de licencia: mapa base gratuito, la atribución © CARTO © OpenStreetMap contributors es obligatoria. No encontramos una cláusula explícita para uso comercial o de gran volumen, así que queda marcado como sin confirmar; no lo trates como autorizado para uso comercial.',
+    mapBoundaryTianditu: 'Límite de licencia: gratuito, pero el propietario debe solicitar una key; hay cuotas y el uso comercial necesita autorización aparte. Este programa no puede solicitar la key ni garantizar la cuota.',
+    mapBoundaryCustom: 'Límite de licencia: el que exija el proveedor XYZ que elijas. Este programa solo comprueba https y los marcadores posicionales; no decide si tu licencia cubre tu uso.',
+    mapBoundaryOpentopomap: "Límite de licencia: gratuito; la atribución \"Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)\" es obligatoria. La política de uso es similar a OSM: no se acepta uso masivo o de gran volumen y no es un mapa base predeterminado.",
+    mapBoundaryKeyProvider: "Límite de licencia: {service} normalmente exige que te registres y obtengas una clave (puede haber planes gratuitos o de pago). La atribución, los límites de tráfico o concurrencia y las condiciones comerciales los fija ese proveedor. Este programa no puede solicitar la clave, no garantiza la cuota ni la disponibilidad, y no decide si tu licencia cubre tu uso.",
+    mapBoundaryEsri: "Límite de licencia: servicios públicos de mapas base de Esri; no confirmamos una cláusula explícita de uso comercial gratuito, por lo que queda marcado como sin confirmar. Verifícalo con el acuerdo de Esri y tu cuenta antes de usarlo; si hace falta un token, usa una plantilla XYZ personalizada con un marcador key. Este programa no lo pone como predeterminado.",
+    mapGroupTemplate: 'Plantilla XYZ y atribución',
+    mapUrlTemplate: 'Plantilla XYZ',
+    mapUrlHint: 'Debe contener los marcadores z, x e y; s rota los subdominios y key inserta la clave de abajo. Solo se acepta https://.',
+    mapKey: 'Clave (opcional)',
+    mapKeyHint: 'Pon aquí la clave de Tianditu y servicios similares; se guarda en la base de ajustes local y no se escribe en los registros.',
+    mapAttribution: 'Texto de atribución',
+    mapAttributionHint: 'Se muestra en la esquina inferior derecha del mapa; no puede quedar vacío mientras la capa esté activa.',
+    mapTimezone: 'Punto central (automático según la zona horaria)',
+    mapTimezoneValue: 'Zona horaria del equipo {zone} → {center}, zoom inicial {zoom}',
+    mapTimezoneHint: 'No especificado por el manual: la tabla de centros y el zoom inicial son decisiones de este programa; el rango de zoom está fijado en 2–18. Si la zona horaria no se reconoce, se usa 0, 0 (zoom 2).',
+    mapErrTemplateRequired: 'La plantilla XYZ es obligatoria al activar el mapa base en línea',
+    mapErrTemplateProtocol: 'Solo se permiten direcciones https:// (ni http, ni file ni otros protocolos)',
+    mapErrTemplateTokens: 'La plantilla XYZ debe contener los marcadores z, x e y',
+    mapErrTemplateTokenUnknown: 'La plantilla tiene un marcador desconocido (solo se permiten z, x, y, s y key)',
+    mapErrTemplateInvalid: 'La plantilla XYZ no es una dirección válida (revisa espacios o una longitud excesiva)',
+    mapErrKeyRequired: 'La plantilla usa el marcador key; introduce la clave',
+    mapErrKeyInvalid: 'La clave no es válida (sin saltos de línea, máximo 512 caracteres)',
+    mapErrAttributionRequired: 'El texto de atribución es obligatorio al activar el mapa base en línea',
+    restoreItemMapTiles: 'Mapa base en línea (interruptor, plantilla XYZ, clave y atribución)',
     tabAccount: 'Cuenta',
     tabAbout: 'Acerca de y mantenimiento',
 
@@ -1184,6 +1236,148 @@ export const es: MessageSchema = {
   },
 
   /** Mapa de dispositivos sin conexión (lote 8). El fondo se dibuja solo con los puntos WGS84 grabados. */
+  /**
+   * GIS Live Monitor (especificación del propietario V1.0, 2026-09-20).
+   *
+   * El signo `@` es el del mensaje enlazado de vue-i18n, así que ningún mensaje
+   * puede contenerlo (la prueba de i18n compila cada entrada). Los modelos de
+   * dispositivo no se repiten aquí: solo afectan a `resolveRealtimeProfile()`.
+   */
+  realtimeUi: {
+    title: 'Monitor en directo',
+    primary: 'PRINCIPAL',
+    detail: 'ANÁLISIS / DETALLE',
+    realtime: 'TIEMPO REAL',
+    directionRadar: 'DIRECCIÓN',
+    signalTrend: 'TENDENCIA DE SEÑAL',
+    channels: 'CANALES',
+    channelsHint: 'Seleccione un canal para cambiar las columnas central y derecha; los canales sin lectura muestran —.',
+    featuresTitle: 'CARACTERÍSTICAS DE {channel}',
+    channelIssue: 'INCIDENCIA DEL CANAL',
+    aboveLimit: 'Por encima del límite',
+    emptyTrend: 'Aún no se han recibido datos de este canal.',
+    spectrumWaiting: 'Esperando datos del espectro…',
+    spectrumUnknownAxis: 'El dispositivo no proporciona un eje de frecuencia: el eje horizontal muestra el número de línea espectral.',
+    voiceprintPending: 'Aún no hay gráfico de cambio de huella para este canal; las siete lecturas de características están en la columna derecha.',
+    waveformPending: 'Este dispositivo no proporciona forma de onda en tiempo real.',
+    prpdUnavailable: 'La interfaz actual del dispositivo no proporciona datos PRPD con resolución de fase; este es un estado explícito de ausencia de datos.',
+    pdProbability: 'PROBABILIDAD DE DESCARGAS PARCIALES',
+    pdProbabilityEmpty: 'El dispositivo no proporciona probabilidades de tipo de descarga parcial.',
+    leakAnalysis: 'ANÁLISIS DE FUGA',
+    leakAnalysisEmpty: 'La interfaz del dispositivo aún no proporciona campos de análisis de fuga en tiempo real.',
+    pdClass: {
+      corona: 'Corona',
+      creepage: 'Contorneo',
+      suspended: 'Suspendida',
+      noise: 'Ruido'
+    },
+    tempUnitHint: 'La unidad depende de la configuración infrarroja del dispositivo.',
+    noTarget: 'Sin objetivo',
+    signalTrendPending: 'Esperando la tabla de puntos de datos en tiempo real; este es un marcador de posición de Signal Trend conectable.',
+    connectionPending: 'Los campos de conexión y canal se enlazarán cuando esté disponible el protocolo de comunicación completo.',
+    selectDeviceTitle: 'Seleccione un dispositivo para ver datos en directo',
+    selectDeviceHint: 'Elija un dispositivo en el mapa, la lista de dispositivos o la lista de alarmas.',
+    unsupportedTitle: 'Aún no hay plantilla en tiempo real para este modelo',
+    unsupportedHint: 'La V1 ofrece un espacio de trabajo en directo para cámaras acústicas, el motor de huella FA8 y el sonar de aire; este dispositivo sigue disponible en la página de Monitor en directo.',
+    openMonitor: 'Abrir Monitor en directo',
+    resize: 'Arrastre para cambiar la altura de la sección en directo',
+    location: 'Ubicación',
+    updatedAt: 'Actualizado {time}',
+    dataDelay: 'RETRASO DE DATOS',
+    collapse: 'Contraer',
+    expand: 'Expandir',
+    offline: 'DISPOSITIVO SIN CONEXIÓN',
+    lastCommunication: 'Última comunicación: {time}',
+    lastKnownValue: 'Último valor conocido: {value}',
+    noDataTitle: 'Aún no hay datos en directo',
+    noDataHint: 'La recepción comienza automáticamente cuando el dispositivo está en línea; los valores ausentes nunca se sustituyen por 0.',
+    returnToLive: 'Volver a directo',
+    status: {
+      live: 'EN DIRECTO',
+      warning: 'ADVERTENCIA',
+      alarm: 'ALARMA',
+      offline: 'SIN CONEXIÓN',
+      dataDelay: 'RETRASO DE DATOS'
+    },
+    quality: {
+      good: 'CORRECTO',
+      stale: 'OBSOLETO',
+      invalid: 'NO VÁLIDO',
+      nodata: 'SIN DATOS'
+    },
+    mode: {
+      label: 'Modo de vista',
+      pd: 'Descarga parcial',
+      leak: 'Fuga'
+    },
+    tabs: {
+      label: 'Visualización principal',
+      trend: 'Tendencia',
+      spectrum: 'Espectro',
+      voiceprint: 'Huella acústica',
+      waveform: 'Forma de onda',
+      prpd: 'PRPD'
+    },
+    actions: {
+      liveView: 'Vista en directo',
+      listen: 'Escuchar',
+      ptz: 'PTZ',
+      history: 'Historial',
+      analysis: 'Análisis',
+      configuration: 'Configuración'
+    },
+    template: {
+      acousticCameraPD: 'Cámara acústica · Descarga parcial',
+      acousticCameraLeak: 'Cámara acústica · Fuga',
+      voiceprint: 'Motor de huella acústica',
+      airSonar: 'Sonar de aire',
+      gasLeakMonitor: 'Monitor de fugas en pozo de gas'
+    },
+    metric: {
+      maxSpl: 'SPL máximo',
+      soundEnergy: 'Energía sonora',
+      pdType: 'Tipo de descarga',
+      confidence: 'Confianza',
+      maxTemp: 'Temperatura máxima',
+      leakRate: 'Caudal de fuga',
+      loss: 'Pérdida por fuga',
+      frequencyBand: 'Banda de frecuencia',
+      detectionDistance: 'Distancia de detección',
+      centerTemp: 'Temperatura central',
+      minTemp: 'Temperatura mínima',
+      maxChannel: 'Canal máximo',
+      event: 'Evento',
+      ptz: 'PTZ',
+      azimuth: 'Azimut',
+      tdeRatio: 'Relación de energía temporal',
+      fdeRatio: 'Relación de energía frecuencial',
+      horizontal: 'Horizontal',
+      vertical: 'Vertical',
+      leakStatus: 'Estado de fuga',
+      edgeAi: 'IA en el borde',
+      connection: 'Conexión',
+      lastAnalysis: 'Último análisis',
+      channels: 'Canales',
+      target: 'Objetivo',
+      peakSpl: 'SPL de pico'
+    },
+    event: {
+      none: 'Ninguno',
+      alarm: 'Alarma'
+    },
+    ptz: {
+      tracking: 'Siguiendo'
+    },
+    leakStatus: {
+      unknown: 'Desconocido'
+    },
+    channelStatus: {
+      normal: 'Normal',
+      warning: 'Advertencia',
+      alarm: 'Alarma',
+      nodata: 'Sin datos'
+    }
+  },
   mapUi: {
     canvasLabel: 'Posiciones de los equipos',
     /**
@@ -1205,7 +1399,6 @@ export const es: MessageSchema = {
      * «En línea» y «sin conexión» reutilizan `devices.status.*`: un hecho, una redacción.
      * El color nunca carga solo con el significado, por eso cada leyenda lleva un recuento.
      */
-    legendAlarm: 'Alarma sin confirmar',
     /** Lista de equipos (primera de las tres listas, punto 17). */
     devicesTitle: 'Equipos',
     devicesCount: '{count} equipo(s)',
@@ -1224,11 +1417,6 @@ export const es: MessageSchema = {
     alarmsTitle: 'Alarmas',
     alarmsFor: 'Equipo seleccionado: {name}',
     /** Lista de datos en vivo (tercera). */
-    liveTitle: 'Datos en vivo',
-    colDb: 'dB',
-    colStability: 'Estabilidad',
-    colAzimuth: 'Azimut',
-    liveHint: 'Los dB y la estabilidad proceden de la alarma más reciente de ese equipo (— si no hay ninguna); el azimut es el de instalación registrado, no el de la fuente en el fotograma actual.',
     /**
      * De dónde sale cada columna, escrito tras fijar el propietario la terminología (2026-09-19:
      * «usar 平稳度»). Eso resolvió la ambigüedad: lo que él llamaba «estabilidad» ES el
@@ -1254,6 +1442,11 @@ export const es: MessageSchema = {
     snapshotLoading: 'Leyendo capturas…',
     snapshotNotCaptured: 'Esta alarma no tiene captura en el equipo (no se descargó al sincronizar, o la cúpula no tiene activado «guardar captura al alarmar»).',
     snapshotFilesGone: 'La base de datos registra capturas de esta alarma, pero los archivos ya no están en este equipo (cambió el directorio de almacenamiento o se limpiaron).',
+    zoomIn: 'Acercar',
+    zoomOut: 'Alejar',
+    zoomReset: 'Volver al centro de la zona horaria',
+    zoomLevel: 'Zoom {zoom}',
+    tilesError: 'No se cargaron {failed} de {total} teselas del mapa base (red no disponible o servicio rechazado); los marcadores y las listas no se ven afectados.',
     sonarHint: 'Las capturas del sónar de aire vienen de la cúpula PTZ enlazada: una por segundo, hasta tres.'
   },
 
@@ -1378,6 +1571,32 @@ export const es: MessageSchema = {
     pagerRange: "{shown} en esta página / {total} en total"
   },
   /** Familia de auscultación (E2 / FA100 / FA110 / Air Sonar): el canal de sondeo. */
+  /**
+   * Valor en tiempo real por segundo del SN-16 (el dispositivo hace POST a notify_url;
+   * lo recibe el mismo listener HTTP de ingesta local).
+   */
+  e2CallbackUi: {
+    title: 'Callback en tiempo real SN-16',
+    hint: 'El dispositivo envía max_db_value / max_db_chn / TDE / FDE a notify_url cada segundo; esta máquina lo recibe por el listener HTTP de ingesta. Al activarlo se escribe la dirección local en el dispositivo (administrador).',
+    start: 'Recibir en este PC',
+    stop: 'Detener recepción',
+    deviceUrl: 'URL de callback del dispositivo',
+    flag: 'is_send_realtime_value',
+    listener: 'Listener local',
+    listening: 'Escuchando (puerto {port})',
+    stopped: 'Sin escucha',
+    pointsToUs: 'Apunta a este PC',
+    pointsElsewhere: 'Apunta a otra dirección',
+    notConfigured: 'Sin configurar',
+    adminOnly: 'Escribir en el dispositivo requiere administrador.',
+    partialReadback: 'Se escribió en el dispositivo, pero no todos los campos se leyeron igual; actualice para confirmar.',
+    receivedAt: 'Última recepción: {time}',
+    maxDbValue: 'SPL máximo',
+    maxChannel: 'Canal máximo',
+    tde: 'Relación de energía temporal',
+    fde: 'Relación de energía frecuencial',
+    noValue: 'Aún no se ha recibido ningún valor en tiempo real.'
+  },
   e2Ui: {
     statusTitle: 'Estado del equipo',
     variant: 'Generación del protocolo',
@@ -1882,6 +2101,10 @@ export const es: MessageSchema = {
    */
   cameraStreamUi: {
     stop: 'Detener recepción',
+    startSpectrum: 'Iniciar espectro',
+    startWaveform: 'Iniciar forma de onda',
+    startVoiceprint: 'Iniciar imagen de huella',
+    onDemandHint: 'La vista GIS no abre flujos de cámara automáticamente: la conexión se crea solo al pulsar Iniciar y se detiene al salir de la pestaña o la página.',
     adminOnlyHint: 'Iniciar y detener los flujos de la cámara es una acción de administrador.',
     noDevice: 'Seleccione primero una cámara.',
     sessionIdle: 'Flujos sin iniciar',

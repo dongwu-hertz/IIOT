@@ -32,6 +32,10 @@ import {
   defaultIotIngestConfig,
   normaliseIotIngestConfig
 } from '@shared/domain/iot-ingest'
+import {
+  defaultMapTilesConfig,
+  normaliseMapTilesConfig
+} from '@shared/domain/map-tiles'
 import { appLog } from '../logging/logger'
 
 /** Defaults applied on first run and used to fill any missing key. */
@@ -90,7 +94,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
    * `@shared/domain/iot-ingest` 的 `defaultIotIngestConfig()`（端口 8080 / 1883、
    * 绑定 `0.0.0.0` —— 只有设备连得上，接入才有意义）。
    */
-  iotIngest: defaultIotIngestConfig()
+  iotIngest: defaultIotIngestConfig(),
+
+  /**
+   * 在线地图底图（业主 2026-09-19 追加第 1 条；**手册未说明**）。
+   *
+   * **默认关闭**：离线优先；关着时地图页仍走本机 SVG 网格，不出网。
+   * 只允许 https 的 XYZ 模板、可选 key、启用时必须署名；规则见 @shared/domain/map-tiles。
+   */
+  mapTiles: defaultMapTilesConfig()
 }
 
 /**
@@ -128,7 +140,8 @@ export const RESTORABLE_SETTING_KEYS = [
   'maxConcurrentCameraStreams',
   'alarmLinkage',
   'alarmSounds',
-  'iotIngest'
+  'iotIngest',
+  'mapTiles'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 export type RestorableSettingKey = (typeof RESTORABLE_SETTING_KEYS)[number]
@@ -222,6 +235,21 @@ const VALIDATORS: {
     const { config, issues } = normaliseIotIngestConfig(value)
     if (issues.length > 0) {
       appLog().warn('IoT 接入配置存在非法字段，已回落到默认值', { fields: issues })
+    }
+    return config
+  },
+
+  /**
+   * 在线地图底图（业主 2026-09-19 追加第 1 条）。
+   *
+   * 与其他嵌套块不同，这里**不逐字段回落**：XYZ 模板、key、署名是一组互相约束的值，
+   * 一个坏字段就应当整键拒绝（`normaliseMapTilesConfig()` 返回 undefined），免得存进
+   * 一份「开关开着但模板不可用」的配置 —— 那种状态在地图页就是一张空白底图。
+   */
+  mapTiles: (value) => {
+    const config = normaliseMapTilesConfig(value)
+    if (!config) {
+      appLog().warn('地图底图配置不合法，整键拒绝', { field: 'mapTiles' })
     }
     return config
   }
@@ -368,7 +396,7 @@ export class SettingsService extends EventEmitter {
    * ---------------------------------------------------------------------------
    * 它到底动了什么（这一段就是实现，不是注释里的承诺）
    * ---------------------------------------------------------------------------
-   * 只写 `RESTORABLE_SETTING_KEYS` 那 13 个键，值取自 `DEFAULT_SETTINGS`，并把
+   * 只写 `RESTORABLE_SETTING_KEYS` 那 15 个键，值取自 `DEFAULT_SETTINGS`，并把
    * `storageRoot` 落回平台默认。其余一切**不经过这里**：
    *
    *   - `devices` / `channels` / `recordings` / `alarms` / `users`：本类只持有

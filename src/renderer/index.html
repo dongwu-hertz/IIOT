@@ -35,6 +35,13 @@
       the path. `img-src` authorises IMAGE LOADS only; `connect-src 'none'` still
       blocks fetch/XHR/WebSocket, so this cannot become a data channel either.
 
+      `img-src … https:` was added for the OPTIONAL ONLINE BASEMAP (owner 2026-09-19:
+      GIS should be configurable in settings). When — and only when — the operator turns
+      that layer on, the map page loads XYZ tiles as plain <img> elements. Only https
+      templates are accepted (validated in `@shared/domain/map-tiles`), and
+      `connect-src 'none'` is unchanged: the tile host still cannot be turned into a
+      fetch/XHR/WebSocket channel. The layer is off by default (offline first).
+
       Why a wildcard loopback port is safe HERE while nothing else was relaxed:
         - the host is the literal `127.0.0.1`, never `localhost` (which resolves
           through the hosts file) and never a device IP, so this grants no reach
@@ -48,7 +55,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://127.0.0.1:* https:; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none'"
     />
     <title>HERTZINNO Acoustic Box Manager</title>
   </head>

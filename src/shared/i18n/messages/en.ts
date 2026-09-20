@@ -121,6 +121,58 @@ export const en: MessageSchema = {
     tabVideo: 'Video & buffering',
     tabAlarm: 'Alarms',
     tabEmail: 'Email',
+
+    /*
+     * GIS / online basemap (owner 2026-09-19, extra item 1).
+     *
+     * Not in the manual: the manual has no map or tile-service chapter. The page name, the global provider
+presets, the licence boundaries
+     * presets, the licence boundaries, off-by-default, https-only, time-zone centre and zoom 2–18
+     * are all this software own choices; the rules live in @shared/domain/map-tiles.
+     */
+    tabMap: 'Map',
+
+    mapGroupService: 'Basemap service (online tiles)',
+    mapEnable: 'Enable online basemap',
+    mapEnableHint: 'Off by default: while it is off this page keeps using the local offline grid and never touches the network. When enabled, only https XYZ tile URLs are accepted and attribution is mandatory.',
+    mapPresetsLabel: 'Free service presets',
+    mapPresetsHint: "Presets are ordered free public, then global commercial / bring-your-own-key, then China regional, then custom. Commercial templates are pre-filled from public documentation; verify them against the provider documentation before use.",
+    mapPresetOsm: 'OpenStreetMap standard tiles',
+    mapPresetCarto: 'CARTO Basemaps',
+    mapPresetTianditu: 'Tianditu',
+    mapPresetCustom: 'Custom XYZ',
+    mapPresetOpentopomap: "OpenTopoMap (terrain)",
+    mapPresetEsri: "Esri World Street Map",
+    mapPresetMaptiler: "MapTiler Cloud",
+    mapPresetMapbox: "Mapbox",
+    mapPresetTomtom: "TomTom Maps",
+    mapPresetStadia: "Stadia Maps (Stamen family)",
+    mapBoundaryOsm: 'Licence boundary: free; attribution © OpenStreetMap contributors is mandatory. The Tile Usage Policy forbids heavy or bulk use and does not accept it as a default basemap; this software ships with the layer off.',
+    mapBoundaryCarto: 'Licence boundary: free basemap, attribution © CARTO © OpenStreetMap contributors is mandatory. We could not find an explicit commercial or high-traffic clause, so it is marked as unconfirmed; do not treat it as cleared for commercial use.',
+    mapBoundaryTianditu: 'Licence boundary: free, but the owner must apply for a key; quotas apply and commercial use needs separate authorisation. This software cannot apply for the key or guarantee the quota.',
+    mapBoundaryCustom: 'Licence boundary: whatever the XYZ provider you choose requires. This software only checks https and placeholders; it does not judge whether your licence covers your use.',
+    mapBoundaryOpentopomap: "Licence boundary: free; attribution \"Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)\" is mandatory. Usage policy is similar to OSM: heavy or bulk use is not accepted, and this is not a default basemap.",
+    mapBoundaryKeyProvider: "Licence boundary: {service} normally requires you to register and obtain a key (free tiers may exist, paid plans may apply). Attribution, rate and concurrency limits and commercial terms are set by that provider. This software cannot apply for the key, does not guarantee quota or availability, and does not judge whether your licence covers your use.",
+    mapBoundaryEsri: "Licence boundary: Esri public basemap services; we did not confirm an explicit free commercial clause, so this is marked as unconfirmed. Verify against the Esri master agreement and your account before use; if a token is required, use a custom XYZ template with a key placeholder. This software does not make it the default.",
+    mapGroupTemplate: 'XYZ template and attribution',
+    mapUrlTemplate: 'XYZ template',
+    mapUrlHint: 'Must contain the z, x and y placeholders; s rotates subdomains and key inserts the key below. Only https:// is accepted.',
+    mapKey: 'Key (optional)',
+    mapKeyHint: 'Put the key for Tianditu and similar services here; it is stored in the local settings database and is not written to logs.',
+    mapAttribution: 'Attribution text',
+    mapAttributionHint: 'Shown at the bottom-right of the map; it cannot be empty while the layer is enabled.',
+    mapTimezone: 'Centre point (automatic by time zone)',
+    mapTimezoneValue: 'Computer time zone {zone} → {center}, initial zoom {zoom}',
+    mapTimezoneHint: 'Not specified by the manual: the centre table and initial zoom are the choice of this software; the zoom range is fixed at 2–18. An unknown time zone falls back to 0, 0 (zoom 2).',
+    mapErrTemplateRequired: 'An XYZ template is required when the online basemap is enabled',
+    mapErrTemplateProtocol: 'Only https:// addresses are allowed (no http, file or other schemes)',
+    mapErrTemplateTokens: 'The XYZ template must contain the z, x and y placeholders',
+    mapErrTemplateTokenUnknown: 'The template has an unknown placeholder (only z, x, y, s and key are allowed)',
+    mapErrTemplateInvalid: 'The XYZ template is not a valid address (check for spaces or excessive length)',
+    mapErrKeyRequired: 'The template uses the key placeholder; enter the key',
+    mapErrKeyInvalid: 'The key is not valid (no line breaks, at most 512 characters)',
+    mapErrAttributionRequired: 'Attribution text is required when the online basemap is enabled',
+    restoreItemMapTiles: 'Online basemap (switch, XYZ template, key and attribution)',
     tabAccount: 'Account',
     tabAbout: 'About & maintenance',
 
@@ -1221,6 +1273,148 @@ export const en: MessageSchema = {
   },
 
   /** Offline device map (batch 8). The basemap is drawn from recorded WGS84 points only. */
+  /**
+   * GIS Live Monitor (owner spec V1.0, 2026-09-20).
+   *
+   * `@` is the linked-message sigil in vue-i18n, so no message may contain one
+   * (the i18n test compiles every entry). Device models are deliberately not
+   * repeated here: the model only affects `resolveRealtimeProfile()`.
+   */
+  realtimeUi: {
+    title: 'Live Monitor',
+    primary: 'PRIMARY',
+    detail: 'ANALYSIS / DETAIL',
+    realtime: 'REALTIME',
+    directionRadar: 'DIRECTION',
+    signalTrend: 'SIGNAL TREND',
+    channels: 'CHANNELS',
+    channelsHint: 'Select a channel to switch the centre and right columns; channels with no reading show —.',
+    featuresTitle: '{channel} FEATURES',
+    channelIssue: 'CHANNEL ISSUE',
+    aboveLimit: 'Above limit',
+    emptyTrend: 'No data received for this channel yet.',
+    spectrumWaiting: 'Waiting for spectrum data…',
+    spectrumUnknownAxis: 'The device does not provide a frequency axis: the horizontal axis shows spectrum bin numbers.',
+    voiceprintPending: 'No voiceprint change chart for this channel yet; the seven feature readings are in the right column.',
+    waveformPending: 'This device does not provide a realtime waveform.',
+    prpdUnavailable: 'The current device interface does not provide phase-resolved PRPD data; this is an explicit no-data state.',
+    pdProbability: 'PD PROBABILITY',
+    pdProbabilityEmpty: 'The device does not provide partial-discharge class probabilities.',
+    leakAnalysis: 'LEAK ANALYSIS',
+    leakAnalysisEmpty: 'The device interface does not provide realtime leak-analysis fields yet.',
+    pdClass: {
+      corona: 'Corona',
+      creepage: 'Creepage',
+      suspended: 'Suspended',
+      noise: 'Noise'
+    },
+    tempUnitHint: 'Unit follows the device infrared setting.',
+    noTarget: 'No Target',
+    signalTrendPending: 'Waiting for the realtime data-point table; this is a pluggable Signal Trend placeholder.',
+    connectionPending: 'Connection and channel fields will be bound when the full communication protocol is available.',
+    selectDeviceTitle: 'Select a device to view live data',
+    selectDeviceHint: 'Choose a device from the map, device list, or alarm list.',
+    unsupportedTitle: 'No realtime template for this model yet',
+    unsupportedHint: 'V1 provides a live workspace for acoustic cameras, the FA8 voiceprint engine, and air sonar; this device is still available on the Live Monitor page.',
+    openMonitor: 'Open Live Monitor',
+    resize: 'Drag to resize the live section',
+    location: 'Location',
+    updatedAt: 'Updated {time}',
+    dataDelay: 'DATA DELAY',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    offline: 'DEVICE OFFLINE',
+    lastCommunication: 'Last communication: {time}',
+    lastKnownValue: 'Last known value: {value}',
+    noDataTitle: 'No live data yet',
+    noDataHint: 'Receiving starts automatically when the device is online; missing values are never replaced with 0.',
+    returnToLive: 'Return to Live',
+    status: {
+      live: 'LIVE',
+      warning: 'WARNING',
+      alarm: 'ALARM',
+      offline: 'OFFLINE',
+      dataDelay: 'DATA DELAY'
+    },
+    quality: {
+      good: 'GOOD',
+      stale: 'STALE',
+      invalid: 'INVALID',
+      nodata: 'NO DATA'
+    },
+    mode: {
+      label: 'View mode',
+      pd: 'Partial discharge',
+      leak: 'Leak'
+    },
+    tabs: {
+      label: 'Main visualisation',
+      trend: 'Trend',
+      spectrum: 'Spectrum',
+      voiceprint: 'Voiceprint',
+      waveform: 'Waveform',
+      prpd: 'PRPD'
+    },
+    actions: {
+      liveView: 'Live view',
+      listen: 'Listen',
+      ptz: 'PTZ',
+      history: 'History',
+      analysis: 'Analysis',
+      configuration: 'Configuration'
+    },
+    template: {
+      acousticCameraPD: 'Acoustic Camera · Partial Discharge',
+      acousticCameraLeak: 'Acoustic Camera · Leak',
+      voiceprint: 'Voiceprint Engine',
+      airSonar: 'Air Sonar',
+      gasLeakMonitor: 'Gas Well Leak Monitor'
+    },
+    metric: {
+      maxSpl: 'Max SPL',
+      soundEnergy: 'Sound energy',
+      pdType: 'PD type',
+      confidence: 'Confidence',
+      maxTemp: 'Max temperature',
+      leakRate: 'Leak rate',
+      loss: 'Leak loss',
+      frequencyBand: 'Frequency band',
+      detectionDistance: 'Detection distance',
+      centerTemp: 'Centre temperature',
+      minTemp: 'Min temperature',
+      maxChannel: 'Max channel',
+      event: 'Event',
+      ptz: 'PTZ',
+      azimuth: 'Azimuth',
+      tdeRatio: 'Time-domain energy ratio',
+      fdeRatio: 'Frequency-domain energy ratio',
+      horizontal: 'Horizontal',
+      vertical: 'Vertical',
+      leakStatus: 'Leak status',
+      edgeAi: 'Edge AI',
+      connection: 'Connection',
+      lastAnalysis: 'Last analysis',
+      channels: 'Channels',
+      target: 'Target',
+      peakSpl: 'Peak SPL'
+    },
+    event: {
+      none: 'None',
+      alarm: 'Alarm'
+    },
+    ptz: {
+      tracking: 'Tracking'
+    },
+    leakStatus: {
+      unknown: 'Unknown'
+    },
+    channelStatus: {
+      normal: 'Normal',
+      warning: 'Warning',
+      alarm: 'Alarm',
+      nodata: 'No data'
+    }
+  },
   mapUi: {
     canvasLabel: 'Device positions',
     /**
@@ -1243,7 +1437,6 @@ export const en: MessageSchema = {
      * "Online" and "offline" reuse `devices.status.*` - one wording per fact. Colour never
      * carries the meaning alone, so each legend entry shows a count.
      */
-    legendAlarm: 'Unacknowledged alarm',
     /** Device list (first of the three lists, item 17). */
     devicesTitle: 'Devices',
     devicesCount: '{count} device(s)',
@@ -1262,17 +1455,12 @@ export const en: MessageSchema = {
     alarmsTitle: 'Alarms',
     alarmsFor: 'Selected device: {name}',
     /** Live data list (third). */
-    liveTitle: 'Live data',
-    colDb: 'dB',
-    colStability: 'Steadiness',
-    colAzimuth: 'Azimuth',
     /**
      * Where each of the three columns comes from, written after the owner settled the wording
      * (2026-09-19: "use 平稳度"). That settled the ambiguity: what he called "stability" IS this
      * repo's `smoothness` (a real value the device reports with each alarm), so the column has a
      * source and the old "not in the manual, therefore always —" note is gone.
      */
-    liveHint: 'dB and steadiness both come from that device\u2019s most recent alarm (— when there is none); azimuth is the recorded installation azimuth, not the current frame\u2019s source bearing.',
     hoverStream: 'Current video stream',
     hoverAlarm: '{count} unacknowledged alarm(s)',
     hoverNoAlarm: 'No unacknowledged alarms',
@@ -1292,6 +1480,11 @@ export const en: MessageSchema = {
     snapshotLoading: 'Loading snapshots…',
     snapshotNotCaptured: 'This alarm has no snapshot on the device (it was not downloaded during sync, or the dome does not have “save a snapshot on alarm” enabled).',
     snapshotFilesGone: 'The database records snapshots for this alarm, but the files are no longer on this machine (storage root changed, or they were cleaned up).',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    zoomReset: 'Back to time-zone centre',
+    zoomLevel: 'Zoom {zoom}',
+    tilesError: '{failed} of {total} basemap tiles did not load (network unavailable or service refused); device markers and lists are unaffected.',
     sonarHint: 'The air sonar’s snapshots come from the linked dome camera: one per second, up to three.'
   },
 
@@ -1416,6 +1609,32 @@ export const en: MessageSchema = {
     pagerRange: "{shown} on this page / {total} in total"
   },
   /** Auscultation family (E2 / FA100 / FA110) — the pull channel (owner request 2026-09-16). */
+  /**
+   * SN-16 per-second realtime value callback (device POSTs to notify_url; the shared
+   * ingest HTTP listener receives it).
+   */
+  e2CallbackUi: {
+    title: 'SN-16 realtime callback',
+    hint: 'The device POSTs max_db_value / max_db_chn / TDE / FDE to notify_url every second; this machine receives it on the shared ingest HTTP listener. Enabling writes the local address into the device (administrator).',
+    start: 'Receive on this PC',
+    stop: 'Stop receiving',
+    deviceUrl: 'Device callback URL',
+    flag: 'is_send_realtime_value',
+    listener: 'Local listener',
+    listening: 'Listening (port {port})',
+    stopped: 'Not listening',
+    pointsToUs: 'Points to this PC',
+    pointsElsewhere: 'Points elsewhere',
+    notConfigured: 'Not configured',
+    adminOnly: 'Writing to the device requires an administrator.',
+    partialReadback: 'The device was written, but not every field read back identically; refresh to confirm.',
+    receivedAt: 'Last received: {time}',
+    maxDbValue: 'Max SPL',
+    maxChannel: 'Max channel',
+    tde: 'Time-domain energy ratio',
+    fde: 'Frequency-domain energy ratio',
+    noValue: 'No realtime value received yet.'
+  },
   e2Ui: {
     statusTitle: 'Device status',
     variant: 'Protocol generation',
@@ -1920,6 +2139,10 @@ export const en: MessageSchema = {
    */
   cameraStreamUi: {
     stop: 'Stop receiving',
+    startSpectrum: 'Start spectrum',
+    startWaveform: 'Start waveform',
+    startVoiceprint: 'Start voiceprint image',
+    onDemandHint: 'The GIS view does not open camera streams automatically: a connection is created only after you press Start, and it stops when you leave the tab or page.',
     adminOnlyHint: 'Starting and stopping camera streams is an administrator action.',
     noDevice: 'Select a camera first.',
     sessionIdle: 'Streams not started',

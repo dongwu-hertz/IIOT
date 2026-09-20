@@ -29,15 +29,22 @@
  *   node scripts/demo-shot.cjs                      # every route
  *   node scripts/demo-shot.cjs --route /devices     # one route
  *   node scripts/demo-shot.cjs --keep-open          # leave the window up
+ *   node scripts/demo-shot.cjs --with-data          # 把真实数据库复制进一次性 profile
+ *   node scripts/demo-shot.cjs --storage-root DIR   # 指定存储根（默认自动探测；探不通就用一次性 profile）
  *   node scripts/demo-shot.cjs --rename-drill       # 真的改一次设备名/通道名，再改回来
  *
  * `--rename-drill` 是**显式**开关：它写的是操作员 profile 里的**真机**（改声纹设备的
  * 设备名与一路通道名，然后都改回原值）。默认那次运行一个字节都不写设备。
+ *
+ * `--storage-root` 与自动探测是给**受限环境**用的：默认存储根（Windows 上是
+ * `D:\HertzinnoData`）可能在当前进程被允许写的范围之外，那时应用会在启动阶段就退出，
+ * 探针一个字都量不到。探测逻辑在下面 `resolveStorageRoot()`。
  */
 
 'use strict'
 
 const { spawn, execFileSync } = require('node:child_process')
+const vm = require('node:vm')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -53,7 +60,9 @@ function parseArgs(argv) {
     renameDrill: false,
     /** 把真实数据库复制进一次性 profile，让截图里有真设备（见下面那段说明）。 */
     withData: false,
-    dataDir: null
+    dataDir: null,
+    /** 存储根（`D:\HertzinnoData` 那种）；默认自动探测，探不通就用一次性 profile。 */
+    storageRoot: null
   }
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--out') {
@@ -70,6 +79,9 @@ function parseArgs(argv) {
       args.withData = true
     } else if (argv[i] === '--data-dir') {
       args.dataDir = path.resolve(argv[i + 1])
+      i += 1
+    } else if (argv[i] === '--storage-root') {
+      args.storageRoot = path.resolve(argv[i + 1])
       i += 1
     }
   }
@@ -120,16 +132,44 @@ if (!fs.existsSync(driver)) {
   process.exit(1)
 }
 
-// The driver is a real module, so `node --check` can reject it before a browser
+// The driver is a real module, so a parse check can reject it before a browser
 // launch is spent on it. A syntax error inside a GENERATED driver used to surface
 // only as Electron's "App threw an error during load", pointing at a file nobody
 // wrote.
-try {
-  execFileSync(process.execPath, ['--check', driver], { stdio: 'pipe' })
-} catch (error) {
-  console.error(
-    `[demo] driver failed to parse: ${error.stderr ? error.stderr.toString() : error.message}`
-  )
+//
+// WHY THE FALLBACK
+// The check used to be only `execFileSync(process.execPath, ['--check', driver])`.
+// That is a CHILD PROCESS, and in this project's restricted/sandboxed runs
+// spawning one with piped stdio is refused (`EPERM`) — so the harness reported
+// "driver failed to parse" while the driver was perfectly fine, and the whole
+// probe never launched. The same parse check is available in-process through
+// `vm.Script`, which compiles the source with exactly the same front end.
+// Prefer the child process (it is the project's historical behaviour and it also
+// catches problems the compile step cannot see); fall back only when spawning is
+// what failed.
+function parseCheckDriver(file) {
+  try {
+    execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' })
+    return null
+  } catch (error) {
+    // `EPERM` means "we were not allowed to spawn", not "the driver is broken".
+    if (error && error.code === 'EPERM') {
+      try {
+        // eslint-disable-next-line no-new
+        new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file })
+        console.log('[demo] driver parse check: in-process (child process not permitted here)')
+        return null
+      } catch (parseError) {
+        return String(parseError && parseError.message)
+      }
+    }
+    return error.stderr ? error.stderr.toString() : error.message
+  }
+}
+
+const driverParseError = parseCheckDriver(driver)
+if (driverParseError !== null) {
+  console.error(`[demo] driver failed to parse: ${driverParseError}`)
   process.exit(1)
 }
 
@@ -204,11 +244,61 @@ console.log(`[demo] driver     : ${driver}`)
 console.log(`[demo] userData   : ${userDataDir}`)
 console.log(`[demo] screenshots: ${args.out}`)
 
+/*
+ * 存储根：默认那份（Windows 上是 `D:\HertzinnoData`）**可能不在本进程被允许写的范围里**，
+ * 那时应用会在启动阶段就报 `Storage root is not writable` 并退出 —— 探针一个字都量不到，
+ * 看起来像"应用起不来"。所以：
+ *
+ *   1. 先探一次**默认根**是否真的可写（与 `app-services.ts` 的判据同序：先 D:，
+ *      没有 D: 就用文档目录）；
+ *   2. 不可写就指到这次运行的一次性 profile（`HERTZINNO_STORAGE_ROOT`），
+ *      这正是 smoke / 打包检查已经在用的那条钩子（`app-services.ts` 里注明它专为
+ *      "把存储根与日志目录重定向到一次性 profile"而存在）。
+ *
+ * 数据不会因此丢：这个 profile 本来就是一次性的（`mkdtempSync`），`--with-data`
+ * 也只是把真库**复制**进来。要强制指定就用 `--storage-root <路径>`。
+ */
+function resolveStorageRoot() {
+  const explicit = args.storageRoot
+  if (explicit) return { root: path.resolve(explicit), reason: '命令行指定' }
+  if (process.env.HERTZINNO_STORAGE_ROOT) {
+    return { root: process.env.HERTZINNO_STORAGE_ROOT, reason: '环境变量' }
+  }
+  const candidates = []
+  if (process.platform === 'win32') {
+    if (fs.existsSync('D:\\')) candidates.push('D:\\HertzinnoData')
+    candidates.push(path.join(os.homedir(), 'Documents', 'HertzinnoData'))
+  } else {
+    candidates.push(path.join(userDataDir, 'HertzinnoData'))
+  }
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true })
+      const probe = path.join(candidate, `.hz-write-probe-${process.pid}`)
+      fs.writeFileSync(probe, 'ok')
+      fs.rmSync(probe, { force: true })
+      return { root: candidate, reason: '默认位置（实测可写）' }
+    } catch {
+      // 换下一个候选；全都不行就落到一次性 profile。
+    }
+  }
+  return { root: path.join(userDataDir, 'HertzinnoData'), reason: '默认位置不可写，改用一次性 profile' }
+}
+
+const storage = resolveStorageRoot()
+console.log(`[demo] storage    : ${storage.root}（${storage.reason}）`)
+
 const child = spawn(electronBinary, [wrapper, `--user-data-dir=${userDataDir}`], {
   cwd: projectRoot,
   stdio: 'inherit',
   env: {
     ...process.env,
+    /*
+     * **刻意不设 `HERTZINNO_SMOKE_TEST`。** 那一套探针会登录、逐个语言切一遍并**重载
+     * 渲染层** —— 那会把本驱动正在导航的窗口当场换掉（`demo-shot` 自己登录、自己切路由）。
+     * 存储根的重定向现在由 `HERTZINNO_STORAGE_ROOT` 单独负责（见 `app-services.ts`）。
+     */
+    HERTZINNO_STORAGE_ROOT: storage.root,
     HZ_DEMO_SHOT: JSON.stringify({
       out: args.out,
       route: args.route,

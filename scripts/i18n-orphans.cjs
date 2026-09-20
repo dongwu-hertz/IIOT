@@ -203,6 +203,21 @@ function scanVue(text, sink) {
   for (const match of cleaned.matchAll(/\b[A-Za-z]*Key\s*[:=]\s*(['"])([^'"]+)\1/g)) {
     if (KEY_LIKE.test(match[2])) sink.callSite.add(match[2])
   }
+  /**
+   * **前缀由 prop 传进子组件**的写法：`label-key-prefix="realtimeUi.pdClass"`。
+   *
+   * 这是 2026-09-20 补的**真误报**：`RealtimeProbabilityBars` 用
+   * ``t(`${props.labelKeyPrefix}.${entry.key}`)`` 拼键，而模板字面量那条正则
+   * （`DYNAMIC_HEAD`）看到的前缀是 `props.labelKeyPrefix` —— 一个**变量名**，
+   * 不是词条前缀。于是 `realtimeUi.pdClass.creepage/suspended/noise` 三条
+   * **正在界面上渲染的活键**被报成"任何地方都没人用（可直接删）"。
+   * 这一段的误报方向是**要删活键**，是本脚本唯一危险的方向，所以按原文扫一遍
+   * 属性的字面量值、注册成动态前缀（与 `domainLabel('a.b', key)` 同一类处理）。
+   */
+  for (const match of cleaned.matchAll(/\b[A-Za-z-]*[Pp]refix\s*=\s*"([^"]+)"/g)) {
+    const value = match[1].trim()
+    if (KEY_LIKE.test(value)) sink.dynamicPrefixes.add(value)
+  }
 }
 
 function scanTree(root) {

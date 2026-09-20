@@ -125,6 +125,57 @@ export const tr: MessageSchema = {
     tabVideo: 'Video ve tampon',
     tabAlarm: 'Alarmlar',
     tabEmail: 'E-posta',
+
+    /*
+     * GIS / çevrimiçi temel harita (mal sahibi 2026-09-19, ek madde 1).
+     *
+     * Kılavuzda yok: kılavuzda harita veya döşeme servisi bölümü yoktur. Sayfa adı, küresel sağlayıcı ön ayarları,
+     * lisans sınırları, varsayılan kapalı olma, yalnızca https, saat dilimine göre merkez ve
+     * 2–18 yakınlaştırma bu yazılımın kendi tercihleridir; kurallar @shared/domain/map-tiles içinde.
+     */
+    tabMap: 'Harita',
+
+    mapGroupService: 'Temel harita servisi (çevrimiçi döşemeler)',
+    mapEnable: 'Çevrimiçi temel haritayı etkinleştir',
+    mapEnableHint: 'Varsayılan olarak kapalıdır: kapalıyken bu sayfa yerel çevrimdışı ızgarayı kullanır ve ağa erişmez. Etkinleştirildiğinde yalnızca https XYZ döşeme adresleri kabul edilir ve atıf zorunludur.',
+    mapPresetsLabel: 'Ücretsiz servis ön ayarları',
+    mapPresetsHint: "Ön ayarlar şu sıradadır: ücretsiz genel, küresel ticari ve kendi anahtarın, Çin bölgesel, özel. Ticari şablonlar genel belgelerden doldurulur; kullanmadan önce sağlayıcı belgeleriyle doğrulayın.",
+    mapPresetOsm: 'OpenStreetMap standart döşemeleri',
+    mapPresetCarto: 'CARTO Basemaps',
+    mapPresetTianditu: 'Tianditu',
+    mapPresetCustom: 'Özel XYZ',
+    mapPresetOpentopomap: "OpenTopoMap (arazi)",
+    mapPresetEsri: "Esri World Street Map",
+    mapPresetMaptiler: "MapTiler Cloud",
+    mapPresetMapbox: "Mapbox",
+    mapPresetTomtom: "TomTom Maps",
+    mapPresetStadia: "Stadia Maps (Stamen ailesi)",
+    mapBoundaryOsm: 'Lisans sınırı: ücretsiz; © OpenStreetMap contributors atıfı zorunludur. Tile Usage Policy yoğun veya toplu kullanıma izin vermez ve varsayılan temel harita olarak kabul etmez; bu yazılım katmanı kapalı olarak gelir.',
+    mapBoundaryCarto: 'Lisans sınırı: ücretsiz temel harita, © CARTO © OpenStreetMap contributors atıfı zorunludur. Ticari veya yüksek trafikli kullanım için açık bir madde bulamadık; bu yüzden doğrulanmamış olarak işaretlendi; ticari kullanım için izin verilmiş saymayın.',
+    mapBoundaryTianditu: 'Lisans sınırı: ücretsiz, ancak key başvurusunu mal sahibi yapmalıdır; kotalar vardır ve ticari kullanım ayrıca yetki gerektirir. Bu yazılım key başvurusu yapamaz ve kotayı garanti edemez.',
+    mapBoundaryCustom: 'Lisans sınırı: seçtiğiniz XYZ sağlayıcısının belirlediği koşullar. Bu yazılım yalnızca https ve yer tutucuları denetler; lisansınızın kullanımınızı kapsayıp kapsamadığına karar vermez.',
+    mapBoundaryOpentopomap: "Lisans sınırı: ücretsiz; \"Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)\" atıfı zorunludur. Kullanım politikası OSM ile benzerdir: yoğun veya toplu kullanım kabul edilmez ve varsayılan temel harita değildir.",
+    mapBoundaryKeyProvider: "Lisans sınırı: {service} genellikle kaydolup anahtar almanızı gerektirir (ücretsiz planlar olabilir, ücretli planlar uygulanabilir). Atıf, trafik ve eşzamanlılık sınırları ile ticari koşullar ilgili sağlayıcı tarafından belirlenir. Bu yazılım anahtar başvurusu yapamaz, kotayı veya kullanılabilirliği garanti etmez ve lisansınızın kullanımınızı kapsayıp kapsamadığına karar vermez.",
+    mapBoundaryEsri: "Lisans sınırı: Esri genel temel harita servisleri; ücretsiz ticari kullanım için açık bir madde doğrulayamadık, bu yüzden doğrulanmamış olarak işaretlendi. Kullanmadan önce Esri ana sözleşmesi ve hesabınızla doğrulayın; token gerekiyorsa key yer tutucusu içeren özel bir XYZ şablonu kullanın. Bu yazılım bunu varsayılan yapmaz.",
+    mapGroupTemplate: 'XYZ şablonu ve atıf',
+    mapUrlTemplate: 'XYZ şablonu',
+    mapUrlHint: 'z, x ve y yer tutucularını içermelidir; s alt alanları döndürür ve key aşağıdaki anahtarı ekler. Yalnızca https:// kabul edilir.',
+    mapKey: 'Anahtar (isteğe bağlı)',
+    mapKeyHint: 'Tianditu ve benzeri servislerin anahtarını buraya koyun; yerel ayar veritabanında saklanır ve günlüklere yazılmaz.',
+    mapAttribution: 'Atıf metni',
+    mapAttributionHint: 'Haritanın sağ alt köşesinde gösterilir; katman etkinken boş bırakılamaz.',
+    mapTimezone: 'Merkez noktası (saat dilimine göre otomatik)',
+    mapTimezoneValue: 'Bilgisayar saat dilimi {zone} → {center}, başlangıç yakınlaştırması {zoom}',
+    mapTimezoneHint: 'Kılavuzda belirtilmemiştir: merkez tablosu ve başlangıç yakınlaştırması bu yazılımın kendi tercihidir; yakınlaştırma aralığı 2–18 olarak sabittir. Saat dilimi tanınmazsa 0, 0 (yakınlaştırma 2) kullanılır.',
+    mapErrTemplateRequired: 'Çevrimiçi temel harita etkinleştirilirken XYZ şablonu zorunludur',
+    mapErrTemplateProtocol: 'Yalnızca https:// adreslerine izin verilir (http, file veya başka protokoller kabul edilmez)',
+    mapErrTemplateTokens: 'XYZ şablonu z, x ve y yer tutucularını içermelidir',
+    mapErrTemplateTokenUnknown: 'Şablonda bilinmeyen bir yer tutucu var (yalnızca z, x, y, s ve key kullanılabilir)',
+    mapErrTemplateInvalid: 'XYZ şablonu geçerli bir adres değil (boşluk veya aşırı uzunluk olabilir)',
+    mapErrKeyRequired: 'Şablon key yer tutucusunu kullanıyor; anahtarı girin',
+    mapErrKeyInvalid: 'Anahtar geçersiz (satır sonu olamaz, en fazla 512 karakter)',
+    mapErrAttributionRequired: 'Çevrimiçi temel harita etkinleştirilirken atıf metni zorunludur',
+    restoreItemMapTiles: 'Çevrimiçi temel harita (anahtar, XYZ şablonu, anahtar değeri ve atıf)',
     tabAccount: 'Hesap',
     tabAbout: 'Hakkında ve bakım',
 
@@ -1189,6 +1240,148 @@ export const tr: MessageSchema = {
   },
 
   /** Çevrimdışı cihaz haritası (8. parti). Arka plan yalnızca kayıtlı WGS84 noktalarından çizilir. */
+  /**
+   * GIS Canlı İzleme (sahip şartnamesi V1.0, 2026-09-20).
+   *
+   * `@` işareti vue-i18n bağlantılı mesaj işaretidir; bu nedenle hiçbir mesajda
+   * bulunamaz (i18n testi her girdiyi derler). Cihaz modelleri burada yinelenmez:
+   * model yalnızca `resolveRealtimeProfile()` sonucunu etkiler.
+   */
+  realtimeUi: {
+    title: 'Canlı İzleme',
+    primary: 'ANA VERİ',
+    detail: 'ANALİZ / AYRINTI',
+    realtime: 'GERÇEK ZAMANLI',
+    directionRadar: 'YÖN',
+    signalTrend: 'SİNYAL EĞİLİMİ',
+    channels: 'KANALLAR',
+    channelsHint: 'Orta ve sağ sütunu değiştirmek için bir kanal seçin; okuması olmayan kanallar — gösterir.',
+    featuresTitle: '{channel} ÖZELLİKLERİ',
+    channelIssue: 'KANAL ARIZASI',
+    aboveLimit: 'Sınır üstü',
+    emptyTrend: 'Bu kanal için henüz veri alınmadı.',
+    spectrumWaiting: 'Spektrum verisi bekleniyor…',
+    spectrumUnknownAxis: 'Cihaz frekans ekseni sağlamıyor: yatay eksen spektrum çizgisi numarasını gösterir.',
+    voiceprintPending: 'Bu kanal için henüz ses izi değişim grafiği yok; yedi özellik okuması sağ sütunda.',
+    waveformPending: 'Bu cihaz gerçek zamanlı dalga formu sağlamıyor.',
+    prpdUnavailable: 'Mevcut cihaz arayüzü faz çözünürlüklü PRPD verisi sağlamıyor; bu açık bir veri yok durumudur.',
+    pdProbability: 'KISMİ DEŞARJ OLASILIĞI',
+    pdProbabilityEmpty: 'Cihaz kısmi deşarj türü olasılıklarını sağlamıyor.',
+    leakAnalysis: 'KAÇAK ANALİZİ',
+    leakAnalysisEmpty: 'Cihaz arayüzü henüz gerçek zamanlı kaçak analizi alanları sağlamıyor.',
+    pdClass: {
+      corona: 'Korona',
+      creepage: 'Yüzey',
+      suspended: 'Askıda',
+      noise: 'Gürültü'
+    },
+    tempUnitHint: 'Birim, cihazın kızılötesi ayarına göredir.',
+    noTarget: 'Hedef yok',
+    signalTrendPending: 'Gerçek zamanlı veri noktası tablosu bekleniyor; bu, takılıp çıkarılabilir bir Signal Trend yer tutucusudur.',
+    connectionPending: 'Bağlantı ve kanal alanları tam iletişim protokolü hazır olduğunda bağlanacaktır.',
+    selectDeviceTitle: 'Canlı verileri görmek için bir cihaz seçin',
+    selectDeviceHint: 'Haritadan, cihaz listesinden veya alarm listesinden bir cihaz seçin.',
+    unsupportedTitle: 'Bu model için henüz gerçek zamanlı şablon yok',
+    unsupportedHint: 'V1; akustik kameralar, FA8 ses izi motoru ve hava sonarı için canlı çalışma alanı sunar; bu cihaz Canlı İzleme sayfasından görülebilir.',
+    openMonitor: 'Canlı İzlemeyi aç',
+    resize: 'Canlı bölümün yüksekliğini sürükleyerek ayarlayın',
+    location: 'Konum',
+    updatedAt: 'Güncellendi {time}',
+    dataDelay: 'VERİ GECİKMESİ',
+    collapse: 'Daralt',
+    expand: 'Genişlet',
+    offline: 'CİHAZ ÇEVRİMDIŞI',
+    lastCommunication: 'Son iletişim: {time}',
+    lastKnownValue: 'Son bilinen değer: {value}',
+    noDataTitle: 'Henüz canlı veri yok',
+    noDataHint: 'Cihaz çevrimiçi olduğunda alma otomatik başlar; eksik değerler asla 0 ile değiştirilmez.',
+    returnToLive: 'Canlıya dön',
+    status: {
+      live: 'CANLI',
+      warning: 'UYARI',
+      alarm: 'ALARM',
+      offline: 'ÇEVRİMDIŞI',
+      dataDelay: 'VERİ GECİKMESİ'
+    },
+    quality: {
+      good: 'İYİ',
+      stale: 'BAYAT',
+      invalid: 'GEÇERSİZ',
+      nodata: 'VERİ YOK'
+    },
+    mode: {
+      label: 'Görünüm modu',
+      pd: 'Kısmi deşarj',
+      leak: 'Kaçak'
+    },
+    tabs: {
+      label: 'Ana görselleştirme',
+      trend: 'Eğilim',
+      spectrum: 'Spektrum',
+      voiceprint: 'Ses izi',
+      waveform: 'Dalga formu',
+      prpd: 'PRPD'
+    },
+    actions: {
+      liveView: 'Canlı görüntü',
+      listen: 'Dinle',
+      ptz: 'PTZ',
+      history: 'Geçmiş',
+      analysis: 'Analiz',
+      configuration: 'Yapılandırma'
+    },
+    template: {
+      acousticCameraPD: 'Akustik Kamera · Kısmi Deşarj',
+      acousticCameraLeak: 'Akustik Kamera · Kaçak',
+      voiceprint: 'Ses İzi Motoru',
+      airSonar: 'Hava Sonarı',
+      gasLeakMonitor: 'Gaz Kuyusu Kaçak İzleyici'
+    },
+    metric: {
+      maxSpl: 'Maks. SPL',
+      soundEnergy: 'Ses enerjisi',
+      pdType: 'Deşarj türü',
+      confidence: 'Güven',
+      maxTemp: 'Maks. sıcaklık',
+      leakRate: 'Kaçak debisi',
+      loss: 'Kaçak kaybı',
+      frequencyBand: 'Frekans bandı',
+      detectionDistance: 'Algılama mesafesi',
+      centerTemp: 'Merkez sıcaklığı',
+      minTemp: 'Min. sıcaklık',
+      maxChannel: 'Maksimum kanal',
+      event: 'Olay',
+      ptz: 'PTZ',
+      azimuth: 'Azimut',
+      tdeRatio: 'Zaman alanı enerji oranı',
+      fdeRatio: 'Frekans alanı enerji oranı',
+      horizontal: 'Yatay',
+      vertical: 'Dikey',
+      leakStatus: 'Kaçak durumu',
+      edgeAi: 'Uç yapay zeka',
+      connection: 'Bağlantı',
+      lastAnalysis: 'Son analiz',
+      channels: 'Kanallar',
+      target: 'Hedef',
+      peakSpl: 'Tepe SPL'
+    },
+    event: {
+      none: 'Yok',
+      alarm: 'Alarm'
+    },
+    ptz: {
+      tracking: 'Takip ediyor'
+    },
+    leakStatus: {
+      unknown: 'Bilinmiyor'
+    },
+    channelStatus: {
+      normal: 'Normal',
+      warning: 'Uyarı',
+      alarm: 'Alarm',
+      nodata: 'Veri yok'
+    }
+  },
   mapUi: {
     canvasLabel: 'Cihaz konumları',
     /**
@@ -1210,7 +1403,6 @@ export const tr: MessageSchema = {
      * «Çevrimiçi» ve «çevrimdışı» `devices.status.*` anahtarlarını yeniden kullanır: bir olgu,
      * tek bir ifade. Renk anlamı tek başına taşımaz; bu yüzden her göstergede sayı da var.
      */
-    legendAlarm: 'Onaylanmamış alarm',
     /** Cihaz listesi (üç listenin ilki, 17. madde). */
     devicesTitle: 'Cihazlar',
     devicesCount: '{count} cihaz',
@@ -1228,11 +1420,6 @@ export const tr: MessageSchema = {
     alarmsTitle: 'Alarmlar',
     alarmsFor: 'Seçili cihaz: {name}',
     /** Canlı veri listesi (üçüncü). */
-    liveTitle: 'Canlı veriler',
-    colDb: 'dB',
-    colStability: 'Durağanlık',
-    colAzimuth: 'Azimut',
-    liveHint: 'dB ve durağanlık, o cihazın en son alarmından gelir (yoksa —); azimut, kayıtlı kurulum azimutudur, geçerli karenin kaynak yönü değildir.',
     /**
      * Sütunların nereden geldiği; sahibi terminolojiyi netleştirdikten sonra yazıldı
      * (2026-09-19: «用平稳度表示»). Bu belirsizliği çözdü: onun «kararlılık» dediği şey bu
@@ -1258,6 +1445,11 @@ export const tr: MessageSchema = {
     snapshotLoading: 'Görüntüler okunuyor…',
     snapshotNotCaptured: 'Bu alarmın cihazda görüntüsü yok (eşitlemede indirilmedi ya da kubbe «alarmda görüntü kaydet» etkin değil).',
     snapshotFilesGone: 'Veritabanı bu alarm için görüntü kayıtlı diyor, ancak dosyalar artık bu makinede değil (depolama dizini değişti veya temizlendi).',
+    zoomIn: 'Yakınlaştır',
+    zoomOut: 'Uzaklaştır',
+    zoomReset: 'Saat dilimi merkezine dön',
+    zoomLevel: 'Yakınlaştırma {zoom}',
+    tilesError: 'Temel harita döşemelerinin {failed} / {total} tanesi yüklenemedi (ağ yok veya servis reddetti); cihaz işaretleri ve listeler etkilenmez.',
     sonarHint: 'Hava sonarının görüntüleri bağlı kubbe kameradan gelir: saniyede bir, en fazla üç.'
   },
 
@@ -1382,6 +1574,32 @@ export const tr: MessageSchema = {
     pagerRange: "Bu sayfada {shown} / toplam {total}"
   },
   /** Oskültasyon ailesi (E2 / FA100 / FA110 / Air Sonar): çekme kanalı. */
+  /**
+   * SN-16 saniyede bir gerçek zamanlı değer (cihaz notify_url adresine POST eder;
+   * aynı yerel HTTP ingest dinleyicisi alır).
+   */
+  e2CallbackUi: {
+    title: 'SN-16 gerçek zamanlı geri çağırma',
+    hint: 'Cihaz her saniye max_db_value / max_db_chn / TDE / FDE değerlerini notify_url adresine gönderir; bu makine bunları ortak ingest HTTP dinleyicisinde alır. Etkinleştirmek yerel adresi cihaza yazar (yönetici).',
+    start: 'Bu bilgisayarda al',
+    stop: 'Almayı durdur',
+    deviceUrl: 'Cihaz geri çağırma adresi',
+    flag: 'is_send_realtime_value',
+    listener: 'Yerel dinleyici',
+    listening: 'Dinliyor (port {port})',
+    stopped: 'Dinlemiyor',
+    pointsToUs: 'Bu bilgisayarı gösteriyor',
+    pointsElsewhere: 'Başka adresi gösteriyor',
+    notConfigured: 'Yapılandırılmadı',
+    adminOnly: 'Cihaza yazmak için yönetici gerekir.',
+    partialReadback: 'Cihaza yazıldı, ancak geri okunan alanların tümü aynı değil; doğrulamak için yenileyin.',
+    receivedAt: 'Son alınan: {time}',
+    maxDbValue: 'Maks. ses basıncı',
+    maxChannel: 'Maksimum kanal',
+    tde: 'Zaman alanı enerji oranı',
+    fde: 'Frekans alanı enerji oranı',
+    noValue: 'Henüz gerçek zamanlı değer alınmadı.'
+  },
   e2Ui: {
     statusTitle: 'Cihaz durumu',
     variant: 'Protokol kuşağı',
@@ -1886,6 +2104,10 @@ export const tr: MessageSchema = {
    */
   cameraStreamUi: {
     stop: 'Almayı durdur',
+    startSpectrum: 'Spektrumu başlat',
+    startWaveform: 'Dalga formunu başlat',
+    startVoiceprint: 'Ses izi görüntüsünü başlat',
+    onDemandHint: 'GIS görünümü kamera akışlarını kendiliğinden açmaz: bağlantı yalnızca Başlat düğmesine basınca kurulur ve sekmeden veya sayfadan ayrılınca durur.',
     adminOnlyHint: 'Kamera akışlarını başlatmak ve durdurmak yönetici işlemidir.',
     noDevice: 'Önce bir kamera seçin.',
     sessionIdle: 'Akışlar başlatılmadı',

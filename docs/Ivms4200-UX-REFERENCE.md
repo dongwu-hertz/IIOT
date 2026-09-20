@@ -4452,7 +4452,7 @@ GUI 探针 `demo-shot --with-data` **0 problems**（树下架、表是 `.page` �
 第 12 条那一轮只改了名字与位置（版面当时还是"左边地图 + 右边详情卡片"）。
 **第 13 条的版面、第 14 条、第 17 条已在 §15.53 做完**，这一节现在只剩：
 
-- 第 13 条的**后半**：底图要能自配 **GIS 服务或平面图**（现在只有我们自己画的经纬度网格）；
+- 第 13 条的**后半**：底图要能自配 **GIS 服务或平面图**（现在只有我们自己画的经纬度网格）—— **在线 GIS 服务第 40 轮 ✅（§15.89）**；平面图仍待做；
 - 第 15、16 条：相机与声纹设备**悬停显示基本信息与当前视频流、有告警显示告警、双击进详情**
   （双击已经能进详情了 —— 设备列表那一行；悬停浮层还没做）。
 
@@ -5322,7 +5322,7 @@ GUI 探针 **0 problems**。逐页实测：侧栏地图那一项 = 「地图信�
 
 **手册未说明**：手册没有"地址信息"这一节（第 1 条本来就是我们自己的数据模型），
 所以上面的形状与"复制什么格式"都是我们定的；点位画在我们自己那张 16:9 示意图上
-（§15.57 的投影），**真正的外部 GIS 服务/在线瓦片是第 13 条那个决定**，还没做。
+（§15.57 的投影），**真正的外部 GIS 服务/在线瓦片由第 40 轮补上（§15.89）**；平面图不在这一条里。
 
 ### 15.68 地图区：删掉三处文字，右上角加半透明状态栏（2026-09-19 第 11 批第 4 条）
 
@@ -6053,7 +6053,7 @@ store 的 `state` 直到 `start()` 内部跑起来才变成 `starting`，所以�
 （与设备管理页的扁平表统一），业主现在说这两条线可以删。删的是线，不是"铺满宽度"这件事 ——
 原来的理由（`.card` 的左右内边距会让画布各缩进 16px）仍然成立，所以左右内边距保持 0。
 
-#### 15.85.2 GIS 可配置 + 免费服务 + 时区默认中心 + 缩放（第 1 条）——**设计与调研，本轮未落地**
+#### 15.85.2 GIS 可配置 + 免费服务 + 时区默认中心 + 缩放（第 1 条）——**✅ 已落地（2026-09-20 第 40 轮，见 §15.89）**
 
 **现状（必须先说清楚）**：我们的地图**不是**地图 —— `DeviceMapView.vue` 画的是一块 SVG
 （经纬度网格 + 落点），投影是我们自己的 `mapProjector`，**没有瓦片、没有缩放、没有服务地址**。
@@ -6085,6 +6085,8 @@ store 的 `state` 直到 `start()` 内部跑起来才变成 `starting`，所以�
 一个"自定义 XYZ 模板"入口。理由：① 离线优先是这个软件的既有约束；② 三个服务的授权边界都不一样，
 把选择权与署名放在设置里，比我们替业主选一个更诚实；③ 不新增依赖，所以即使一个底图服务挂了，
 现状那一块 SVG 网格仍然是**可用**的兜底（不是空白）。
+
+> 2026-09-20 第 40 轮落地时，考虑到软件面向全球，预置已扩展为全球供应商：OpenTopoMap、Esri、MapTiler、Mapbox、TomTom、Stadia 等；上面的免费候选仍保留，完整授权边界见 §15.89.2。
 
 #### 15.85.3 HTTP / MQTT 推流：从"生成地址"到"匹配并显示"（第 3 条）——**待落地**
 现状：接收地址（`http://<本机>:8080/api/v1/<秘钥>/telemetry`）与 MQTT 主题
@@ -6244,3 +6246,238 @@ chartCardWidthRatio=100                                        ← 这一半是�
 
 
 
+
+
+### 15.89 GIS 在设置里配置（免费瓦片 + 授权边界 / 时区中心 / 缩放 2–18）—— 2026-09-20 第 40 轮落地
+
+业主原话（2026-09-19 追加第 1 条，逐字）：
+
+> 「地图信息， GIS应该支持在设置里面配置， 并且你找下哪个可以免费用， 根据用户电脑的时区，
+> 自动定位一个中心点。 同时支持地图的放大缩小。」
+
+**手册未说明（本整节口径都是本软件自己定的）**：仓库手册没有地图 / 瓦片服务这一章。设置页的
+「地图」页签、**全球供应商预置**、授权边界文案、**默认关闭**、只允许 https、`XYZ 模板 + 可选 key + 署名`、
+时区→中心表、缩放固定 2–18，**没有一条来自手册或设备**。规则落点在
+`src/shared/domain/map-tiles.ts`，设置页与地图页引用同一份；契约字段是
+`AppSettings.mapTiles`（见 `src/shared/ipc/contract.ts`）。
+
+#### 15.89.1 落地内容
+
+| 位置 | 内容 |
+|---|---|
+| 系统设置 → 地图 | **启用开关（默认关闭）**；全球预置按免费公开 / 全球商业 / 中国区域 / 自定义排列：OpenStreetMap、OpenTopoMap、CARTO、Esri、MapTiler、Mapbox、TomTom、Stadia Maps、天地图、自定义 XYZ；每个预置旁边列出**授权边界** |
+| XYZ 模板 | 只允许 `https://`；必须含 `z` / `x` / `y` 三个占位符；可选 `s` 子域与 `key` 密钥；启用时署名不能为空 |
+| 密钥 | 可选；模板里出现 `key` 占位符时必填。天地图、MapTiler、Mapbox、TomTom、Stadia 等必须用户自己申请 key，软件不代申请、不内置任何 key |
+| 署名 | 显示在地图右下角。所有预置服务都要求署名，因此启用时由校验器强制非空 |
+| 默认中心 | 由 `Intl.DateTimeFormat().resolvedOptions().timeZone` 查本仓库自己的表；查不到（或时区名不认识）落到 `0, 0`、缩放 2 |
+| 缩放 | 固定 2–18；地图页有 `+` / `-` / 「回到时区中心」按钮，滚轮可用，拖拽平移；到两端按钮禁用 |
+| 地图页 | 只有开关打开后才以普通 `<img>` 加载瓦片；关着时仍走 `shared/domain/device-map.ts` 的离线 SVG 网格，行为与过去完全一样 |
+| 「在地图信息里查看」 | `?device=<id>` 进来时，如果在线底图开着，会把这一台居中（否则时区中心可能看不到它）；离线模式不变 |
+| 恢复默认 | `mapTiles` 在 `SettingsService.RESTORABLE_SETTING_KEYS` 里（第十五项）：恢复默认会把在线底图关掉 |
+| CSP | `connect-src 'none'` **不变**；只在 `img-src` 增加 `https:`，且仅用于用户显式开启后的瓦片图片。渲染层仍然不能 fetch/XHR/WebSocket |
+| 默认值 | 总开关关闭、服务 `custom`、空模板 / 空 key / 空署名（离线优先） |
+
+> 实现同时遵守 §15.88 的硬规矩：地图视野、拖拽状态与瓦片错误集合只由事件处理器写，
+> 模板里没有内联函数 ref / 模板 ref 在 patch 期间写响应式状态；这也是这一轮新代码的静态守卫之一。
+#### 15.89.2 授权边界（全球软件：预置按供应商排列，逐条写清）
+
+| 服务 | 模板 / key | 授权边界（我们确认到哪一步就写到哪一步） |
+|---|---|---|
+| OpenStreetMap 标准瓦片 | `https://tile.openstreetmap.org/{z}/{x}/{y}.png`，无 key | 免费；**必须署名**「© OpenStreetMap contributors」。Tile Usage Policy 明确**不接受高流量 / 批量使用**，也不接受把它当作默认底图；本软件因此默认关闭、由用户显式选择 |
+| OpenTopoMap | `https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png`，无 key | 免费；**必须署名**「Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)」。使用政策类似 OSM：不接受高流量 / 批量使用，不做默认 |
+| CARTO Basemaps | `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png`，无 key | 免费底图；**必须署名**「© CARTO © OpenStreetMap contributors」。**商用 / 高流量条款我们没有确认到明确写法**，标为待确认，不要当成已获商用授权 |
+| Esri World Street Map | `server.arcgisonline.com/.../tile/{z}/{y}/{x}`，无 key；需要 token 时用自定义模板 | 公共底图服务；**我们未确认到可免费商用的明确条款**，标为待确认。使用前请按 Esri 主协议 / 账号授权自行核对；本软件不做默认 |
+| MapTiler Cloud | `api.maptiler.com/...{z}/{x}/{y}...key={key}`，需要 key | 需要用户自己注册并申请 key；免费额度、署名、并发 / 流量限制与商用条件以 MapTiler 条款为准。本软件不代申请、不保证配额或可用性 |
+| Mapbox | `api.mapbox.com/...tiles/256/{z}/{x}/{y}?access_token={key}`，需要 key | 需要用户自己注册并申请 access token；免费额度、署名、并发 / 流量限制与商用条件以 Mapbox 条款为准。本软件不代申请、不保证配额或可用性 |
+| TomTom Maps | `api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key={key}`，需要 key | 需要用户自己注册并申请 key；免费额度、署名、并发 / 流量限制与商用条件以 TomTom 条款为准。本软件不代申请、不保证配额或可用性 |
+| Stadia Maps（Stamen 系） | `tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}.png?api_key={key}`，需要 key | 需要用户自己注册并申请 key；免费额度、署名、域名 / 并发限制与商用条件以 Stadia Maps 条款为准。本软件不代申请、不保证配额或可用性 |
+| 天地图 | WMTS 地址（`t{s}.tianditu.gov.cn/...`），模板含 `key` | 免费，但**必须业主自己申请 key**，有配额；商用另需授权。软件不能替你申请 key，也不能保证配额够用 |
+| 自定义 XYZ | 用户自己填，可选 key | 由所选服务方的条款决定。本软件只校验 https 与占位符，不判断授权是否覆盖你的用途；只支持 Web Mercator 的 XYZ，不支持百度那种自定义投影；Google 地图瓦片不要绕过官方 SDK 直连 |
+
+> 预置模板只是按公开文档预填，服务商改路径或条款时以对方文档为准；用户仍可点「自定义 XYZ」改模板。
+> 默认档位仍是 `custom` 且总开关关闭 —— 软件不会替用户选择供应商、不会自己出网。
+#### 15.89.3 时区→中心与缩放（同样手册未说明）
+
+表在 `src/shared/domain/map-tiles.ts`：具体城市（中国四个时区、东京 / 首尔 / 东南亚 / 南亚 / 中东、欧洲多国、北美 / 南美、非洲、澳洲 / 太平洋等）在前，大区兜底在后；不认识的时区落到世界中心 `0, 0`、
+缩放 2。缩放入口（按钮 / 滚轮 / 拖拽）统一走 `clampTileZoom()`，只能落在 2–18；两端按钮禁用。
+
+如果中心点看起来不对：先确认电脑时区名；这张表是**取值器**，不是设备或手册给的地理数据库。
+要改某个时区的默认中心，只改 `TIME_ZONE_CENTERS` 一处（有单测钉住常见时区与 fallback）。
+
+#### 15.89.4 这一轮验证了什么、还欠什么
+
+- 单测：新增 `tests/map-tiles.test.ts`（默认关闭 / https / 模板占位符 / 可选 key / 署名 /
+  normalise 整键拒绝 / 子域 / 绕经线 / 缩放夹取 / 时区表 / Web Mercator / 落库与恢复默认 /
+  四语言与源码钩子 / 全球预置与各供应商 key 要求）；`settings-tabs`、`account-settings`、`ptz-map-round` 的既有守卫按新口径更新。
+- 打包：`npm run dist:win:offline` 在本机被沙箱的 Node 子进程限制挡住；这一轮用同一套
+  electron-builder 配置与 out 产物在沙箱内产出了 `HERTZINNO Acoustic Box Manager-1.0.16-2026-09-20-x64-setup.exe`。
+  `verify-packaged` 的**磁盘检查全过**（asar / native 模块 / ffmpeg / 安装包版本都要正确），
+  但打包进程冒烟在本机被 Chromium OS 沙箱权限问题挡住（`mojo platform_channel: 拒绝访问`），
+  只有已跑通的 native-modules 探针、没有渲染层登录与语言探针输出。这一段在
+  `docs/UI-VERIFY.md` 第 40 轮里如实写清，**不按 25/0 收**。
+- **仍未验证（不能按已验证验收）**：
+  1. 真实公网瓦片服务在客户网络里真的出图（网络策略、代理、证书、服务端限流都可能改变结果）；
+  2. 授权 / 署名是否覆盖业主的实际用途：CARTO 商用条款、Esri 公共底图条款、MapTiler / Mapbox / TomTom / Stadia 的免费额度与商用条件、天地图 key 与配额 —— 都需要业主或用户自行确认；
+  3. 时区→中心表的具体值只是本仓库的取值（手册未说明），不是官方地理数据；
+  4. 时区名来自 Windows / Chromium，本机没有在跨时区机器上逐个实测；
+  5. 在线底图打开时，实际瓦片失败提示在真实断网环境里的表现只有单测 / 源码守卫，没有真窗口外网故障注入。
+---
+
+## 15.90 GIS 第二行「实时数据」-> Live Monitor 工作台（业主 2026-09-20 规格 V1.0）
+
+### 15.90.1 这一轮改了什么
+
+业主 2026-09-20 给了《GIS Realtime Data UX/UI Specification V1.0》，把 GIS 页面第三行
+（原「实时数据列表」：整幅宽、每台设备一行的 分贝 / 平稳度 / 方位 表格）改成
+**当前聚焦设备的实时监测工作台 / Live Monitor**。实现范围：
+
+- **唯一选中状态**：`stores/realtimeMonitor.ts` 持有 `currentDeviceId` /
+  `currentEventId` / `monitorMode`（规格 §27/§41）。点地图标记、设备列表、告警列表
+  都只改它，实时工作台不再自己存一份选中状态。
+- **统一 Shell**：`components/realtime/RealtimeMonitor.vue` 负责 Header（设备名 /
+  类型 / 状态 / LIVE 或 EVENT / 位置 / Last Update）、模板选择、底部能力动作、面板高度
+  （Default 312 / Collapsed 56 / Expanded 480 / 拖拽上限 55vh）。
+- **统一数据模型与适配层**：`shared/domain/realtime-monitor.ts`（`RealtimeFrame` /
+  `MetricValue` / `ChannelRealtime` / `DeviceRealtimeProfile` / 能力与模板定义）与
+  `renderer/src/lib/realtimeAdapters.ts`（告警、FA8 特征帧、E2 告警原文 -> RealtimeFrame）。
+  界面不认识 `db_value` / `max_db_value` / `hp_spl` 这类固件键名。
+- **五套模板（四类设备）**：`AcousticCameraTemplate`（PD / Leak 两套 Tab 与主数据）、
+  `VoiceprintTemplate`（8 通道列表 + Trend/Spectrum/Voiceprint + 固定七项特征）、
+  `AirSonarTemplate`（Direction Radar + TDE/FDE）、`GasLeakTemplate`（WL15 预留骨架）。
+  模板由 `kind` + `e2Variant` 解析，不按型号名写分支（规格 §37）。
+- **联动**：点告警进入 Event 模式（Header 显示 EVENT · 时间 + Return to Live），
+  FA8 会跟着切到该告警所属通道；点设备行/地图标记回到 Live 并切换模板。
+- **数据质量**：`good / stale / invalid / nodata`；缺失值一律 `value: null` +
+  `nodata`，界面显示 `—`，绝不写 0（规格 §31）。Offline 保留最后有效值并覆盖轻灰
+  （规格 §34）；Stale 有 DATA DELAY 标记且数字变灰。
+- **实时数据来源的口径**：
+  - **FA8 声纹盒**在线时由既有 `monitor` 会话订阅当前通道的 `features` + `spectrum`
+    （实测设备一条 WebSocket 只推一路，GIS 不一次开 8 条）；其它通道显示本会话缓存或
+    最近告警的 last-known 值；
+  - **声相机**在 GIS 里**不自动开五路重流**（voiceprint 一路约 450 KB/s），但
+    Spectrum / Waveform / Voiceprint 三个 Tab **按需接收**：第一次必须由管理员点
+    「接收」，之后切 Tab 自动换成该 Tab 的一路（`/fftData` 约 20 KB/s / `/pcmData`
+    约 190 KB/s / `/voiceprintData` 约 450 KB/s），切到 PRPD、换设备或离开页面就停，
+    不留后台 socket；RTSP 视频仍不在 GIS 播放，底部 Live View 指向实时监测页。
+    PRPD / PD 概率 / 温度 / 泄漏速率在接口确认前保持 no-data，不用 Spectrum 冒充 PRPD；
+  - **空气声呐** Live 模式不显示方向，中心是 "No Target"；只有点历史告警进入 Event
+    模式、且告警原文确有 `horizontal` / `vertical` 时才画方向（规格 §20）。
+    SN-16 的每秒 `realtime_value`（`max_db_value` / `max_db_chn` / TDE / FDE）走设备
+    `notify_url` 回调：主进程复用本机接入的 HTTP 监听接收，再推给渲染层；设备详情页的
+    「SN-16 实时值回调」卡片负责把本机地址写进设备并读回核对（见 §15.91）；
+  - **WL15** 当前软件里还没有这个 `DeviceKind`，模板先落位，接入协议/数据点表后只需
+    在 `resolveRealtimeProfile()` 加一条分支（规格 §43）。
+
+### 15.90.2 版面比例决定：继续用 16:9，不采用 1920×1080 无纵向滚动（业主 2026-09-20）
+
+规格 V1.0 给的行高基线是 GIS 470–500px、Device+Alarm 190–210px、Realtime 300–320px，
+验收项要求 1920×1080 不出现纵向页面滚动。它与本页第 13 条的硬要求
+（**地图 16:9、占满内容宽度**）无法同时成立：1920 宽度下内容区约 1656px，
+16:9 的地图单项就约 931px。
+
+业主 2026-09-20 明确选择：**不用 1920×1080 这个约束，沿用之前的 16:9 比例显示**。
+因此这一页固定为：
+
+- 地图保持 **16:9、占满内容宽度**（第 13 条）；`CANVAS`、SVG 坐标、瓦片排布与
+  相关测试都**不动**；
+- 下方设备+告警列表与实时工作台按内容自然排布，页面允许纵向滚动；
+- 实时工作台自身的 Default 312 / Collapsed 56 / Expanded 480 / 拖拽上限 55vh 保留；
+- 「1920×1080 不产生纵向滚动」**不再作为验收项**。
+
+### 15.90.3 仍未验证 / 明确欠账
+
+- **声相机的 PRPD / 局放概率 / 温度 / 实时泄漏量**：FA371 五路 WebSocket 与检测日志
+  里没有这些实时字段（检测日志的 `leakVolume` 是事件流）；V1 显示 no-data，等接口确认。
+- **空气声呐的每秒 `realtime_value`**（`max_db_value` / `max_fdc_value` / `max_tddr_value`）：
+  设备回调接收端尚未实现；Live 下这些显示 `—`，只对历史告警原文做实解析。
+- **WL15**：没有实时数据点表、没有设备类型，模板骨架不可达。
+- **阈值虚线**：`RealtimeLineChart` 支持 `threshold`，但 GIS 实时区还没有把设备策略
+  阈值取到界面；没有阈值就不画线（不编一条门限）。
+- ~~1920×1080 无纵向滚动~~：业主 2026-09-20 明确不采用该约束，改用 16:9（见 15.90.2）。
+
+### 15.90.4 这一轮验证了什么
+
+- `npm run typecheck`（node + web）全过；
+- `npm test` 2342 项全过，其中新增 `tests/realtime-monitor.test.ts` 直接断言
+  模板解析、Header 优先级、quality、Air Sonar 方向、nodata 不用 0、四语 key 对齐；
+- `npm run build` 全过；
+- 用真实数据库副本在真实窗口里冒烟（临时 profile，只读复制、清空副本账号后重建
+  `admin`）：地图页先显示规格 §35 的 "请选择设备查看实时数据" Empty State；点击离线
+  FA8、声学相机、2023 版听诊盒三行分别渲染出 Voiceprint / AcousticCamera /
+  Unsupport 三种工作台形态，Header、通道列表、Tab、no-data、离线覆盖与能力动作都在，
+  没有渲染层崩溃。声呐在真机上没有模板记录，只有离线数据，方向逻辑由单测覆盖。
+- 声相机按需接收也在真实窗口里点过一遍：在离线的 Acoustic Camera 上切到 Spectrum、
+  按「接收频谱」，面板进入 
+o-frames 空态并出现「停止接收」，没有渲染层崩溃；
+  真机在线的 /fftData / /pcmData / /voiceprintData 尚未在客户设备上验收。
+---
+
+## 15.91 SN-16 每秒实时值 `realtime_value` 回调（2026-09-21，真机未接入）
+
+### 15.91.1 为什么这样做
+
+规格 §20 要的 Air Sonar Live 值（`max_db_chn` / `max_db_value` / TDE / FDE）来自设备
+**主动 POST 到 `notify_url`** 的每秒回调，而不是「拉」端点。文档只给了四种回调
+`message_type`，没有给接收端实现。这一轮只做其中的 `realtime_value`：
+
+1. **复用本机接入的 HTTP 监听**，不新开第二个端口。设备 `notify_url` 写成既有
+   `/api/v1/<每设备秘钥>/telemetry` 地址：秘钥在 URL 里，监听生命周期、端口设置、
+   统计都已存在；回调载荷在同一个 handler 里被识别出来，**不进趋势表**（表里没有这些列）。
+2. **字段名两种都收**：本仓库注释写 `max_tddr_value`，业主手册写 `max_tdr_value`，
+   差一个 d 的后果是「设备在推、界面永远没有值」，所以解析器同时接受两种；
+   没有 `message_type` 但带 `max_*` 键的也认（现场固件不一定带类型字段）。
+3. **写设备必须读回核对**：设备面板上的按钮调用
+   `E2_REALTIME_CALLBACK_UPDATE`，主进程执行
+   准备本机接入秘钥 → 选同网段本机地址 → `PUT /system`（`notify_url` +
+   `is_send_realtime_value=1`）→ `GET /system` → 逐项比较；比较结果回给界面，
+   `allApplied: false` 时界面明说「没有全部一致」。停止只把 `is_send_realtime_value`
+   写 0，不动 `notify_url`（告警等其它回调也可能在用它）。
+4. **渲染层只订阅**：主进程经 `PushChannels.E2_REALTIME_CALLBACK_VALUE` 推送
+   `E2RealtimeValueEvent`；GIS 的 Air Sonar 帧优先用这一帧（quality 由到达时刻判
+   GOOD/STALE），没有回调时才回退到历史告警的 last-known 值。
+
+### 15.91.2 明确假设 / 未验证
+
+- 回调请求本身**没有额外认证**：认证靠 URL 里的每设备秘钥，以及设备必须能连到本机；
+  如果客户网络允许别人拿到 URL，伪造数据是可能的。真机测试时要确认设备回调是否带
+  任何 header/字段可以进一步校验（文档未说明）。
+- 只处理 `realtime_value`；`alarm_msg` / 文件保存报告 / 心跳只分类，不写库、不触发联动。
+  告警仍然走既有「拉」通道同步。
+- 回调端口/绑定沿用「本机接入」那套设置：添加/编辑设备对话框里的 HTTP 端口与绑定地址。
+  开启回调会把这台设备声明成 HTTP 接入（监听由既有对账逻辑打开）。
+- **真机不在手上**：字段名、单位、回调频率、是否真的每秒、`notify_url` 写回后设备
+  是否立即生效，全部只有文档依据；下面那次联调使用的是仓库里的 `mock-air-sonar`。
+
+### 15.91.3 无真机的端到端联调（已跑通）
+
+用 `scripts/mock-air-sonar.cjs` 做了一台假 SN-16，走的是**真应用主进程**：
+
+```
+node scripts/mock-air-sonar.cjs --port 0        # 假 SN-16，随机端口
+# 应用内：添加设备（127.0.0.1:<mock 端口>，admin/secret）
+# 应用内：设备详情 ->「SN-16 实时值回调」-> 在本机接收
+```
+
+实测结果：
+
+- 添加设备自动识别为 `auscultationBox` 且 `e2Variant = 'airSonar'`；
+- 开启前设备 `notify_url` 指向别处、本机监听关闭；
+- 开启后写回 `http://<本机局域网地址>:18080/api/v1/<秘钥>/telemetry`，
+  `is_send_realtime_value = 1`，**notify_url 与标志两项读回都一致**（`allApplied: true`）；
+- 本机 HTTP 监听在 18080 上 `listening: true`；
+- mock 每秒 POST `realtime_value`，渲染层经推送收到
+  `{ maxDbChannel: 5, maxDbValue: 64.58, maxFdrValue: 46.73, maxTdrValue: 0.00044 }`；
+- `npm test` 新增 `tests/e2-callback.test.ts`：解析（两种字段名/缺 message_type/坏值）、
+  地址选择、接入端点分流（`e2Realtime:1`、趋势行 0）、IPC/preload/面板/四语守卫；
+  Air Sonar 适配层用回调值并按时效判 GOOD/STALE。
+
+### 15.91.4 明天真机测试清单
+
+1. 添加/确认 SN-16（`dev_type` 里能读出 16 通道的那台）在线；
+2. 打开该设备的详情/实时监测页，找到「SN-16 实时值回调」卡片，确认本机监听端口没有被占用；
+3. 点「在本机接收」，核对读回 `allFields ok`；如果某个字段不一致，卡片会显示提示，
+   同时 `notify_url` 保持设备原值可控；
+4. 等 1–3 秒，卡片与 GIS Air Sonar Live 应出现每秒刷新的 MAX SPL / MAX CHANNEL / TDE / FDE；
+5. 拔网线或关设备回调，3.5 秒后这些值应变灰并显示 STALE / DATA DELAY，而不是变成 0；
+6. 点「停止接收」后设备 `is_send_realtime_value` 应回 0，监听是否保留取决于本机是否还有
+   其它 HTTP 接入声明（这是现有接入对账逻辑，不是回调特例）。

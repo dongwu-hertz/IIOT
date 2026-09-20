@@ -45,10 +45,12 @@ import { EventEmitter } from 'node:events'
 import type { Device } from '@shared/domain/models'
 import {
   FA371_PCM_SAMPLE_RATE_HZ,
-  FA371_STREAM_KINDS,
+  FA371_ALL_STREAM_KINDS,
   type Fa371DetectFeedbackFrame,
   type Fa371DetectFeedbackPreview,
   type Fa371EnergyFrame,
+  type Fa371InfraredFrame,
+  type Fa371InfraredPreview,
   type Fa371EnergyPreview,
   type Fa371FftFrame,
   type Fa371FftPreview,
@@ -313,6 +315,11 @@ export class Fa371StreamService extends EventEmitter {
           emit(toPcmPreview(deviceId, frame, this.options.waveformBuckets ?? DEFAULT_WAVEFORM_BUCKETS))
         )
         break
+      case 'infraredData':
+        dispose = session.client.onFrame('infraredData', (frame: Fa371InfraredFrame) =>
+          emit(toInfraredPreview(deviceId, frame))
+        )
+        break
       case 'detectFeedback':
         dispose = session.client.onFrame('detectFeedback', (frame: Fa371DetectFeedbackFrame) =>
           emit(toDetectFeedbackPreview(deviceId, frame))
@@ -556,6 +563,26 @@ export function toPcmPreview(deviceId: string, frame: Fa371PcmFrame, buckets: nu
 }
 
 /** `/detectFeedback`：已映射好的检测日志，本身很小，不抽稀。 */
+/**
+ * `/inrared_data` -> preview.
+ *
+ * Missing fields stay missing (no zero fill); the unit follows the device ir_unit
+ * setting and is not converted here.
+ */
+export function toInfraredPreview(
+  deviceId: string,
+  frame: Fa371InfraredFrame
+): Fa371InfraredPreview {
+  return {
+    deviceId,
+    kind: 'infraredData',
+    timestamp: frame.receivedAt,
+    ...(frame.emissivity !== undefined ? { emissivity: frame.emissivity } : {}),
+    ...(frame.centerTemp !== undefined ? { centerTemp: frame.centerTemp } : {}),
+    ...(frame.maxTemp !== undefined ? { maxTemp: frame.maxTemp } : {}),
+    ...(frame.minTemp !== undefined ? { minTemp: frame.minTemp } : {})
+  }
+}
 export function toDetectFeedbackPreview(
   deviceId: string,
   frame: Fa371DetectFeedbackFrame
@@ -595,7 +622,7 @@ function downmixToMono(samples: Float32Array, channels: number): Float32Array {
 function normaliseKinds(kinds: readonly Fa371StreamKind[]): Fa371StreamKind[] {
   const seen = new Set<Fa371StreamKind>()
   for (const kind of kinds) {
-    if (FA371_STREAM_KINDS.includes(kind)) seen.add(kind)
+    if (FA371_ALL_STREAM_KINDS.includes(kind)) seen.add(kind)
   }
   return [...seen]
 }

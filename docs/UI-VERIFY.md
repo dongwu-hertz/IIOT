@@ -15,6 +15,7 @@
 | 看**还没验证**的东西（别按已验证验收） | 六（第 7 批四条）、七（第 8 批五条）、**Z 段末（事件中心规格：没做的与冲突的）** |
 | 明天那台 SN-16 上线后怎么收尾 | 八（一条命令 + 预期输出 + 每种失败是什么意思） |
 | **事件中心规格（Event & Alarm Center V1.0）做到哪一步了** | **Z 段**（这一轮）+ `docs/EVENT-CENTER.md`（规格逐节对照表） |
+| **GIS 实时工作台（Live Monitor）与 SN-16 实时值回调做到哪一步、还欠什么** | **JJ 段**（第 41 轮）+ `docs/Ivms4200-UX-REFERENCE.md` §15.90 / §15.91 |
 | 判断"这段代码为什么这么写" | 不在本文档 —— 看 `docs/Ivms4200-UX-REFERENCE.md`（按 §15.x 分段，含出处） |
 | 从这份代码开新分支（例如 AI 训练版） | `docs/BASELINE.md`（当前状态、代码地图、必须继承的规矩、验证命令） |
 
@@ -1082,7 +1083,7 @@ node scripts/e2-live-proof.cjs --ip 192.168.110.234 --password 123456
 | 10 | 删除基准声压级 | **✅ 上一轮** |
 | 11 | 告警数量与右上角告警图标联动（BUG） | 待做 —— **需要你回一句是哪一个数字**（见"没验证"第 5 条） |
 | 12 | 「点位图」改名「地图信息（GIS）」并移到设备管理上方、总览下方 | **✅ 第 4 轮** |
-| 13 | GIS 页右侧 16:9 占满宽度的地图区，支持自配置 GIS 服务或平面图 | **版面第 5 轮**（自配 GIS 服务/平面图待做） |
+| 13 | GIS 页右侧 16:9 占满宽度的地图区，支持自配置 GIS 服务或平面图 | **版面第 5 轮**；在线 GIS 服务**第 40 轮 ✅**（§15.89）；平面图仍待做 |
 | 14 | 设备位置落图（在线绿 / 告警红 / 离线灰） | **✅ 第 5 轮** |
 | 15 | 声学相机悬停显示基本信息与当前视频流、有告警显示告警、双击进详情 | **✅ 第 10 轮**（"当前视频流"那一行只有源码守卫，见下） |
 | 16 | 声纹设备悬停显示基本信息、双击进详情 | **✅ 第 10 轮**（双击第三轮已有，这一轮补了悬停） |
@@ -3213,7 +3214,7 @@ chartCardWidthRatio=100              ← 这一半是对的：趋势图确实占
 
 | # | 你的要求（原话要点） | 状态 |
 |---|---|---|
-| 1 | 「地图信息，GIS 应该支持在设置里面配置，并且你找下哪个可以免费用，根据用户电脑的时区，自动定位一个中心点。同时支持地图的放大缩小」 | **调研与设计完成**（§15.85.2：设置里配置 + 三个免费候选与各自的授权边界 + 时区→中心表 + 自己算 XYZ 瓦片不引依赖）；**实现下一轮** |
+| 1 | 「地图信息，GIS 应该支持在设置里面配置，并且你找下哪个可以免费用，根据用户电脑的时区，自动定位一个中心点。同时支持地图的放大缩小」 | **调研与设计完成**（§15.85.2：设置里配置 + 三个免费候选与各自的授权边界 + 时区→中心表 + 自己算 XYZ 瓦片不引依赖）；**✅ 第 40 轮已落地**（见 §15.89 与本文第 40 轮） |
 | 2 | 「地图显示卡片的上下有两个线条，这个线条可以删除，重新调整下地图卡片上下的间距」 | **✅ 第 29 轮**：`.map-panel` 的 `border-top` / `border-bottom` 删掉，`padding-block` 16px → 8px |
 | 3 | 「通过设备上设置 HTTP 的推流方式进行数据的接入，这个需要生成接收地址的码流，然后再信息数据的匹配和显示，这部分需要调整」 | **设计与诊断完成、实现下一轮**（§15.85.3：地址**已经能生成**；缺的是"声明的键参与解析"与"看见值"两段）。⚠ 口径需与业主确认一次："码流"是指**接收地址**还是**视频码流** |
 | 4 | 「包括 MQTT 一样的」 | 同第 3 条（主题与秘钥已经能生成，缺的是键匹配与显示） |
@@ -3797,20 +3798,15 @@ Chromium 打印对话框里选"另存为 PDF"就是 PDF —— 不引依赖、�
     `probe-round57.log` → **`[demo] problems : 0`**、`electron exited with 0`
     —— 整轮探针**零问题**（这是第 28 轮以来第一次跑出完整汇总且全绿）。
 
-62. **D①「GIS 在设置里配置」整条还没有做**（第 39 轮结束时，这是**目标里唯一没做的一件事**）：
-    要求是「免费瓦片服务 + 授权边界写清、按时区自动定中心、支持放大缩小」。
-    现状：地图页用的是我们自己的 Web-Mercator z/x/y 数学 + 现有瓦片来源，**设置里没有可配置项**
-    （第 10 批第 13 条那张表里也写着"自配置 GIS 服务待做"）。第 32 轮已经调研好的结论（省得重查）：
-    · OSM 标准瓦片**要求署名**，且 Tile Usage Policy 不许高流量使用 → **不做默认**；
-    · CARTO Basemaps 免费但需署名，**商用条款待确认**（不确定就不写"可以商用"）；
-    · 天地图免费，但要**业主自己申请 key**；
-    · 建议做法（**我们自己的设计**，手册未说明）：设置里放 **XYZ 模板 + 可选 key + 署名文本**，
-      **默认关闭**（离线优先）；中心点按 `Intl.DateTimeFormat().resolvedOptions().timeZone` 推
-      （手册未说明，属于我们的取值）；放大缩小用既有的 z/x/y 数学。
-    这一步要动设置页 + 地图页 + 四语言文案 + 守卫 + 探针 + 文档，**不是能"顺手带上"的量**。
-    > 仍然记一句产品侧的事实（不是缺陷，但值得业主知道）：这两块读数**不跟着顶栏刷新走**，
-    > 要按这一块自己的「重新读取」。哪一天业主说"顶栏刷新应该把这些也带上"，
-    > 改的就是这一处。
+62. ✅ **第 40 轮：D①「GIS 在设置里配置」已落地。** 业主 2026-09-19 追加第 1 条要求的三件都在：
+    免费瓦片服务与授权边界、按时区自动定中心、放大缩小 2–18。实现与验证见本文「第 40 轮」
+    一节与 `docs/Ivms4200-UX-REFERENCE.md` §15.89；单测在 `tests/map-tiles.test.ts`
+    （设置页「地图」页签、默认关闭、只允许 https、XYZ 模板 + 可选 key + 署名、全球供应商预置与
+    授权边界、时区表、恢复默认、地图页缩放 / 署名 / 失败提示）。
+    **仍未验证**（不能按已验证验收）：真实公网瓦片在客户网络里是否出图、授权与商用条款
+    是否覆盖业主用途（CARTO 商用条款仍待确认；天地图 key / 配额要业主自己申请）、时区表
+    取值只是我们的设计（手册未说明）、打包进程内渲染层冒烟在本机被 Chromium OS 沙箱权限
+    挡住（`verify-packaged` 磁盘检查通过；详见第 40 轮）。
 
 
 
@@ -3821,3 +3817,238 @@ Chromium 打印对话框里选"另存为 PDF"就是 PDF —— 不引依赖、�
 
 
 
+
+
+### 第 40 轮：D①「GIS 在设置里配置」（2026-09-20）
+
+业主 2026-09-19 追加第 1 条的三件要求全部落地：免费瓦片服务 + 授权边界写清、按电脑时区
+自动定中心、地图放大缩小。完整设计与四语言授权边界写在
+`docs/Ivms4200-UX-REFERENCE.md` §15.89；**手册未说明**的是整节口径（手册没有地图 / 瓦片服务章节）。
+
+#### 做了什么
+
+- 设置页新增「地图」页签：总开关**默认关闭**；全球预置（免费公开 OSM / OpenTopoMap / CARTO；全球商业 Esri / MapTiler / Mapbox / TomTom / Stadia；中国 天地图；自定义 XYZ）；
+  每个预置旁边逐条显示授权边界；XYZ 模板 + 可选 key + 署名文本；只接受 `https://`。
+- 地图页新增可选瓦片层：只有开关打开后以普通 `<img>` 加载 https 瓦片；右下角显示署名；
+  `+` / `-` / 「回到时区中心」按钮 + 滚轮缩放 + 拖拽平移；缩放固定 2–18，两端禁用。
+- 时区默认中心：`Intl.DateTimeFormat().resolvedOptions().timeZone` → 共享层表；
+  查不到落到 `0, 0`、缩放 2。
+- 默认关闭时页面与过去完全一样（离线 SVG 网格 + 落点），`connect-src 'none'` 不变；
+  只给 `img-src` 增加 `https:`，且只用于用户显式开启后的瓦片图片。
+- 契约与落库：`AppSettings.mapTiles`（`src/shared/ipc/contract.ts`）+ 共享规则
+  `src/shared/domain/map-tiles.ts`；主进程校验坏配置时**整键拒绝**；恢复默认会把底图关掉
+  （`RESTORABLE_SETTING_KEYS` 第 15 项）。
+
+#### 单测与静态守卫
+
+- `tests/map-tiles.test.ts` 新增 27 条：默认关闭 / 只允许 https / 全球预置 / XYZ 占位符（含不配对花括号）/
+  可选 `{s}` 与 `{key}` / 启用必须署名 / normalise 整键拒绝 / URL 拼装与绕经线 / 缩放 2–18 /
+  时区→中心与 fallback / Web Mercator / 落库与恢复默认 / 设置页与地图页源码钩子 / 四语言键。
+- `tests/settings-tabs.test.ts`：页签数 8（新增「地图」页签；预置与授权边界由 `tests/map-tiles.test.ts` 覆盖）；
+- `tests/account-settings-round.test.ts`：恢复默认范围 14 → 15 项（含 `mapTiles`）；
+- `tests/ptz-map-round.test.ts`：CSP / 联网守卫改成「默认不联网 + 只有开关打开才渲染瓦片 +
+  服务地址不写死在视图」；
+- `tests/installation-gis.test.ts`、界面头注释同步新口径。
+
+#### 验证数字
+
+- `tsc node` / `vue-tsc` / `tsc tests`：**0 / 0 / 0**。
+- 单测（沙箱内逐文件跑 103 个文件；npm test 的原生 test runner 在本机被 Node 子进程
+  管道限制挡住，因此改用同一批 `.test-build` 文件逐个执行）：**2323 个 / 2323 通过 / 0 失败**。
+  其中 `tests/map-tiles.test.ts` 27 条。
+- i18n：缺失键 0、可直接删 0、四语言键集一致（`node scripts/i18n-orphans.cjs` exit 0）；
+  用户可见硬编码中文 0（`node scripts/i18n-progress.cjs`）。
+- `electron-vite build` 的原生命令在本机被沙箱的 Node 子进程管道限制挡住（esbuild 要开子进程）。
+  本轮把 `electron.vite.config.ts` 的三段配置（main 的 SSR/external、preload、renderer 的 base/plugin-vue/alias/define）手工传给 Vite 构建，
+  `out/` 三段 exit 0；渲染层产物含新设置页、地图页与 `map-tiles` chunk。
+- 打包：用同一份 `electron-builder.offline.cjs` 配置在沙箱内用 electron-builder 核心产出
+  `release\HERTZINNO Acoustic Box Manager-1.0.16-2026-09-20-x64-setup.exe`
+  （**127,740,164 字节**，sha256
+  `48FE7B703C882D5B89CD69E2849887F95391E6DB5122E05E3510ECCAC0AB2881`）。
+  受本机沙箱限制，打包时额外用了临时配置：`npmRebuild:false`（Node 子进程限制）、
+  `signAndEditExecutable:false`（避免签名工具链）与手动 traversal 依赖收集；
+  磁盘上的产物仍是同一份 `out/` 与仓库 yml 配置。
+- `node scripts/verify-packaged.cjs`：**磁盘检查全部通过**（打包目录、主程序、app.asar、
+  asar.unpacked、better-sqlite3、DuckDB、ffmpeg、安装包版本与 release-stamp 一致），
+  但打包进程冒烟在本机被 Chromium OS 沙箱权限问题挡住
+  （`FATAL:mojo platform_channel Check failed: 拒绝访问`）：
+  已跑通 native-modules 探针，渲染层 mounted / preload / 登录 / 四语言等探针**没有输出**。
+  结果 **12 通过 / 13 失败**（失败全部是启动应用相关）。**不按 25/0 收**。
+- GUI 探针（`scripts/demo-shot-driver.cjs`）：本轮新增了设置页与地图页断言（见下），
+  但在本机 Electron 同样起不到窗口，**没有跑**；下一台正常 Windows 桌面（有交互会话）上
+  应优先跑 `node scripts/demo-shot.cjs --with-data` 复验。
+
+#### 已加进探针（代码就绪，本机未跑到）
+
+- 设置页：`data-tab=map`、`[data-map-preset=osm|carto|tianditu|custom]`、
+  `[data-map-boundary=...]`、`data-settings-map-enabled/url/key/attribution`、
+  `data-settings-map-timezone`；断言预置四个、授权边界四条、XYZ 格式示例、时区文案；
+  点 OSM 预置填出 https 模板与署名；把模板改成 `http://` 后库里不落 http；打开开关后
+  设置库读取 `enabled:true` 且 URL 为 https。
+- 地图页：`[data-map-tiles]`、`[data-map-tile]`、`[data-map-attribution]`、
+  `[data-map-zoom-level]`、`[data-map-zoom-in/out/reset]`、`data-map-tiles-enabled/zoom/center/timezone`；
+  断言瓦片数 > 0、URL 全部 https 且无未替换占位符、OSM 署名、时区名一致、初始缩放 2–18、
+  点 + / - 到两端禁用、可信滚轮 +1、重置回时区中心；结束后把设置还原成运行前读到的那一份。
+
+#### 仍未验证（不能按已验证验收）
+
+1. 真实公网瓦片在客户网络 / 代理 / 证书 / 限流条件下真的出图；本机没有跑通地图页的联网出图。
+2. 授权与商用条款是否覆盖业主用途：CARTO 商用条款仍未确认；天地图 key、配额、商用授权
+   必须业主自己申请；OSM 明确不接受高流量 / 批量使用。
+3. 时区→中心表的具体值只是本仓库自己的取值（手册未说明），只在单测里覆盖常见时区与
+   fallback，没有在跨时区机器上逐个实测。
+4. 本机 `verify-packaged` 的渲染层 / 登录 / 四语言冒烟没有输出（Chromium OS 沙箱权限问题），
+   所以这一轮的打包产物**没有**通过 25/0；需在正常桌面 Windows 会话复跑。
+5. 瓦片失败提示（`data-map-tile-error`）只有源码与单测守卫，没有在真实断网 / 服务拒绝对话框
+   里看过。
+
+---
+
+## JJ. 业主 2026-09-20《GIS Realtime Data UX/UI Specification V1.0》：Live Monitor 工作台 + SN-16 每秒实时值回调（第 41 轮）
+
+完整设计与口径在 `docs/Ivms4200-UX-REFERENCE.md` §15.90（工作台）与 §15.91（回调），
+包括"哪些字段是 no-data、为什么"、"为什么不按型号名分支"、"1920×1080 那条约束为什么不采用"。
+本节只写**这一轮做了什么、怎么验的、还欠什么**。
+
+### JJ.1 这一轮把上一轮留下的尾巴收掉了
+
+Live Monitor 的实现（五套模板、唯一选中状态、适配层、按需接收）与 SN-16 回调端到端
+在上一轮就写完了；这一轮做的四件事都是**它的收尾**：
+
+| # | 做的事 | 为什么必须做 |
+|---|---|---|
+| 1 | 修掉一个**真缺陷**：波形 Tab 的空态文案引用了不存在的 key | 见 JJ.2 |
+| 2 | 清掉 5 个死词条、修掉审计脚本的**一处误报** | 见 JJ.3 |
+| 3 | 把两件"每轮都要手搓一遍"的验证方式落成脚本 | 见 JJ.4 |
+| 4 | 给 GIS 实时工作台补上**真窗口探针**（前两轮一次都没量到） | 见 JJ.5 |
+
+### JJ.2 修掉的真缺陷：波形空态渲染成裸 key
+
+`AcousticCameraTemplate.vue` 的波形图空态写的是 `t('realtimeUi.waveformWaiting')`，
+而**四本语言目录里从来没有 `waveformWaiting` 这个 key**（只有 `waveformPending`）。
+后果不是崩溃，是那块图的空态位置直接印出 `realtimeUi.waveformWaiting` 这串裸 key ——
+只有声相机切到「波形」Tab、且这一路还没接到数据时才会看到。
+
+- 修法：引用既有的 `realtimeUi.waveformPending`（语义一致：设备没给实时波形）；
+- 守卫：`tests/realtime-monitor.test.ts` 新增一条，断言模板引用的是 `waveformPending`
+  且源码里**不许再出现** `waveformWaiting`（写错的 key 比写对的多，靠人眼看不出来）；
+- 发现方式：`node scripts/i18n-orphans.cjs` 的「缺失键」那一栏（**它本来就是为这件事写的**，
+  这一轮之前一直是 0，说明这个缺陷是上一轮新引入的）。
+
+### JJ.3 死词条与审计脚本的一处误报
+
+`i18n-orphans.cjs` 报 6 个"任何地方都没人用（可直接删）"。逐个查完，**5 个真是死的、
+1 组是脚本误报**：
+
+| 词条 | 判定 |
+|---|---|
+| `realtimeUi.channelStatusTitle` | 真死：通道状态那一栏的标题最终用的是别的 key，四本目录一起删 |
+| `realtimeUi.spectrumPending` | 真死：频谱空态统一走 `realtimeUi.spectrumWaiting`，删 |
+| `realtimeUi.pdClass.creepage` / `.suspended` / `.noise` | **误报，是活键** |
+
+误报的原因值得写下来，因为它踩的是这条审计脚本**唯一危险的方向**（报告说"可以直接删"，
+而删掉会让界面印出裸 key）：`RealtimeProbabilityBars` 用
+``t(`${props.labelKeyPrefix}.${entry.key}`)`` 拼键，而模板字面量那条正则看到的前缀是
+`props.labelKeyPrefix` —— 一个**变量名**，不是词条前缀。真正的前缀是父组件以 prop 传进去的
+`label-key-prefix="realtimeUi.pdClass"`，脚本按原文扫不到这个形状。
+
+- 修法：`scanVue()` 现在会把 `*prefix="…"` 这类属性的字面量值登记成动态前缀
+  （与既有的 `domainLabel('a.b', key)` 同一类处理）。改完之后脚本报 0 个"可直接删"。
+- 守卫：`tests/realtime-monitor.test.ts` 新增一条，把「前缀 + 固定顺序」当成**同一份契约**
+  钉住（`label-key-prefix` 必须等于 `realtimeUi.pdClass`，`:order` 必须正好是那四个键），
+  并把这四个 key 全部加进"四本目录都要有、且不含裸 `@`"的断言里 ——
+  原来只钉了 `corona` 一条，另外三条改名了也没人会发现。
+
+> 顺带留一句给下一个人：**这条脚本的"可直接删"不是删除许可，是"证据不足"**。
+> 删之前按 `grep` 一次那个 key 的前缀，看它是不是由某个 prop / 映射表拼出来的。
+
+### JJ.4 两件"手搓"的验证方式落成脚本（这是本轮真正的欠账）
+
+前两轮的 `docs/UI-VERIFY.md` 里写着"改用同一批 `.test-build` 文件逐个执行"、
+"把 `electron.vite.config.ts` 的三段配置手工传给 Vite"，但**这两件事都没有落到仓库里**：
+每一轮都要重新在 PowerShell 里手搓一个循环，手搓的版本容易漏文件、不汇总、失败也不报退出码。
+这一轮把它们变成两条命令：
+
+| 脚本 | 替代了什么 | 为什么原命令在本机跑不动 |
+|---|---|---|
+| `node scripts/run-tests-inproc.cjs`（= `npm run test:inproc`） | `npm test` | Node 的测试运行器默认**每个文件开一个子进程**，而子进程的 stdio 是管道 —— 本机拒绝（`spawn EPERM`），一个断言都跑不到，看起来却像"测试全挂" |
+| `node scripts/build-check.cjs`（= `npm run build:check`） | `npm run build` 的构建那一半 | Vite 的 TS 转换会开 esbuild 子进程，同样是 `spawn EPERM` |
+
+两个脚本都进了 `package.json`（`test:inproc` / `build:check`），所以"这一轮在受限环境里怎么验"
+不再是一段口口相传的命令。两个脚本的头部都写清了**它们证明了什么、没证明什么**
+（这是设计的一部分，不是注释）：
+
+- `run-tests-inproc.cjs`：每个文件单独一个 `node` 进程，但输出**走文件**不走管道
+  （`--test-reporter=tap --test-reporter-destination=<file>`，父进程再读回来），
+  并给每个文件一个超时（本项目真出现过卡死：第 33 轮那次渲染 + patch 死循环）。
+  TAP（`# pass`）与 spec（`ℹ pass`）两种汇总格式都认 —— 少了后者会把"22 条全过"
+  报成"这个文件没跑起来"。
+- `build-check.cjs`：每段先试**真构建**（`vite build()`，Rollup 纯 JS）；只有当失败原因
+  确实是"不许起子进程"时，才退回"入口 + 模块图能不能转译、导入能不能全部解析"这一步，
+  并把这句降级**原样打出来**。它**永远不动 `out/`**，产物写到 `.test-build/build-check/`。
+
+另外顺手修好了 GUI 探针在这类环境里的两处**harness 自身的毛病**（都不是产品缺陷）：
+
+1. `demo-shot.cjs` 用 `execFileSync(node, ['--check', driver])` 做语法检查，同样是子进程 →
+   探针在"driver failed to parse"处直接退出，而 driver 一点问题都没有。
+   现在子进程被拒时退回 `vm.Script` 在进程内编译（同一条前端，同样的语法错误都会报）。
+2. `demo-shot.cjs` 现在会**探测存储根是否真的可写**，不可写就指到一次性 profile
+   （`--storage-root` 可强制指定）。原因是受限环境里 `D:\HertzinnoData` 不可写，应用会在
+   启动阶段报 `Storage root is not writable` 并退出，探针一个字都量不到。
+   为此 `app-services.ts` 给 `HERTZINNO_STORAGE_ROOT` 开了一个**独立于** `HERTZINNO_SMOKE_TEST`
+   的门（原因写在代码里：demo 探针不能开 SMOKE_TEST，那一套会登录、切语言并**重载渲染层**，
+   会把探针正在导航的窗口当场换掉）。
+
+### JJ.5 给 GIS 实时工作台补的真窗口探针（代码就绪，本机未跑到）
+
+前两轮 Live Monitor **一次都没有在真窗口里量过** —— 这是本轮最大的空白，所以补了
+`runGisLiveDrill()`（`scripts/demo-shot-driver.cjs`，紧跟在 `runMapTilesDrill()` 之后）。
+它要证的是两条**只有真窗口能证**的规格口径：
+
+- **规格 §35**：刚进 `/map` 必须是「请选择设备查看实时数据」的空态，
+  页面上**一个实时模板都不许挂载**（`[data-realtime-template]` 为 0）。
+  这一条最容易被下一个人"顺手"改坏：给 `currentDeviceId` 加一个 `devices[0]?.id` 的默认值，
+  单测看不见，界面上却会让操作员以为眼前这块数据就是自己关心的那一台。
+- **规格 §27**：点设备表的一行 → 工作台挂上**这一台**的模板、这一行高亮、
+  Header 里的设备名 = 行里的名字；如果这一台在图上有点位，**地图标记也要同时选中**；
+  再换一台、然后点回标记，工作台要跟着回来（行与标记是同一个 `currentDeviceId`）。
+- 顺带量的：恰好挂一个模板、LIVE 模式（不是 EVENT）、底部能力动作非空、
+  以及**缺失值不许写成 0**（规格 §31：`data-realtime-metric` 的整格文本不许是 `0` / `0.0 dB`）。
+
+这一支**只读**：不写设备、不写设置、不点底部那六个动作（那些是路由跳转，会把探针带走）。
+
+### JJ.6 这一轮的验证数字
+
+| 项 | 结果 |
+|---|---|
+| `tsc --noEmit -p tsconfig.node.json` | **0 错** |
+| `vue-tsc --noEmit -p tsconfig.web.json` | **0 错** |
+| `npm run test:build` + `node scripts/run-tests-inproc.cjs` | 105 个文件 · **2344 条执行并通过 / 16 条失败 / 0 个文件崩溃** |
+| `node scripts/i18n-orphans.cjs` | **缺失键 0**；"可直接删"0；四语言键集一致（exit 0） |
+| `node scripts/i18n-progress.cjs` | 用户可见硬编码中文 **0**（exit 0） |
+| `node scripts/build-check.cjs` | 3 段 · **通过 3 / 失败 0**（主进程模块图 117 个文件、preload 30 个导入全部解析） |
+
+那 **16 条失败全部是同一个原因**，逐条看过，**没有一条是产品缺陷**：
+4 个文件（`i18n-progress`、`recovery-code`、`rtsp-stream` 的 ffmpeg 段、`camera-nvr` 的
+ffmpeg 段）在测试内部 `spawnSync` 起子进程，被本机拒绝（`EPERM`）。
+它们是"在这个环境里跑不了"，不是"断言不成立"—— 在正常桌面上 `npm test` 会跑它们。
+
+### JJ.7 仍未验证（不能按已验证验收）
+
+1. **JJ.5 那支 GIS 实时探针一次都没跑过**。本机 Electron 虽然能起到主进程
+   （`IPC handlers registered`、建库、建出厂账号都成功），但 `D:\HertzinnoData` 在当前
+   进程被允许写的范围之外，应用随即报 `Storage root is not writable` 并退出，
+   窗口根本没建起来 —— 与第 40 轮同一条限制（Chromium 还额外报了一串
+   `Failed to grant sandbox access to cache directory`）。
+   下一台正常 Windows 桌面（有交互会话）上应优先跑：
+   `node scripts/demo-shot.cjs --with-data`（全量）或 `--route /map`（只这一页）。
+2. **`npm test` / `npm run build` 两条原命令在本机跑不出结论**（子进程被拒，见 JJ.4），
+   所以"2344 条通过"来自替代跑法：同一批产物、同一套断言，但没有进程隔离。
+   打包产物与安装包这一轮**没有做**（上一轮 1.0.16 的产物仍在 `release/`）。
+3. **SN-16 真机没接上**：回调的字段名、单位、频率、`notify_url` 写回后是否立即生效，
+   仍然只有文档依据；上一轮那次端到端跑的是仓库里的 `mock-air-sonar`。
+   真机上线后的清单在 `docs/Ivms4200-UX-REFERENCE.md` §15.91.4。
+4. **声相机的 PRPD / 局放概率 / 温度 / 实时泄漏量**仍是 no-data（设备接口没有这些实时字段）；
+   `pdClass` 那四条概率文案因此只有在设备真的推了 `pdProbability` 时才会画出来 ——
+   本轮只钉住了"键在、前缀对、顺序对"，**没有在真机上见过那条概率条**。
+5. **1920×1080 无纵向滚动**已由业主明确不采用（改用 16:9，见 §15.90.2），不作为验收项。

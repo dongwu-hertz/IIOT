@@ -1,0 +1,568 @@
+/**
+ * 在线底图（GIS）的**纯逻辑**：XYZ 模板、https 校验、可选 key / 子域、时区→中心、
+ * Web Mercator 投影与瓦片铺排。
+ *
+ * ---------------------------------------------------------------------------
+ * 为什么放在共享层
+ * ---------------------------------------------------------------------------
+ * 设置页要即时校验用户输入、地图页要按同一套规则拼瓦片 URL、主进程在落库前要拒绝坏值。
+ * 三处必须共用同一份判据：复制一份的结果一定是"界面允许、主进程不认"（或者反过来），
+ * 而用户看到的是自动保存失败，我们看到的是一条只在某个入口才出现的漂移。
+ *
+ * ---------------------------------------------------------------------------
+ * 手册未说明（整节都是我们自己的取值）
+ * ---------------------------------------------------------------------------
+ * `docs/Ivms4200-UX-REFERENCE.md` 没有地图 / 瓦片服务这一章。本文件里的口径 ——
+ * 默认关闭、只允许 https、XYZ 模板 `{z}/{x}/{y}`、可选 `{s}` 与 `{key}`、全球供应商
+ * 预置、时区→中心表、缩放 2–18 —— **没有一条来自手册或设备**，是仓库按业主
+ * 2026-09-19「GIS 应该支持在设置里面配置」那句话做的设计。写在这里，免得下一个人
+ * 去手册里找一个不存在的出处。
+ *
+ * 另一条硬约束：**渲染层仍然不能发 fetch/XHR/WebSocket**（CSP `connect-src 'none'`）。
+ * 瓦片只以 `<img>` 形式加载，因此这里做的是 URL 字符串与几何，不做任何网络调用。
+ */
+
+/** 缩放范围：业主与设计都要求 2–18；两端都含。 */
+export const MIN_TILE_ZOOM = 2
+export const MAX_TILE_ZOOM = 18
+/** Web Mercator 的瓦片边长（像素）。 */
+export const TILE_SIZE = 256
+/** Web Mercator 能表示的纬度上下限（tan 在 ±90° 发散，这里取通用截断值）。 */
+export const MAX_MERCATOR_LATITUDE = 85.05112878
+
+/**
+ * 可选的服务档位；`custom` 表示用户自己填的 XYZ。
+ *
+ * 全球软件不能只绑一个区域的服务：预置同时覆盖免费公开瓦片、需要自带 key 的全球商业
+ * 供应商与中国区域服务。所有档位都默认关闭、都只允许 https；商业服务的模板只是按公开
+ * 文档预填，最终以服务商条款与文档为准（§15.89）。
+ */
+export const MAP_TILE_SERVICES = [
+  'custom',
+  'osm',
+  'opentopomap',
+  'carto',
+  'esri',
+  'maptiler',
+  'mapbox',
+  'tomtom',
+  'stadia',
+  'tianditu'
+] as const
+export type MapTileServiceId = (typeof MAP_TILE_SERVICES)[number]
+/** 有预置模板的那些档位（`custom` 没有预置）。 */
+export type MapTilePresetId = Exclude<MapTileServiceId, 'custom'>
+
+/** 落进 `settings` 表的地图配置。 */
+export interface MapTilesConfig {
+  /** 默认 `false`：离线优先，软件打开时绝不主动出网。 */
+  enabled: boolean
+  service: MapTileServiceId
+  /** XYZ 模板；允许 `{z}` `{x}` `{y}`，另可选用 `{s}` `{key}`。 */
+  urlTemplate: string
+  /** 可选密钥；模板里出现 `{key}` 时必填。 */
+  apiKey: string
+  /** 必须显示在地图上的署名文本；启用时不能为空。 */
+  attribution: string
+}
+
+/** 一个服务预置：模板、法定署名与可选子域。 */
+export interface MapTilePreset {
+  urlTemplate: string
+  attribution: string
+  subdomains?: readonly string[]
+  /** 这一档是否必须业主自己申请 key；界面据此显示提示，真正的校验只看模板里的 `{key}`。 */
+  keyRequired: boolean
+}
+
+/**
+ * 全球主要供应商的预置模板与法定署名。
+ *
+ * 授权边界的**正文**在四语言目录里（`settingsUi.mapBoundary*`），因为它是给人读的；
+ * 这里存的是服务本身规定的**署名文本**与模板。所有档位都默认关闭；商业服务的模板只是
+ * 按公开文档预填，服务商改路径或条款时以对方文档为准（用户仍可用自定义 XYZ 改）。
+ */
+export const MAP_TILE_PRESETS: Record<MapTilePresetId, MapTilePreset> = {
+  osm: {
+    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+    keyRequired: false
+  },
+  opentopomap: {
+    urlTemplate: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: 'Map data © OpenStreetMap contributors, SRTM | Map style © OpenTopoMap (CC-BY-SA)',
+    subdomains: ['a', 'b', 'c'],
+    keyRequired: false
+  },
+  carto: {
+    urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    attribution: '© CARTO © OpenStreetMap contributors',
+    subdomains: ['a', 'b', 'c', 'd'],
+    keyRequired: false
+  },
+  esri: {
+    urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution:
+      'Tiles © Esri — Source: Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS User Community',
+    keyRequired: false
+  },
+  maptiler: {
+    urlTemplate: 'https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key={key}',
+    attribution: '© MapTiler © OpenStreetMap contributors',
+    keyRequired: true
+  },
+  mapbox: {
+    urlTemplate:
+      'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token={key}',
+    attribution: '© Mapbox © OpenStreetMap contributors',
+    keyRequired: true
+  },
+  tomtom: {
+    urlTemplate: 'https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key={key}',
+    attribution: '© TomTom',
+    keyRequired: true
+  },
+  stadia: {
+    urlTemplate: 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}.png?api_key={key}',
+    attribution: '© Stadia Maps © OpenMapTiles © OpenStreetMap contributors',
+    keyRequired: true
+  },
+  tianditu: {
+    urlTemplate:
+      'https://t{s}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk={key}',
+    attribution: '© 天地图',
+    subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
+    keyRequired: true
+  }
+}
+
+/** 出厂默认：关闭、自定义（空模板）、无 key、无署名。 */
+export function defaultMapTilesConfig(): MapTilesConfig {
+  return {
+    enabled: false,
+    service: 'custom',
+    urlTemplate: '',
+    apiKey: '',
+    attribution: ''
+  }
+}
+
+export function isMapTileService(value: unknown): value is MapTileServiceId {
+  return typeof value === 'string' && (MAP_TILE_SERVICES as readonly string[]).includes(value)
+}
+
+/** 校验失败的具体原因；界面把它翻译成四语言错误文案。 */
+export type MapTilesProblem =
+  | 'templateRequired'
+  | 'templateProtocol'
+  | 'templateTokens'
+  | 'templateTokenUnknown'
+  | 'templateInvalid'
+  | 'keyRequired'
+  | 'keyInvalid'
+  | 'attributionRequired'
+
+const ALLOWED_TEMPLATE_TOKENS = new Set(['z', 'x', 'y', 's', 'key'])
+
+function templateTokens(template: string): string[] {
+  return [...template.matchAll(/\{([^}]*)\}/g)].map((match) => match[1] ?? '')
+}
+
+function sampleTileUrl(template: string): string {
+  return template
+    .replace(/\{z\}/g, '3')
+    .replace(/\{x\}/g, '4')
+    .replace(/\{y\}/g, '2')
+    .replace(/\{s\}/g, 'a')
+    .replace(/\{key\}/g, 'sample-key')
+}
+
+/**
+ * 校验一份地图配置。
+ *
+ * 规则（任何一条不满足都返回一个**具体原因**，而不是笼统的"不合法"）：
+ *   · 关闭或留空模板：合法（这是出厂状态）；
+ *   · 非空模板：必须以 `https://` 开头、只能出现上面五个占位符、必须有 `z/x/y`；
+ *   · 模板含 `{key}` 时 key 必填；启用时署名必填；
+ *   · URL 去掉占位符后必须真的能被 `new URL()` 读成一个带主机的地址。
+ */
+export function mapTilesProblem(config: MapTilesConfig): MapTilesProblem | null {
+  if (!config || typeof config !== 'object') return 'templateInvalid'
+  if (typeof config.enabled !== 'boolean') return 'templateInvalid'
+  if (!isMapTileService(config.service)) return 'templateInvalid'
+  const rawTemplate = typeof config.urlTemplate === 'string' ? config.urlTemplate : ''
+  const rawKey = typeof config.apiKey === 'string' ? config.apiKey : ''
+  const rawAttribution = typeof config.attribution === 'string' ? config.attribution : ''
+  const template = rawTemplate.trim()
+  const key = rawKey.trim()
+  const attribution = rawAttribution.trim()
+
+  if (rawTemplate.length > 2048 || rawAttribution.length > 512 || rawKey.length > 512) {
+    return rawAttribution.length > 512 ? 'attributionRequired' : rawKey.length > 512 ? 'keyInvalid' : 'templateInvalid'
+  }
+  if (key.includes('\n') || key.includes('\r') || key.includes('\t')) return 'keyInvalid'
+
+  if (template === '') return config.enabled ? 'templateRequired' : null
+
+  if (!/^https:\/\//i.test(template)) return 'templateProtocol'
+  if (/\s/.test(template)) return 'templateInvalid'
+
+  const tokens = templateTokens(template)
+  if (tokens.some((token) => !ALLOWED_TEMPLATE_TOKENS.has(token))) return 'templateTokenUnknown'
+  // 不配对的花括号既不是合法占位符，也可能让 URL 在运行时变成一个奇怪的空格/编码；
+  // 先按'未知占位符'退回，别把坏模板存进设置库。
+  const withoutTokens = template.replace(/\{(z|x|y|s|key)\}/g, '')
+  if (withoutTokens.includes('{') || withoutTokens.includes('}')) return 'templateTokenUnknown'
+  for (const required of ['z', 'x', 'y']) {
+    if (!tokens.includes(required)) return 'templateTokens'
+  }
+  if (tokens.includes('key') && key === '') return 'keyRequired'
+
+  try {
+    const sample = new URL(sampleTileUrl(template))
+    if (!sample.hostname) return 'templateInvalid'
+  } catch {
+    return 'templateInvalid'
+  }
+
+  if (config.enabled && attribution === '') return 'attributionRequired'
+  return null
+}
+
+/**
+ * 把任意输入归一化成合法的 `MapTilesConfig`；不合法时返回 `undefined`（整键拒绝）。
+ *
+ * 与 `mapTilesProblem()` 的分工：这里接收的是**磁盘 / IPC 来的 unknown**，所以先做
+ * 形状检查、再做语义检查；界面调用 `mapTilesProblem()` 拿具体原因，主进程调用这里
+ * 决定"这一笔写不写"。
+ */
+export function normaliseMapTilesConfig(value: unknown): MapTilesConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') return undefined
+  if (raw.service !== undefined && !isMapTileService(raw.service)) return undefined
+  for (const field of ['urlTemplate', 'apiKey', 'attribution'] as const) {
+    if (raw[field] !== undefined && typeof raw[field] !== 'string') return undefined
+  }
+
+  const config: MapTilesConfig = {
+    enabled: raw.enabled === true,
+    service: isMapTileService(raw.service) ? raw.service : 'custom',
+    urlTemplate: typeof raw.urlTemplate === 'string' ? raw.urlTemplate.trim() : '',
+    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
+    attribution: typeof raw.attribution === 'string' ? raw.attribution.trim() : ''
+  }
+  return mapTilesProblem(config) === null ? config : undefined
+}
+
+/** 缩放级别夹到 2–18 的整数；坏输入回落到最小值。 */
+export function clampTileZoom(value: number): number {
+  if (!Number.isFinite(value)) return MIN_TILE_ZOOM
+  return Math.min(MAX_TILE_ZOOM, Math.max(MIN_TILE_ZOOM, Math.round(value)))
+}
+
+export function isTileZoom(value: number): boolean {
+  return Number.isInteger(value) && value >= MIN_TILE_ZOOM && value <= MAX_TILE_ZOOM
+}
+
+function tileSubdomains(service: MapTileServiceId): readonly string[] {
+  if (service === 'osm') return ['a']
+  if (service === 'opentopomap') return MAP_TILE_PRESETS.opentopomap.subdomains ?? ['a']
+  if (service === 'tianditu') return MAP_TILE_PRESETS.tianditu.subdomains ?? ['0']
+  if (service === 'carto') return MAP_TILE_PRESETS.carto.subdomains ?? ['a']
+  return ['a', 'b', 'c', 'd']
+}
+
+/**
+ * 拼一块瓦片的最终 URL。
+ *
+ * `x` 按世界横轴取模（跨 180° 经线时回到另一侧），`y` 越界返回空串（Web Mercator 在
+ * 两极之外没有瓦片）；子域按 `(x + y) % 子域数` 轮换 —— 同一个位置每次刷新拿到同一子域，
+ * 便于缓存，也能让这些预置看起来像它们文档里的例子。
+ */
+export function tileUrl(config: MapTilesConfig, z: number, x: number, y: number): string {
+  if (!isTileZoom(z) || !Number.isInteger(x) || !Number.isInteger(y)) return ''
+  const world = 2 ** z
+  if (y < 0 || y >= world) return ''
+  const wrappedX = ((x % world) + world) % world
+  const subdomains = tileSubdomains(config.service)
+  const subdomain = subdomains[(wrappedX + y) % Math.max(1, subdomains.length)] ?? subdomains[0] ?? ''
+  const template = config.urlTemplate.trim()
+  if (template === '') return ''
+  return template
+    .replace(/\{z\}/g, String(z))
+    .replace(/\{x\}/g, String(wrappedX))
+    .replace(/\{y\}/g, String(y))
+    .replace(/\{s\}/g, subdomain)
+    .replace(/\{key\}/g, encodeURIComponent(config.apiKey.trim()))
+}
+
+// ---------------------------------------------------------------------------
+// Web Mercator 与视口
+// ---------------------------------------------------------------------------
+
+export interface MapCenter {
+  latitude: number
+  longitude: number
+  /** 2–18. */
+  zoom: number
+}
+
+export function lonToWorldX(longitude: number, zoom: number): number {
+  const z = clampTileZoom(zoom)
+  return ((longitude + 180) / 360) * TILE_SIZE * 2 ** z
+}
+
+export function latToWorldY(latitude: number, zoom: number): number {
+  const z = clampTileZoom(zoom)
+  const clamped = Math.max(-MAX_MERCATOR_LATITUDE, Math.min(MAX_MERCATOR_LATITUDE, latitude))
+  const radians = (clamped * Math.PI) / 180
+  return (
+    (0.5 - Math.log((1 + Math.sin(radians)) / (1 - Math.sin(radians))) / (4 * Math.PI)) *
+    TILE_SIZE *
+    2 ** z
+  )
+}
+
+export function worldXToLon(x: number, zoom: number): number {
+  const z = clampTileZoom(zoom)
+  return (x / (TILE_SIZE * 2 ** z)) * 360 - 180
+}
+
+export function worldYToLat(y: number, zoom: number): number {
+  const z = clampTileZoom(zoom)
+  const n = Math.PI - (2 * Math.PI * y) / (TILE_SIZE * 2 ** z)
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)))
+}
+
+/** 一个经纬度点在当前视口里的像素坐标（画布左上角为原点）。 */
+export function projectToViewport(
+  center: MapCenter,
+  latitude: number,
+  longitude: number,
+  width: number,
+  height: number
+): { x: number; y: number } {
+  const z = clampTileZoom(center.zoom)
+  const centerX = lonToWorldX(center.longitude, z)
+  const centerY = latToWorldY(center.latitude, z)
+  return {
+    x: lonToWorldX(longitude, z) - centerX + width / 2,
+    y: latToWorldY(latitude, z) - centerY + height / 2
+  }
+}
+
+/**
+ * 拖拽平移：画布向右拖 `dx` 像素 = 视野向西移（中心经度减小）。
+ *
+ * `dx/dy` 必须是**画布逻辑像素**；调用方按 `CANVAS.width / frame.clientWidth` 换算，
+ * 否则 125% DPI 或窗口缩放时会拖得比鼠标快/慢。
+ */
+export function panMapCenter(center: MapCenter, dx: number, dy: number): MapCenter {
+  const z = clampTileZoom(center.zoom)
+  const worldSize = TILE_SIZE * 2 ** z
+  const nextX = (((lonToWorldX(center.longitude, z) - dx) % worldSize) + worldSize) % worldSize
+  const nextY = Math.max(0, Math.min(worldSize, latToWorldY(center.latitude, z) - dy))
+  return {
+    latitude: worldYToLat(nextY, z),
+    longitude: worldXToLon(nextX, z),
+    zoom: z
+  }
+}
+
+export interface MapTilePlacement {
+  /** 稳定键：缩放 / 原始列 / 行 / URL（同位置换服务也会换键，`<img>` 因而重建）。 */
+  key: string
+  z: number
+  x: number
+  y: number
+  url: string
+  /** 相对当前视口左上角的像素位置（逻辑坐标，可能为负）。 */
+  left: number
+  top: number
+}
+
+/**
+ * 当前视口需要的瓦片。
+ *
+ * `x` 允许绕世界横轴取模（低缩放级别、超宽窗口时同一列会重复出现）；`y` 不绕：
+ * 两极之外没有瓦片，那些位置由画布底色兜底。
+ */
+export function viewTiles(
+  config: MapTilesConfig,
+  center: MapCenter,
+  zoom: number,
+  width: number,
+  height: number
+): MapTilePlacement[] {
+  if (config.urlTemplate.trim() === '') return []
+  const z = clampTileZoom(zoom)
+  const centerX = lonToWorldX(center.longitude, z)
+  const centerY = latToWorldY(center.latitude, z)
+  const left = centerX - width / 2
+  const top = centerY - height / 2
+  const world = 2 ** z
+
+  const xStart = Math.floor(left / TILE_SIZE)
+  const xEnd = Math.floor((left + width - 1e-9) / TILE_SIZE)
+  const yStart = Math.floor(top / TILE_SIZE)
+  const yEnd = Math.floor((top + height - 1e-9) / TILE_SIZE)
+
+  const placements: MapTilePlacement[] = []
+  for (let y = yStart; y <= yEnd; y += 1) {
+    if (y < 0 || y >= world) continue
+    for (let x = xStart; x <= xEnd; x += 1) {
+      const wrappedX = ((x % world) + world) % world
+      const url = tileUrl(config, z, wrappedX, y)
+      if (url === '') continue
+      placements.push({
+        key: `${z}/${x}/${y}/${url}`,
+        z,
+        x: wrappedX,
+        y,
+        url,
+        left: x * TILE_SIZE - left,
+        top: y * TILE_SIZE - top
+      })
+    }
+  }
+  return placements
+}
+
+// ---------------------------------------------------------------------------
+// 时区 → 中心
+// ---------------------------------------------------------------------------
+
+/**
+ * 时区前缀表（**我们自己的取值，手册未说明**）。
+ *
+ * 查找顺序就是数组顺序：具体城市在前，大区兜底在后；命中规则是"完全相等或
+ * `match + '/'` 前缀"。取不到（或时区名不认识）就落到世界中心 `0, 0`、缩放 2 ——
+ * 这与设计文档 §15.85.2 的约定一致，不把一张看不懂的地图硬塞给用户。
+ */
+const TIME_ZONE_CENTERS: ReadonlyArray<{
+  match: string
+  latitude: number
+  longitude: number
+  zoom: number
+}> = [
+  // 中国（时区名含四个行政区；中心取该时区名对应的大致区域中心，缩放取大区级 4）。
+  { match: 'asia/shanghai', latitude: 31.2304, longitude: 121.4737, zoom: 4 },
+  { match: 'asia/chongqing', latitude: 29.563, longitude: 106.5516, zoom: 4 },
+  { match: 'asia/harbin', latitude: 45.8038, longitude: 126.535, zoom: 4 },
+  { match: 'asia/urumqi', latitude: 43.8256, longitude: 87.6168, zoom: 4 },
+  { match: 'asia/hong_kong', latitude: 22.3193, longitude: 114.1694, zoom: 6 },
+  { match: 'asia/macau', latitude: 22.1987, longitude: 113.5439, zoom: 6 },
+  { match: 'asia/taipei', latitude: 25.033, longitude: 121.5654, zoom: 6 },
+  { match: 'asia/tokyo', latitude: 36.2048, longitude: 138.2529, zoom: 5 },
+  { match: 'asia/seoul', latitude: 36.5, longitude: 127.8, zoom: 6 },
+  { match: 'asia/singapore', latitude: 1.3521, longitude: 103.8198, zoom: 8 },
+  { match: 'asia/bangkok', latitude: 15.87, longitude: 100.9925, zoom: 5 },
+  { match: 'asia/jakarta', latitude: -2.5489, longitude: 118.0149, zoom: 5 },
+  { match: 'asia/kolkata', latitude: 22.5937, longitude: 78.9629, zoom: 5 },
+  { match: 'asia/calcutta', latitude: 22.5937, longitude: 78.9629, zoom: 5 },
+  { match: 'asia/karachi', latitude: 30.3753, longitude: 69.3451, zoom: 5 },
+  { match: 'asia/dubai', latitude: 24.4667, longitude: 54.3667, zoom: 6 },
+  { match: 'asia/riyadh', latitude: 23.8859, longitude: 45.0792, zoom: 5 },
+  { match: 'asia/tehran', latitude: 32.4279, longitude: 53.688, zoom: 5 },
+  { match: 'asia/jerusalem', latitude: 31.0461, longitude: 34.8516, zoom: 7 },
+  { match: 'asia/vladivostok', latitude: 43.1332, longitude: 131.9113, zoom: 6 },
+  { match: 'asia/ho_chi_minh', latitude: 16.0, longitude: 108.0, zoom: 5 },
+  { match: 'asia/manila', latitude: 12.8797, longitude: 121.774, zoom: 5 },
+  { match: 'asia/kuala_lumpur', latitude: 3.139, longitude: 101.6869, zoom: 6 },
+  { match: 'asia/kathmandu', latitude: 27.7172, longitude: 85.324, zoom: 6 },
+  { match: 'asia/dhaka', latitude: 23.685, longitude: 90.3563, zoom: 5 },
+  { match: 'asia/almaty', latitude: 48.0196, longitude: 66.9237, zoom: 5 },
+  { match: 'asia/tashkent', latitude: 41.2995, longitude: 69.2401, zoom: 5 },
+  { match: 'asia/novosibirsk', latitude: 55.0084, longitude: 82.9357, zoom: 5 },
+  { match: 'europe/london', latitude: 54.0, longitude: -2.0, zoom: 5 },
+  { match: 'europe/dublin', latitude: 53.4129, longitude: -8.2439, zoom: 6 },
+  { match: 'europe/paris', latitude: 46.6034, longitude: 1.8883, zoom: 5 },
+  { match: 'europe/berlin', latitude: 51.1657, longitude: 10.4515, zoom: 5 },
+  { match: 'europe/madrid', latitude: 40.4637, longitude: -3.7492, zoom: 6 },
+  { match: 'europe/rome', latitude: 41.8719, longitude: 12.5674, zoom: 6 },
+  { match: 'europe/amsterdam', latitude: 52.1326, longitude: 5.2913, zoom: 7 },
+  { match: 'europe/moscow', latitude: 55.7558, longitude: 37.6173, zoom: 5 },
+  { match: 'europe/istanbul', latitude: 41.0082, longitude: 28.9784, zoom: 6 },
+  { match: 'europe/kyiv', latitude: 48.3794, longitude: 31.1656, zoom: 5 },
+  { match: 'europe/warsaw', latitude: 52.2297, longitude: 21.0122, zoom: 5 },
+  { match: 'europe/stockholm', latitude: 60.1282, longitude: 18.6435, zoom: 4 },
+  { match: 'europe/oslo', latitude: 60.472, longitude: 8.4689, zoom: 5 },
+  { match: 'europe/helsinki', latitude: 61.9241, longitude: 25.7482, zoom: 4 },
+  { match: 'europe/athens', latitude: 39.0742, longitude: 21.8243, zoom: 6 },
+  { match: 'europe/lisbon', latitude: 39.3999, longitude: -8.2245, zoom: 6 },
+  { match: 'europe/zurich', latitude: 46.8182, longitude: 8.2275, zoom: 7 },
+  { match: 'europe/brussels', latitude: 50.5039, longitude: 4.4699, zoom: 7 },
+  { match: 'europe/vienna', latitude: 47.5162, longitude: 14.5501, zoom: 6 },
+  { match: 'america/new_york', latitude: 40.7128, longitude: -74.006, zoom: 7 },
+  { match: 'america/chicago', latitude: 41.8781, longitude: -87.6298, zoom: 7 },
+  { match: 'america/denver', latitude: 39.7392, longitude: -104.9903, zoom: 7 },
+  { match: 'america/los_angeles', latitude: 34.0522, longitude: -118.2437, zoom: 7 },
+  { match: 'america/sao_paulo', latitude: -23.5505, longitude: -46.6333, zoom: 6 },
+  { match: 'america/mexico_city', latitude: 23.6345, longitude: -102.5528, zoom: 5 },
+  { match: 'america/toronto', latitude: 56.1304, longitude: -106.3468, zoom: 4 },
+  { match: 'america/vancouver', latitude: 49.2827, longitude: -123.1207, zoom: 7 },
+  { match: 'america/argentina/buenos_aires', latitude: -23.5505, longitude: -58.4155, zoom: 6 },
+  { match: 'america/santiago', latitude: -33.4489, longitude: -70.6693, zoom: 5 },
+  { match: 'america/bogota', latitude: 4.5709, longitude: -74.2973, zoom: 5 },
+  { match: 'america/lima', latitude: -9.19, longitude: -75.0152, zoom: 5 },
+  { match: 'america/havana', latitude: 23.1136, longitude: -82.3666, zoom: 6 },
+  { match: 'america/panama', latitude: 8.5379, longitude: -80.7821, zoom: 6 },
+  { match: 'america/halifax', latitude: 44.6488, longitude: -63.5752, zoom: 6 },
+  { match: 'america/phoenix', latitude: 33.4484, longitude: -112.074, zoom: 6 },
+  { match: 'america/anchorage', latitude: 61.2181, longitude: -149.9003, zoom: 4 },
+  { match: 'america/honolulu', latitude: 21.3069, longitude: -157.8583, zoom: 7 },
+  { match: 'australia/sydney', latitude: -33.8688, longitude: 151.2093, zoom: 7 },
+  { match: 'australia/perth', latitude: -31.9505, longitude: 115.8605, zoom: 7 },
+  { match: 'pacific/auckland', latitude: -36.8485, longitude: 174.7633, zoom: 6 },
+  { match: 'africa/cairo', latitude: 26.8206, longitude: 30.8025, zoom: 5 },
+  { match: 'africa/johannesburg', latitude: -26.2041, longitude: 28.0473, zoom: 6 },
+  { match: 'africa/lagos', latitude: 6.5244, longitude: 3.3792, zoom: 6 },
+  { match: 'africa/nairobi', latitude: -1.2921, longitude: 36.8219, zoom: 6 },
+  { match: 'africa/accra', latitude: 5.6037, longitude: -0.187, zoom: 6 },
+  { match: 'africa/casablanca', latitude: 33.5731, longitude: -7.5898, zoom: 5 },
+  { match: 'africa/addis_ababa', latitude: 8.9806, longitude: 38.7578, zoom: 5 },
+  { match: 'australia/brisbane', latitude: -27.4698, longitude: 153.0251, zoom: 7 },
+  { match: 'australia/adelaide', latitude: -34.9285, longitude: 138.6007, zoom: 6 },
+  { match: 'australia/darwin', latitude: -12.4634, longitude: 130.8456, zoom: 6 },
+  { match: 'pacific/fiji', latitude: -17.7134, longitude: 178.065, zoom: 5 },
+  { match: 'pacific/guam', latitude: 13.4443, longitude: 144.7937, zoom: 6 },
+  { match: 'indian/mauritius', latitude: -20.3484, longitude: 57.5522, zoom: 6 },
+  { match: 'indian/maldives', latitude: 3.2028, longitude: 73.2207, zoom: 6 },
+  { match: 'atlantic/canary', latitude: 28.2916, longitude: -15.4311, zoom: 6 },
+  // 大区兜底（城市名不认识时至少落在同一洲，而不是永远的世界中心）。
+  { match: 'asia', latitude: 34.0479, longitude: 100.6197, zoom: 4 },
+  { match: 'europe', latitude: 54.526, longitude: 15.2551, zoom: 4 },
+  { match: 'america', latitude: 39.0, longitude: -98.0, zoom: 4 },
+  { match: 'australia', latitude: -25.2744, longitude: 133.7751, zoom: 4 },
+  { match: 'africa', latitude: 0.0, longitude: 20.0, zoom: 3 },
+  { match: 'pacific', latitude: 0.0, longitude: -160.0, zoom: 3 },
+  { match: 'indian', latitude: -20.0, longitude: 80.0, zoom: 3 },
+  { match: 'atlantic', latitude: 30.0, longitude: -30.0, zoom: 3 },
+  { match: 'antarctica', latitude: -80.0, longitude: 0.0, zoom: 2 },
+  // UTC / GMT 家族：一张看不出地点的世界图。
+  { match: 'utc', latitude: 0.0, longitude: 0.0, zoom: 2 },
+  { match: 'etc/utc', latitude: 0.0, longitude: 0.0, zoom: 2 },
+  { match: 'gmt', latitude: 0.0, longitude: 0.0, zoom: 2 },
+  { match: 'etc/gmt', latitude: 0.0, longitude: 0.0, zoom: 2 }
+]
+
+/**
+ * 由电脑时区推默认中心。
+ *
+ * 输入用 `Intl.DateTimeFormat().resolvedOptions().timeZone` 的 IANA 名字；大小写不敏感，
+ * 下划线与空格都接受。不认识的时区回落到 `0, 0`、缩放 2。
+ */
+export function timeZoneCenter(timeZone: string | null | undefined): MapCenter {
+  const normalized = String(timeZone ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+  for (const entry of TIME_ZONE_CENTERS) {
+    if (normalized === entry.match || normalized.startsWith(`${entry.match}/`)) {
+      return { latitude: entry.latitude, longitude: entry.longitude, zoom: entry.zoom }
+    }
+  }
+  return { latitude: 0, longitude: 0, zoom: MIN_TILE_ZOOM }
+}

@@ -75,7 +75,7 @@ import type {
 import { RELEASE } from '@shared/release'
 import { attachStreamForwarding } from './monitor-bridge'
 import { attachFa371StreamForwarding } from './fa371-stream-bridge'
-import { FA371_STREAM_KINDS } from '@shared/domain/fa371-stream'
+import { FA371_ALL_STREAM_KINDS } from '@shared/domain/fa371-stream'
 import { PushChannels } from '@shared/ipc/contract'
 import type { ConfigService } from '../services/device/config-service'
 import { E2_SYNC_MAX_LIMIT } from '../services/device/e2/e2-device-service'
@@ -1182,6 +1182,30 @@ export function registerIpcHandlers(): void {
       return undefined
     })
   )
+  /*
+   * SN-16 realtime_value (owner spec 20).
+   *
+   * status is a READ of device parameters -> viewDevices; set writes the device's own
+   * notify_url / is_send_realtime_value -> administrator + configureDevices, exactly like
+   * E2_PTZ_UPDATE. The shared HTTP ingest listener is managed by the existing device-ingest
+   * reconciliation; this channel only writes the device side and reads it back.
+   */
+  ipcMain.handle(IpcChannels.E2_REALTIME_CALLBACK, (_event, deviceId: unknown) =>
+    toResult(async () => {
+      requirePermission('viewDevices')
+      return getServices().e2.realtimeCallbackStatus(String(deviceId))
+    })
+  )
+
+  ipcMain.handle(
+    IpcChannels.E2_REALTIME_CALLBACK_UPDATE,
+    (_event, deviceId: unknown, enabled: unknown) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('configureDevices')
+        return getServices().e2.setRealtimeCallback(String(deviceId), enabled === true)
+      })
+  )
 
   // -------------------------------------------------------------------------
   // Protocol Lab (spec section 19)
@@ -1414,7 +1438,7 @@ export function registerIpcHandlers(): void {
         }
         const valid: Fa371StreamKind[] = []
         for (const kind of kinds) {
-          if (!FA371_STREAM_KINDS.includes(kind)) {
+          if (!FA371_ALL_STREAM_KINDS.includes(kind)) {
             throw new AppError(ErrorCodes.VALIDATION_ERROR, `未知的相机数据通道: ${String(kind)}`)
           }
           if (!valid.includes(kind)) valid.push(kind)

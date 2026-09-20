@@ -13,6 +13,14 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AppSettingsPatch } from '@shared/ipc/contract'
+import {
+  MAP_TILE_PRESETS,
+  defaultMapTilesConfig,
+  mapTilesProblem,
+  timeZoneCenter,
+  type MapTilesConfig,
+  type MapTilesProblem
+} from '@shared/domain/map-tiles'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { RELEASE, formatVersion, parsePlainDate } from '@shared/release'
@@ -65,7 +73,7 @@ const session = useSessionStore()
  *   2. 页签**不持久化**：设置页是一个"进来改一项就走"的地方，记住上次停在哪一页
  *      反而会让下次进来看到一页与预期无关的内容（默认永远落在「语言」）；
  *   3. 「设备探测」并进「视频与缓冲」这一页（业主 ④：探测与缓冲合成一组）——
- *      它们都是"这一路实时链路怎么工作"的参数，合成一页之后不必在七个页签之间来回跳。
+ *      它们都是"这一路实时链路怎么工作"的参数，合成一页之后不必在多个页签之间来回跳。
  */
 const TABS = [
   { id: 'language', labelKey: 'settingsUi.tabLanguage' },
@@ -73,6 +81,11 @@ const TABS = [
   { id: 'video', labelKey: 'settingsUi.tabVideo' },
   { id: 'alarm', labelKey: 'settingsUi.tabAlarm' },
   { id: 'email', labelKey: 'settingsUi.tabEmail' },
+  /*
+   * 地图页签（业主 2026-09-19 追加第 1 条：GIS 应该支持在设置里面配置）。
+   * 默认关闭、只允许 https、XYZ 模板 + 可选 key + 署名都在这一页里。
+   */
+  { id: 'map', labelKey: 'settingsUi.tabMap' },
   /*
    * 「数据接入」页签**删掉了**（业主 2026-09-19 第 13 批第 1 条：
    * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）。
@@ -110,6 +123,13 @@ interface Draft {
    * 点击保存才会写进主进程的设置表。
    */
   autoPlayCameraLive: boolean
+  /**
+   * 在线地图底图（GIS）。
+   *
+   * 扁平字段容易在 patch/回流两处各写一遍；这里直接拿 shared 层的完整形状，
+   * patchFromDraft() 只做一次浅拷贝，字段名不可能漂移。**默认关闭**。
+   */
+  mapTiles: MapTilesConfig
 }
 
 const draft = reactive<Draft>({
@@ -122,7 +142,8 @@ const draft = reactive<Draft>({
   preAlarmSeconds: 10,
   postAlarmSeconds: 20,
   ringBufferSeconds: 60,
-  autoPlayCameraLive: true
+  autoPlayCameraLive: true,
+  mapTiles: defaultMapTilesConfig()
 })
 
 const formError = ref('')
@@ -147,6 +168,7 @@ function seedFromStore(): void {
   draft.postAlarmSeconds = current.postAlarmSeconds
   draft.ringBufferSeconds = current.ringBufferSeconds
   draft.autoPlayCameraLive = current.autoPlayCameraLive
+  draft.mapTiles = { ...current.mapTiles }
 }
 
 onMounted(async () => {
@@ -185,6 +207,78 @@ watch(activeTab, (tab) => {
   void trends.loadStats()
 })
 
+/**
+ * 地图页签的全球供应商预置（顺序就是界面上按钮的顺序）。
+ *
+ * 模板与署名来自共享层（`MAP_TILE_PRESETS`）；授权边界正文来自四语言目录 ——
+ * 它是给人读的，不能写死在组件里。默认档位仍是 `custom` 且总开关关闭。
+ */
+const MAP_PRESET_UI = [
+  { id: 'osm', labelKey: 'settingsUi.mapPresetOsm', boundaryKey: 'settingsUi.mapBoundaryOsm' },
+  { id: 'opentopomap', labelKey: 'settingsUi.mapPresetOpentopomap', boundaryKey: 'settingsUi.mapBoundaryOpentopomap' },
+  { id: 'carto', labelKey: 'settingsUi.mapPresetCarto', boundaryKey: 'settingsUi.mapBoundaryCarto' },
+  { id: 'esri', labelKey: 'settingsUi.mapPresetEsri', boundaryKey: 'settingsUi.mapBoundaryEsri' },
+  { id: 'maptiler', labelKey: 'settingsUi.mapPresetMaptiler', boundaryKey: 'settingsUi.mapBoundaryKeyProvider' },
+  { id: 'mapbox', labelKey: 'settingsUi.mapPresetMapbox', boundaryKey: 'settingsUi.mapBoundaryKeyProvider' },
+  { id: 'tomtom', labelKey: 'settingsUi.mapPresetTomtom', boundaryKey: 'settingsUi.mapBoundaryKeyProvider' },
+  { id: 'stadia', labelKey: 'settingsUi.mapPresetStadia', boundaryKey: 'settingsUi.mapBoundaryKeyProvider' },
+  { id: 'tianditu', labelKey: 'settingsUi.mapPresetTianditu', boundaryKey: 'settingsUi.mapBoundaryTianditu' },
+  { id: 'custom', labelKey: 'settingsUi.mapPresetCustom', boundaryKey: 'settingsUi.mapBoundaryCustom' }
+] as const
+
+/**
+ * 模板输入框的占位例子。**故意不做成消息**：{z} 这类花括号会被 vue-i18n 当成
+ * 插值占位符；技术格式在所有语言里本来就是同一个字符串。
+ */
+const MAP_URL_PLACEHOLDER = 'https://host/{z}/{x}/{y}.png'
+
+/** 把共享层的问题码翻成这一页能显示的一句人话。 */
+function mapTilesProblemText(problem: MapTilesProblem): string {
+  switch (problem) {
+    case 'templateRequired':
+      return t('settingsUi.mapErrTemplateRequired')
+    case 'templateProtocol':
+      return t('settingsUi.mapErrTemplateProtocol')
+    case 'templateTokens':
+      return t('settingsUi.mapErrTemplateTokens')
+    case 'templateTokenUnknown':
+      return t('settingsUi.mapErrTemplateTokenUnknown')
+    case 'templateInvalid':
+      return t('settingsUi.mapErrTemplateInvalid')
+    case 'keyRequired':
+      return t('settingsUi.mapErrKeyRequired')
+    case 'keyInvalid':
+      return t('settingsUi.mapErrKeyInvalid')
+    case 'attributionRequired':
+      return t('settingsUi.mapErrAttributionRequired')
+  }
+}
+
+/** 点一个预置：把模板与法定署名填进草稿（key 由用户自己填，不覆盖）。 */
+function applyMapPreset(id: MapTilesConfig['service']): void {
+  draft.mapTiles.service = id
+  if (id === 'custom') return
+  const preset = MAP_TILE_PRESETS[id]
+  draft.mapTiles.urlTemplate = preset.urlTemplate
+  draft.mapTiles.attribution = preset.attribution
+}
+
+/** 电脑时区；拿不到时退回 UTC（国际标准时区名，查表落到世界中心）。 */
+const detectedTimeZone = computed(() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+})
+
+/** 时区→中心（**手册未说明**，取值在 @shared/domain/map-tiles）。 */
+const detectedMapCenter = computed(() => timeZoneCenter(detectedTimeZone.value))
+const detectedMapCenterText = computed(() => {
+  const center = detectedMapCenter.value
+  return `${center.latitude.toFixed(4)}, ${center.longitude.toFixed(4)}`
+})
+
 function validate(): string {
   if (!draft.storageRoot.trim()) return t('settingsUi.errStorageRoot')
   if (!Number.isInteger(draft.retentionDays) || draft.retentionDays < 1)
@@ -201,6 +295,13 @@ function validate(): string {
     return t('settingsUi.errRingBuffer')
   if (draft.ringBufferSeconds < draft.preAlarmSeconds + draft.postAlarmSeconds)
     return t('settingsUi.errRingBufferTooShort')
+  /*
+   * 地图底图的校验用共享层那一份（mapTilesProblem()）：界面、主进程、地图页三处
+   * 的规则必须完全相同。这里只把「哪种问题」翻译成四语言文案。
+   */
+  const mapTiles = patchFromDraft().mapTiles
+  const mapProblem = mapTiles ? mapTilesProblem(mapTiles) : null
+  if (mapProblem) return mapTilesProblemText(mapProblem)
   /*
    * 数据接入的三条校验（绑定地址 / 两个端口）**跟着那一块搬走了**：
    * 现在在 `AddDeviceDialog.saveIotSettings()` 里，用的还是**共享层**那一套判据
@@ -224,7 +325,14 @@ function patchFromDraft(): AppSettingsPatch {
     preAlarmSeconds: draft.preAlarmSeconds,
     postAlarmSeconds: draft.postAlarmSeconds,
     ringBufferSeconds: draft.ringBufferSeconds,
-    autoPlayCameraLive: draft.autoPlayCameraLive
+    autoPlayCameraLive: draft.autoPlayCameraLive,
+    mapTiles: {
+      enabled: draft.mapTiles.enabled,
+      service: draft.mapTiles.service,
+      urlTemplate: draft.mapTiles.urlTemplate.trim(),
+      apiKey: draft.mapTiles.apiKey.trim(),
+      attribution: draft.mapTiles.attribution.trim()
+    }
   }
 }
 
@@ -466,7 +574,7 @@ const APP_INFO_ROWS = computed(() => [
  * 将被重置的项，**逐项列出来**给用户确认。
  *
  * 为什么是硬编码的一张清单而不是从主进程读：主进程那边是
- * `SettingsService.RESTORABLE_SETTING_KEYS`（十三个键），而这里要显示的是
+ * `SettingsService.RESTORABLE_SETTING_KEYS`（十五个键），而这里要显示的是
  * **人能读懂的每一项名称**。两者的对应关系由 `tests/account-settings.test.ts`
  * 钉住（它断言这张清单的键集合与主进程那份**完全相同**），所以「加了新设置项却
  * 忘了写进确认对话框」会是一条失败的测试，而不是一次静默的重置。
@@ -488,7 +596,9 @@ const RESTORE_ITEMS = computed(() => [
   t('settingsUi.restoreItemAlarmLinkage'),
   t('settingsUi.restoreItemAlarmSounds'),
   /** 数据接入（业主 2026-09-19 第 1 条）：恢复默认会把监听**关掉**，所以必须列出来。 */
-  t('settingsUi.restoreItemIotIngest')
+  t('settingsUi.restoreItemIotIngest'),
+  /** 在线地图底图（GIS）：恢复默认会把底图关掉，必须列出来。 */
+  t('settingsUi.restoreItemMapTiles')
 ])
 
 const restoreOpen = ref(false)
@@ -550,7 +660,7 @@ async function confirmRestore(): Promise<void> {
     <template v-else>
       <!--
         页签（业主 2026-09-17 的 ③）。`role="tablist"` + `role="tab"` + `aria-selected`
-        不是装饰：屏幕阅读器要能说出"这是七个页签中的第几个、当前选中哪个"。
+        不是装饰：屏幕阅读器要能说出"这是八个页签中的第几个、当前选中哪个"。
         读屏名称用**这一页的标题**（`app.nav.settings`，与路由 meta 同一个键）——
         `settingsUi.title` 这个键从来不存在，第一版写成它会让 aria-label 变成裸 key。
       -->
@@ -827,6 +937,100 @@ async function confirmRestore(): Promise<void> {
 
       <!-- 邮箱页签（手册 §17.2.8）：邮件服务器与告警收件人。 -->
       <EmailSettingsSection v-if="activeTab === 'email'" />
+
+      <!--
+        GIS / 在线底图（业主 2026-09-19 追加第 1 条：GIS 应该支持在设置里面配置）。
+        **手册未说明**：手册没有地图与瓦片服务这一章。页面名、全球供应商预置、授权边界、
+        默认关闭、只允许 https、时区推中心与缩放 2–18 都是本软件自己定的（见
+        @shared/domain/map-tiles）。
+      -->
+      <section v-if="activeTab === 'map'" class="card settings-panel" role="tabpanel">
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('settingsUi.mapGroupService') }}</span>
+          <label class="toggle">
+            <input
+              v-model="draft.mapTiles.enabled"
+              type="checkbox"
+              data-settings-map-enabled
+            />
+            <span>{{ t('settingsUi.mapEnable') }}</span>
+          </label>
+          <p class="muted settings-hint">{{ t('settingsUi.mapEnableHint') }}</p>
+          <span class="field-label">{{ t('settingsUi.mapPresetsLabel') }}</span>
+          <p class="muted settings-hint">{{ t('settingsUi.mapPresetsHint') }}</p>
+          <div class="map-presets" data-settings-map-presets>
+            <button
+              v-for="preset in MAP_PRESET_UI"
+              :key="preset.id"
+              type="button"
+              class="btn"
+              :class="{ 'btn--primary': draft.mapTiles.service === preset.id }"
+              :data-map-preset="preset.id"
+              @click="applyMapPreset(preset.id)"
+            >
+              {{ t(preset.labelKey) }}
+            </button>
+          </div>
+          <ul class="map-licences" data-settings-map-boundaries>
+            <li v-for="preset in MAP_PRESET_UI" :key="preset.id" :data-map-boundary="preset.id">
+              <strong>{{ t(preset.labelKey) }}</strong>：{{ t(preset.boundaryKey, { service: t(preset.labelKey) }) }}
+            </li>
+          </ul>
+        </div>
+
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('settingsUi.mapGroupTemplate') }}</span>
+          <div class="form-grid settings-map-form">
+            <label class="field settings-map-form__wide">
+              <span class="field-label">{{ t('settingsUi.mapUrlTemplate') }}</span>
+              <input
+                v-model="draft.mapTiles.urlTemplate"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                :placeholder="MAP_URL_PLACEHOLDER"
+                data-settings-map-url
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapKey') }}</span>
+              <input
+                v-model="draft.mapTiles.apiKey"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                data-settings-map-key
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapAttribution') }}</span>
+              <input
+                v-model="draft.mapTiles.attribution"
+                class="input"
+                type="text"
+                data-settings-map-attribution
+              />
+            </label>
+          </div>
+          <p class="muted settings-hint">{{ t('settingsUi.mapUrlHint') }}</p>
+          <p class="muted settings-hint">{{ t('settingsUi.mapKeyHint') }}</p>
+          <p class="muted settings-hint">{{ t('settingsUi.mapAttributionHint') }}</p>
+        </div>
+
+        <div class="settings-group">
+          <span class="settings-group__title">{{ t('settingsUi.mapTimezone') }}</span>
+          <p class="muted settings-hint" data-settings-map-timezone>
+            {{
+              t('settingsUi.mapTimezoneValue', {
+                zone: detectedTimeZone,
+                center: detectedMapCenterText,
+                zoom: detectedMapCenter.zoom
+              })
+            }}
+          </p>
+          <p class="muted settings-hint">{{ t('settingsUi.mapTimezoneHint') }}</p>
+        </div>
+      </section>
 
       <!--
         账号管理（手册 §17.1）。
@@ -1210,4 +1414,34 @@ async function confirmRestore(): Promise<void> {
   columns: 2;
   font-size: 12.5px;
 }
+/*
+ * 地图页签（业主 2026-09-19 追加第 1 条）。
+ * 预置按钮一排、授权边界一张清单、XYZ 模板整行；三块都只是可读性样式。
+ */
+.map-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.map-licences {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.map-licences strong {
+  color: var(--color-text);
+}
+
+/* URL 模板整行：它是这一页最长的一个值，挤在半列里会看不到完整域名。 */
+.settings-map-form__wide {
+  grid-column: 1 / -1;
+}
+
 </style>

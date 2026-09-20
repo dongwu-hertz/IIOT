@@ -71,6 +71,8 @@ const panel = read('src/renderer/src/components/AlarmLinkagePanel.vue')
 const panelCode = stripComments(panel)
 const panelTemplate = stripComments(templateBlock(panel))
 const mapView = read('src/renderer/src/views/DeviceMapView.vue')
+const mapCode = stripComments(mapView)
+const adaptersCode = stripComments(read('src/renderer/src/lib/realtimeAdapters.ts'))
 
 describe('告警图标数的是**设备推来的告警**（业主 2026-09-19 第 2 条）', () => {
   it('角标读设备告警的 total，而不是联动那一份', () => {
@@ -184,17 +186,25 @@ describe('用词：「平稳度」（业主 2026-09-19 第 4 条）', () => {
     )
   })
 
-  it('「没有数据源」那套写法消失，那一列改读最近一条告警的 smoothness', () => {
+  it('「没有数据源」那套写法消失，平稳度改经适配层进入实时工作台', () => {
     assert.equal(
       /stabilityNoSourceHint/.test(mapView),
       false,
       '地图页还留着"这一列没有数据源"的说明（业主已澄清取 smoothness）'
     )
     assert.match(mapView, /facts\.latestSmoothness/, '平稳度没有从最近一条告警里取')
-    assert.match(
-      mapView,
-      /function liveSmoothness\(/,
-      '没有 liveSmoothness()（那一列还在写死「—」？）'
+    /*
+     * 2026-09-20 的实时工作台改造：页面不再自己写一个 `liveSmoothness()` 填表格，
+     * 而是把最近一条告警交给 `RealtimeMonitor`，再由适配层把 `smoothness` 归一进
+     * `FeatureSource` / `RealtimeFrame`。出处没有变，读数的位置换了。
+     */
+    assert.equal(
+      /function liveSmoothness\(/.test(mapCode),
+      false,
+      '旧的 liveSmoothness() 还留在页面里（实时表格应该已经换成工作台）'
     )
+    assert.match(adaptersCode, /function featureSourceOfAlarm/, '适配层没有告警 -> FeatureSource 的入口')
+    assert.match(adaptersCode, /alarm\.smoothness/, '适配层没有取告警的 smoothness')
+    assert.match(adaptersCode, /featureMetric\(source, 'smoothness'/, 'FA8 七项特征里没有平稳度')
   })
 })

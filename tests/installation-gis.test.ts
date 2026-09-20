@@ -2,8 +2,9 @@
  * 「地址信息支持 GIS 显示」（业主 2026-09-18 第 10 批第 7 条后半）。
  *
  * WHY THIS FILE EXISTS
- * 这一条在**离线优先**的架构里有一个必须说清的口径：本机不联网取瓦片（CSP 也把它挡在外面），
- * 所以"GIS 显示"不是嵌一张在线地图，而是三件事：
+ * 这一条在**离线优先**的架构里有一个必须说清的口径：**默认**不联网取瓦片，所以"GIS 显示"
+ * 的基础仍是本机画的那张图；在线底图是后来的可选层（默认关闭，见 `map-tiles.ts`），
+ * 不是这一条的替代品。这一条要钉的是三件事：
  *   1. 录进去的点位**真的画到「地图信息」页上**（那是第 5 轮就有的落图）；
  *   2. 地址信息卡片上能**一键定位到这一台**（`/map?device=<id>`，地图页认这个参数）；
  *   3. 坐标能**复制走**（十进制度、逗号分隔，粘进任何 GIS 工具都能用）。
@@ -137,7 +138,19 @@ describe('接线（源码守卫）', () => {
       /layout\.value\.markers\.find\(\(marker\) => marker\.id === focusId\)/,
       '没有在"有点位的标记"里找这一台（过期的 id 会被当成选中项）'
     )
-    assert.match(map, /const first = focused \?\? layout\.value\.markers\[0\]/, '没有回落到第一台')
+    /*
+     * 2026-09-20 的实时工作台规格 §35 明确要求：**没有 ?device= 时不要默认选第一台**，
+     * 实时区显示 "Select a device to view live data"。默认选一台会让操作员把眼前的
+     * 实时读数误认成自己关心的设备；地图页是多设备场景，这个误读代价更大。
+     * 因此这里断言"回落到第一台"已经删除，并且只选中 `focused`。
+     */
+    assert.equal(
+      /const first = focused \?\?/.test(map),
+      false,
+      '又回落到第一台了（规格 §35：没有选中设备时应显示 Empty State）'
+    )
+    assert.match(map, /realtime\.clearSelection\(\)/, '进入页面时没有清掉上一个会话的选中状态')
+    assert.match(map, /if \(focused\) \{[\s\S]{0,120}selectDevice\(focused\.id\)/, '没有只选中 ?device= 指向的那一台')
   })
 
   it('四条新文案四语言齐全', () => {

@@ -29,6 +29,7 @@
  *   4. **不转发**：设备之间不互相转发遥测（ThingsBoard 的规则链、仪表盘、告警规则都不在
  *      本轮里）。
  */
+import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net'
 import {
@@ -55,6 +56,7 @@ import {
   encodeUnsubAck,
   readFixedHeader
 } from './mqtt-codec'
+import { parseE2CallbackPayload, type E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 import type { IngestTargetDevice, IntakeOutcome, TelemetryIntake } from './telemetry-intake'
 
 export interface IngestLogger {
@@ -97,7 +99,7 @@ interface MqttSession {
   clientId: string
 }
 
-export class IotIngestService {
+export class IotIngestService extends EventEmitter {
   private readonly options: IotIngestOptions
   private readonly now: () => number
 
@@ -131,6 +133,7 @@ export class IotIngestService {
   private disposed = false
 
   constructor(options: IotIngestOptions) {
+    super()
     this.options = options
     this.now = options.now ?? ((): number => Date.now())
   }
@@ -324,7 +327,9 @@ export class IotIngestService {
     respondJson(response, 200, {
       accepted: result.rows.length,
       trendRows: outcome.trendRows,
-      alarmRows: outcome.alarmRows
+      alarmRows: outcome.alarmRows,
+      // E2 回调（SN-16 realtime_value）也走这条端点；设备只关心 200，这个数给人看。
+      e2Realtime: outcome.e2Realtime
     })
   }
 
@@ -567,12 +572,25 @@ export class IotIngestService {
   // 落库 + 统计
   // -------------------------------------------------------------------------
 
+  /**
+   * 落库 + 统计；E2 回调在这之前分流。
+   *
+   * SN-16 的 `notify_url` 回调与遥测共用同一个 HTTP 端点（秘钥在 URL 里，见 `e2-callback.ts`），
+   * 但它的载荷不是遥测行 —— `max_*` 字段不能进趋势表（表里没有这些列），也不该按
+   * "不认识的键"记噪音。所以这里先看是不是实时值：是就推给渲染层并**不再往下走**。
+   */
   private record(
     device: IngestTargetDevice,
     rows: readonly TelemetryRow[],
     source: 'http' | 'mqtt',
     ignoredValues: number
-  ): { trendRows: number; alarmRows: number } {
+  ): { trendRows: number; alarmRows: number; e2Realtime: number } {
+    const e2Realtime = findE2RealtimeRow(rows)
+    if (e2Realtime !== undefined) {
+      this.emitE2Realtime(device, e2Realtime.ts, e2Realtime.value, source)
+      return { trendRows: 0, alarmRows: 0, e2Realtime: 1 }
+    }
+
     let outcome: IntakeOutcome
     try {
       outcome = this.options.intake.ingest(device, rows)
@@ -584,7 +602,7 @@ export class IotIngestService {
         reason: error instanceof Error ? error.message : String(error)
       })
       this.rejectPayload('intake-failed')
-      return { trendRows: 0, alarmRows: 0 }
+      return { trendRows: 0, alarmRows: 0, e2Realtime: 0 }
     }
 
     this.stats.trendRows += outcome.trendRows
@@ -607,7 +625,27 @@ export class IotIngestService {
       ...(unrecognised.length > 0 ? { unrecognised } : {})
     })
 
-    return { trendRows: outcome.trendRows, alarmRows: outcome.alarmRows }
+    return { trendRows: outcome.trendRows, alarmRows: outcome.alarmRows, e2Realtime: 0 }
+  }
+
+  /** 把一帧 E2 实时值推给渲染层；emit 本身不抛，接收端由 main/index.ts 接线。 */
+  private emitE2Realtime(
+    device: IngestTargetDevice,
+    at: number,
+    value: E2RealtimeValueEvent['value'],
+    source: 'http' | 'mqtt'
+  ): void {
+    this.stats.lastAt = this.now()
+    this.stats.lastDeviceId = device.id
+    this.stats.lastSource = source
+    const event: E2RealtimeValueEvent = { deviceId: device.id, at, value }
+    this.options.log?.info('IoT 接入：收到 E2 实时值', {
+      source,
+      deviceId: device.id,
+      channel: value.maxDbChannel,
+      spl: value.maxDbValue
+    })
+    this.emit('e2-realtime', event)
   }
 
   private rejectAuth(reason: string): void {
@@ -622,6 +660,22 @@ export class IotIngestService {
   }
 }
 
+/**
+ * 在一批已解析的遥测行里找 E2 实时值。
+ *
+ * 只认**对象里明确带 `max_*` 或 `message_type: realtime_value`** 的行；普通遥测行
+ * （`sound_pressure_level` 等）不会命中。一包里出现多条回调时只取第一条 —— 设备按秒推，
+ * 一包里多条没有业务含义。
+ */
+function findE2RealtimeRow(
+  rows: readonly TelemetryRow[]
+): { ts: number; value: E2RealtimeValueEvent['value'] } | undefined {
+  for (const row of rows) {
+    const parsed = parseE2CallbackPayload(row.values)
+    if (parsed.kind === 'realtimeValue') return { ts: row.ts, value: parsed.value }
+  }
+  return undefined
+}
 function respondJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = Buffer.from(JSON.stringify(body))
   response.writeHead(status, {

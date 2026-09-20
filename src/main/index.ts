@@ -22,6 +22,7 @@ import { probeFfmpeg } from './services/media/ffmpeg'
 import { registerLinkagePopupScheme } from './services/linkage/linkage-actions'
 import { DEVICE_STATUS_CHANNEL, PushChannels } from '@shared/ipc/contract'
 import type { PendingAlarmSnapshot } from '@shared/ipc/contract'
+import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 import type { SessionInfo } from '@shared/domain/auth'
 
 let mainWindow: BrowserWindow | undefined
@@ -641,6 +642,16 @@ if (!gotTheLock) {
       services.linkage.on('pending', (snapshot: PendingAlarmSnapshot) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send(PushChannels.LINKAGE_PENDING, snapshot)
+        }
+      })
+
+      /**
+       * SN-16 每秒实时值：设备 POST 到本机接入的 HTTP 端点，主进程收到后推给渲染层。
+       * 与 linkage pending 同一条规矩：界面挂载时先读一次缓存状态，之后靠推送同步。
+       */
+      services.iotIngest.on('e2-realtime', (event: E2RealtimeValueEvent) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(PushChannels.E2_REALTIME_CALLBACK_VALUE, event)
         }
       })
 

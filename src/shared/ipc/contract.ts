@@ -111,6 +111,15 @@ import type {
   E2PtzPatch,
   E2PtzUpdateOutcome
 } from '../domain/e2-ptz'
+/*
+ * E2 回调（SN-16 ealtime_value）的形状与解析都在 domain/e2-callback.ts。
+ * 契约层只把它带出去：渲染层订阅推送、设备面板显示状态，用的都是同一份类型。
+ */
+import type {
+  E2RealtimeCallbackOutcome,
+  E2RealtimeCallbackStatus,
+  E2RealtimeValueEvent
+} from '../domain/e2-callback'
 import type { TrendMetric } from '../domain/trend'
 
 /**
@@ -151,6 +160,14 @@ export type {
 } from '../domain/iot-ingest'
 import type { IotIngestConfig, IotIngestRuntimeStatus } from '../domain/iot-ingest'
 import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
+
+/**
+ * 在线地图底图（业主 2026-09-19 追加第 1 条；**手册未说明**）。
+ *
+ * 形状与纯规则在 `@shared/domain/map-tiles`：XYZ 模板、只允许 https、可选 key/子域、
+ * 时区→中心、缩放 2–18。设置页与地图页引用同一份判据，契约层只负责把它带过 IPC。
+ */
+import type { MapTilesConfig } from '../domain/map-tiles'
 
 /**
  * Result of a successful login.
@@ -372,6 +389,16 @@ export const IpcChannels = {
   E2_ALARM_SNAPSHOTS: 'e2:alarm-snapshots',
   /** 关掉当前那条告警的抓图端点（界面离开时调用；TTL 是兜底）。 */
   E2_SNAPSHOT_CLOSE: 'e2:snapshot-close',
+
+  /**
+   * SN-16 空气声呐的每秒实时回调（业主规格 §20）。
+   *
+   * 读状态走 iewDevices（设备参数本来就是可读的）；**写回设备**走 configureDevices，
+   * 与 PTZ 配置同一条规则：它会改设备自己的 
+otify_url / is_send_realtime_value。
+   */
+  E2_REALTIME_CALLBACK: 'e2:realtime-callback',
+  E2_REALTIME_CALLBACK_UPDATE: 'e2:realtime-callback-update',
 
   // Configuration reads used by earlier phases (kept: still referenced)
   CONFIG_GET_SAMPLE_RATE: 'config:get-sample-rate',
@@ -715,6 +742,8 @@ export const PushChannels = {
   FA371_VOICEPRINT: 'fa371-stream:voiceprint',
   FA371_ENERGY: 'fa371-stream:energy',
   FA371_PCM: 'fa371-stream:pcm',
+  /** 声温成像仪红外温度（手册 §5.3.6）。 */
+  FA371_INFRARED: 'fa371-stream:infrared',
   FA371_DETECT_FEEDBACK: 'fa371-stream:detect-feedback',
   /** Per-channel connection state, pushed on every transition. */
   FA371_STREAM_STATUS: 'fa371-stream:status',
@@ -752,7 +781,15 @@ export const PushChannels = {
    * 每个写出的 chunk 都数得到，所以百分比有真实来源；`HttpTransport` 那条路
    * 一次性读完响应，中途的字节数拿不到，编一个假进度条比没有更糟。
    */
-  CAMERA_UPGRADE_PROGRESS: 'camera-upgrade:upload-progress'
+  CAMERA_UPGRADE_PROGRESS: 'camera-upgrade:upload-progress',
+  /**
+   * SN-16 每秒 ealtime_value（设备 POST 到 
+otify_url）。
+   *
+   * 与其它遥测推送同一条理由：数据由主进程 HTTP 监听接收，渲染层只订阅；
+   * 界面挂载或切换设备时先读一次状态里的最新值，之后靠这条推送同步。
+   */
+  E2_REALTIME_CALLBACK_VALUE: 'e2:realtime-value'
 } as const
 
 /** One step of a network change, pushed while it runs. */
@@ -862,6 +899,15 @@ export interface AppSettings {
    * 绑定地址与两个端口可配。
    */
   iotIngest: IotIngestConfig
+
+  /**
+   * 在线地图底图（业主 2026-09-19 追加第 1 条：地图 GIS 应该在设置里面配置）。
+   *
+   * **默认关闭**（离线优先）；只有用户显式打开后，地图页才会以 `<img>` 加载配置的
+   * XYZ 瓦片。只允许 https、模板必须含 `{z}/{x}/{y}`、启用时必须填署名。
+   * **手册未说明**：手册没有地图/瓦片服务这一章，整套口径见 `@shared/domain/map-tiles`。
+   */
+  mapTiles: MapTilesConfig
 }
 
 export type AppSettingsPatch = Partial<AppSettings>
@@ -1003,6 +1049,7 @@ export type {
   Fa371EnergyTarget,
   Fa371FftPreview,
   Fa371HandshakeCertainty,
+  Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
   Fa371StreamKind,
@@ -1999,6 +2046,13 @@ export interface RendererApi {
      * 只有界面知道，让那个端口挂到 TTL 到点（30 分钟）是一种浪费。TTL 仍然是兜底。
      */
     closeSnapshots(): Promise<DeviceResult<void>>
+    /** SN-16 realtime callback status (owner spec 20). Read-only; no secret echo. */
+    realtimeCallback(deviceId: string): Promise<DeviceResult<E2RealtimeCallbackStatus>>
+    /** Enable/disable the local realtime_value receiver; writes notify_url + is_send_realtime_value and reads back. */
+    setRealtimeCallback(
+      deviceId: string,
+      enabled: boolean
+    ): Promise<DeviceResult<E2RealtimeCallbackOutcome>>
   }
 
   overview: {
@@ -2713,6 +2767,8 @@ export interface RendererEvents {
   onFa371Energy: EventSubscription<import('../domain/fa371-stream').Fa371EnergyPreview>
   // `/pcmData` — a 512-point envelope plus peak/rms, never 48000 samples.
   onFa371Pcm: EventSubscription<import('../domain/fa371-stream').Fa371PcmPreview>
+  // /inrared_data — 4 float32 temperature fields (manual 5.3.6).
+  onFa371Infrared: EventSubscription<import('../domain/fa371-stream').Fa371InfraredPreview>
   // `/detectFeedback` — the mapped detection log for one finished detection.
   onFa371DetectFeedback: EventSubscription<import('../domain/fa371-stream').Fa371DetectFeedbackPreview>
   /** Per-channel camera connection state, including which handshake auth won. */
@@ -2731,6 +2787,9 @@ export interface RendererEvents {
    * `linkage.pending()`，之后靠这条推送保持同步。
    */
   onLinkagePending: EventSubscription<PendingAlarmSnapshot>
+
+  /** SN-16 realtime_value pushed from the main-process callback listener. */
+  onE2RealtimeValue: EventSubscription<E2RealtimeValueEvent>
 
   /**
    * 检测结果文件的下载进度。

@@ -5,7 +5,7 @@
  * 这一条改动**只有版式**，所以它最容易悄悄退化：页签拿掉之后页面照样能看（只是又变回
  * 一条长列），"每张卡片都写名字"再长回来也没有任何报错。三类守卫：
  *
- *   1. **页签**：七个页签就是业主点名的那七个，每一页都被 `activeTab` 门住；
+ *   1. **页签**：八个页签就是业主点名的七个加追加的「地图」，每一页都被 `activeTab` 门住；
  *   2. **不重复标题**：`SettingsView` 里**不许**再出现 `section-title` ——
  *      页签已经写着这一页叫什么，卡片再写一遍就是业主说的"每张卡片都写名字"；
  *   3. **设备探测与缓冲合成一组**（业主 ④）：六个数在**同一组**里，而且旧的两张卡片
@@ -72,6 +72,7 @@ const TABS: ReadonlyArray<[string, string]> = [
   ['video', 'tabVideo'],
   ['alarm', 'tabAlarm'],
   ['email', 'tabEmail'],
+  ['map', 'tabMap'],
   ['account', 'tabAccount'],
   ['about', 'tabAbout']
 ]
@@ -103,24 +104,24 @@ describe('③ 设置页的页签', () => {
    * 是**探针里那份清单没跟着改**，而它前面 4 轮都因为趋势页超时、从来没跑到打印汇总那一步，
    * 所以谁都没看见。一条断言换掉一次这样的来回。
    */
-  it('GUI 探针里那份页签期望与本文件一致（7 个，且不许再出现 iot）', () => {
+  it('GUI 探针里那份页签期望与本文件一致（8 个，且不许再出现 iot）', () => {
     const driver = read('scripts/demo-shot-driver.cjs')
     assert.ok(
       driver.includes(`settingsTabs.tabs !== ${TABS.length}`),
       `探针里的页签数期望不是 ${TABS.length}`
     )
     assert.equal(
-      /settingsTabs\.tabs !== 8/.test(driver),
+      /settingsTabs\.tabs !== 7/.test(driver),
       false,
-      '探针里又写回了 8 个页签'
+      '探针里还写着 7 个页签'
     )
     assert.ok(
-      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'account', 'about']`),
+      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'map', 'account', 'about']`),
       '探针里那份页签 id 清单与这里不一致'
     )
   })
 
-  it('每一页都被 activeTab 门住（否则七个页签的内容会同时显示）', () => {
+  it('每一页都被 activeTab 门住（否则八个页签的内容会同时显示）', () => {
     const panelStart = settings.indexOf('class="settings-tabs"')
     const template = settings.slice(panelStart)
     for (const [id] of TABS) {
@@ -141,7 +142,7 @@ describe('③ 设置页的页签', () => {
     assert.match(settings, /role="tabpanel"/, '页内容没有 role="tabpanel"')
   })
 
-  it('七个页签名在四种语言里都存在且互不相同', () => {
+  it('八个页签名在四种语言里都存在且互不相同', () => {
     for (const locale of LOCALES) {
       const labels = TABS.map(([, key]) => messageAt(locale, `settingsUi.${key}`))
       for (const [index, label] of labels.entries()) {

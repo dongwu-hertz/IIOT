@@ -87,6 +87,22 @@ function defaultStorageRoot(): string {
   if (process.env.HERTZINNO_SMOKE_TEST && process.env.HERTZINNO_STORAGE_ROOT) {
     return process.env.HERTZINNO_STORAGE_ROOT
   }
+  /*
+   * 同一件事的**第二个门**，给"不能开 SMOKE_TEST 的验证进程"用。
+   *
+   * `demo-shot`（人工辅助验证 UI 的截图探针）不能开 `HERTZINNO_SMOKE_TEST`：
+   * 那一套探针会登录、切语言并**重载渲染层**，把探针正在导航的窗口当场换掉。
+   * 但它在受限环境里跑时默认存储根（Windows 上是 `D:\HertzinnoData`）可能不可写，
+   * 于是应用在启动阶段就报 `Storage root is not writable` 并退出 —— 一个字都量不到。
+   *
+   * 所以把这个门**独立**出来：只要显式给了 `HERTZINNO_STORAGE_ROOT`，就按它走。
+   * 这没有削弱原来那条保护 —— 原来防的是"打包后的客户安装里有人误用"，而
+   * "进程里存在这个环境变量"本身就是刻意的动作（与 HERTZINNO_SMOKE_TEST 同级），
+   * 客户安装里不会有人设它。存储根本来就是一个可配置的位置（见下面 D: 的注释）。
+   */
+  if (process.env.HERTZINNO_STORAGE_ROOT) {
+    return process.env.HERTZINNO_STORAGE_ROOT
+  }
   if (process.platform === 'win32') {
     // Spec 4.4: audio must be able to live on a large disk. D: is the common
     // choice, but never assume it exists.
@@ -604,7 +620,12 @@ export async function initServices(): Promise<AppServices> {
     alarms: alarmRepo,
     recordings: recordingRepo,
     storage,
-    files: videoFiles
+    files: videoFiles,
+    // SN-16 realtime_value callback: reuse the shared HTTP ingest listener, so the
+    // callback card needs the same port/bind/address inputs the device-ingest UI uses.
+    getIngestConfig: () => settings.get().iotIngest,
+    listLocalAddresses,
+    getRealtimeListener: () => iotIngest.status.http
   })
 
   const protocolLab = new ProtocolLab({

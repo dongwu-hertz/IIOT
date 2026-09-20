@@ -1593,6 +1593,430 @@ async function runIotIngestDrill(win, layout) {
  *      （`clearAll` 以前会把源一起删掉，那是第 11 批带出来的一个真 bug）；
  *   ③ 回到实时监测页**删掉**它：列表回到 0，主进程里那一路会话也没了。
  */
+/**
+ * D①「GIS 在设置里配置」（业主 2026-09-19 追加第 1 条）。
+ *
+ * 这一段会**写设置**：开在线底图 -> 量地图页 -> 再还原成运行前读到的那一份。
+ * 因此它排在所有只读探针之后。它不去公网验证某个瓦片服务真的能出图（那要外网，
+ * 写进未验证清单）；它量的是产品自己的行为：
+ *   · 设置页：地图页签、全球供应商预置、逐条授权边界、XYZ 模板 / 可选 key / 署名、时区中心；
+ *   · 只允许 https：把模板改成 http 之后，库里仍是原值（保存被拦）；
+ *   · 地图页：开关打开后真的铺瓦片（URL 是 https、没有未替换占位符、右下角有署名）；
+ *   · 缩放 2–18：两端按钮要禁用、可信滚轮要能改级别、重置回得去。
+ */
+async function runMapTilesDrill(win, layout) {
+  const settingsProbe = await layout('/settings', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "";' +
+    'const mapTab = document.querySelector(".settings-tabs [data-tab=map]");' +
+    'if (!mapTab) return JSON.stringify({ ok: false, reason: "no-map-tab" });' +
+    'mapTab.click();' +
+    'await wait(300);' +
+    'const read = (sel) => {' +
+    '  const el = document.querySelector(sel);' +
+    '  return el ? { value: String(el.value || ""), checked: !!el.checked, disabled: !!el.disabled } : null;' +
+    '};' +
+    'const persisted = await window.api.settings.get();' +
+    'const original = persisted && persisted.success ? persisted.data.mapTiles : null;' +
+    'const presets = [...document.querySelectorAll("[data-map-preset]")].map((b) => b.getAttribute("data-map-preset"));' +
+    'const boundaries = [...document.querySelectorAll("[data-map-boundary]")].map((b) => text(b));' +
+    'const out = {' +
+    '  ok: true,' +
+    '  original,' +
+    '  enabled: read("[data-settings-map-enabled]"),' +
+    '  url: read("[data-settings-map-url]"),' +
+    '  key: read("[data-settings-map-key]"),' +
+    '  attribution: read("[data-settings-map-attribution]"),' +
+    '  placeholder: (document.querySelector("[data-settings-map-url]") || {}).placeholder || null,' +
+    '  timezoneText: text(document.querySelector("[data-settings-map-timezone]")),' +
+    '  timezoneName: Intl.DateTimeFormat().resolvedOptions().timeZone,' +
+    '  presets, boundaries' +
+    '};' +
+    'const osm = document.querySelector("[data-map-preset=osm]");' +
+    'if (osm) { osm.click(); await wait(250); }' +
+    'out.osmUrl = read("[data-settings-map-url]");' +
+    'out.osmAttribution = read("[data-settings-map-attribution]");' +
+    /*
+     * 只允许 https：先把模板改成 http，等自动保存（600ms 防抖 + IPC）。
+     * 库里必须还是原值（非法值不落库），再由预置按钮把草稿修回来。
+     */
+    'const urlInput = document.querySelector("[data-settings-map-url]");' +
+    'if (urlInput) {' +
+    '  urlInput.value = "http://example.com/{z}/{x}/{y}.png";' +
+    '  urlInput.dispatchEvent(new Event("input", { bubbles: true }));' +
+    '  urlInput.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '}' +
+    'await wait(1000);' +
+    'const afterBad = await window.api.settings.get();' +
+    'out.persistedAfterBad = afterBad && afterBad.success ? afterBad.data.mapTiles : null;' +
+    'out.errorText = text(document.querySelector(".alert--danger"));' +
+    'if (osm) { osm.click(); await wait(250); }' +
+    'const enabledInput = document.querySelector("[data-settings-map-enabled]");' +
+    'if (enabledInput && !enabledInput.checked) {' +
+    '  enabledInput.checked = true;' +
+    '  enabledInput.dispatchEvent(new Event("change", { bubbles: true }));' +
+    '}' +
+    'await wait(1200);' +
+    'const afterGood = await window.api.settings.get();' +
+    'out.persistedAfterGood = afterGood && afterGood.success ? afterGood.data.mapTiles : null;' +
+    'return JSON.stringify(out);' +
+    '})()', 60_000)
+  log('map settings  : ' + JSON.stringify({ ...settingsProbe, original: undefined }))
+
+  if (settingsProbe.ok !== true) {
+    problems.push('设置页里找不到「地图」页签（data-tab=map）：' + JSON.stringify(settingsProbe.reason))
+    return
+  }
+  const wantMapPresets = ['osm', 'opentopomap', 'carto', 'esri', 'maptiler', 'mapbox', 'tomtom', 'stadia', 'tianditu', 'custom']
+  if (!wantMapPresets.every((id) => (settingsProbe.presets || []).includes(id))) {
+    problems.push('设置页的全球地图预置不齐：' + JSON.stringify(settingsProbe.presets))
+  }
+  if ((settingsProbe.boundaries || []).length !== wantMapPresets.length ||
+      (settingsProbe.boundaries || []).some((entry) => !entry || entry.length < 20)) {
+    problems.push('地图设置里的授权边界没有写清楚：' + JSON.stringify(settingsProbe.boundaries))
+  }
+  if (!settingsProbe.placeholder || settingsProbe.placeholder.indexOf('{z}') < 0 ||
+      settingsProbe.placeholder.indexOf('{x}') < 0 || settingsProbe.placeholder.indexOf('{y}') < 0) {
+    problems.push('XYZ 模板输入框没有给出 z/x/y 的格式示例：' + JSON.stringify(settingsProbe.placeholder))
+  }
+  if (!settingsProbe.timezoneText ||
+      settingsProbe.timezoneText.indexOf(settingsProbe.timezoneName) < 0) {
+    problems.push('地图设置没有按电脑时区显示中心点：' + JSON.stringify(settingsProbe.timezoneText) +
+      ' / ' + JSON.stringify(settingsProbe.timezoneName))
+  }
+  if (!settingsProbe.osmUrl ||
+      String(settingsProbe.osmUrl.value || '').indexOf('https://tile.openstreetmap.org/') !== 0) {
+    problems.push('点 OSM 预置没有填出 https 模板：' + JSON.stringify(settingsProbe.osmUrl))
+  }
+  if (!settingsProbe.osmAttribution ||
+      !String(settingsProbe.osmAttribution.value || '').includes('OpenStreetMap')) {
+    problems.push('点 OSM 预置没有填出法定署名：' + JSON.stringify(settingsProbe.osmAttribution))
+  }
+  if (settingsProbe.persistedAfterBad && settingsProbe.persistedAfterBad.urlTemplate &&
+      String(settingsProbe.persistedAfterBad.urlTemplate).indexOf('http://') === 0) {
+    problems.push('http:// 模板被保存进了设置库（只允许 https 这一条没有守住）')
+  }
+  if (!settingsProbe.errorText || !/https/.test(String(settingsProbe.errorText))) {
+    problems.push('把模板改成 http 之后界面没有说清只允许 https：' + JSON.stringify(settingsProbe.errorText))
+  }
+  if (!settingsProbe.persistedAfterGood || settingsProbe.persistedAfterGood.enabled !== true) {
+    problems.push('打开地图开关并填写合法配置之后，设置库里没有 enabled=true：' +
+      JSON.stringify(settingsProbe.persistedAfterGood))
+  } else if (String(settingsProbe.persistedAfterGood.urlTemplate || '').indexOf('https://') !== 0) {
+    problems.push('启用后保存的模板不是 https：' + JSON.stringify(settingsProbe.persistedAfterGood.urlTemplate))
+  }
+
+  const mapProbe = await layout('/map', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "";' +
+    'const frame = document.querySelector("[data-map-canvas-frame]");' +
+    'if (!frame) return JSON.stringify({ found: false });' +
+    'await wait(800);' +
+    'const tiles = [...document.querySelectorAll("[data-map-tile]")];' +
+    'const srcs = tiles.map((t) => t.getAttribute("src") || "");' +
+    'const zoomTextOf = () => text(document.querySelector("[data-map-zoom-level]"));' +
+    'const zoomOf = () => {' +
+    '  const m = String(zoomTextOf()).match(/(\\d+)/);' +
+    '  return m ? Number(m[1]) : null;' +
+    '};' +
+    'const out = {' +
+    '  found: true,' +
+    '  tilesEnabled: frame.getAttribute("data-map-tiles-enabled"),' +
+    '  tileCount: tiles.length,' +
+    '  tileSrcs: srcs,' +
+    '  attribution: text(document.querySelector("[data-map-attribution]")),' +
+    '  timezone: frame.getAttribute("data-map-timezone"),' +
+    '  zoomBefore: zoomOf(),' +
+    '  zoomTextBefore: zoomTextOf(),' +
+    '  zoomInAtStart: (document.querySelector("[data-map-zoom-in]") || {}).disabled,' +
+    '  zoomOutAtStart: (document.querySelector("[data-map-zoom-out]") || {}).disabled' +
+    '};' +
+    'const inBtn = document.querySelector("[data-map-zoom-in]");' +
+    'const outBtn = document.querySelector("[data-map-zoom-out]");' +
+    'const resetBtn = document.querySelector("[data-map-zoom-reset]");' +
+    'if (inBtn) { inBtn.click(); await wait(200); }' +
+    'out.zoomAfterIn = zoomOf();' +
+    'for (let i = 0; i < 30 && outBtn && !outBtn.disabled; i += 1) { outBtn.click(); await wait(30); }' +
+    'out.zoomMin = zoomOf();' +
+    'out.zoomOutDisabledAtMin = outBtn ? outBtn.disabled : null;' +
+    'for (let i = 0; i < 30 && inBtn && !inBtn.disabled; i += 1) { inBtn.click(); await wait(30); }' +
+    'out.zoomMax = zoomOf();' +
+    'out.zoomInDisabledAtMax = inBtn ? inBtn.disabled : null;' +
+    'if (resetBtn) { resetBtn.click(); await wait(250); }' +
+    'out.zoomReset = zoomOf();' +
+    'out.center = frame.getAttribute("data-map-center");' +
+    'out.tileErrorCount = document.querySelectorAll("[data-map-tile-error]").length;' +
+    'const rect = frame.getBoundingClientRect();' +
+    'out.frameCenter = { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+  log('map tiles     : ' + JSON.stringify({ ...mapProbe, tileSrcs: undefined }))
+
+  if (mapProbe.found !== true) {
+    problems.push('打开在线底图之后，地图页上没有量到画布：' + JSON.stringify(mapProbe))
+  } else {
+    if (mapProbe.tilesEnabled !== 'yes') {
+      problems.push('打开在线底图之后画布没有标记 data-map-tiles-enabled=yes')
+    }
+    if (!(mapProbe.tileCount > 0)) {
+      problems.push('打开在线底图之后一块瓦片都没有铺：' + mapProbe.tileCount)
+    }
+    for (const src of mapProbe.tileSrcs || []) {
+      if (String(src).indexOf('https://') !== 0) {
+        problems.push('瓦片 URL 不是 https：' + src)
+      }
+      if (String(src).indexOf('{z}') >= 0 || String(src).indexOf('{x}') >= 0 ||
+          String(src).indexOf('{y}') >= 0) {
+        problems.push('瓦片 URL 里还留着未替换的 XYZ 占位符：' + src)
+      }
+    }
+    if (!String(mapProbe.attribution || '').includes('OpenStreetMap')) {
+      problems.push('地图右下角没有显示 OSM 署名：' + JSON.stringify(mapProbe.attribution))
+    }
+    if (String(mapProbe.timezone || '') === '' ||
+        String(mapProbe.timezone) !== String(settingsProbe.timezoneName)) {
+      problems.push('地图页的 data-map-timezone 与电脑时区不一致：' +
+        JSON.stringify({ map: mapProbe.timezone, os: settingsProbe.timezoneName }))
+    }
+    const centerParts = String(mapProbe.center || '')
+      .split(',')
+      .map((part) => Number(part.trim()))
+    if (centerParts.length !== 2 || !centerParts.every((n) => Number.isFinite(n))) {
+      problems.push('地图页没有可读的中心点：' + JSON.stringify(mapProbe.center))
+    }
+    if (mapProbe.zoomBefore === null || mapProbe.zoomBefore < 2 || mapProbe.zoomBefore > 18) {
+      problems.push('初始缩放不在 2–18：' + mapProbe.zoomBefore)
+    }
+    if (!(mapProbe.zoomAfterIn === mapProbe.zoomBefore + 1)) {
+      problems.push('点「+」之后缩放没有 +1：' +
+        JSON.stringify({ before: mapProbe.zoomBefore, after: mapProbe.zoomAfterIn }))
+    }
+    if (mapProbe.zoomMin !== 2 || mapProbe.zoomOutDisabledAtMin !== true) {
+      problems.push('连续缩小之后没有停在 2 且禁用「-」：' + JSON.stringify({
+        zoomMin: mapProbe.zoomMin,
+        disabled: mapProbe.zoomOutDisabledAtMin
+      }))
+    }
+    if (mapProbe.zoomMax !== 18 || mapProbe.zoomInDisabledAtMax !== true) {
+      problems.push('连续放大之后没有停在 18 且禁用「+」：' + JSON.stringify({
+        zoomMax: mapProbe.zoomMax,
+        disabled: mapProbe.zoomInDisabledAtMax
+      }))
+    }
+    if (mapProbe.zoomReset === null || mapProbe.zoomReset < 2 || mapProbe.zoomReset > 18) {
+      problems.push('点「回到时区中心」之后缩放不在 2–18：' + JSON.stringify(mapProbe.zoomReset))
+    }
+
+    // 可信滚轮：从浏览器进程发一次带 wheelTicks 的真滚轮，看级别真的变了。
+    if (mapProbe.frameCenter) {
+      const zoomBeforeWheel = mapProbe.zoomReset
+      win.webContents.sendInputEvent({
+        type: 'mouseWheel',
+        x: mapProbe.frameCenter.x,
+        y: mapProbe.frameCenter.y,
+        deltaX: 0,
+        deltaY: -240,
+        wheelTicksX: 0,
+        wheelTicksY: 3,
+        canScroll: false
+      })
+      await sleep(500)
+      const wheelState = await layout('/map', '(() => JSON.stringify({' +
+        '  level: (function(){ const m = String((document.querySelector("[data-map-zoom-level]") || {}).textContent || "").match(/(\\d+)/); return m ? Number(m[1]) : null; })()' +
+        '}))()', 30_000)
+      log('map wheel     : ' + JSON.stringify({ before: zoomBeforeWheel, after: wheelState.level }))
+      if (!(wheelState.level === zoomBeforeWheel + 1)) {
+        problems.push('可信滚轮之后地图缩放没有 +1：' +
+          JSON.stringify({ before: zoomBeforeWheel, after: wheelState.level }))
+      }
+    }
+  }
+
+  /*
+   * 无论上面那一支有没有全部量到，都要还原成运行前读到的那一份。
+   * 写的是**原值**，不是默认值：操作员的副本里可能本来就开着。
+   */
+  const restoreValue = settingsProbe.original
+  if (restoreValue) {
+    const restored = await win.webContents.executeJavaScript(
+      '(async () => { const result = await window.api.settings.update({ mapTiles: ' +
+        JSON.stringify(restoreValue) +
+        ' }); return JSON.stringify({ success: result && result.success, value: result && result.data ? result.data.mapTiles : null }); })()'
+    )
+    log('map restore   : ' + JSON.stringify(restored))
+    let restoredState = null
+    try {
+      restoredState = JSON.parse(restored)
+    } catch (error) {
+      restoredState = null
+    }
+    if (!restoredState || restoredState.success !== true) {
+      problems.push('地图底图探针没有还原运行时读到的配置：' + JSON.stringify(restored))
+    }
+  } else {
+    problems.push('地图底图探针读不到要还原的原始配置（settings.get 失败）')
+  }
+}
+
+/**
+ * GIS 实时工作台 / Live Monitor（业主 2026-09-20 规格 V1.0，第 41 轮）。
+ *
+ * 这一支要证的是**规格 §27/§35 那两条纯交互的口径** —— 它们只有真窗口能量：
+ *   1. **§35「没有选中任何设备时不要默认选第一台」**：刚进 `/map` 必须是
+ *      "请选择设备查看实时数据"的空态，页面上**一个实时模板都不许挂载**
+ *      （`[data-realtime-template]` 为 0）。这一条最容易被下一个人"顺手"改坏：
+ *      给 `currentDeviceId` 加一个 `devices[0]?.id` 的默认值，单测看不见，界面上
+ *      却会让操作员以为眼前这块实时数据就是自己关心的那一台。
+ *   2. **§27「整页只有一个选中状态」**：点设备表的一行 → 工作台挂上**这一台**的
+ *      模板；如果这台在图上有点位，地图标记也必须同时变成选中（反之亦然）。
+ *      地图行、地图标记、告警行三条入口打的是同一个 `currentDeviceId`，所以
+ *      "行高亮 / 标记高亮 / 工作台里的设备名"三处必须是同一个名字。
+ *
+ * 这一支**只读**：不写设备、不写设置、不点底部那六个动作（那些是路由跳转，
+ * 会把探针从这一页带走）。库里的设备全是离线时也成立 —— 离线覆盖层反而是
+ * 「离线保留最后有效值」那条口径的现场证据，所以这里顺带量一下它。
+ */
+async function runGisLiveDrill(win, layout) {
+  const live = await layout('/map', '(async () => {' +
+    'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+    'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+    'const monitor = document.querySelector("[data-realtime-monitor]");' +
+    'const out = {' +
+    '  monitorPresent: !!monitor,' +
+    '  statusCount: document.querySelectorAll("[data-realtime-status]").length,' +
+    '  templatesBefore: document.querySelectorAll("[data-realtime-template]").length,' +
+    '  bodyBefore: document.querySelectorAll("[data-realtime-body]").length,' +
+    '  actionsBefore: document.querySelectorAll("[data-realtime-action]").length,' +
+    '  rowCount: document.querySelectorAll("[data-map-device-row]").length,' +
+    '  emptyText: text(monitor)' +
+    '};' +
+    'if (!out.monitorPresent || out.rowCount === 0) return JSON.stringify(out);' +
+    'const row = document.querySelector("[data-map-device-row]");' +
+    'out.rowName = text(row.querySelector("td:nth-child(2)"));' +
+    'out.deviceId = row.getAttribute("data-map-device-row");' +
+    'row.click();' +
+    'await wait(1500);' +
+    'const active = document.querySelector("[data-realtime-monitor]");' +
+    'out.headerName = text(active ? active.querySelector(".rt__name") : null);' +
+    'out.statusText = text(active ? active.querySelector("[data-realtime-status]") : null);' +
+    'out.rowActive = !!(active && active.ownerDocument.querySelector(".map-table__row--active"));' +
+    'out.selectedRows = document.querySelectorAll(".map-table__row--active").length;' +
+    'out.templates = [...document.querySelectorAll("[data-realtime-template]")]' +
+    '  .map((el) => el.getAttribute("data-realtime-template"));' +
+    'out.tabs = [...document.querySelectorAll("[data-realtime-tab]")]' +
+    '  .map((el) => el.getAttribute("data-realtime-tab"));' +
+    'out.channels = document.querySelectorAll("[data-realtime-channel]").length;' +
+    'out.metrics = document.querySelectorAll("[data-realtime-metric]").length;' +
+    'out.radar = document.querySelectorAll("[data-realtime-radar]").length;' +
+    'out.radarTarget = (document.querySelector("[data-realtime-radar]") || {}).getAttribute' +
+    '  ? document.querySelector("[data-realtime-radar]").getAttribute("data-radar-target") : null;' +
+    'out.actions = [...document.querySelectorAll("[data-realtime-action]")]' +
+    '  .map((el) => el.getAttribute("data-realtime-action"));' +
+    'out.liveMode = document.querySelectorAll("[data-realtime-mode=live]").length;' +
+    'out.eventMode = document.querySelectorAll("[data-realtime-mode=event]").length;' +
+    'out.offline = document.querySelectorAll("[data-realtime-offline]").length;' +
+    '/* 缺失值不许写 0（规格 §31）：读数格子里的 "—" 是允许的，裸 0 不是。 */' +
+    'out.metricTexts = [...document.querySelectorAll("[data-realtime-metric]")]' +
+    '  .map((el) => text(el)).slice(0, 12);' +
+    '/* 地图标记那一侧（§27：行与标记是同一个选中状态）。 */' +
+    'const marker = document.querySelector("[data-map-marker=\\"" + out.deviceId + "\\"]");' +
+    'out.markerPresent = !!marker;' +
+    'out.markerActive = !!(marker && marker.classList.contains("map-marker--active"));' +
+    '/* 反向：点标记也要把工作台切回来（先点第二台，再点回标记）。 */' +
+    'const rows = [...document.querySelectorAll("[data-map-device-row]")];' +
+    'if (marker && rows.length > 1) {' +
+    '  const other = rows.find((r) => r.getAttribute("data-map-device-row") !== out.deviceId);' +
+    '  other.click();' +
+    '  await wait(1200);' +
+    '  out.afterOtherName = text(document.querySelector("[data-realtime-monitor] .rt__name"));' +
+    '  marker.dispatchEvent(new MouseEvent("click", { bubbles: true }));' +
+    '  await wait(1200);' +
+    '  out.afterMarkerName = text(document.querySelector("[data-realtime-monitor] .rt__name"));' +
+    '}' +
+    'return JSON.stringify(out);' +
+    '})()', 90_000)
+
+  log('gis live      : ' + JSON.stringify(live))
+
+  if (live.probeTimeout) return
+
+  if (live.monitorPresent !== true) {
+    problems.push('GIS 页第三行没有挂上实时工作台（[data-realtime-monitor] 找不到）')
+    return
+  }
+
+  // ---- §35：不默认选第一台 ---------------------------------------------------
+  if (live.templatesBefore !== 0 || live.bodyBefore !== 0 || live.actionsBefore !== 0) {
+    problems.push(
+      '刚进 GIS 页就已经挂上了实时模板（规格 §35 要的是"请选择设备"空态）：' +
+      JSON.stringify({
+        templates: live.templatesBefore,
+        body: live.bodyBefore,
+        actions: live.actionsBefore
+      })
+    )
+  }
+  if (typeof live.emptyText !== 'string' || live.emptyText.length < 4) {
+    problems.push('没有选中设备时实时区没有给出任何提示文案：' + JSON.stringify(live.emptyText))
+  }
+
+  if (live.rowCount === 0) {
+    log('gis live      : 设备列表是空的 —— §27 的联动这一条**没有量到**')
+    return
+  }
+
+  // ---- §27：点一行 → 工作台换成这一台 -----------------------------------------
+  if (live.headerName !== live.rowName) {
+    problems.push(
+      '点了设备行之后实时工作台显示的不是这一台：工作台 "' + live.headerName +
+      '" vs 设备行 "' + live.rowName + '"'
+    )
+  }
+  if (!live.statusText) {
+    problems.push('实时工作台的 Header 没有状态读数（data-realtime-status 是空的）')
+  }
+  if (live.selectedRows !== 1) {
+    problems.push('设备列表里高亮的行数是 ' + live.selectedRows + '（规格 §27：整页只有一个选中状态）')
+  }
+  if ((live.templates || []).length !== 1) {
+    problems.push(
+      '选中一台设备之后应当**恰好挂一个**实时模板，实际：' + JSON.stringify(live.templates)
+    )
+  }
+  if (live.liveMode !== 1) {
+    problems.push('选中设备之后 Header 没有显示 LIVE 模式（规格 §28）：' + live.liveMode)
+  }
+  if (live.eventMode !== 0) {
+    problems.push('没有点任何告警，Header 却已经是 EVENT 模式：' + live.eventMode)
+  }
+  if ((live.actions || []).length === 0) {
+    problems.push('实时工作台底部一个能力动作都没有（能力驱动的动作区是空的）')
+  }
+  for (const metric of live.metricTexts || []) {
+    /*
+     * 规格 §31：缺失值显示 "—"，**绝不写 0**。
+     * 只查"整格就是一个 0"的形状：`0.0 dB`、`0 %` 这种同样是"编出来的读数"。
+     */
+    if (/^0(\.0+)?\s*[a-zA-Z%]*$/.test(metric)) {
+      problems.push('实时工作台把缺失值写成了 0（规格 §31 要求 —）：' + metric)
+    }
+  }
+
+  if (live.markerPresent) {
+    if (!live.markerActive) {
+      problems.push('点了设备行之后，地图上这一台的标记没有跟着选中（§27：同一个 currentDeviceId）')
+    }
+    if (live.afterMarkerName !== undefined && live.afterMarkerName !== live.headerName) {
+      problems.push(
+        '换了一台再点回地图标记，工作台没有跟着回到那一台：' +
+        JSON.stringify({ afterMarker: live.afterMarkerName, first: live.headerName })
+      )
+    }
+  } else {
+    log('gis live      : 这一台在图上没有点位 —— 标记与行的双向联动只量到了行这一侧')
+  }
+}
+
 async function runManualRtspDrill(win, layout) {
   const probeName = '探针手填源'
   const url = 'rtsp://127.0.0.1:8554/probe'
@@ -3467,15 +3891,15 @@ async function run() {
   log('settings tabs: ' + JSON.stringify(settingsTabs))
 
   /*
-   * 7 个页签：`iot`（设备接入）那一个**撤掉了** —— 业主第 13 批 A①要求「数据接入」
+   * 8 个页签：`iot`（设备接入）那一个**撤掉了**，另加了业主追加第 1 条的「地图」页签； —— 业主第 13 批 A①要求「数据接入」
    * 搬进「设备管理 → 添加设备」，于是「本机接入（监听设置与收数）」现在在
    * `AddDeviceDialog.vue` 里，不再是设置页的一个页签（四语言的 `settingsUi.tabIot` 也删了）。
-   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 7 个）。
+   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 8 个：地图页签是业主追加第 1 条加的）。
    */
-  if (settingsTabs.tabs !== 7) {
-    problems.push('设置页的页签不是 7 个：' + settingsTabs.tabs)
+  if (settingsTabs.tabs !== 8) {
+    problems.push('设置页的页签不是 8 个：' + settingsTabs.tabs)
   } else {
-    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'account', 'about']
+    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'map', 'account', 'about']
     if (JSON.stringify(settingsTabs.ids) !== JSON.stringify(expectedIds)) {
       problems.push('设置页页签的顺序/名字不对：' + JSON.stringify(settingsTabs.ids))
     }
@@ -9096,6 +9520,10 @@ async function run() {
   } else {
     log('gis partial   : 库里没有"只录一半"的设备，那一条边界没验证到')
   }
+
+  await runMapTilesDrill(win, layout)
+
+  await runGisLiveDrill(win, layout)
 
   log('problems     : ' + problems.length)
   for (const p of problems) log('  ! ' + p)

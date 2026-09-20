@@ -7,9 +7,9 @@
  *   1. **空气声呐的页签只剩一个 PTZ**。留着 2023 版那一组（工作模式/阈值参数/告警同步），
  *      界面就在承诺一些这一代产品不回答的东西 —— 而那些页签点开会**显示"读不到"**，
  *      看起来像设备坏了。判据必须是**设备自己说的代次**，不是型号名、也不是用户的选择。
- *   2. **图上不联网**。渲染层按设计不能联网（CSP `connect-src 'none'`），而"地图"这个词
- *      本身会诱导下一个人加一个瓦片请求 —— 那在机房（无外网）里表现为一张空白图。
- *      所以这里同时钉：视图里没有 `fetch`/`XHR`、瓦片地址一律不出现、底图由
+ *   2. **默认不联网**。渲染层不能发 fetch/XHR/WebSocket（CSP `connect-src 'none'`），
+ *      在线底图只在设置里显式打开后才以 <img> 取 https 瓦片（默认关闭、服务地址不写死）。
+ *      所以这里钉：视图里没有网页联网手段、服务地址不硬编码、离线底图仍由
  *      `shared/domain/device-map.ts` 的纯函数画。
  *
  * 抓图那三种状态也是源码守卫：`not-captured`（设备上本来没有）与 `files-gone`（本机文件
@@ -67,6 +67,9 @@ const mapView = read('src/renderer/src/views/DeviceMapView.vue')
 const mapFull = stripComments(mapView)
 const mapTemplate = templateBlock(mapView)
 const mapCode = stripComments(mapTemplate)
+const adaptersCode = stripComments(read('src/renderer/src/lib/realtimeAdapters.ts'))
+const feedCode = stripComments(read('src/renderer/src/composables/useRealtimeMonitorFeed.ts'))
+const monitorShellCode = stripComments(read('src/renderer/src/components/realtime/RealtimeMonitor.vue'))
 const router = read('src/renderer/src/router/index.ts')
 const sidebar = read('src/renderer/src/components/AppSidebar.vue')
 const shell = read('src/renderer/index.html')
@@ -177,16 +180,27 @@ describe('PTZ 面板：只有保存才写设备，写完按读回结果说话', 
   })
 })
 
-describe('点位图：不联网、点声呐看抓图', () => {
-  it('视图里没有任何联网取图的手段（CSP 也仍然是 connect-src none）', () => {
-    for (const forbidden of ['fetch(', 'XMLHttpRequest', 'new WebSocket', 'tile.openstreetmap', 'amap.com', 'map.baidu']) {
-      assert.equal(mapView.includes(forbidden), false, `点位图里出现了联网/瓦片相关的代码：${forbidden}`)
+describe('点位图：默认不联网，在线底图是显式开启的另一层', () => {
+  it('视图里没有 fetch/XHR/WebSocket（connect-src 仍然是 none）', () => {
+    for (const forbidden of ['fetch(', 'XMLHttpRequest', 'new WebSocket']) {
+      assert.equal(mapView.includes(forbidden), false, `点位图里出现了网页联网手段：${forbidden}`)
     }
     assert.ok(/connect-src 'none'/.test(shell), 'CSP 的 connect-src 不再是 none')
     assert.ok(
       /img-src[^;]*http:\/\/127\.0\.0\.1:\*/.test(shell),
       '抓图的回环地址没有被 img-src 放行（图片会被 CSP 拦掉）'
     )
+    assert.ok(/img-src[^;]*https:/.test(shell), '在线瓦片的 https 图片没有被 img-src 放行')
+  })
+
+  it('瓦片只在配置开关打开时渲染，而且视图里不写死任何服务地址', () => {
+    assert.ok(mapTemplate.includes('v-if="tileConfig"'), '瓦片层没有被配置开关门住')
+    assert.ok(mapTemplate.includes('data-map-tiles'), '没有瓦片层钩子')
+    assert.ok(mapTemplate.includes('data-map-tile'), '没有单块瓦片的钩子')
+    for (const hard of ['tile.openstreetmap', 'basemaps.cartocdn', 'tianditu.gov.cn']) {
+      assert.equal(mapView.includes(hard), false, `视图里写死了服务地址：${hard}`)
+    }
+    assert.ok(/<img[\s\S]{0,220}data-map-tile/.test(mapTemplate), '瓦片不是用 <img> 加载的')
   })
 
   it('底图用共享的投影纯函数画（没有第二份坐标算式）', () => {
@@ -423,29 +437,24 @@ describe('落点配色：在线绿 / 告警红 / 离线灰（第 14 条）', () 
     )
   })
 
-  it('颜色不单独承载信息：色点仍带一句说明，*计数*搬进了右上角状态栏', () => {
+  it('颜色不单独承载信息：没有图例，色点只与名字/状态/数字同屏出现', () => {
     /*
-     * 第 10 批第 14 条要的是"图例三档各带一个数"；第 11 批第 4 条把**图例连同计数一起删了**
-     * （「有未确认告警0在线0离线0」），改在地图右上角放一条半透明状态栏。
-     * 所以颜色现在有两处出口，都带着文字或数字：
-     *   · 地图上的落点（悬停浮层里写这一台的名字、状态、告警条数）；
-     *   · 实时数据列表每行前面那个色点，`title` 是 `mapUi.legendAlarm`（「有未确认告警」）。
-     * 设备列表按第 5 条只留 序号/名称/状态，那里不再放色点 —— 于是 `markerTone(device)`
-     * 全页只剩**一处**（实时数据列表）。
+     * 第 10 批第 14 条要的是"图例三档各带一个数"；第 11 批第 4 条把**图例连同计数一起删了**，
+     * 改在地图右上角放一条半透明状态栏。
+     *
+     * 2026-09-20 的实时工作台改造后，落点颜色只剩下**地图这一处**（原来实时数据列表每行
+     * 前面还有一个色点，那张表已经换成 RealtimeMonitor）。颜色仍然不单独承载信息：
+     *   · 落点本身带设备名（`map-marker__label`）；
+     *   · 悬停浮层里有状态徽标与告警条数文字（`StatusBadge` / `hoverAlarmText`）；
+     *   · 右上角状态栏把"图上 / 共 / 在线 / 离线 / 未确认告警"写成数字。
      */
     assert.equal(mapTemplate.includes('data-map-legend'), false, '图例又回来了（第 4 条已删）')
+    assert.match(mapTemplate, /class="map-marker__label"[^>]*>\{\{ marker\.name \}\}/, '落点没有名字')
     assert.match(
       mapTemplate,
-      /class="map-table__tone" :class="`map-table__tone--\$\{markerTone\(device\)\}`"[\s\S]{0,120}:title="t\('mapUi\.legendAlarm'\)"/,
-      '实时数据列表里的色点没有带那句说明'
+      /data-map-hover[\s\S]*?<StatusBadge[\s\S]*?data-map-hover-alarm/,
+      '悬停浮层没有把颜色配上状态与告警条数文字'
     )
-    // 列表里的色点与图上的落点用同一个 `markerTone()`：两处各判一次迟早不一致。
-    assert.equal(
-      (mapTemplate.match(/markerTone\(device\)/g) ?? []).length,
-      1,
-      '色点不止一处（或一处都没有）：设备列表按第 5 条已经不放色点了'
-    )
-    // 三个数在状态栏上：图上 / 共 / 在线 / 离线。
     for (const hook of [
       'data-map-status-mapped',
       'data-map-status-total',
@@ -458,146 +467,133 @@ describe('落点配色：在线绿 / 告警红 / 离线灰（第 14 条）', () 
   })
 })
 
-describe('地图下方依次三张列表（第 17 条）', () => {
-  it('顺序是 设备列表 → 告警列表 → 实时数据列表，而且都在地图区之后', () => {
+describe('地图下方：设备列表 → 告警列表 → 实时监测工作台（第 17 条 + 2026-09-20 规格）', () => {
+  it('顺序正确，第三行是 RealtimeMonitor 工作台，不再是一次列全部设备的三列表格', () => {
     const panel = mapTemplate.indexOf('data-map-panel')
     const devicesList = mapTemplate.indexOf('data-map-devices')
     const alarmsList = mapTemplate.indexOf('data-map-alarms')
-    const liveList = mapTemplate.indexOf('data-map-live')
-    assert.ok(panel >= 0 && devicesList >= 0 && alarmsList >= 0 && liveList >= 0, '三张列表没有齐')
+    const live = mapTemplate.indexOf('data-map-live')
+    assert.ok(panel >= 0 && devicesList >= 0 && alarmsList >= 0 && live >= 0, '四块没有齐')
     assert.ok(
-      panel < devicesList && devicesList < alarmsList && alarmsList < liveList,
-      '三张列表的顺序或位置不对（应为：地图区 → 设备列表 → 告警列表 → 实时数据列表）'
+      panel < devicesList && devicesList < alarmsList && alarmsList < live,
+      '顺序不对（应为：地图区 → 设备列表 → 告警列表 → 实时监测）'
     )
+    assert.ok(mapTemplate.includes('<RealtimeMonitor'), '第三行不是实时监测工作台')
+    assert.equal(mapCode.includes('data-live-row='), false, '旧的"全部设备实时表格"又回来了')
+    assert.equal(/function liveDb\(/.test(mapCode), false, '旧的 liveDb() 还留在页面里')
+    assert.equal(/function liveSmoothness\(/.test(mapCode), false, '旧的 liveSmoothness() 还留在页面里')
   })
 
-  it('实时数据列表的列是 分贝 / 稳定度 / 方位', () => {
-    const block = mapTemplate.slice(mapTemplate.indexOf('data-map-live'))
-    for (const key of ['mapUi.colDb', 'mapUi.colStability', 'mapUi.colAzimuth']) {
-      assert.ok(block.includes(key), `实时数据列表缺少 ${key} 这一列`)
+  it('第三行正式命名为「实时监测 / Live Monitor」，旧列文案键连目录一起删掉', () => {
+    for (const locale of Object.keys(CATALOGUES)) {
+      const title = messageAt(locale, 'realtimeUi.title')
+      assert.ok(title && title.trim() !== '', `${locale} 缺 realtimeUi.title`)
+      for (const gone of [
+        'mapUi.liveTitle',
+        'mapUi.colDb',
+        'mapUi.colStability',
+        'mapUi.colAzimuth',
+        'mapUi.liveHint',
+        'mapUi.legendAlarm'
+      ]) {
+        assert.equal(messageAt(locale, gone), undefined, `${locale} 目录里还留着已删掉的 ${gone}`)
+      }
     }
+    assert.equal(String(messageAt('zh-CN', 'realtimeUi.title')), '实时监测')
   })
 
-  it('「平稳度」那一列**有数据源**了：取最近一条告警上报的 smoothness（业主 2026-09-19 澄清）', () => {
-    /*
-     * 这一条原来是「恒为 — + 写明没有数据源」。业主 2026-09-19 说「用**平稳度**表示」之后，
-     * 他说的「稳定度」就是本仓库的 `smoothness` —— 一个有真实来源的测量值。
-     * 所以断言**翻了过来**：不许再有"恒为 —"的写法，而且必须真的去读那个值。
-     */
-    const block = mapTemplate.slice(mapTemplate.indexOf('data-map-live'))
-    assert.equal(
-      /stabilityNoSourceHint/.test(mapView),
-      false,
-      '「没有数据源」那段说明还在（业主已澄清这一列取 smoothness）'
-    )
-    assert.ok(block.includes('data-live-smoothness'), '平稳度那一格没有稳定的探针钩子')
-    assert.match(
-      mapView,
-      /function liveSmoothness\([\s\S]*?facts\.latestSmoothness/,
-      '平稳度不是取最近一条告警的 smoothness'
-    )
-    assert.match(
-      mapView,
-      /latest\?\.smoothness !== undefined\) facts\.latestSmoothness = latest\.smoothness/,
-      'facts 里没有把 smoothness 从最近一条告警里取出来'
-    )
-    // 与分贝**同源同刻**：两个字段都从同一条 `latest` 上取。
+  it('SPL 与平稳度取最近一条真实告警，并且经适配层转成 RealtimeFrame（不直接绑固件字段）', () => {
+    // 页面上仍然从最近一条告警上取这两个值 —— 出处没有变，只是搬到了工作台。
     assert.match(
       mapView,
       /facts\.latestSpl = latest\.spl[\s\S]{0,200}facts\.latestSmoothness = latest\.smoothness/,
-      '分贝与平稳度不是从同一条告警上取的（两列会对不上同一时刻）'
+      '分贝与平稳度不是从同一条告警上取的（两个读数会对不上同一时刻）'
     )
-    // 读不到与"没有"必须分得开（与分贝那一列同一条口径）。
     assert.match(
-      mapView,
-      /function liveSmoothness\([\s\S]*?facts\.total < 0[\s\S]*?mapUi\.notRead/,
-      '平稳度那一列没有区分"没读到"'
+      adaptersCode,
+      /featureSourceOfAlarm[\s\S]*?alarm\.spl[\s\S]*?alarm\.smoothness/,
+      '适配层没有把告警的 spl / smoothness 归一进 FeatureSource'
+    )
+    assert.match(adaptersCode, /export function buildRealtimeFrame\(/, '没有统一的 RealtimeFrame 适配入口')
+    assert.match(feedCode, /buildRealtimeFrame\(\{/, '实时工作台没有调用统一的适配入口')
+    // 页面把最近一条告警交给工作台；工作台再交给适配层，而不是自己读字段。
+    assert.match(
+      mapTemplate,
+      /<RealtimeMonitor[\s\S]{0,400}:alarms="alarms"[\s\S]{0,200}:pending-alarms=/,
+      'RealtimeMonitor 没有拿到告警来源与未确认条数'
     )
   })
 
-  it('分贝取最近一条告警的声压级，方位取**录入的**方位角（各有出处）', () => {
-    assert.match(mapView, /function liveDb\([\s\S]*?facts\.latestSpl/, '分贝不是取最近一条告警的 spl')
+  it('方位仍取**录入的**安装角；实时方向只在 Event 模式从告警原文取，Live 不伪造', () => {
     assert.match(
       mapView,
       /function liveAzimuth\([\s\S]*?installation\?\.azimuthDeg/,
       '方位不是取录入的方位角'
     )
-    // 读不到与"没有"必须分得开。
-    assert.match(mapView, /facts\.total < 0[\s\S]*?mapUi\.notRead/, '分贝那一列没有区分"没读到"')
+    assert.match(
+      adaptersCode,
+      /parseAirSonarDirection/,
+      '适配层没有解析 Air Sonar 告警原文里的 horizontal / vertical'
+    )
+    assert.match(
+      adaptersCode,
+      /mode === 'event'[\s\S]{0,200}parseAirSonarDirection/,
+      '方向没有只在 Event 模式出现（Live 会显示不断变化的方向角）'
+    )
   })
 
-  it('三张列表的文案在四种语言里齐全', () => {
+  it('缺失值不使用 0：nodata / stale 有独立视觉；离线保留最后有效值', () => {
+    assert.match(adaptersCode, /quality: 'nodata'/, '适配层没有 nodata 这一档')
+    assert.match(adaptersCode, /missingMetric\(/, '没有统一的"没有值"构造器')
+    assert.match(monitorShellCode, /data-realtime-offline/, '离线覆盖没有实现')
+    assert.match(monitorShellCode, /lastKnownValue/, '离线时没有显示最后有效值')
+    assert.match(monitorShellCode, /rt__status--dataDelay/, 'STALE / DATA DELAY 没有独立样式')
+  })
+
+  it('实时工作台的新文案在四种语言里齐全（含能力动作与模板名）', () => {
     const REQUIRED = [
-      'mapUi.legendAlarm',
-      'mapUi.devicesTitle',
-      'mapUi.devicesCount',
-      'mapUi.devicesHint',
-      'mapUi.colAlarms',
-      'mapUi.alarmsTitle',
-      'mapUi.alarmsFor',
-      'mapUi.liveTitle',
-      'mapUi.colDb',
-      'mapUi.colStability',
-      'mapUi.colAzimuth',
-      'mapUi.liveHint',
-      'mapUi.notRead',
-      'mapUi.none'
+      'realtimeUi.title',
+      'realtimeUi.primary',
+      'realtimeUi.detail',
+      'realtimeUi.selectDeviceTitle',
+      'realtimeUi.selectDeviceHint',
+      'realtimeUi.unsupportedTitle',
+      'realtimeUi.offline',
+      'realtimeUi.lastCommunication',
+      'realtimeUi.lastKnownValue',
+      'realtimeUi.returnToLive',
+      'realtimeUi.event.none',
+      'realtimeUi.quality.nodata',
+      'realtimeUi.status.alarm',
+      'realtimeUi.tabs.trend',
+      'realtimeUi.actions.liveView',
+      'realtimeUi.actions.configuration',
+      'realtimeUi.template.acousticCameraPD',
+      'realtimeUi.metric.maxSpl'
     ]
-    /**
-     * 纯符号的两条**故意四种语言一样**（`—` 就是 `—`，没有可翻译的东西），所以
-     * "不能与中文逐字相同"这一条对它们不适用 —— 第一次跑正是这里红了一次。
-     */
-    const SYMBOLS = ['mapUi.notRead', 'mapUi.none']
     for (const key of REQUIRED) {
       for (const locale of Object.keys(CATALOGUES)) {
         const message = messageAt(locale, key)
         assert.ok(message && message.trim() !== '', `${locale} 缺 ${key}`)
         assert.equal(message.includes('@'), false, `${locale} 的 ${key} 含裸 @`)
       }
-      if (SYMBOLS.includes(key)) continue
-      const reference = messageAt('zh-CN', key) as string
-      for (const locale of ['en', 'es', 'tr']) {
-        assert.notEqual(messageAt(locale, key), reference, `${locale} 的 ${key} 与中文逐字相同`)
-      }
     }
-    // 两条符号键在四本目录里必须是同一个符号：它们在界面上的意思是"没有值 / 没读到"，
-    // 逐语言改一个破折号只会让同一件事有两种写法。
-    for (const key of SYMBOLS) {
+    // 设备/告警两张列表自己的文案不能因为第三行改造而丢。
+    for (const key of ['mapUi.devicesTitle', 'mapUi.alarmsTitle', 'mapUi.notRead', 'mapUi.none']) {
       for (const locale of Object.keys(CATALOGUES)) {
-        assert.equal(
-          messageAt(locale, key),
-          messageAt('zh-CN', key),
-          `${locale} 的 ${key} 与其它语言不是同一个符号`
-        )
-        assert.equal(
-          /[a-zA-Z\u4e00-\u9fa5]/.test(messageAt(locale, key) as string),
-          false,
-          `${locale} 的 ${key} 里出现了文字：它应当是纯符号`
-        )
+        assert.ok(messageAt(locale, key), `${locale} 缺 ${key}`)
       }
     }
-    // `devicesCount` 与 `alarmsFor` 的占位符四语言一致。
-    for (const key of ['mapUi.devicesCount', 'mapUi.alarmsFor']) {
-      const reference = (messageAt('zh-CN', key) as string).match(/\{(\w+)\}/g)?.sort()
-      for (const locale of ['en', 'es', 'tr']) {
-        assert.deepEqual(
-          (messageAt(locale, key) as string).match(/\{(\w+)\}/g)?.sort(),
-          reference,
-          `${locale} 的 ${key} 占位符不一致`
-        )
-      }
+    // `featuresTitle` 的占位符四语言一致。
+    for (const locale of ['en', 'es', 'tr']) {
+      assert.deepEqual(
+        (messageAt(locale, 'realtimeUi.featuresTitle') as string).match(/\{(\w+)\}/g)?.sort(),
+        (messageAt('zh-CN', 'realtimeUi.featuresTitle') as string).match(/\{(\w+)\}/g)?.sort(),
+        `${locale} 的 realtimeUi.featuresTitle 占位符不一致`
+      )
     }
-  })
-
-  it('旧的"告警与抓图"标题已经换成「告警列表」（不留第二种说法）', () => {
-    assert.equal(
-      String(messageAt('zh-CN', 'mapUi.alarmsTitle')),
-      '告警列表',
-      '告警列表那一张的标题不是第 17 条给的那一个'
-    )
   })
 })
-
 // ---------------------------------------------------------------------------
 // 第 10 批第 15、16 条：设备悬停浮层
 // ---------------------------------------------------------------------------
