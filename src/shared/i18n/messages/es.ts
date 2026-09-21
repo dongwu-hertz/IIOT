@@ -65,6 +65,29 @@ export const es: MessageSchema = {
     description: 'Se aplica de inmediato y se recuerda su elección.'
   },
 
+  /** Selector de rango de fechas (el «único calendario» de las páginas de alarmas y eventos). */
+  picker: {
+    placeholder: 'Seleccionar rango de tiempo',
+    presetAll: 'Todo',
+    presetToday: 'Hoy',
+    preset1h: 'Última hora',
+    preset24h: 'Últimas 24 horas',
+    preset7d: 'Últimos 7 días',
+    prevMonth: 'Mes anterior',
+    nextMonth: 'Mes siguiente',
+    startTime: 'Hora de inicio',
+    endTime: 'Hora de fin',
+    clear: 'Borrar',
+    confirm: 'Aceptar',
+    sun: 'Do',
+    mon: 'Lu',
+    tue: 'Ma',
+    wed: 'Mi',
+    thu: 'Ju',
+    fri: 'Vi',
+    sat: 'Sá'
+  },
+
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Software de gestión de equipos',
@@ -83,7 +106,7 @@ export const es: MessageSchema = {
        * plano, así que «mapa de dispositivos» ya no la describe).
        */
       map: 'Información de mapas',
-      events: 'Centro de eventos y alarmas',
+      events: 'Centro de eventos',
       recordings: 'Grabaciones',
       samples: 'Biblioteca de muestras',
       settings: 'Configuración',
@@ -171,6 +194,55 @@ export const es: MessageSchema = {
     restoreItemMapTiles: 'Mapa base en línea (interruptor, plantilla XYZ, clave y atribución)',
     tabAccount: 'Cuenta',
     tabAbout: 'Acerca de y mantenimiento',
+    /** Pestaña de servicios de IA (petición del propietario: admitir "distintos servicios de IA"). */
+    tabAi: 'Servicios de IA',
+
+    /** Biblioteca de servicios GIS (dentro de la pestaña Mapa; petición: «añadir servicio GIS»). */
+    mapServiceGroup: 'Servicios GIS',
+    mapServiceHint:
+      'Guarde con nombre los servicios de teselas que use habitualmente y aplique uno con un clic; «Aplicar» sobrescribe la configuración actual de arriba y activa la capa.',
+    mapServiceEmpty: 'Aún no hay servicios GIS guardados.',
+    mapServiceAdd: 'Añadir servicio',
+    mapServiceSaveCurrent: 'Guardar configuración actual como servicio',
+    mapServiceApply: 'Aplicar',
+    mapServiceEdit: 'Editar',
+    mapServiceDelete: 'Eliminar',
+    mapServiceDeleteConfirm: '¿Eliminar el servicio GIS «{name}»?',
+    mapServiceSave: 'Guardar servicio',
+    mapServiceCancel: 'Cancelar',
+    mapServiceName: 'Nombre del servicio',
+    mapServiceTest: 'Probar tesela',
+    mapServiceTesting: 'Probando…',
+    mapServiceTestOk: 'La tesela de ejemplo se cargó correctamente; esta dirección funciona.',
+    mapServiceTestFail: 'Error al cargar la tesela de ejemplo (sin internet, clave incorrecta o servicio rechazado).',
+    mapServiceTooMany: 'Se alcanzó el límite de servicios GIS',
+
+    /** Biblioteca de servicios de IA (dentro de la pestaña IA). */
+    aiServiceGroup: 'Servicios de IA',
+    aiServiceHint:
+      'Añada servicios de IA (API compatible con OpenAI) y elija uno; el servicio seleccionado etiqueta las muestras. Las claves permanecen en este equipo y nunca se muestran.',
+    aiServiceEmpty: 'Aún no hay servicios de IA guardados.',
+    aiServiceAdd: 'Añadir servicio',
+    aiServiceName: 'Nombre del servicio',
+    aiServiceEndpoint: 'Dirección del endpoint',
+    aiServiceModel: 'Modelo',
+    aiServiceKey: 'Clave de API',
+    aiServiceKeyPlaceholder: 'Deje vacío para conservar la clave guardada',
+    aiServiceKeyStored: 'Clave guardada',
+    aiServiceKeyNone: 'Sin clave guardada',
+    aiServiceDeleteConfirm: '¿Eliminar el servicio de IA «{name}»? Su clave también se eliminará.',
+    aiServiceSaveFailed: 'No se pudo guardar el servicio de IA',
+    aiServiceTooMany: 'Se alcanzó el límite de servicios de IA',
+    aiServiceUnknown: 'Estado de los servicios aún no leído',
+    aiServiceReady: 'El servicio seleccionado está listo',
+    aiPresetLabel: 'Preajustes de proveedor (clic para rellenar endpoint y modelo)',
+    aiPreset_openai: 'OpenAI',
+    aiPreset_deepseek: 'DeepSeek',
+    aiPreset_moonshot: 'Moonshot',
+    aiPreset_zhipu: 'Zhipu GLM',
+    aiPreset_qwen: 'Qwen',
+    aiPreset_ollama: 'Ollama (local)',
+    aiPreset_custom: 'Personalizado',
 
     /** Rótulo del grupo dentro de la pestaña Almacenamiento. */
     storageGroupLocation: 'Ubicación y retención',
@@ -259,6 +331,7 @@ export const es: MessageSchema = {
     restoreItemAlarmLinkage: 'Vinculación de alarmas (servidor de correo, destinatarios, plantillas y enfriamiento)',
     restoreItemAlarmSounds: 'Biblioteca de sonidos de alarma (tipos y archivos de audio elegidos)',
     restoreItemIotIngest: 'Ingesta de datos (interruptores de HTTP push / MQTT, dirección y puertos)',
+    restoreItemMapServices: 'Biblioteca de servicios GIS (servicios de teselas guardados con nombre)',
     restoreWarnStorage: 'La ruta de almacenamiento vuelve a la predeterminada. Las grabaciones y los archivos que ya están en el disco no se borran, simplemente dejan de estar referenciados; anote la ruta actual si la necesita.',
     restoreKeeps: 'La lista de dispositivos, los canales, las grabaciones y los archivos de audio, los registros de alarma, las cuentas y sus permisos no se modifican.',
     restoreConfirm: 'Restaurar',
@@ -423,6 +496,22 @@ export const es: MessageSchema = {
     filterType: 'Tipo de alarma',
     filterAllTypes: 'Todos los tipos',
     filterFrom: 'Desde',
+    /** Fila de filtros (rediseño del propietario: título + contenido + un calendario). */
+    filterTitle: 'Título',
+    filterTitleHint: 'Buscar por nombre del equipo',
+    filterContent: 'Contenido',
+    filterContentHint: 'Buscar en nota / motivo del equipo',
+    filterTimeRange: 'Rango de tiempo',
+    menuDetail: 'Ver detalles',
+    menuReplay: 'Reproducir',
+    menuDownload: 'Descargar alarma',
+    menuAddSample: 'Añadir a muestras',
+    menuAck: 'Confirmar',
+    menuUnack: 'Desconfirmar',
+    menuNoRecording: 'Esta alarma no tiene grabación local para descargar',
+    downloadDone: 'Guardado en {path}',
+    videoTitle: 'Vídeo de alarma',
+    snapshotsTitle: 'Capturas de alarma',
     filterTo: 'Hasta',
     filterAck: 'Confirmación',
     filterAllChannels: 'Todos los canales',
@@ -1977,7 +2066,8 @@ export const es: MessageSchema = {
     eventSource: {
       deviceDetect: 'Registro de detección de la cámara',
       linkage: 'Vinculación local de alarmas',
-      localAlarm: 'Alarma de la caja acústica'
+      localAlarm: 'Alarma de la caja acústica',
+      deviceStatus: 'Estado del equipo'
     },
     eventSeverity: {
       info: 'Información',
@@ -1989,7 +2079,9 @@ export const es: MessageSchema = {
       deviceDetect: 'Detección completada',
       deviceDetectAlarm: 'Detección que el equipo marcó como alarma',
       linkageAlarm: 'Alarma por vinculación local',
-      localAlarm: 'Alarma de la caja acústica'
+      localAlarm: 'Alarma de la caja acústica',
+      deviceOnline: 'Equipo en línea',
+      deviceOffline: 'Equipo fuera de línea'
     },
     detectFileKind: {
       power_spectrum_photo: 'Imagen del espectro de potencia',
@@ -2905,6 +2997,7 @@ export const es: MessageSchema = {
     },
 
     searchPlaceholder: 'Buscar equipo, evento o métrica',
+    filterTimeRange: 'Rango de tiempo',
     searchScope: 'La búsqueda solo cubre las {loaded} filas cargadas',
 
     savedViewTitle: 'Vistas',

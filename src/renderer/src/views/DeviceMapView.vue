@@ -272,6 +272,14 @@ const tileFailureCount = computed(
   () => tilePlacements.value.filter((tile) => tileErrors.value.includes(tile.key)).length
 )
 
+// 只留**当前这批瓦片**的键：老键留着没有任何用处（对应的 <img> 已经销毁），
+// 一张图拖一整天，这个数组会变成一份只进不出的失败日志（G3 修复）。
+watch(tilePlacements, (placements) => {
+  if (tileErrors.value.length === 0) return
+  const live = new Set(placements.map((tile) => tile.key))
+  tileErrors.value = tileErrors.value.filter((key) => live.has(key))
+})
+
 function onTileError(key: string): void {
   if (!tileErrors.value.includes(key)) tileErrors.value = [...tileErrors.value, key]
 }

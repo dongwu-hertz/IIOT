@@ -3891,15 +3891,16 @@ async function run() {
   log('settings tabs: ' + JSON.stringify(settingsTabs))
 
   /*
-   * 8 个页签：`iot`（设备接入）那一个**撤掉了**，另加了业主追加第 1 条的「地图」页签； —— 业主第 13 批 A①要求「数据接入」
+   * 9 个页签：`iot`（设备接入）那一个**撤掉了**，加了业主追加第 1 条的「地图」页签，
+   * 又加了业主追加的「AI 服务」页签（多命名 AI 服务 + 单选启用）。 —— 业主第 13 批 A①要求「数据接入」
    * 搬进「设备管理 → 添加设备」，于是「本机接入（监听设置与收数）」现在在
    * `AddDeviceDialog.vue` 里，不再是设置页的一个页签（四语言的 `settingsUi.tabIot` 也删了）。
-   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 8 个：地图页签是业主追加第 1 条加的）。
+   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 9 个：地图与 AI 服务页签是业主追加的）。
    */
-  if (settingsTabs.tabs !== 8) {
-    problems.push('设置页的页签不是 8 个：' + settingsTabs.tabs)
+  if (settingsTabs.tabs !== 9) {
+    problems.push('设置页的页签不是 9 个：' + settingsTabs.tabs)
   } else {
-    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'map', 'account', 'about']
+    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'map', 'ai', 'account', 'about']
     if (JSON.stringify(settingsTabs.ids) !== JSON.stringify(expectedIds)) {
       problems.push('设置页页签的顺序/名字不对：' + JSON.stringify(settingsTabs.ids))
     }
@@ -4058,84 +4059,68 @@ async function run() {
     '  node.dispatchEvent(new Event("input", { bubbles: true }));' +
     '  return true; };' +
     'const countOf = () => {' +
-    '  const m = /共 (\\d+) 条/.exec(text(document.querySelector(".page-subtitle")));' +
+    '  const m = /共 (\d+) 条/.exec(text(document.querySelector(".page-subtitle")));' +
     '  return m ? Number(m[1]) : null;' +
     '};' +
+    /*
+     * 业主重构后的筛选行：标题 + 内容 + 一个日历（DateRangePicker），同一行；
+     * 「更多筛选」整个删掉了。这里逐项读 DOM，顺带验证标题搜索真的打到了查询上。
+     */
     'const labels = [...document.querySelectorAll("[data-alarm-simple-filters] .field-label")]' +
     '  .map((n) => n.textContent.trim());' +
-    'const selects = [...document.querySelectorAll("[data-alarm-simple-filters] select")];' +
-    'const severitySelect = selects.find((s) =>' +
-    '  [...s.options].some((o) => o.textContent.trim() === "全部等级"));' +
+    'const titleInput = document.querySelector("[data-filter-title]");' +
+    'const contentInput = document.querySelector("[data-filter-content]");' +
+    'const rangePicker = document.querySelector("[data-range-picker]");' +
+    'const moreToggle = document.querySelector("[data-action=toggle-alarm-filters]");' +
+    'const morePanel = document.querySelector("[data-alarm-more-filters]");' +
     'const heads = [...document.querySelectorAll("table thead th")].map((n) => n.textContent.trim());' +
     'const page = document.querySelector(".page");' +
     'const card = page ? page.querySelector("section.card") : null;' +
     'const header = document.querySelector(".page-header");' +
-    /*
-     * 「筛选卡在最上面」的判据是 DOM 顺序：`compareDocumentPosition` 里
-     * `DOCUMENT_POSITION_FOLLOWING` 表示"另一个节点排在我后面"。
-     */
     'const filterCardFirst = !!(card && header && card.contains(document.querySelector("[data-alarm-filters]")) &&' +
     '  (document.querySelector("[data-alarm-filters]").compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&' +
     '  !(header.compareDocumentPosition(document.querySelector("[data-alarm-filters]")) & Node.DOCUMENT_POSITION_FOLLOWING));' +
     'const navItem = [...document.querySelectorAll(".sidebar__nav a.nav-item")]' +
     '  .find((a) => (a.getAttribute("href") || "").replace(/^#/, "") === "/alarms");' +
-    'const toggle = document.querySelector("[data-action=toggle-alarm-filters]");' +
-    'const moreBefore = !!document.querySelector("[data-alarm-more-filters]");' +
-    'const expandedBefore = toggle ? toggle.getAttribute("aria-expanded") : null;' +
-    'if (toggle) { toggle.click(); await wait(300); }' +
-    'const moreAfterOpen = !!document.querySelector("[data-alarm-more-filters]");' +
-    'const expandedAfterOpen = toggle ? toggle.getAttribute("aria-expanded") : null;' +
-    'const moreLabels = [...document.querySelectorAll("[data-alarm-more-filters] .field-label")]' +
-    '  .map((n) => n.textContent.trim());' +
-    'const moreControls = document.querySelectorAll("[data-alarm-more-filters] input, [data-alarm-more-filters] select").length;' +
-    'if (toggle) { toggle.click(); await wait(300); }' +
-    'const moreAfterClose = !!document.querySelector("[data-alarm-more-filters]");' +
     /*
-     * 「收起之后那四个仍然生效」这一条**必须真的做一次**，否则整块"更多筛选"只是排版。
-     *
-     * 做法：展开 → 把「开始时间」设成一个未来时刻（2099 年，库里不可能有）→ 命中数必须变成 0，
-     * 而且**收起状态下的按钮上要出现生效项数**（列表变短的唯一解释）→ 清空 → 命中数回到原值。
-     * 全程只改筛选（不写库、不写设备）。
+     * 标题搜索端到端：搜一个不可能的设备名 → 命中 0；清空 → 回到原值。
+     * （库可能是空的：totalBefore 为 0 时这条仍然成立 —— 0 → 0 → 0，只是验不了"变过去"，
+     *   所以同时要求 rowsFiltered 为 0。）
      */
     'const totalBefore = countOf();' +
-    'if (toggle) { toggle.click(); await wait(300); }' +
-    'const fromInput = document.querySelector("[data-alarm-more-filters] input[type=datetime-local]");' +
-    'setInput(fromInput, "2099-01-01T00:00");' +
+    'setInput(titleInput, "不存在的设备名HZ999");' +
     'await wait(1200);' +
     'const totalFiltered = countOf();' +
     'const rowsFiltered = document.querySelectorAll("table tbody tr.is-clickable").length;' +
-    'if (toggle) { toggle.click(); await wait(300); }' +
-    'const labelWhenCollapsed = toggle ? toggle.textContent.trim() : "";' +
-    'if (toggle) { toggle.click(); await wait(400); }' +
-    'const clearTarget = document.querySelector("[data-alarm-more-filters] input[type=datetime-local]");' +
-    'const clearApplied = setInput(clearTarget, "");' +
+    'setInput(titleInput, "");' +
     'await wait(1200);' +
     'const totalRestored = countOf();' +
+    /*
+     * 右键菜单：有行才能在真行上触发；空库则如实记 null（不冒充验过）。
+     */
+    'const firstRow = document.querySelector("table tbody tr.is-clickable");' +
+    'let contextMenuAppeared = null;' +
+    'if (firstRow) {' +
+    '  firstRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }));' +
+    '  await wait(300);' +
+    '  contextMenuAppeared = !!document.querySelector("[data-alarm-row-menu]");' +
+    '  const backdrop = document.querySelector("[data-alarm-row-menu-backdrop]");' +
+    '  if (backdrop) backdrop.dispatchEvent(new MouseEvent("click", { bubbles: true }));' +
+    '  await wait(200);' +
+    '}' +
+    'const contextMenuClosed = document.querySelector("[data-alarm-row-menu]") === null;' +
     'return JSON.stringify({' +
     '  filterLabels: labels,' +
-    '  severityOptionCount: severitySelect ? severitySelect.options.length - 1 : 0,' +
-    '  severityOptions: severitySelect ? [...severitySelect.options].slice(1).map((o) => o.textContent.trim()) : [],' +
+    '  titlePresent: !!titleInput, contentPresent: !!contentInput, rangePickerPresent: !!rangePicker,' +
+    '  moreTogglePresent: !!moreToggle, morePanelPresent: !!morePanel,' +
     '  heads,' +
     '  navLabel: navItem ? (navItem.textContent || "").trim() : null,' +
     '  topbarTitle: (document.querySelector(".topbar__heading") || {}).textContent || null,' +
     '  filterCardFirst,' +
-    '  moreBefore, extraExpanded: expandedBefore,' +
-    '  moreAfterOpen, expandedAfterOpen, moreLabels, moreControls, moreAfterClose,' +
-    '  totalBefore, totalFiltered, rowsFiltered, labelWhenCollapsed, totalRestored,' +
-    '  clearApplied' +
+    '  totalBefore, totalFiltered, rowsFiltered, totalRestored,' +
+    '  contextMenuAppeared, contextMenuClosed' +
     '});})()')
   log('alarms controls: ' + JSON.stringify(alarmsLayout))
-  if (!alarmsLayout.filterLabels.includes('告警等级')) {
-    problems.push('告警中心的简单筛选里没有「告警等级」下拉：' + JSON.stringify(alarmsLayout.filterLabels))
-  }
-  if (alarmsLayout.severityOptionCount !== 4) {
-    problems.push('等级下拉有 ' + alarmsLayout.severityOptionCount + ' 个档位，应为 4：' +
-      JSON.stringify(alarmsLayout.severityOptions))
-  }
-  if (!alarmsLayout.heads.includes('等级')) {
-    problems.push('告警中心的表头里没有「等级」列：' + JSON.stringify(alarmsLayout.heads))
-  }
-
   // ① 页面名（侧栏 + 顶栏标题）都是「告警中心」。
   if (alarmsLayout.navLabel !== '告警中心') {
     problems.push('侧栏里这一页不叫「告警中心」：' + JSON.stringify(alarmsLayout.navLabel))
@@ -4143,66 +4128,44 @@ async function run() {
   if (String(alarmsLayout.topbarTitle ?? '').trim() !== '告警中心') {
     problems.push('顶栏标题不是「告警中心」：' + JSON.stringify(alarmsLayout.topbarTitle))
   }
-
   // ② 筛选卡在最上面（DOM 顺序判）。
   if (!alarmsLayout.filterCardFirst) {
-    problems.push('筛选卡不在「计数 + 批量动作」那一行之前（业主第 2 条要求放在最上面）')
+    problems.push('筛选卡不在「计数 + 批量动作」那一行之前（业主要求放在最上面）')
   }
-
-  // ③ 更多筛选默认收起，开关真的能展开 / 收回。
-  if (alarmsLayout.moreBefore) {
-    problems.push('「更多筛选」默认没有收起（[data-alarm-more-filters] 一开始就在 DOM 里）')
+  // ③ 业主重构：筛选 = 标题 + 内容 + 一个日历，同一行；更多筛选删干净。
+  const wantLabels = ['标题', '内容', '时间范围']
+  if (JSON.stringify(alarmsLayout.filterLabels) !== JSON.stringify(wantLabels)) {
+    problems.push('告警中心筛选行不是「标题/内容/时间范围」：' + JSON.stringify(alarmsLayout.filterLabels))
   }
-  if (alarmsLayout.extraExpanded !== 'false') {
-    problems.push('「更多筛选」开关初始 aria-expanded 不是 false：' + JSON.stringify(alarmsLayout.extraExpanded))
+  if (!alarmsLayout.titlePresent || !alarmsLayout.contentPresent) {
+    problems.push('标题/内容搜索框没渲染：title=' + alarmsLayout.titlePresent + ' content=' + alarmsLayout.contentPresent)
   }
-  if (!alarmsLayout.moreAfterOpen) {
-    problems.push('点了「更多筛选」之后那四个控件没有出现')
+  if (!alarmsLayout.rangePickerPresent) {
+    problems.push('时间范围选择器（一个日历）没渲染')
   }
-  if (alarmsLayout.expandedAfterOpen !== 'true') {
-    problems.push('展开之后 aria-expanded 不是 true：' + JSON.stringify(alarmsLayout.expandedAfterOpen))
+  if (alarmsLayout.moreTogglePresent || alarmsLayout.morePanelPresent) {
+    problems.push('「更多筛选」删得不干净：toggle=' + alarmsLayout.moreTogglePresent + ' panel=' + alarmsLayout.morePanelPresent)
   }
-  if (alarmsLayout.moreControls !== 4) {
-    problems.push('「更多筛选」里的控件不是 4 个（开始/结束/通道/类型）：' + alarmsLayout.moreControls +
-      ' ' + JSON.stringify(alarmsLayout.moreLabels))
+  if (!alarmsLayout.heads.includes('等级')) {
+    problems.push('告警中心的表头里没有「等级」列：' + JSON.stringify(alarmsLayout.heads))
   }
-  for (const label of ['开始时间', '结束时间', '通道', '告警类型']) {
-    if (!(alarmsLayout.moreLabels || []).includes(label)) {
-      problems.push('「更多筛选」里没有「' + label + '」：' + JSON.stringify(alarmsLayout.moreLabels))
-    }
-  }
-  if (alarmsLayout.moreAfterClose) {
-    problems.push('再点一次「更多筛选」之后没有收回去')
-  }
-  /*
-   * 收起的筛选**仍然生效**（这一条是"简单/更多"这个区分真正的风险点）：
-   * 未来时刻的开始时间必须把命中数打到 0，收起来之后按钮上要能看出有一项在生效，
-   * 清空之后必须回到原来的数。
-   */
+  // ④ 标题搜索真的打到了查询上（端到端）。
   if (alarmsLayout.totalBefore === null) {
     problems.push('读不到筛选结果的条数（.page-subtitle 的格式变了？）')
   } else {
-    if (alarmsLayout.totalFiltered !== 0) {
-      problems.push(
-        '「更多筛选」里的开始时间没有生效：设成 2099 年之后命中 ' +
-          JSON.stringify(alarmsLayout.totalFiltered) + ' 条（应为 0）'
-      )
-    }
-    if (alarmsLayout.rowsFiltered !== 0) {
-      problems.push('筛成 0 条之后表格里还有 ' + alarmsLayout.rowsFiltered + ' 行')
-    }
-    if (!/1/.test(String(alarmsLayout.labelWhenCollapsed))) {
-      problems.push(
-        '收起之后按钮上没有生效项数（列表变短没有解释）：' +
-          JSON.stringify(alarmsLayout.labelWhenCollapsed)
-      )
+    if (alarmsLayout.totalFiltered !== 0 || alarmsLayout.rowsFiltered !== 0) {
+      problems.push('标题搜索没有生效：搜不存在的设备名后命中 ' +
+        JSON.stringify(alarmsLayout.totalFiltered) + ' 条 / ' + alarmsLayout.rowsFiltered + ' 行（应为 0）')
     }
     if (alarmsLayout.totalRestored !== alarmsLayout.totalBefore) {
-      problems.push(
-        '清空「更多筛选」之后命中数没有回到原值：' + alarmsLayout.totalRestored +
-          ' vs ' + alarmsLayout.totalBefore
-      )
+      problems.push('清空标题搜索后命中数没有回到原值：' + alarmsLayout.totalRestored + ' vs ' + alarmsLayout.totalBefore)
     }
+  }
+  // ⑤ 行右键菜单（有行才验得到；空库如实跳过）。
+  if (alarmsLayout.contextMenuAppeared === false || alarmsLayout.contextMenuClosed === false) {
+    problems.push('行右键菜单没按预期出现/关闭：' + JSON.stringify({
+      appeared: alarmsLayout.contextMenuAppeared, closed: alarmsLayout.contextMenuClosed
+    }))
   }
 
   /**

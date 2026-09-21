@@ -64,6 +64,8 @@ const settings = stripComments(read('src/renderer/src/views/SettingsView.vue'))
  * 2026-09-19 第 13 批第 1 条把**第八个页签「数据接入」删掉了**（业主：
  * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）：监听设置与收数统计
  * 搬进「添加设备 → 协议接入方式」下面那一块「本机接入」，`settingsUi.tabIot` 四语言一起删。
+ *
+ * 业主追加又加回一页：「AI 服务」（多命名 AI 服务 + 单选启用，管理不同厂家的大模型）。
  * 守卫的价值不变：这张表**就是**我们商定的那一串，多一个少一个都要在这里改一次。
  */
 const TABS: ReadonlyArray<[string, string]> = [
@@ -73,6 +75,7 @@ const TABS: ReadonlyArray<[string, string]> = [
   ['alarm', 'tabAlarm'],
   ['email', 'tabEmail'],
   ['map', 'tabMap'],
+  ['ai', 'tabAi'],
   ['account', 'tabAccount'],
   ['about', 'tabAbout']
 ]
@@ -104,19 +107,19 @@ describe('③ 设置页的页签', () => {
    * 是**探针里那份清单没跟着改**，而它前面 4 轮都因为趋势页超时、从来没跑到打印汇总那一步，
    * 所以谁都没看见。一条断言换掉一次这样的来回。
    */
-  it('GUI 探针里那份页签期望与本文件一致（8 个，且不许再出现 iot）', () => {
+  it('GUI 探针里那份页签期望与本文件一致（9 个，且不许再出现 iot）', () => {
     const driver = read('scripts/demo-shot-driver.cjs')
     assert.ok(
       driver.includes(`settingsTabs.tabs !== ${TABS.length}`),
       `探针里的页签数期望不是 ${TABS.length}`
     )
     assert.equal(
-      /settingsTabs\.tabs !== 7/.test(driver),
+      /settingsTabs\.tabs !== [78]/.test(driver),
       false,
-      '探针里还写着 7 个页签'
+      '探针里还写着 7/8 个页签'
     )
     assert.ok(
-      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'map', 'account', 'about']`),
+      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'map', 'ai', 'account', 'about']`),
       '探针里那份页签 id 清单与这里不一致'
     )
   })

@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 
 export interface Migration {
   version: number
@@ -930,6 +930,44 @@ export const MIGRATIONS: readonly Migration[] = [
        * 与 v15 的 `push_secret` 同一条理由。
        */
       db.exec(`ALTER TABLE devices ADD COLUMN ingest_plan TEXT NOT NULL DEFAULT '';`)
+    }
+  },
+  {
+    version: 17,
+    name: 'device-status-events',
+    up: (db) => {
+      /**
+       * 设备**上线 / 离线**事件（业主：事件中心把「设备离线」等内容纳入时间线）。
+       *
+       * 设备状态翻转只发生在 DeviceService 的两处（上线 / 连续探测失败判离线），
+       * 之前没有任何历史留存 —— `devices.status` 只有**当前**值。这张表把每一次
+       * 翻转落下来，事件中心作为第四路来源合并进来。
+       *
+       *   - `device_name` 是**写入时刻的快照**：设备可能改名 / 被删，旧事件不追改
+       *     （与 `EventCenterEntry.deviceName` 的读侧快照同一哲学）；
+       *   - `severity` 在**写入时**算好（ONLINE → info / OFFLINE → warning），
+       *     让事件中心的等级筛选可以下推到 SQL，而不是读回来再丢；
+       *   - `acknowledged` 是我们自己表上的列，确认/取消确认直接 UPDATE。
+       *
+       * 保留策略：与 `alarms` 同一口径（按时间窗清），清理由 `pruneDeviceStatusEvents`
+       * 提供，挂在既有的保留清扫上 —— 状态事件是诊断线索，不是审计流水，不留 forever。
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS device_status_events (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          device_name TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('ONLINE', 'OFFLINE')),
+          severity TEXT NOT NULL CHECK (severity IN ('info', 'warning')),
+          at INTEGER NOT NULL,
+          acknowledged INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_device_status_events_at
+          ON device_status_events (at DESC);
+        CREATE INDEX IF NOT EXISTS idx_device_status_events_device
+          ON device_status_events (device_id, at DESC);
+      `)
     }
   }
 ]

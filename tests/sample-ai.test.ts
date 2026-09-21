@@ -30,7 +30,7 @@ import {
   SampleAiLabelService,
   toStatus
 } from '../src/main/services/sample/sample-ai-label-service'
-import type { SampleAiStore, StoredAiSettings } from '../src/main/services/sample/sample-ai-store'
+import type { SampleAiStore, StoredActiveAi } from '../src/main/services/sample/sample-ai-store'
 import {
   EMPTY_AI_CONFIG,
   buildLabelMessages,
@@ -294,14 +294,14 @@ async function startServer(): Promise<FakeServer> {
   }
 }
 
-function fakeStore(settings: Partial<StoredAiSettings>): SampleAiStore {
-  const value: StoredAiSettings = {
+function fakeStore(settings: Partial<StoredActiveAi>): SampleAiStore {
+  const value: StoredActiveAi = {
     config: { enabled: true, endpoint: 'http://127.0.0.1:1/v1/chat/completions', model: 'm' },
     apiKeyStored: false,
     encryptionAvailable: true,
     ...settings
   }
-  return { read: () => value, save: () => undefined } as unknown as SampleAiStore
+  return { readActive: () => value } as unknown as SampleAiStore
 }
 
 /**

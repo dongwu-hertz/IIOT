@@ -23,7 +23,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { AlarmEvent, AlarmQuery } from '@shared/domain/models'
-import { AlarmType, ALARM_NOTE_MAX_LENGTH, CHANNEL_COUNT } from '@shared/domain/models'
+import { ALARM_NOTE_MAX_LENGTH } from '@shared/domain/models'
 import type { EventSeverity } from '@shared/domain/event-center'
 /**
  * Labels come from the RENDERER's `lib/labels`, not from
@@ -33,18 +33,14 @@ import type { EventSeverity } from '@shared/domain/event-center'
  * arithmetic in the UI" rule from the spec is untouched.
  */
 import { alarmTypeLabel, describeAlarmMask, eventSeverityLabel } from '@renderer/lib/labels'
-import { channelState, channelStateLabelKey, type ChannelState } from '@renderer/lib/channelState'
 import { ALARM_PAGE_SIZE, useAlarmsStore } from '@renderer/stores/alarms'
 import { useSamplesStore } from '@renderer/stores/samples'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
-import {
-  channelLabel,
-  formatDateTime,
-  formatNumber,
-  fromDateTimeLocalValue
-} from '@renderer/lib/format'
+import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
+import { channelLabel, formatDateTime, formatNumber, fromDateTimeLocalValue } from '@renderer/lib/format'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
+import DateRangePicker from '@renderer/components/DateRangePicker.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -53,73 +49,36 @@ const alarms = useAlarmsStore()
 const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
 
-const ALARM_TYPE_OPTIONS: AlarmType[] = Object.values(AlarmType).filter(
-  (value): value is AlarmType => typeof value === 'number'
-)
-
-type AckFilter = 'all' | 'true' | 'false'
-
+/**
+ * 筛选（业主重构 2026：只留「标题 + 内容 + 时间范围」，同一行；更多筛选整个删掉）。
+ *   · 标题 = 设备名关键字（哪台设备的）；
+ *   · 内容 = 备注 / 设备告警原因文本关键字（记录里写了什么的）；
+ *   · 时间范围 = 一个日历（DateRangePicker，开始与结束在同一个日历里选）。
+ * `deviceId` 不在界面上 —— 它是「设备详情 → 查看告警记录」带进来的隐藏条件。
+ */
 interface FilterState {
-  deviceId: string
-  channelId: string
-  alarmType: string
-  /** `''` = 全部等级。取值是 `EventSeverity`，不是任意字符串。 */
-  severity: '' | EventSeverity
+  title: string
+  content: string
   from: string
   to: string
-  ack: AckFilter
+  deviceId: string
 }
 
 const filters = reactive<FilterState>({
-  deviceId: '',
-  channelId: '',
-  alarmType: '',
-  severity: '',
+  title: '',
+  content: '',
   from: '',
   to: '',
-  ack: 'all'
+  deviceId: ''
 })
 
 /**
- * 等级选项。
+ * 等级选项（详情抽屉里人工改判用）。
  *
- * 顺序刻意是「严重 → 不严重 → 未知」而不是 `EVENT_SEVERITIES` 的定义顺序：这是**筛选器**，
- * 操作员找的是"最要紧的那些"，所以最严重的排第一。`unknown` 放在最后，因为它不是"最轻"，
- * 而是"我们没判"（理由见 `event-center.ts` 的等级说明）。
+ * 顺序刻意是「严重 → 不严重 → 未知」：操作员找的是"最要紧的那些"，所以最严重的排第一。
+ * `unknown` 放在最后，因为它不是"最轻"，而是"我们没判"。
  */
 const SEVERITY_FILTER_OPTIONS: readonly EventSeverity[] = ['critical', 'warning', 'info', 'unknown']
-
-/**
- * 「更多筛选」是否展开（业主 2026-09-19 第 2 条：更多筛选默认收起）。
- *
- * 用组件内的 ref 而不是持久化：这一页是"进来看一眼就走"的地方，记住上次展开过
- * 反而会让下一次进来看到一个不是默认状态的筛选区。
- */
-const moreOpen = ref(false)
-
-/**
- * 收起的「更多筛选」里当前有几项在生效。
- *
- * 这个数字是**必须**的：面板收起来之后筛选仍然生效，而列表变短在屏幕上只有这一个解释。
- * 不显示它，操作员会以为"库里没有数据"（业主 2026-09-19 那条要求里"区分"两个字的落点）。
- */
-const advancedFilterCount = computed(() => {
-  let count = 0
-  if (filters.channelId !== '') count += 1
-  if (filters.alarmType !== '') count += 1
-  if (filters.from !== '') count += 1
-  if (filters.to !== '') count += 1
-  return count
-})
-
-/** 收起状态下的按钮文案（有生效项时把数字带上）。 */
-const moreFiltersLabel = computed(() =>
-  moreOpen.value
-    ? t('alarmsUi.hideMoreFilters')
-    : advancedFilterCount.value > 0
-      ? t('alarmsUi.moreFiltersActive', { count: advancedFilterCount.value })
-      : t('alarmsUi.moreFilters')
-)
 
 const selectedIds = ref<string[]>([])
 const detail = ref<AlarmEvent | null>(null)
@@ -186,34 +145,6 @@ const page = computed(() => alarms.page)
 const canPrev = computed(() => page.value.offset > 0)
 const canNext = computed(() => page.value.offset + rows.value.length < alarms.total)
 
-/** 历史筛选用的通道项：带上状态，未启用/未知都要在文字里标出来。 */
-interface ChannelOption {
-  index: number
-  name: string
-  state: ChannelState
-}
-
-const channelOptions = computed<ChannelOption[]>(() => {
-  if (filters.deviceId) {
-    const list = devices.channelsOf(filters.deviceId)
-    if (list.length > 0) {
-      return [...list]
-        .sort((a, b) => a.channelIndex - b.channelIndex)
-        .map((channel) => ({
-          index: channel.channelIndex,
-          name: channel.channelName,
-          state: channelState(channel)
-        }))
-    }
-  }
-  // 设备没返回通道表：状态是“未知”，不能当作“已启用”。
-  return Array.from({ length: CHANNEL_COUNT }, (_, index) => ({
-    index,
-    name: '',
-    state: 'unknown'
-  }))
-})
-
 /**
  * 把界面上的筛选变成一次查询。
  *
@@ -221,25 +152,27 @@ const channelOptions = computed<ChannelOption[]>(() => {
  *
  * 原因在 store 那边：`alarms.applyQuery(patch)` 做的是
  * `query.value = { ...query.value, ...patch, offset: 0 }` —— 一个**合并补丁**。
- * 于是"把某一格清空"这件事在补丁里表现为**那个键根本不在**，合并之后**上一次的值原样留着**：
- * 界面上下拉回到了"全部等级"、时间框空了，而列表仍然按旧条件过滤。
+ * 于是"把某一格清空"这件事在补丁里表现为**那个键根本不在**，合并之后**上一次的值原样留着**。
  *
  * 这个缺陷是 2026-09-19 第 15 轮的 GUI 探针抓到的（把「开始时间」设成 2099 年 → 0 条，
- * 再清空 → **仍然是 0 条**）。当时 `severity` / `channelId` / `alarmType` / `acknowledged` /
- * `to` 五格都只能"加条件"、不能"去条件"，`reset()` 也一样清不掉。
+ * 再清空 → **仍然是 0 条**）。这里每一格都照此办理，新增的 `title`/`content` 也一样。
  */
 function buildQuery(): Partial<AlarmQuery> {
   return {
-    deviceId: filters.deviceId || undefined,
-    channelId: filters.channelId === '' ? undefined : Number(filters.channelId),
-    alarmType: filters.alarmType === '' ? undefined : (Number(filters.alarmType) as AlarmType),
-    severity: filters.severity === '' ? undefined : filters.severity,
+    title: filters.title.trim() || undefined,
+    content: filters.content.trim() || undefined,
     from: fromDateTimeLocalValue(filters.from),
     to: fromDateTimeLocalValue(filters.to),
-    acknowledged: filters.ack === 'all' ? undefined : filters.ack === 'true',
+    deviceId: filters.deviceId || undefined,
     limit: ALARM_PAGE_SIZE,
     offset: 0
   }
+}
+
+/** 日历范围选择器（一个日历）选完：两个格一起进筛选状态，由 watcher 自动查询。 */
+function applyDateRange(value: { from: string; to: string }): void {
+  filters.from = value.from
+  filters.to = value.to
 }
 
 async function reload(): Promise<void> {
@@ -248,13 +181,11 @@ async function reload(): Promise<void> {
 }
 
 function reset(): void {
-  filters.deviceId = ''
-  filters.channelId = ''
-  filters.alarmType = ''
-  filters.severity = ''
+  filters.title = ''
+  filters.content = ''
   filters.from = ''
   filters.to = ''
-  filters.ack = 'all'
+  filters.deviceId = ''
   void reload()
 }
 
@@ -295,15 +226,6 @@ watch(
   () => ({ ...filters }),
   () => {
     void reload()
-  }
-)
-
-// Channel list depends on the selected device, so load it lazily.
-watch(
-  () => filters.deviceId,
-  (deviceId) => {
-    if (deviceId) void devices.loadChannels(deviceId)
-    filters.channelId = ''
   }
 )
 
@@ -412,6 +334,15 @@ async function toggleDetailAck(): Promise<void> {
   }
 }
 
+/** 右键「回放」：打开详情并让播放器自动加载（普通点击打开则不自动播）。 */
+const replayAutoload = ref(false)
+
+function replayAlarm(alarm: AlarmEvent): void {
+  replayAutoload.value = true
+  openDetail(alarm)
+  closeRowMenu()
+}
+
 function openDetail(alarm: AlarmEvent): void {
   detail.value = alarm
   // 抽屉打开时把备注装进草稿。`note` 缺失与空字符串都变成空草稿——输入框里没有区别，
@@ -419,12 +350,121 @@ function openDetail(alarm: AlarmEvent): void {
   noteDraft.value = alarm.note ?? ''
   // 上一条的入库回执不能跟着换到这一条上：那是"另一条告警已入库"。
   detailSampleNotice.value = ''
+  // 回放证据随抽屉打开：抓图（听诊盒子族）与视频（MP4 容器）各取各的，拿不到就如实说。
+  void loadSnapshots(alarm)
+  void loadVideo(alarm)
 }
 
 function closeDetail(): void {
   detail.value = null
   noteDraft.value = ''
   detailSampleNotice.value = ''
+  replayAutoload.value = false
+  snapshots.value = null
+  if (videoUrl.value) videoUrl.value = ''
+  videoError.value = ''
+  if (window.api.e2?.closeSnapshots) void window.api.e2.closeSnapshots()
+}
+
+// ---------------------------------------------------------------------------
+// 回放证据：抓图（听诊盒子族，SN-16 每次告警 3 张球机抓图）与视频（MP4 容器）
+// ---------------------------------------------------------------------------
+
+/** 当前告警的抓图；`null` = 不适用（非听诊盒子族）或尚未加载。 */
+const snapshots = ref<{ state: string; files: { name: string; url: string }[] } | null>(null)
+
+async function loadSnapshots(alarm: AlarmEvent): Promise<void> {
+  snapshots.value = null
+  const device = devices.byId(alarm.deviceId)
+  if (!device || device.kind !== 'auscultationBox') return
+  if (!window.api.e2?.alarmSnapshots) return
+  const result = await callApi(() => window.api.e2.alarmSnapshots(alarm.deviceId, alarm.id))
+  if (result.success) snapshots.value = unwrap(result) ?? null
+}
+
+const videoUrl = ref('')
+const videoError = ref('')
+
+/** MP4 容器走回环 HTTP（支持 Range），WAV 仍由 RecordingPlayer 处理。 */
+async function loadVideo(alarm: AlarmEvent): Promise<void> {
+  videoUrl.value = ''
+  videoError.value = ''
+  if (alarm.localRecordingContainer !== 'mp4' || !alarm.localRecordingId) return
+  const result = await callApi(() => window.api.cameraNvr.videoUrl(alarm.localRecordingId as string))
+  if (!result.success) {
+    videoError.value = resultMessage(result)
+    return
+  }
+  videoUrl.value = unwrap(result)?.url ?? ''
+}
+
+// ---------------------------------------------------------------------------
+// 行右键菜单（业主：每条记录支持 查看细节 / 回放 / 下载告警 / 加入样本）
+// ---------------------------------------------------------------------------
+
+interface RowMenuState {
+  x: number
+  y: number
+  alarm: AlarmEvent
+}
+
+const rowMenu = ref<RowMenuState | null>(null)
+const menuBusy = ref(false)
+
+function openRowMenu(event: MouseEvent, alarm: AlarmEvent): void {
+  event.preventDefault()
+  rowMenu.value = { x: event.clientX, y: event.clientY, alarm }
+}
+
+function closeRowMenu(): void {
+  rowMenu.value = null
+}
+
+/** 下载告警录音（另存为到操作员选的位置）。无本机录音的条目在菜单里已禁用。 */
+async function downloadAlarm(alarm: AlarmEvent): Promise<void> {
+  if (!alarm.localRecordingId || menuBusy.value) return
+  menuBusy.value = true
+  const result = await callApi(() => window.api.recordings.export(alarm.localRecordingId as string))
+  menuBusy.value = false
+  closeRowMenu()
+  if (!result.success) {
+    notice.value = resultMessage(result)
+    return
+  }
+  const saved = unwrap(result)
+  if (saved) notice.value = t('alarmsUi.downloadDone', { path: saved.path })
+}
+
+/** 右键 → 加入样本（与抽屉单条入库同一条路，三种结果分开说）。 */
+async function addAlarmToSamples(alarm: AlarmEvent): Promise<void> {
+  if (menuBusy.value) return
+  menuBusy.value = true
+  const outcome = await samples.addFromAlarm(alarm.id)
+  menuBusy.value = false
+  closeRowMenu()
+  if (!outcome) {
+    notice.value = samples.error
+    return
+  }
+  notice.value = outcome.created
+    ? outcome.metricsStored > 0
+      ? t('alarmsUi.sampleAddedWithMetrics', {
+          count: outcome.metricsStored,
+          label: outcome.label ?? t('samplesUi.unlabelled')
+        })
+      : t('alarmsUi.sampleAddedNoMetrics')
+    : t('alarmsUi.sampleAlreadyIn')
+}
+
+/** 右键 → 确认 / 取消确认。 */
+async function toggleAckFromMenu(alarm: AlarmEvent): Promise<void> {
+  closeRowMenu()
+  const next = !alarm.acknowledged
+  const affected = await alarms.acknowledge([alarm.id], next)
+  notice.value =
+    affected > 0
+      ? t(next ? 'alarmsUi.notifyDetailAcknowledged' : 'alarmsUi.notifyDetailUnacknowledged')
+      : alarms.error
 }
 
 /**
@@ -505,54 +545,36 @@ function openDevice(deviceId: string): void {
     -->
     <section class="card" data-alarm-filters>
       <!--
-        简单筛选：值守时最常用的三个（设备 / 等级 / 确认状态）。**一直显示** ——
-        把它们也收起来会让"看一眼未确认的告警"变成两次点击。
+        业主重构：筛选只留「标题 + 内容 + 时间范围」，同一行；更多筛选整个删掉。
+        标题 = 设备名关键字；内容 = 备注/设备原因关键字；时间 = 一个日历（DateRangePicker）。
       -->
-      <div class="filter-bar" data-alarm-simple-filters>
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterDevice') }}</span>
-          <select v-model="filters.deviceId" class="select">
-            <option value="">{{ t('alarmsUi.filterAllDevices') }}</option>
-            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-              {{ device.name }}
-            </option>
-          </select>
+      <div class="filter-bar alarm-filter-row" data-alarm-simple-filters>
+        <label class="field alarm-filter-row__title">
+          <span class="field-label">{{ t('alarmsUi.filterTitle') }}</span>
+          <input
+            v-model="filters.title"
+            class="input"
+            type="search"
+            data-filter-title
+            :placeholder="t('alarmsUi.filterTitleHint')"
+          />
         </label>
 
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterSeverity') }}</span>
-          <select v-model="filters.severity" class="select">
-            <option value="">{{ t('alarmsUi.filterAllSeverities') }}</option>
-            <option v-for="level in SEVERITY_FILTER_OPTIONS" :key="level" :value="level">
-              {{ eventSeverityLabel(level) }}
-            </option>
-          </select>
+        <label class="field alarm-filter-row__content">
+          <span class="field-label">{{ t('alarmsUi.filterContent') }}</span>
+          <input
+            v-model="filters.content"
+            class="input"
+            type="search"
+            data-filter-content
+            :placeholder="t('alarmsUi.filterContentHint')"
+          />
         </label>
 
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterAck') }}</span>
-          <select v-model="filters.ack" class="select">
-            <option value="all">{{ t('alarmsUi.ackAll') }}</option>
-            <option value="false">{{ t('alarmsUi.ackUnacknowledged') }}</option>
-            <option value="true">{{ t('alarmsUi.ackAcknowledged') }}</option>
-          </select>
+        <label class="field alarm-filter-row__range">
+          <span class="field-label">{{ t('alarmsUi.filterTimeRange') }}</span>
+          <DateRangePicker :from="filters.from" :to="filters.to" @apply="applyDateRange" />
         </label>
-
-        <!--
-          「更多筛选」开关。`aria-expanded` 不是装饰：读屏要能说出它是开着还是收着，
-          而它下面**真的**多出四个控件（v-if，不是 v-show —— 收着的时候那些控件不在 DOM 里，
-          也不会被 Tab 走到）。
-        -->
-        <button
-          type="button"
-          class="btn btn--sm filter-more-toggle"
-          data-action="toggle-alarm-filters"
-          :aria-expanded="moreOpen"
-          :aria-controls="'alarm-more-filters'"
-          @click="moreOpen = !moreOpen"
-        >
-          {{ moreFiltersLabel }}
-        </button>
 
         <button
           type="button"
@@ -562,49 +584,6 @@ function openDevice(deviceId: string): void {
         >
           {{ t('common.reset') }}
         </button>
-      </div>
-
-      <!--
-        更多筛选（默认收起）：时间起止 / 通道 / 告警类型。
-        这三样是"翻旧账"时才用的（通道与类型各有 8 / 14 个取值），日常值守不需要它们占一行。
-      -->
-      <div
-        v-if="moreOpen"
-        id="alarm-more-filters"
-        class="filter-bar filter-bar--more"
-        data-alarm-more-filters
-      >
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterFrom') }}</span>
-          <input v-model="filters.from" class="input" type="datetime-local" />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterTo') }}</span>
-          <input v-model="filters.to" class="input" type="datetime-local" />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterChannel') }}</span>
-          <select v-model="filters.channelId" class="select">
-            <option value="">{{ t('alarmsUi.filterAllChannels') }}</option>
-            <option v-for="channel in channelOptions" :key="channel.index" :value="channel.index">
-              {{ channelLabel(channel.index) }}<template v-if="channel.name">（{{ channel.name }}）</template>
-              <!-- 未启用的通道照样可以查历史（过去的数据仍在），但必须看得出来它现在没开。 -->
-              <template v-if="channel.state !== 'enabled'">（{{ t(channelStateLabelKey(channel.state)) }}）</template>
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('alarmsUi.filterType') }}</span>
-          <select v-model="filters.alarmType" class="select">
-            <option value="">{{ t('alarmsUi.filterAllTypes') }}</option>
-            <option v-for="type in ALARM_TYPE_OPTIONS" :key="type" :value="type">
-              {{ alarmTypeLabel(type) }}
-            </option>
-          </select>
-        </label>
       </div>
     </section>
 
@@ -684,6 +663,7 @@ function openDevice(deviceId: string): void {
             class="is-clickable"
             :class="{ 'row--active': detail?.id === alarm.id }"
             @click="openDetail(alarm)"
+            @contextmenu="openRowMenu($event, alarm)"
           >
             <td class="col-check" @click.stop>
               <input
@@ -722,6 +702,50 @@ function openDevice(deviceId: string): void {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!--
+      行右键菜单（业主：每条记录支持 查看细节 / 回放 / 下载告警 / 加入样本 / 确认）。
+      透明遮罩兜住"点外面"和"再按右键"两种关闭路径；不可用的项禁用并写出原因。
+    -->
+    <div
+      v-if="rowMenu"
+      class="row-menu-backdrop"
+      data-alarm-row-menu-backdrop
+      @click="closeRowMenu"
+      @contextmenu.prevent="closeRowMenu"
+    >
+      <div
+        class="row-menu"
+        :style="{ left: rowMenu.x + 'px', top: rowMenu.y + 'px' }"
+        role="menu"
+        data-alarm-row-menu
+        @click.stop
+      >
+        <button type="button" role="menuitem" class="row-menu__item" @click="openDetail(rowMenu.alarm); closeRowMenu()">
+          {{ t('alarmsUi.menuDetail') }}
+        </button>
+        <button type="button" role="menuitem" class="row-menu__item" data-menu-replay @click="replayAlarm(rowMenu.alarm)">
+          {{ t('alarmsUi.menuReplay') }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="row-menu__item"
+          data-menu-download
+          :disabled="!rowMenu.alarm.localRecordingId || menuBusy"
+          :title="rowMenu.alarm.localRecordingId ? '' : t('alarmsUi.menuNoRecording')"
+          @click="downloadAlarm(rowMenu.alarm)"
+        >
+          {{ menuBusy ? t('common.loading') : t('alarmsUi.menuDownload') }}
+        </button>
+        <button type="button" role="menuitem" class="row-menu__item" data-menu-sample :disabled="menuBusy" @click="addAlarmToSamples(rowMenu.alarm)">
+          {{ t('alarmsUi.menuAddSample') }}
+        </button>
+        <button type="button" role="menuitem" class="row-menu__item" data-menu-ack @click="toggleAckFromMenu(rowMenu.alarm)">
+          {{ rowMenu.alarm.acknowledged ? t('alarmsUi.menuUnack') : t('alarmsUi.menuAck') }}
+        </button>
+      </div>
     </div>
 
     <div class="pager">
@@ -852,6 +876,7 @@ function openDevice(deviceId: string): void {
             -->
             <RecordingPlayer
               :recording-id="detail.localRecordingId"
+              :auto-load="replayAutoload"
               :anchor-at-ms="detail.timestamp"
               :anchor-lead-ms="ALARM_JUMP_BACK_MS"
             >
@@ -861,6 +886,24 @@ function openDevice(deviceId: string): void {
                 </RouterLink>
               </template>
             </RecordingPlayer>
+          </section>
+
+          <!-- MP4 容器走视频播放器（回环 HTTP，支持 Range）；拿不到地址时如实说。 -->
+          <section v-if="detail.localRecordingContainer === 'mp4'" class="drawer__section">
+            <h4 class="drawer__section-title">{{ t('alarmsUi.videoTitle') }}</h4>
+            <video v-if="videoUrl" controls class="drawer__video" :src="videoUrl" data-alarm-video></video>
+            <p v-else-if="videoError" class="form-error" role="alert">{{ videoError }}</p>
+            <p v-else class="muted">{{ t('common.loading') }}</p>
+          </section>
+
+          <!-- 抓图（听诊盒子族）：SN-16 每次告警 3 张球机抓图。 -->
+          <section v-if="snapshots" class="drawer__section">
+            <h4 class="drawer__section-title">{{ t('alarmsUi.snapshotsTitle') }}</h4>
+            <div v-if="snapshots.files.length > 0" class="drawer__images" data-alarm-snapshots>
+              <img v-for="file in snapshots.files" :key="file.name" :src="file.url" :alt="file.name" class="drawer__image" />
+            </div>
+            <p v-else-if="snapshots.state === 'not-captured'" class="muted">{{ t('eventsUi.evidenceNotCaptured') }}</p>
+            <p v-else class="muted">{{ t('eventsUi.evidenceFilesGone') }}</p>
           </section>
 
           <section class="drawer__section">
@@ -935,18 +978,87 @@ function openDevice(deviceId: string): void {
 
 <style scoped>
 /*
- * 筛选条：简单那一行与「更多筛选」那一行**同一套排版**，但两行之间留一条细线 ——
- * 它们不是同一档（一个常显、一个收起），靠留白区分太弱。
+ * 筛选行（业主重构）：标题 / 内容 / 时间范围同一行。
+ * 标题与内容输入框吸收剩余宽度；时间范围选择器固定宽幅；重置贴最右。
  */
-.filter-bar--more {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
+.alarm-filter-row {
+  align-items: flex-end;
 }
 
-/* 两个按钮推到这一行的右端：左边是筛选条件，右边是两个动作（更多筛选 / 重置）。 */
-.filter-more-toggle {
+.alarm-filter-row__title {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.alarm-filter-row__content {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.alarm-filter-row__range {
+  flex: 0 0 auto;
+  width: 260px;
+}
+
+.alarm-filter-row .filter-reset {
   margin-left: auto;
+}
+
+/* 行右键菜单：透明遮罩全屏兜点击，菜单钉在光标处。 */
+.row-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.row-menu {
+  position: fixed;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.15));
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+}
+
+.row-menu__item {
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.row-menu__item:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.row-menu__item:disabled {
+  color: var(--color-text-secondary, #999);
+  cursor: not-allowed;
+}
+
+/* 抽屉里的回放证据。 */
+.drawer__video {
+  width: 100%;
+  border-radius: 6px;
+  background: #000;
+}
+
+.drawer__images {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.drawer__image {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
 }
 
 /*

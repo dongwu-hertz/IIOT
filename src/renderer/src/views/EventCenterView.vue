@@ -49,7 +49,6 @@ import {
   eventFilterCounts,
   eventFilterFromQuery,
   eventFilterToQuery,
-  eventKpis,
   evidenceImageSource,
   groupWindowMsFor,
   hasEventFilterQuery,
@@ -87,10 +86,10 @@ import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
 import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
 import EventFilterPanel from '@renderer/components/event-center/EventFilterPanel.vue'
-import EventKpiStrip from '@renderer/components/event-center/EventKpiStrip.vue'
 import IncidentCreateDialog from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import type { IncidentCandidate } from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
+import DateRangePicker from '@renderer/components/DateRangePicker.vue'
 import {
   alarmTypeLabel,
   describeAlarmMask,
@@ -384,7 +383,6 @@ const alerts = computed(() =>
     matchEventSearch(alert, filters.search, eventKindLabel(alert.kind))
   )
 )
-const kpis = computed(() => eventKpis(alerts.value))
 const counts = computed(() => eventFilterCounts(alerts.value))
 const page = computed(() => store.page)
 const canPrev = computed(() => page.value.offset > 0)
@@ -444,7 +442,14 @@ async function reload(): Promise<void> {
   await store.applyQuery(buildQuery())
 }
 
-/** 筛选面板 / KPI 条点一下：只改一处，其余不动（改了就会重新查询，见下面的 watch）。 */
+/** 日历范围选择器（一个日历）选完：两个格一起进筛选状态，由 watch 重新查询。 */
+function applyDateRange(value: { from: string; to: string }): void {
+  activeSavedViewId.value = null
+  filters.from = value.from
+  filters.to = value.to
+}
+
+/** 筛选面板点一下：只改一处，其余不动（改了就会重新查询，见下面的 watch）。 */
 function patchFilter(patch: Partial<EventQueueFilter>): void {
   activeSavedViewId.value = null
   Object.assign(filters, patch)
@@ -965,15 +970,6 @@ async function goToPage(offset: number): Promise<void> {
       {{ t('eventsUi.truncated', { cap: perSourceCap }) }}
     </p>
 
-    <EventKpiStrip
-      :kpis="kpis"
-      :loaded="alerts.length"
-      :total="store.total"
-      :severity="filters.severity"
-      :ack="filters.ack"
-      @filter="patchFilter"
-    />
-
     <section class="card">
       <div class="filter-bar">
         <div class="field event-filters__search">
@@ -986,14 +982,9 @@ async function goToPage(offset: number): Promise<void> {
           />
         </div>
 
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterFrom') }}</span>
-          <input v-model="filters.from" class="input" type="datetime-local" />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{{ t('eventsUi.filterTo') }}</span>
-          <input v-model="filters.to" class="input" type="datetime-local" />
+        <label class="field event-filters__range">
+          <span class="field-label">{{ t('eventsUi.filterTimeRange') }}</span>
+          <DateRangePicker :from="filters.from" :to="filters.to" @apply="applyDateRange" />
         </label>
 
         <button
@@ -1713,6 +1704,12 @@ async function goToPage(offset: number): Promise<void> {
 .event-filters__search {
   flex: 1 1 260px;
   max-width: 320px;
+}
+
+/* 时间范围（一个日历）固定宽幅，与搜索框同一行。 */
+.event-filters__range {
+  flex: 0 0 auto;
+  width: 280px;
 }
 
 .event-filters__clear {

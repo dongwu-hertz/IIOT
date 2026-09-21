@@ -96,13 +96,23 @@ function createWindow(): BrowserWindow {
  * adding `media-src http://127.0.0.1:*` to the meta tag alone would have produced a
  * request cancelled right here — logged as a blocked network request, with a
  * `<video>` that never starts and no other symptom.
+ *
+ * THIRD OPENING: ONLINE MAP TILES (same two-gate lesson)
+ * The CSP meta widened `img-src` to `https:` for the optional online basemap
+ * (owner 2026-09-19), but this gate still cancelled every tile `<img>` — the map
+ * page showed nothing but the "some tiles failed" note. An image load cannot be
+ * turned into a fetch()/XHR/WebSocket channel (`connect-src 'none'` still blocks
+ * those in the renderer policy), so https **images** pass here exactly like they
+ * pass the CSP. Anything that is not an image stays on the old allow-list.
  */
 function configureSession(): void {
   const defaultSession = session.defaultSession
 
-  // Reject every renderer-initiated request that is not the app shell itself.
+  // Reject every renderer-initiated request that is not the app shell itself,
+  // an online map tile image, or the loopback camera stream.
   defaultSession.webRequest.onBeforeRequest((details, callback) => {
     const url = details.url
+    const isOnlineTileImage = details.resourceType === 'image' && /^https:\/\//i.test(url)
     const allowed =
       url.startsWith('file://') ||
       url.startsWith('devtools://') ||
@@ -110,7 +120,8 @@ function configureSession(): void {
       (!!process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL)) ||
       url.startsWith('data:') ||
       url.startsWith('blob:') ||
-      isCameraLiveStreamUrl(url)
+      isCameraLiveStreamUrl(url) ||
+      isOnlineTileImage
 
     if (!allowed) {
       appLog().warn('Blocked renderer-initiated network request', { url, resourceType: details.resourceType })

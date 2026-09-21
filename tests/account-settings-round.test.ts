@@ -591,15 +591,16 @@ describe('一键恢复默认值（手册 §17.2 第 5227 行）', () => {
     assert.equal(restored.alarmSounds.defaultSoundId, DEFAULT_ALARM_SOUND_ID)
   })
 
-  it('范围**只有**那十五个键，而且 i18n 的清单与它逐项对应', () => {
+  it('范围**只有**那十六个键，而且 i18n 的清单与它逐项对应', () => {
     /**
-     * 2026-09-19 起先是十四项（多了 `iotIngest`）；第 40 轮又加了 `mapTiles`（GIS 在设置里配置）。
+     * 2026-09-19 起先是十四项（多了 `iotIngest`）；第 40 轮又加了 `mapTiles`（GIS 在设置里配置）；
+     * 业主追加「GIS 服务库」后又加了 `mapServices`。
      *
      * 这一条断言守的是"有一项会被重置却没说"：范围由主进程的
      * `RESTORABLE_SETTING_KEYS` 定义，而确认对话框逐项列出它，两边的项数必须一样。
-     * 恢复默认会把接入总开关与在线底图都**关掉**（两者出厂默认都是关闭），所以那两项必须在清单里写出来。
+     * 恢复默认会把接入总开关与在线底图都**关掉**、清空 GIS 服务库（三者的出厂默认都是关/空），所以那三项必须在清单里写出来。
      */
-    assert.equal(RESTORABLE_SETTING_KEYS.length, 15)
+    assert.equal(RESTORABLE_SETTING_KEYS.length, 16)
     // 确认对话框逐项列出它们；项数不一致意味着"有一项会被重置却没说"。
     const zhItems = Object.keys(zhCN.settingsUi).filter((key) => key.startsWith('restoreItem'))
     assert.equal(

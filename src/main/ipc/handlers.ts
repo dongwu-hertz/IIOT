@@ -15,7 +15,7 @@
 
 import { ipcMain, shell, dialog, BrowserWindow, app } from 'electron'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IpcChannels } from '@shared/ipc/contract'
 import type {
@@ -54,11 +54,13 @@ import type {
   ProbeResult as ProbeResultContract,
   SampleAiConfigInput,
   SampleAiLabelRequest,
+  SampleAiServiceInput,
   SampleExportRequest,
   E2SyncRequest,
   /** IoT 接入的读数（业主 2026-09-19 第 1 条）：监听事实 + 收数统计。 */
   IotIngestRuntimeStatus
 } from '@shared/ipc/contract'
+import { isAiServicePreset } from '@shared/domain/sample-ai'
 import { AppError, ErrorCodes, toResult, type DeviceResult } from '@shared/errors'
 import type {
   ChangePasswordInput,
@@ -887,6 +889,50 @@ export function registerIpcHandlers(): void {
     toResult(async () => getServices().recordings.syncDeviceRecordings(deviceId))
   )
 
+  /**
+   * 另存一条本机录音（业主：告警中心右键「下载告警」）。
+   *
+   * 主进程负责全部三件事：定位行 → 保存对话框 → 复制文件。渲染层只拿到**保存后的
+   * 绝对路径**（用于一句成功提示）；取消对话框返回 `null`，不是错误。
+   * 复制用 `copyFile`（同一磁盘内是廉价元数据操作），写失败留下的部分文件被删掉 ——
+   * 与 `storage-service` 下载路径同一条「不留半截文件」纪律。
+   */
+  ipcMain.handle(IpcChannels.RECORDING_EXPORT, (event, recordingId: string) =>
+    toResult(async () => {
+      requirePermission('viewRecordings')
+      const id = String(recordingId ?? '').trim()
+      if (id === '') throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少录像 ID')
+      const services = getServices()
+      const row = services.recordingRepo.findById(id)
+      if (!row) throw new AppError(ErrorCodes.VALIDATION_ERROR, '找不到该录像记录', id)
+      const absolute = services.storage.resolve(row.relativePath)
+      if (!existsSync(absolute)) {
+        throw new AppError(ErrorCodes.STORAGE_ERROR, '该录像只有元数据，本地没有文件', row.relativePath)
+      }
+      const window = BrowserWindow.fromWebContents(event.sender)
+      const options = {
+        title: '下载告警录音',
+        defaultPath: row.relativePath.split('/').pop() ?? 'recording.wav',
+        filters: [{ name: '全部文件', extensions: ['*'] }]
+      }
+      const result = window
+        ? await dialog.showSaveDialog(window, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      try {
+        await copyFile(absolute, result.filePath)
+      } catch (error) {
+        await rm(result.filePath, { force: true }).catch(() => undefined)
+        throw new AppError(
+          ErrorCodes.STORAGE_ERROR,
+          '文件复制失败',
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      return { path: result.filePath }
+    })
+  )
+
   // -------------------------------------------------------------------------
   // 本地异常声纹样本库（schema v7，业主 2026-09-16）
   // -------------------------------------------------------------------------
@@ -1096,6 +1142,50 @@ export function registerIpcHandlers(): void {
       }
       if (request?.includeWeakLabelled === true) normalised.includeWeakLabelled = true
       return getServices().sampleAi.label(normalised)
+    })
+  )
+
+  /**
+   * 命名的 AI 服务库四条通道（业主追加：设置里「不同 AI 服务」）。
+   *
+   * 与上面三条同一权限批（`viewRecordings`）。写通道在**这一层收窄参数**：
+   * 名称/地址/模型只收字符串，provider 只收预置枚举（其余落到 'custom'），
+   * 密钥沿用三态（undefined 不动 / null 清除 / 字符串写入）。
+   */
+  ipcMain.handle(IpcChannels.SAMPLE_AI_SERVICES, () =>
+    toResult(async () => {
+      requirePermission('viewRecordings')
+      return getServices().sampleAi.servicesStatus()
+    })
+  )
+
+  ipcMain.handle(IpcChannels.SAMPLE_AI_SERVICE_SAVE, (_event, input: SampleAiServiceInput) =>
+    toResult(async () => {
+      requirePermission('viewRecordings')
+      const normalised: SampleAiServiceInput = {
+        name: typeof input?.name === 'string' ? input.name : '',
+        provider: isAiServicePreset(input?.provider) ? input.provider : 'custom',
+        endpoint: typeof input?.endpoint === 'string' ? input.endpoint : '',
+        model: typeof input?.model === 'string' ? input.model : ''
+      }
+      if (typeof input?.id === 'string' && input.id !== '') normalised.id = input.id
+      if (input?.apiKey === null) normalised.apiKey = null
+      else if (typeof input?.apiKey === 'string') normalised.apiKey = input.apiKey
+      return getServices().sampleAi.saveService(normalised)
+    })
+  )
+
+  ipcMain.handle(IpcChannels.SAMPLE_AI_SERVICE_DELETE, (_event, id: unknown) =>
+    toResult(async () => {
+      requirePermission('viewRecordings')
+      return getServices().sampleAi.deleteService(String(id ?? ''))
+    })
+  )
+
+  ipcMain.handle(IpcChannels.SAMPLE_AI_SERVICE_SET_ACTIVE, (_event, id: unknown) =>
+    toResult(async () => {
+      requirePermission('viewRecordings')
+      return getServices().sampleAi.setActiveService(String(id ?? ''))
     })
   )
 
@@ -1769,7 +1859,12 @@ export function registerIpcHandlers(): void {
           row.relativePath
         )
       }
-      return services.videoFiles.serve(absolute)
+      // 契约 `VideoPlaybackSource` 只有 {url, fileName}：句柄里的 `close` 是函数，
+      // 过 IPC 结构化克隆会抛 DataCloneError（「An object could not be cloned」），
+      // 三个播放入口会因此全挂，而且每个被打开的会话都泄漏一个回环端点（等 30 分钟 TTL）。
+      // 端点有 TTL 兜底，主进程侧不需要渲染层来关。
+      const handle = await services.videoFiles.serve(absolute)
+      return { url: handle.url, fileName: handle.fileName }
     })
   )
 

@@ -55,7 +55,6 @@ import {
   eventFilterCounts,
   eventFilterFromQuery,
   eventFilterToQuery,
-  eventKpis,
   evidenceImageSource,
   groupEvents,
   groupWindowIdFor,
@@ -262,47 +261,6 @@ describe('视图模型：状态、证据摘要、指标', () => {
       views.map((item) => item.id),
       ['a', 'b']
     )
-  })
-})
-
-describe('KPI（规格 §8）', () => {
-  it('按等级与"等着人确认"分别计数', () => {
-    const kpis = eventKpis([
-      view({ id: 'a', severity: 'critical', source: 'linkage', kind: 'linkageAlarm' }),
-      view({ id: 'b', severity: 'warning', source: 'linkage', kind: 'linkageAlarm' }),
-      view({ id: 'c', severity: 'unknown', source: 'deviceDetect', kind: 'deviceDetect' }),
-      view({ id: 'd', severity: 'warning', acknowledged: true })
-    ])
-    assert.equal(kpis.total, 4)
-    assert.equal(kpis.critical, 1)
-    assert.equal(kpis.high, 2)
-    assert.equal(kpis.unknownSeverity, 1)
-    // 只有 a、b 两条是"能确认但还没确认"；c 没有确认接口，d 已经确认。
-    assert.equal(kpis.unacknowledged, 2)
-  })
-
-  it('没有确认能力的来源不计入「未确认」（否则那个数字永远清不掉）', () => {
-    const kpis = eventKpis([
-      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' }),
-      view({ source: 'deviceDetect', kind: 'deviceDetect', severity: 'unknown' })
-    ])
-    assert.equal(kpis.total, 2)
-    assert.equal(kpis.unacknowledged, 0)
-  })
-
-  it('平均确认耗时与聚合事件数都是 `null`（来源里没有这两样东西）', () => {
-    const kpis = eventKpis([view()])
-    assert.equal(kpis.avgAckMs, null)
-    assert.equal(kpis.incidents, null)
-  })
-
-  it('空列表给出全 0（界面据此显示 0 而不是"—"）', () => {
-    const kpis = eventKpis([])
-    assert.equal(kpis.total, 0)
-    assert.equal(kpis.critical, 0)
-    assert.equal(kpis.high, 0)
-    assert.equal(kpis.unknownSeverity, 0)
-    assert.equal(kpis.unacknowledged, 0)
   })
 })
 

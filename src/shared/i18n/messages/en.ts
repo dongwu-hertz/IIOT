@@ -64,6 +64,29 @@ export const en: MessageSchema = {
     description: 'Takes effect immediately and your choice is remembered.'
   },
 
+  /** Calendar range picker (the "one calendar" shared by the alarm and event centers). */
+  picker: {
+    placeholder: 'Select time range',
+    presetAll: 'All',
+    presetToday: 'Today',
+    preset1h: 'Last hour',
+    preset24h: 'Last 24 hours',
+    preset7d: 'Last 7 days',
+    prevMonth: 'Previous month',
+    nextMonth: 'Next month',
+    startTime: 'Start time',
+    endTime: 'End time',
+    clear: 'Clear',
+    confirm: 'OK',
+    sun: 'Su',
+    mon: 'Mo',
+    tue: 'Tu',
+    wed: 'We',
+    thu: 'Th',
+    fri: 'Fr',
+    sat: 'Sa'
+  },
+
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Device management software',
@@ -87,7 +110,7 @@ export const en: MessageSchema = {
        * merges three sources newest-first: camera detection logs, local alarm
        * linkage and the box's own alarms.
        */
-      events: 'Event & alarm centre',
+      events: 'Event centre',
       recordings: 'Recordings',
       samples: 'Sample library',
       settings: 'Settings',
@@ -175,6 +198,55 @@ presets, the licence boundaries
     restoreItemMapTiles: 'Online basemap (switch, XYZ template, key and attribution)',
     tabAccount: 'Account',
     tabAbout: 'About & maintenance',
+    /** AI services tab (owner request: support "different AI services" in settings). */
+    tabAi: 'AI services',
+
+    /** GIS service library (inside the Map tab; owner request: "add GIS service"). */
+    mapServiceGroup: 'GIS services',
+    mapServiceHint:
+      'Save frequently used tile services by name and apply one with a single click; "Apply" overwrites the current configuration above and turns the layer on.',
+    mapServiceEmpty: 'No saved GIS services yet.',
+    mapServiceAdd: 'Add service',
+    mapServiceSaveCurrent: 'Save current configuration as a service',
+    mapServiceApply: 'Apply',
+    mapServiceEdit: 'Edit',
+    mapServiceDelete: 'Delete',
+    mapServiceDeleteConfirm: 'Delete GIS service "{name}"?',
+    mapServiceSave: 'Save service',
+    mapServiceCancel: 'Cancel',
+    mapServiceName: 'Service name',
+    mapServiceTest: 'Test tile',
+    mapServiceTesting: 'Testing…',
+    mapServiceTestOk: 'Sample tile loaded successfully; this URL works.',
+    mapServiceTestFail: 'Sample tile failed to load (no internet, wrong key, or service refused).',
+    mapServiceTooMany: 'GIS service limit reached',
+
+    /** AI service library (inside the AI tab). */
+    aiServiceGroup: 'AI services',
+    aiServiceHint:
+      'Add AI services (OpenAI-compatible API) and pick one; the selected service labels samples. Keys stay on this machine and are never shown back.',
+    aiServiceEmpty: 'No saved AI services yet.',
+    aiServiceAdd: 'Add service',
+    aiServiceName: 'Service name',
+    aiServiceEndpoint: 'Endpoint URL',
+    aiServiceModel: 'Model',
+    aiServiceKey: 'API key',
+    aiServiceKeyPlaceholder: 'Leave empty to keep the stored key',
+    aiServiceKeyStored: 'Key stored',
+    aiServiceKeyNone: 'No key stored',
+    aiServiceDeleteConfirm: 'Delete AI service "{name}"? Its key will be deleted too.',
+    aiServiceSaveFailed: 'Failed to save the AI service',
+    aiServiceTooMany: 'AI service limit reached',
+    aiServiceUnknown: 'Service status not loaded yet',
+    aiServiceReady: 'Selected service is ready',
+    aiPresetLabel: 'Provider presets (click to fill endpoint and model)',
+    aiPreset_openai: 'OpenAI',
+    aiPreset_deepseek: 'DeepSeek',
+    aiPreset_moonshot: 'Moonshot',
+    aiPreset_zhipu: 'Zhipu GLM',
+    aiPreset_qwen: 'Qwen',
+    aiPreset_ollama: 'Ollama (local)',
+    aiPreset_custom: 'Custom',
 
     /** Group caption inside the Storage tab (the tab name already says "storage"). */
     storageGroupLocation: 'Location & retention',
@@ -263,6 +335,7 @@ presets, the licence boundaries
     restoreItemAlarmLinkage: 'Alarm linkage (including the mail server, receivers, templates and cooldown)',
     restoreItemAlarmSounds: 'Alarm sound library (sound types and the audio files chosen)',
     restoreItemIotIngest: 'Data ingest (HTTP push / MQTT switches, bind address and ports)',
+    restoreItemMapServices: 'GIS service library (saved named tile services)',
     restoreWarnStorage: 'The storage path goes back to the default. Recordings and files already on disk are not deleted, they are simply no longer pointed at; note the current path down first if you need it.',
     restoreKeeps: 'The device list, channels, recordings and audio files, alarm records, accounts and account permissions are not touched.',
     restoreConfirm: 'Restore defaults',
@@ -431,6 +504,22 @@ presets, the licence boundaries
     filterType: 'Alarm type',
     filterAllTypes: 'All types',
     filterFrom: 'From',
+    /** Filter row (owner redesign: title + content + one calendar). */
+    filterTitle: 'Title',
+    filterTitleHint: 'Search by device name',
+    filterContent: 'Content',
+    filterContentHint: 'Search note / device reason',
+    filterTimeRange: 'Time range',
+    menuDetail: 'View details',
+    menuReplay: 'Replay',
+    menuDownload: 'Download alarm',
+    menuAddSample: 'Add to samples',
+    menuAck: 'Acknowledge',
+    menuUnack: 'Unacknowledge',
+    menuNoRecording: 'This alarm has no local recording to download',
+    downloadDone: 'Saved to {path}',
+    videoTitle: 'Alarm video',
+    snapshotsTitle: 'Alarm snapshots',
     filterTo: 'To',
     filterAck: 'Acknowledged',
     filterAllChannels: 'All channels',
@@ -2015,7 +2104,8 @@ presets, the licence boundaries
     eventSource: {
       deviceDetect: 'Camera detection log',
       linkage: 'Local alarm linkage',
-      localAlarm: 'Acoustic box alarm'
+      localAlarm: 'Acoustic box alarm',
+      deviceStatus: 'Device status'
     },
     eventSeverity: {
       info: 'Info',
@@ -2027,7 +2117,9 @@ presets, the licence boundaries
       deviceDetect: 'Detection completed',
       deviceDetectAlarm: 'Detection the device flagged as an alarm',
       linkageAlarm: 'Local linkage alarm',
-      localAlarm: 'Acoustic box alarm'
+      localAlarm: 'Acoustic box alarm',
+      deviceOnline: 'Device online',
+      deviceOffline: 'Device offline'
     },
     detectFileKind: {
       power_spectrum_photo: 'Power spectrum image',
@@ -2965,6 +3057,7 @@ presets, the licence boundaries
     },
 
     searchPlaceholder: 'Search device, event, metric',
+    filterTimeRange: 'Time range',
     searchScope: 'Search covers the {loaded} loaded rows only',
 
     savedViewTitle: 'Views',

@@ -566,3 +566,95 @@ export function timeZoneCenter(timeZone: string | null | undefined): MapCenter {
   }
   return { latitude: 0, longitude: 0, zoom: MIN_TILE_ZOOM }
 }
+
+// ---------------------------------------------------------------------------
+// 命名的 GIS 服务库（业主追加：设置里「添加 GIS 服务」）
+// ---------------------------------------------------------------------------
+
+/** 库里最多存几条命名服务：设置页一个小列表，不是数据库；太多条本身就是一种混乱。 */
+export const MAX_MAP_SERVICES = 20
+/** 服务显示名长度上限。 */
+export const MAX_MAP_SERVICE_NAME = 64
+
+/**
+ * 一条**命名的** GIS 服务（设置 → 地图 → GIS 服务库）。
+ *
+ * 与 `MapTilesConfig` 的关系：`MapTilesConfig` 是"**当前生效**的那一份"（带 enabled
+ * 开关），`MapServiceEntry` 是可命名保存、随时一键选用的**备选库**。条目本身没有开关——
+ * 「启用」发生在「应用」那一刻：把条目内容抄进 `mapTiles` 并置 enabled。
+ *
+ * 校验判据与 `mapTilesProblem()` **同一份**（那里注释了为什么规则只有一套）：这里只是
+ * 把"模板必填、名称必填"补进去。
+ */
+export interface MapServiceEntry {
+  id: string
+  name: string
+  service: MapTileServiceId
+  urlTemplate: string
+  apiKey: string
+  attribution: string
+}
+
+/** 新条目 id。渲染层（添加）与主进程（迁移/兜底）都用它，避免两处各写一套。 */
+export function newMapServiceId(): string {
+  return globalThis.crypto.randomUUID()
+}
+
+/** 校验一条库条目；合法返回 null，否则返回与 `mapTilesProblem()` 同枚举的问题码。 */
+export function mapServiceProblem(entry: MapServiceEntry): MapTilesProblem | null {
+  const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+  if (name === '') return 'templateInvalid'
+  if (name.length > MAX_MAP_SERVICE_NAME || /[\u0000-\u001F]/.test(name)) return 'templateInvalid'
+  // 库里存一条空模板服务没有意义：这一条比 mapTilesProblem() 多出来的唯一规则。
+  if (typeof entry.urlTemplate !== 'string' || entry.urlTemplate.trim() === '') {
+    return 'templateRequired'
+  }
+  return mapTilesProblem({ enabled: false, ...entry })
+}
+
+/**
+ * 把任意输入归一化成服务库；坏条目**逐条丢弃**并记 issues（一条坏服务不该让整个库作废，
+ * 与 `alarmLinkage` 逐字段回落同一哲学）。issues 里的字符串是「索引:问题码」。
+ */
+export function normaliseMapServices(value: unknown): { services: MapServiceEntry[]; issues: string[] } {
+  const empty = { services: [] as MapServiceEntry[], issues: [] as string[] }
+  if (!Array.isArray(value)) return empty
+  const services: MapServiceEntry[] = []
+  const issues: string[] = []
+  const seen = new Set<string>()
+  for (const [index, raw] of value.entries()) {
+    if (services.length >= MAX_MAP_SERVICES) {
+      issues.push(`${index}:too-many`)
+      continue
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      issues.push(`${index}:shape`)
+      continue
+    }
+    const record = raw as Record<string, unknown>
+    const entry: MapServiceEntry = {
+      id:
+        typeof record.id === 'string' && record.id.trim() !== ''
+          ? record.id.trim()
+          : newMapServiceId(),
+      name:
+        typeof record.name === 'string' ? record.name.trim().slice(0, MAX_MAP_SERVICE_NAME) : '',
+      service: isMapTileService(record.service) ? record.service : 'custom',
+      urlTemplate: typeof record.urlTemplate === 'string' ? record.urlTemplate.trim() : '',
+      apiKey: typeof record.apiKey === 'string' ? record.apiKey.trim() : '',
+      attribution: typeof record.attribution === 'string' ? record.attribution.trim() : ''
+    }
+    if (seen.has(entry.id)) {
+      issues.push(`${index}:duplicate-id`)
+      continue
+    }
+    const problem = mapServiceProblem(entry)
+    if (problem !== null) {
+      issues.push(`${index}:${problem}`)
+      continue
+    }
+    seen.add(entry.id)
+    services.push(entry)
+  }
+  return { services, issues }
+}

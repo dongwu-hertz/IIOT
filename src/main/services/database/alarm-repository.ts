@@ -59,6 +59,11 @@ interface AlarmRow {
   device_raw: string | null
   /** v12：本机存这条告警抓图的目录（存储根相对）。 */
   snapshot_dir: string | null
+  /**
+   * LEFT JOIN `recordings` 带来的容器（回放据此选音频/视频播放器）。
+   * 查询语句用 `alarms.*` + 别名投影，列序不与 recordings 的列混淆。
+   */
+  local_recording_container?: string | null
 }
 
 /**
@@ -104,6 +109,9 @@ function toAlarm(row: AlarmRow): AlarmEvent {
   if (row.files_status !== null) event.filesStatus = row.files_status
   if (row.device_raw !== null) event.deviceRaw = row.device_raw
   if (row.snapshot_dir !== null) event.snapshotDir = row.snapshot_dir
+  if (typeof row.local_recording_container === 'string' && row.local_recording_container !== '') {
+    event.localRecordingContainer = row.local_recording_container as AlarmEvent['localRecordingContainer']
+  }
   return event
 }
 
@@ -233,46 +241,66 @@ export class AlarmRepository {
     const params: (string | number)[] = []
 
     if (query.deviceId) {
-      conditions.push('device_id = ?')
+      conditions.push('alarms.device_id = ?')
       params.push(query.deviceId)
     }
     if (query.channelId !== undefined) {
-      conditions.push('channel_id = ?')
+      conditions.push('alarms.channel_id = ?')
       params.push(query.channelId)
     }
     if (query.from !== undefined) {
-      conditions.push('alarm_time >= ?')
+      conditions.push('alarms.alarm_time >= ?')
       params.push(query.from)
     }
     if (query.to !== undefined) {
-      conditions.push('alarm_time <= ?')
+      conditions.push('alarms.alarm_time <= ?')
       params.push(query.to)
     }
     if (query.acknowledged !== undefined) {
-      conditions.push('acknowledged = ?')
+      conditions.push('alarms.acknowledged = ?')
       params.push(query.acknowledged ? 1 : 0)
     }
     if (query.severity !== undefined) {
-      conditions.push('severity = ?')
+      conditions.push('alarms.severity = ?')
       params.push(query.severity)
     }
     if (query.source !== undefined) {
       // 旧行的 `source` 在迁移里回填过，所以这里可以精确匹配；`'fa8'` 也要能查到它们。
-      conditions.push('source = ?')
+      conditions.push('alarms.source = ?')
       params.push(query.source)
     }
     if (query.alarmType !== undefined) {
       // Bit test in SQL is fine here: this is an index/scan concern, not
       // business decoding. The decoded list still comes from decodeAlarmMask.
-      conditions.push('(alarm_mask & ?) != 0')
+      conditions.push('(alarms.alarm_mask & ?) != 0')
       params.push(1 << query.alarmType)
+    }
+    /*
+     * 标题 / 内容关键字（业主：告警中心筛选只留这两项 + 时间范围）。
+     * 标题匹配**设备名**：名字在 `devices` 表里，用子查询而不是 JOIN——JOIN 会让
+     * `SELECT *` 的列序被 devices 的列污染，`AlarmRow` 映射会错位。
+     * 转义收在这一层（调用方传**原始**关键字）：`%`/`_`/`\` 先转义再两头包 `%`，
+     * 否则操作员搜一个下划线就把全库捞出来了。
+     */
+    const title = typeof query.title === 'string' ? query.title.trim() : ''
+    if (title !== '') {
+      conditions.push("alarms.device_id IN (SELECT id FROM devices WHERE name LIKE ? ESCAPE '\\')")
+      params.push(likePattern(title))
+    }
+    const content = typeof query.content === 'string' ? query.content.trim() : ''
+    if (content !== '') {
+      conditions.push("(COALESCE(alarms.note, '') LIKE ? ESCAPE '\\' OR COALESCE(alarms.device_reason, '') LIKE ? ESCAPE '\\')")
+      params.push(likePattern(content), likePattern(content))
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
+    // `alarms.*` 投影保住 AlarmRow 的列序；容器经别名附在末尾（回放选播放器用）。
     const rows = this.db
       .prepare<typeof params, AlarmRow>(
-        `SELECT * FROM alarms ${where} ORDER BY alarm_time DESC LIMIT ? OFFSET ?`
+        `SELECT alarms.*, recordings.container_format AS local_recording_container
+         FROM alarms LEFT JOIN recordings ON recordings.id = alarms.recording_id
+         ${where} ORDER BY alarms.alarm_time DESC LIMIT ? OFFSET ?`
       )
       .all(...params, limit, offset)
 
@@ -285,7 +313,11 @@ export class AlarmRepository {
 
   recent(limit = 10): AlarmEvent[] {
     const rows = this.db
-      .prepare<[number], AlarmRow>(`SELECT * FROM alarms ORDER BY alarm_time DESC LIMIT ?`)
+      .prepare<[number], AlarmRow>(
+        `SELECT alarms.*, recordings.container_format AS local_recording_container
+         FROM alarms LEFT JOIN recordings ON recordings.id = alarms.recording_id
+         ORDER BY alarm_time DESC LIMIT ?`
+      )
       .all(clampLimit(limit, 10, 200))
     return rows.map(toAlarm)
   }
@@ -298,7 +330,13 @@ export class AlarmRepository {
    * 一条 1000 条以前的告警会"点加入样本库没反应"，而且**看不出来为什么**。
    */
   findById(id: string): AlarmEvent | undefined {
-    const row = this.db.prepare<[string], AlarmRow>(`SELECT * FROM alarms WHERE id = ?`).get(id)
+    const row = this.db
+      .prepare<[string], AlarmRow>(
+        `SELECT alarms.*, recordings.container_format AS local_recording_container
+         FROM alarms LEFT JOIN recordings ON recordings.id = alarms.recording_id
+         WHERE alarms.id = ?`
+      )
+      .get(id)
     return row ? toAlarm(row) : undefined
   }
 
@@ -374,19 +412,19 @@ export class AlarmRepository {
     const conditions: string[] = []
     const params: (string | number)[] = []
     if (query.deviceId) {
-      conditions.push('device_id = ?')
+      conditions.push('alarms.device_id = ?')
       params.push(query.deviceId)
     }
     if (query.channelId !== undefined) {
-      conditions.push('channel_id = ?')
+      conditions.push('alarms.channel_id = ?')
       params.push(query.channelId)
     }
     if (query.from !== undefined) {
-      conditions.push('alarm_time >= ?')
+      conditions.push('alarms.alarm_time >= ?')
       params.push(query.from)
     }
     if (query.to !== undefined) {
-      conditions.push('alarm_time <= ?')
+      conditions.push('alarms.alarm_time <= ?')
       params.push(query.to)
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -781,6 +819,15 @@ function clampLimit(value: number | undefined, fallback: number, max: number): n
 /** Type-narrow a channel index coming from an untrusted source. */
 export function isValidChannel(channelId: number): boolean {
   return Number.isInteger(channelId) && channelId >= 0 && channelId < CHANNEL_COUNT
+}
+
+/**
+ * 把原始关键字变成安全的 LIKE 模式：转义 `%` / `_` / `\` 后两头包 `%`。
+ * 与上面 query() 里的 `ESCAPE '\'` 配套；导出来是为了让单测能直接断言转义行为。
+ */
+export function likePattern(keyword: string): string {
+  const escaped = keyword.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+  return `%${escaped}%`
 }
 
 export type { AlarmType }

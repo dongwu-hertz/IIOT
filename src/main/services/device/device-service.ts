@@ -131,6 +131,15 @@ export interface DeviceServiceOptions {
    */
   getIngestConfig?: () => IotIngestConfig
   /**
+   * 设备**上线 / 离线**事件的落库（业主：事件中心把设备离线纳入时间线，schema v17）。
+   *
+   * 可选注入：测试里构造 `DeviceService` 大多不关心事件留存，不给就用一个**空实现**，
+   * 翻转照常发生、只是不留历史。生产接线见 `app-services.ts`。
+   */
+  deviceStatusEvents?: {
+    record(input: { deviceId: string; deviceName: string; status: 'ONLINE' | 'OFFLINE'; at: number }): void
+  }
+  /**
    * 本机可用于设备的地址表。
    *
    * 注入口而不是在这里 `import os`：测试机器上有几张网卡、地址是什么，与"秘钥怎么生成、
@@ -219,6 +228,8 @@ export class DeviceService extends EventEmitter {
   private readonly listLocalAddresses: () => IotIngestLocalAddress[]
   /** 设备声明变了之后通知接线层（见 `DeviceServiceOptions.syncIngest`）。 */
   private readonly onIngestNeedChanged?: (need: { http: boolean; mqtt: boolean }) => void
+  /** 设备状态翻转事件落库（schema v17）；测试不注入时就是 undefined（不留历史）。 */
+  private readonly deviceStatusEvents?: DeviceServiceOptions['deviceStatusEvents']
 
   constructor(options: DeviceServiceOptions) {
     super()
@@ -231,6 +242,7 @@ export class DeviceService extends EventEmitter {
     this.getIngestConfig = options.getIngestConfig ?? defaultIotIngestConfig
     this.listLocalAddresses = options.listLocalAddresses ?? listLocalAddresses
     this.onIngestNeedChanged = options.syncIngest
+    this.deviceStatusEvents = options.deviceStatusEvents
     this.resolver = new AuthStrategyResolver(this.transport)
   }
 
@@ -1625,9 +1637,28 @@ export class DeviceService extends EventEmitter {
       this.devices.setStatus(device.id, 'ONLINE', timestamp)
       runtime.lastStatus = 'ONLINE'
       this.emitStatus({ deviceId: device.id, status: 'ONLINE', lastSeen: timestamp })
+      this.recordStatusEvent(device, 'ONLINE', timestamp)
     } else {
       // Still online: refresh lastSeen silently, no event storm.
       this.devices.setStatus(device.id, 'ONLINE', timestamp)
+    }
+  }
+
+  /** 落一条设备状态事件（翻转才落；静默刷新 lastSeen 不落，否则一次会话能写几千条）。 */
+  private recordStatusEvent(device: Device, status: 'ONLINE' | 'OFFLINE', at: number): void {
+    try {
+      this.deviceStatusEvents?.record({
+        deviceId: device.id,
+        deviceName: device.name,
+        status,
+        at
+      })
+    } catch (error) {
+      // 事件留存失败不影响状态机本身：状态翻转是设备事实，留存是诊断线索。
+      deviceLog().warn('设备状态事件落库失败', {
+        deviceId: device.id,
+        reason: error instanceof Error ? error.message : String(error)
+      })
     }
   }
 
@@ -1669,6 +1700,7 @@ export class DeviceService extends EventEmitter {
       this.devices.setStatus(device.id, 'OFFLINE')
       runtime.lastStatus = 'OFFLINE'
       this.emitStatus({ deviceId: device.id, status: 'OFFLINE' })
+      this.recordStatusEvent(device, 'OFFLINE', now())
       deviceLog().warn('Device marked OFFLINE', {
         deviceId: device.id,
         consecutiveFailures: runtime.consecutiveFailures,

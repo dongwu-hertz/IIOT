@@ -307,3 +307,107 @@ function errorDetail(body: unknown): string {
   }
   return ''
 }
+
+// ---------------------------------------------------------------------------
+// 命名的 AI 服务库（业主追加：设置里「不同 AI 服务」）
+// ---------------------------------------------------------------------------
+
+/** 库里最多存几条命名服务（与 GIS 服务库同一口径）。 */
+export const MAX_AI_SERVICES = 20
+/** 服务显示名长度上限。 */
+export const MAX_AI_SERVICE_NAME = 64
+
+/**
+ * 常见厂家的 OpenAI 兼容预置（业主追加：设置里支持不同 AI 服务）。
+ *
+ * 全部走 `/chat/completions` 兼容协议 —— 与 `buildChatRequest()` 已经发出的请求形状
+ * 一致，运行时**不按 provider 分支**：provider 只是保存预置名与「点选后填哪两个框」。
+ * endpoint 都是完整地址（本软件不猜路径，见 `normaliseAiEndpoint()` 的注释）。
+ *
+ * 模型名写的是各家**当前文档里的入门档**：够用、便宜、限额宽；换更强模型改「模型」框即可。
+ */
+export const AI_SERVICE_PRESETS = [
+  { id: 'openai', endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+  { id: 'deepseek', endpoint: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
+  { id: 'moonshot', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'moonshot-v1-8k' },
+  { id: 'zhipu', endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash' },
+  { id: 'qwen', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus' },
+  { id: 'ollama', endpoint: 'http://localhost:11434/v1/chat/completions', model: 'qwen2.5:7b' },
+  { id: 'custom', endpoint: '', model: '' }
+] as const
+export type AiServicePresetId = (typeof AI_SERVICE_PRESETS)[number]['id']
+
+export function isAiServicePreset(value: unknown): value is AiServicePresetId {
+  return typeof value === 'string' && AI_SERVICE_PRESETS.some((preset) => preset.id === value)
+}
+
+/**
+ * 一条**命名的** AI 服务（设置 → AI 服务库）。
+ *
+ * 与 GIS 服务库同一哲学：`SampleAiConfig` 是"**当前启用**的那一份"，`AiServiceEntry`
+ * 是可命名保存、随时选用的备选库。条目不带 enabled（启用在选用那一刻发生），也**不带
+ * 密钥** —— 密钥是秘密，按服务 id 单独走 OS 加密存储（`sampleAi.key.<id>`）。
+ */
+export interface AiServiceEntry {
+  id: string
+  name: string
+  provider: AiServicePresetId
+  endpoint: string
+  model: string
+}
+
+/** 新条目 id。渲染层（添加）与主进程（迁移/兜底）都用它。 */
+export function newAiServiceId(): string {
+  return globalThis.crypto.randomUUID()
+}
+
+/**
+ * 把任意输入归一化成 AI 服务库；坏条目**逐条丢弃**并记 issues（索引:问题码形状，
+ * 与 `normaliseMapServices()` 同一套约定）。endpoint 用 `isAcceptableAiEndpoint()` 判
+ * （http/https 且非空——空 endpoint 的条目存着没有意义）。
+ */
+export function normaliseAiServices(value: unknown): { services: AiServiceEntry[]; issues: string[] } {
+  const empty = { services: [] as AiServiceEntry[], issues: [] as string[] }
+  if (!Array.isArray(value)) return empty
+  const services: AiServiceEntry[] = []
+  const issues: string[] = []
+  const seen = new Set<string>()
+  for (const [index, raw] of value.entries()) {
+    if (services.length >= MAX_AI_SERVICES) {
+      issues.push(`${index}:too-many`)
+      continue
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      issues.push(`${index}:shape`)
+      continue
+    }
+    const record = raw as Record<string, unknown>
+    const endpoint = typeof record.endpoint === 'string' ? record.endpoint.trim() : ''
+    if (endpoint === '' || !isAcceptableAiEndpoint(endpoint)) {
+      issues.push(`${index}:bad-endpoint`)
+      continue
+    }
+    const name = typeof record.name === 'string' ? record.name.trim().slice(0, MAX_AI_SERVICE_NAME) : ''
+    if (name === '' || name.length > MAX_AI_SERVICE_NAME) {
+      issues.push(`${index}:bad-name`)
+      continue
+    }
+    const entry: AiServiceEntry = {
+      id:
+        typeof record.id === 'string' && record.id.trim() !== ''
+          ? record.id.trim()
+          : newAiServiceId(),
+      name,
+      provider: isAiServicePreset(record.provider) ? record.provider : 'custom',
+      endpoint: normaliseAiEndpoint(endpoint),
+      model: typeof record.model === 'string' ? record.model.trim() : ''
+    }
+    if (seen.has(entry.id)) {
+      issues.push(`${index}:duplicate-id`)
+      continue
+    }
+    seen.add(entry.id)
+    services.push(entry)
+  }
+  return { services, issues }
+}

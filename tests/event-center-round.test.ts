@@ -218,10 +218,9 @@ describe('Phase 2 · 侧栏折叠（规格 §3.2 / §3.3）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Phase 3：KPI 条 / 筛选面板 / 告警队列（规格 §8–§11）
+// Phase 3：筛选面板 / 告警队列（规格 §8–§11；KPI 条已按业主要求整段删除）
 // ---------------------------------------------------------------------------
 
-const kpiStrip = read('src/renderer/src/components/event-center/EventKpiStrip.vue')
 const filterPanel = read('src/renderer/src/components/event-center/EventFilterPanel.vue')
 const alertQueue = read('src/renderer/src/components/event-center/AlertQueue.vue')
 const drawer = read('src/renderer/src/components/event-center/EventDetailDrawer.vue')
@@ -272,7 +271,6 @@ describe('Phase 3 · 严重度五级与队列行（规格 §2.3 / §10）', () =
   })
 
   it('新组件里没有写死的颜色（颜色只在 main.css 的 token 里）', () => {
-    expectNoHardcodedColor(kpiStrip, 'EventKpiStrip.vue')
     expectNoHardcodedColor(filterPanel, 'EventFilterPanel.vue')
     expectNoHardcodedColor(alertQueue, 'AlertQueue.vue')
   })
@@ -308,42 +306,11 @@ describe('Phase 3 · 严重度五级与队列行（规格 §2.3 / §10）', () =
   })
 })
 
-describe('Phase 3 · KPI 条与筛选（规格 §8 / §9）', () => {
-  it('KPI 条只画四格：严重 / 高 / 未确认 / 平均确认耗时（聚合事件是 Phase 6）', () => {
-    assert.ok(kpiStrip.includes("t('eventsUi.alertSeverity.critical')"), '没有严重那一格')
-    assert.ok(kpiStrip.includes("t('eventsUi.alertSeverity.high')"), '没有高那一格')
-    assert.ok(kpiStrip.includes("t('eventsUi.kpiUnacknowledged')"), '没有未确认那一格')
-    assert.ok(kpiStrip.includes("t('eventsUi.kpiAvgAck')"), '没有平均确认耗时那一格')
-    // 聚合事件（Incidents）在 Phase 6 之前不渲染：一个恒为 0 的格子会被读成"聚合过了"。
-    assert.equal(kpiStrip.includes('incidents'), false, 'KPI 条渲染了还没实现的聚合事件')
-  })
-
-  it('平均确认耗时拿不到时显示「—」而不是 0（`avgAckMs` 恒为 null）', () => {
-    assert.ok(
-      kpiStrip.includes('props.kpis.avgAckMs === null ? null : props.kpis.avgAckMs / 1000'),
-      '没有把"没有确认时刻"当成 0 秒'
-    )
-    assert.ok(kpiStrip.includes(':value="avgAckSeconds"'), '那一格没有把换算结果接上')
-    assert.match(
-      eventViewDomain,
-      /avgAckMs:\s*null,[\s\S]{0,80}incidents:\s*null/,
-      '视图模型没有如实声明这两个数拿不到'
-    )
-  })
-
-  it('KPI 与计数都写明作用域（只统计已加载的那一页）', () => {
-    assert.ok(kpiStrip.includes("t('eventsUi.kpiScope'"), 'KPI 条没有印作用域')
+describe('Phase 3 · 筛选（规格 §9；KPI 条已按业主要求整段删除）', () => {
+  it('筛选面板的计数写明作用域（只统计已加载的那一页）', () => {
     assert.ok(filterPanel.includes("t('eventsUi.panelScope'"), '筛选面板没有印作用域')
-    assert.ok(kpiStrip.includes("t('eventsUi.kpiScope'"), 'KPI 条缺少作用域说明')
   })
 
-  it('KPI 可点：严重/高/未确认三格把筛选打开或关掉', () => {
-    assert.ok(kpiStrip.includes('@click="toggleSeverity(\'critical\')"'), '严重那一格不可点')
-    assert.ok(kpiStrip.includes('@click="toggleSeverity(\'high\')"'), '高那一格不可点')
-    assert.ok(kpiStrip.includes('@click="toggleAck(\'unacknowledged\')"'), '未确认那一格不可点')
-    assert.ok(kpiStrip.includes(':aria-pressed='), '可点的 KPI 没有 aria-pressed')
-    assert.ok(eventView.includes('@filter="patchFilter"'), 'KPI 与筛选没有接上')
-  })
 
   it('筛选面板四组都带计数，且"计数为 0 也能点"（它们是筛选，不是统计）', () => {
     for (const group of [

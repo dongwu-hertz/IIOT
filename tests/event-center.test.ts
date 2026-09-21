@@ -371,10 +371,10 @@ describe('EventCenterService.query', () => {
     assert.deepEqual(page.items, [])
     assert.equal(page.total, 0)
     assert.equal(page.truncated, false)
-    assert.deepEqual(page.countsBySource, { deviceDetect: 0, linkage: 0, localAlarm: 0 })
+    assert.deepEqual(page.countsBySource, { deviceDetect: 0, linkage: 0, localAlarm: 0, deviceStatus: 0 })
     // Every source reports itself as read-and-empty rather than being absent:
     // "we looked and there was nothing" is a different statement from silence.
-    assert.equal(page.sources.length, 3)
+    assert.equal(page.sources.length, 3) // 本测试不注入 deviceStatus：没接线的那一路不报状态
     for (const status of page.sources) {
       assert.equal(status.ok, true)
       assert.equal(status.items, 0)
@@ -407,7 +407,7 @@ describe('EventCenterService.query', () => {
       page.items.map((item) => item.at),
       [4_000, 3_000, 2_000]
     )
-    assert.deepEqual(page.countsBySource, { deviceDetect: 1, linkage: 1, localAlarm: 1 })
+    assert.deepEqual(page.countsBySource, { deviceDetect: 1, linkage: 1, localAlarm: 1, deviceStatus: 0 })
     assert.equal(page.total, 3)
     assert.equal(page.truncated, false)
   })
@@ -470,7 +470,7 @@ describe('EventCenterService.query', () => {
     const page = await service.query({ deviceId: 'cam-1', limit: 50, offset: 0 })
     assert.equal(page.items.length, 1)
     assert.equal(page.items[0]?.deviceId, 'cam-1')
-    assert.deepEqual(page.countsBySource, { deviceDetect: 1, linkage: 0, localAlarm: 0 })
+    assert.deepEqual(page.countsBySource, { deviceDetect: 1, linkage: 0, localAlarm: 0, deviceStatus: 0 })
 
     const justBoxA = await service.query({ deviceId: boxA, limit: 50, offset: 0 })
     assert.deepEqual(justBoxA.items.map((item) => item.deviceId), [boxA])
@@ -522,7 +522,7 @@ describe('EventCenterService.query', () => {
     // must exclude the linkage entry (whose level is unknown) entirely.
     const warningOnly = await service.query({ severity: 'warning', limit: 50, offset: 0 })
     assert.deepEqual(warningOnly.items.map((item) => item.source), ['localAlarm', 'localAlarm'])
-    assert.deepEqual(warningOnly.countsBySource, { deviceDetect: 0, linkage: 0, localAlarm: 2 })
+    assert.deepEqual(warningOnly.countsBySource, { deviceDetect: 0, linkage: 0, localAlarm: 2, deviceStatus: 0 })
 
     const unknownOnly = await service.query({ severity: 'unknown', limit: 50, offset: 0 })
     assert.deepEqual(unknownOnly.items.map((item) => item.source), ['linkage', 'linkage'])

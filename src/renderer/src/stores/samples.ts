@@ -16,6 +16,8 @@ import type {
   SampleAiConfigInput,
   SampleAiLabelOutcome,
   SampleAiLabelRequest,
+  SampleAiServiceInput,
+  SampleAiServicesStatus,
   SampleAiStatus,
   SampleBulkAddOutcome,
   SampleExportRequest,
@@ -247,6 +249,55 @@ export const useSamplesStore = defineStore('samples', () => {
     return unwrap(result)
   }
 
+  // -------------------------------------------------------------------------
+  // 命名的 AI 服务库（设置页 AI 页签用；样本页不直接改库）
+  // -------------------------------------------------------------------------
+
+  const aiServices = ref<SampleAiServicesStatus | null>(null)
+
+  async function loadAiServices(): Promise<void> {
+    const result = await callApi(() => window.api.samples.aiServices())
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return
+    }
+    error.value = ''
+    aiServices.value = unwrap(result) ?? null
+  }
+
+  async function saveAiService(input: SampleAiServiceInput): Promise<boolean> {
+    const result = await callApi(() => window.api.samples.saveAiService(input))
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return false
+    }
+    error.value = ''
+    aiServices.value = unwrap(result) ?? aiServices.value
+    return true
+  }
+
+  async function deleteAiService(id: string): Promise<boolean> {
+    const result = await callApi(() => window.api.samples.deleteAiService(id))
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return false
+    }
+    error.value = ''
+    aiServices.value = unwrap(result) ?? aiServices.value
+    return true
+  }
+
+  async function setActiveAiService(id: string): Promise<boolean> {
+    const result = await callApi(() => window.api.samples.setActiveAiService(id))
+    if (!result.success) {
+      error.value = resultMessage(result)
+      return false
+    }
+    error.value = ''
+    aiServices.value = unwrap(result) ?? aiServices.value
+    return true
+  }
+
   /**
    * 写**某一维**的标签（`null` = 撤销这一维的标注）。
    *
@@ -392,6 +443,7 @@ export const useSamplesStore = defineStore('samples', () => {
     aiStatus,
     aiSaving,
     aiBusy,
+    aiServices,
     labelLibrary,
     labelBusy,
     error,
@@ -409,6 +461,10 @@ export const useSamplesStore = defineStore('samples', () => {
     loadAiStatus,
     saveAiConfig,
     aiLabel,
+    loadAiServices,
+    saveAiService,
+    deleteAiService,
+    setActiveAiService,
     setLabel,
     setLabels,
     remove,

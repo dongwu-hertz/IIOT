@@ -22,6 +22,10 @@
 
 import { i18n } from '@renderer/i18n'
 import { DEFAULT_ERROR_MESSAGES, type AppErrorShape, type DeviceResult } from '@shared/errors'
+import { useAppNoticesStore } from '@renderer/stores/appNotices'
+
+/** 桥接失败在顶栏通知里的稳定 id（成功一次即撤掉，见 `callApi`）。 */
+const BRIDGE_NOTICE_ID = 'app.bridge'
 
 /**
  * Translate an error code.
@@ -89,6 +93,9 @@ export function errorMessage(error?: AppErrorShape): string {
 /** Message for a failed result, including the code so support can triage. */
 export function resultMessage<T>(result: DeviceResult<T>): string {
   if (result.success) return ''
+  // 桥接失败（软件自身故障）只在顶栏通知里说一次；页面内的大字横幅对它保持沉默，
+  // 否则一条「无法连接到主进程，请重启应用」会把整页内容顶下去（业主只要求标题栏提示）。
+  if (result.error?.bridge === true) return ''
   return i18n.global.t('errors.withCode', {
     message: errorMessage(result.error),
     code: result.error?.code ?? 'UNKNOWN'
@@ -116,15 +123,27 @@ export async function callApi<T>(
   fallbackMessage?: string
 ): Promise<DeviceResult<T>> {
   try {
-    return await operation()
+    const result = await operation()
+    if (result.success) {
+      // 任何一次成功都证明桥是通的：把顶栏那条「无法连接到主进程」撤掉。
+      useAppNoticesStore().clear(BRIDGE_NOTICE_ID)
+    }
+    return result
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     const base = fallbackMessage ?? i18n.global.t('errors.bridgeUnavailable')
+    // 顶栏通知说一遍（同 id 覆盖，不刷屏）；页面横幅由 `resultMessage` 的 bridge 分支沉默掉。
+    useAppNoticesStore().report({
+      id: BRIDGE_NOTICE_ID,
+      kind: 'error',
+      text: i18n.global.t('errors.bridgeUnavailableDetail', { message: base, detail })
+    })
     return {
       success: false,
       error: {
         code: 'UNKNOWN',
-        message: i18n.global.t('errors.bridgeUnavailableDetail', { message: base, detail })
+        message: i18n.global.t('errors.bridgeUnavailableDetail', { message: base, detail }),
+        bridge: true
       }
     }
   }

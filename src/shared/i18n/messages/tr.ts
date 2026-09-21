@@ -73,6 +73,29 @@ export const tr: MessageSchema = {
     description: 'Değişiklik hemen uygulanır ve seçiminiz hatırlanır.'
   },
 
+  /** Takvim aralığı seçici (alarm ve olay merkezinin «tek takvimi»). */
+  picker: {
+    placeholder: 'Zaman aralığı seçin',
+    presetAll: 'Tümü',
+    presetToday: 'Bugün',
+    preset1h: 'Son 1 saat',
+    preset24h: 'Son 24 saat',
+    preset7d: 'Son 7 gün',
+    prevMonth: 'Önceki ay',
+    nextMonth: 'Sonraki ay',
+    startTime: 'Başlangıç saati',
+    endTime: 'Bitiş saati',
+    clear: 'Temizle',
+    confirm: 'Tamam',
+    sun: 'Pa',
+    mon: 'Pt',
+    tue: 'Sa',
+    wed: 'Ça',
+    thu: 'Pe',
+    fri: 'Cu',
+    sat: 'Ct'
+  },
+
   app: {
     title: 'HERTZINNO Acoustic Box Manager',
     tagline: 'Cihaz yönetim yazılımı',
@@ -91,7 +114,7 @@ export const tr: MessageSchema = {
        * taşıdığı için «cihaz haritası» adı onu anlatmıyor).
        */
       map: 'Harita bilgileri',
-      events: 'Olay ve alarm merkezi',
+      events: 'Olay merkezi',
       recordings: 'Kayıtlar',
       samples: 'Örnek kitaplığı',
       settings: 'Ayarlar',
@@ -178,6 +201,55 @@ export const tr: MessageSchema = {
     restoreItemMapTiles: 'Çevrimiçi temel harita (anahtar, XYZ şablonu, anahtar değeri ve atıf)',
     tabAccount: 'Hesap',
     tabAbout: 'Hakkında ve bakım',
+    /** YZ hizmetleri sekmesi (müşteri talebi: ayarlarda "farklı YZ hizmetleri" desteği). */
+    tabAi: 'YZ hizmetleri',
+
+    /** GIS hizmet kitaplığı (Harita sekmesi içinde; talep: «GIS hizmeti ekle»). */
+    mapServiceGroup: 'GIS hizmetleri',
+    mapServiceHint:
+      'Sık kullandığınız karoları adla kaydedin ve tek tıkla uygulayın; "Uygula", yukarıdaki geçerli yapılandırmanın üzerine yazar ve katmanı açar.',
+    mapServiceEmpty: 'Henüz kayıtlı GIS hizmeti yok.',
+    mapServiceAdd: 'Hizmet ekle',
+    mapServiceSaveCurrent: 'Geçerli yapılandırmayı hizmet olarak kaydet',
+    mapServiceApply: 'Uygula',
+    mapServiceEdit: 'Düzenle',
+    mapServiceDelete: 'Sil',
+    mapServiceDeleteConfirm: '"{name}" GIS hizmeti silinsin mi?',
+    mapServiceSave: 'Hizmeti kaydet',
+    mapServiceCancel: 'İptal',
+    mapServiceName: 'Hizmet adı',
+    mapServiceTest: 'Karoyu dene',
+    mapServiceTesting: 'Deneniyor…',
+    mapServiceTestOk: 'Örnek karo başarıyla yüklendi; bu adres kullanılabilir.',
+    mapServiceTestFail: 'Örnek karo yüklenemedi (internetsiz, yanlış anahtar veya hizmet reddetti).',
+    mapServiceTooMany: 'GIS hizmeti sınırına ulaşıldı',
+
+    /** YZ hizmet kitaplığı (YZ sekmesi içinde). */
+    aiServiceGroup: 'YZ hizmetleri',
+    aiServiceHint:
+      'YZ hizmetleri ekleyin (OpenAI uyumlu API) ve birini seçin; seçilen hizmet örnekleri etiketler. Anahtarlar bu makinede kalır ve asla geri gösterilmez.',
+    aiServiceEmpty: 'Henüz kayıtlı YZ hizmeti yok.',
+    aiServiceAdd: 'Hizmet ekle',
+    aiServiceName: 'Hizmet adı',
+    aiServiceEndpoint: 'Uç nokta adresi',
+    aiServiceModel: 'Model',
+    aiServiceKey: 'API anahtarı',
+    aiServiceKeyPlaceholder: 'Kayıtlı anahtarı korumak için boş bırakın',
+    aiServiceKeyStored: 'Anahtar kayıtlı',
+    aiServiceKeyNone: 'Anahtar kayıtlı değil',
+    aiServiceDeleteConfirm: '"{name}" YZ hizmeti silinsin mi? Anahtarı da silinecek.',
+    aiServiceSaveFailed: 'YZ hizmeti kaydedilemedi',
+    aiServiceTooMany: 'YZ hizmeti sınırına ulaşıldı',
+    aiServiceUnknown: 'Hizmet durumu henüz okunmadı',
+    aiServiceReady: 'Seçilen hizmet hazır',
+    aiPresetLabel: 'Sağlayıcı ön ayarları (uç nokta ve modeli doldurmak için tıklayın)',
+    aiPreset_openai: 'OpenAI',
+    aiPreset_deepseek: 'DeepSeek',
+    aiPreset_moonshot: 'Moonshot',
+    aiPreset_zhipu: 'Zhipu GLM',
+    aiPreset_qwen: 'Qwen',
+    aiPreset_ollama: 'Ollama (yerel)',
+    aiPreset_custom: 'Özel',
 
     /** Depolama sekmesindeki grup başlığı. */
     storageGroupLocation: 'Konum ve saklama',
@@ -266,6 +338,7 @@ export const tr: MessageSchema = {
     restoreItemAlarmLinkage: 'Alarm bağlantısı (e-posta sunucusu, alıcılar, şablonlar ve bekleme süresi)',
     restoreItemAlarmSounds: 'Alarm ses kitaplığı (ses türleri ve seçilen ses dosyaları)',
     restoreItemIotIngest: 'Veri aktarımı (HTTP push / MQTT anahtarları, dinleme adresi ve portlar)',
+    restoreItemMapServices: 'GIS hizmet kitaplığı (adıyla kayıtlı karo hizmetleri)',
     restoreWarnStorage: 'Depolama yolu öntanımlıya döner. Disk üzerindeki kayıtlar ve dosyalar silinmez, yalnızca artık işaret edilmez; gerekirse geçerli yolu önceden not edin.',
     restoreKeeps: 'Cihaz listesi, kanallar, kayıtlar ve ses dosyaları, alarm kayıtları, hesaplar ve hesap izinleri değiştirilmez.',
     restoreConfirm: 'Geri yükle',
@@ -430,6 +503,22 @@ export const tr: MessageSchema = {
     filterType: 'Alarm türü',
     filterAllTypes: 'Tüm türler',
     filterFrom: 'Başlangıç',
+    /** Filtre satırı (müşteri yeniden tasarımı: başlık + içerik + tek takvim). */
+    filterTitle: 'Başlık',
+    filterTitleHint: 'Cihaz adına göre ara',
+    filterContent: 'İçerik',
+    filterContentHint: 'Not / cihaz nedeninde ara',
+    filterTimeRange: 'Zaman aralığı',
+    menuDetail: 'Ayrıntıları gör',
+    menuReplay: 'Yeniden oynat',
+    menuDownload: 'Alarmı indir',
+    menuAddSample: 'Örneklere ekle',
+    menuAck: 'Onayla',
+    menuUnack: 'Onayı kaldır',
+    menuNoRecording: 'Bu alarmın indirilecek yerel kaydı yok',
+    downloadDone: '{path} konumuna kaydedildi',
+    videoTitle: 'Alarm videosu',
+    snapshotsTitle: 'Alarm görüntüleri',
     filterTo: 'Bitiş',
     filterAck: 'Onay durumu',
     filterAllChannels: 'Tüm kanallar',
@@ -1980,7 +2069,8 @@ export const tr: MessageSchema = {
     eventSource: {
       deviceDetect: 'Kamera algılama günlüğü',
       linkage: 'Yerel alarm bağlantısı',
-      localAlarm: 'Akustik kutu alarmı'
+      localAlarm: 'Akustik kutu alarmı',
+      deviceStatus: 'Cihaz durumu'
     },
     eventSeverity: {
       info: 'Bilgi',
@@ -1992,7 +2082,9 @@ export const tr: MessageSchema = {
       deviceDetect: 'Algılama tamamlandı',
       deviceDetectAlarm: 'Cihazın alarm saydığı algılama',
       linkageAlarm: 'Yerel bağlantı alarmı',
-      localAlarm: 'Akustik kutu alarmı'
+      localAlarm: 'Akustik kutu alarmı',
+      deviceOnline: 'Cihaz çevrimiçi',
+      deviceOffline: 'Cihaz çevrimdışı'
     },
     detectFileKind: {
       power_spectrum_photo: 'Güç spektrumu görüntüsü',
@@ -2904,6 +2996,7 @@ export const tr: MessageSchema = {
     },
 
     searchPlaceholder: 'Cihaz, olay veya ölçüm ara',
+    filterTimeRange: 'Zaman aralığı',
     searchScope: 'Arama yalnızca yüklenen {loaded} satırı kapsar',
 
     savedViewTitle: 'Görünümler',

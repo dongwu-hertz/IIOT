@@ -36,7 +36,7 @@ function emptyQuery(): EventCenterQuery {
 }
 
 function emptyCounts(): Record<EventSourceKind, number> {
-  return { deviceDetect: 0, linkage: 0, localAlarm: 0 }
+  return { deviceDetect: 0, linkage: 0, localAlarm: 0, deviceStatus: 0 }
 }
 
 /** 一次下载的稳定键：同一条日志的同一种文件只可能有一次进行中的下载。 */

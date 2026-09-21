@@ -437,6 +437,11 @@ export interface AlarmEvent {
   /** Local recording produced by the Ring Buffer, if pre/post capture was armed. */
   localRecordingId?: string
   /**
+   * `localRecordingId` 那一行的容器（读时 LEFT JOIN `recordings.container_format` 带来）。
+   * 回放据此选播放器：`mp4` 用 `<video>`，其余走 `RecordingPlayer`；没有录音就是 `undefined`。
+   */
+  localRecordingContainer?: RecordingContainerFormat
+  /**
    * 听诊盒子族原始的 `alarm_value`。
    *
    * 它**不是** `alarmMask`：手册说它是"每一位代表一个键值"的十六进制数，而**只列出了 6 个值**，
@@ -505,6 +510,13 @@ export interface AlarmQuery {
   from?: number
   to?: number
   acknowledged?: boolean
+  /**
+   * 标题关键字（业主：告警中心筛选只留「标题 + 内容」）：模糊匹配**设备名**。
+   * 与 `content` 分开是因为操作员心里的问题不同——「哪台设备的」与「备注里写了什么的」。
+   */
+  title?: string
+  /** 内容关键字：模糊匹配备注（`note`）与设备自己给的原因文本（`device_reason`）。 */
+  content?: string
   limit?: number
   offset?: number
 }

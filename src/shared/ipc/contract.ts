@@ -167,7 +167,8 @@ import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
  * 形状与纯规则在 `@shared/domain/map-tiles`：XYZ 模板、只允许 https、可选 key/子域、
  * 时区→中心、缩放 2–18。设置页与地图页引用同一份判据，契约层只负责把它带过 IPC。
  */
-import type { MapTilesConfig } from '../domain/map-tiles'
+import type { MapServiceEntry, MapTilesConfig } from '../domain/map-tiles'
+import type { AiServicePresetId } from '../domain/sample-ai'
 
 /**
  * Result of a successful login.
@@ -337,6 +338,8 @@ export const IpcChannels = {
   // Recordings
   RECORDING_QUERY: 'recording:query',
   RECORDING_SYNC_DEVICE: 'recording:sync-device',
+  /** 另存一条本机录音（保存对话框 + 复制文件）。权限 `viewRecordings`。 */
+  RECORDING_EXPORT: 'recording:export',
   /**
    * 本地样本库（schema v7）。权限归 `viewRecordings` —— 这个库是从录音派生的，
    * 打标签是对派生物的注解，不动录音本身。
@@ -366,6 +369,16 @@ export const IpcChannels = {
   SAMPLE_AI_STATUS: 'sample:ai-status',
   SAMPLE_AI_SAVE_CONFIG: 'sample:ai-save-config',
   SAMPLE_AI_LABEL: 'sample:ai-label',
+  /**
+   * 命名的 AI 服务库（业主追加：设置里「不同 AI 服务」）。
+   * 与上面三条同一权限批（`viewRecordings`）；`SAVE`/`DELETE`/`SET_ACTIVE`
+   * 是写操作，参数在 handler 层收窄。**密钥本体永不经过 IPC 的读方向**——
+   * `SAVE` 只收（可缺省/可 null 的）写方向密钥。
+   */
+  SAMPLE_AI_SERVICES: 'sample:ai-services',
+  SAMPLE_AI_SERVICE_SAVE: 'sample:ai-service-save',
+  SAMPLE_AI_SERVICE_DELETE: 'sample:ai-service-delete',
+  SAMPLE_AI_SERVICE_SET_ACTIVE: 'sample:ai-service-set-active',
 
   /**
    * 听诊盒子族（E2 / FA100 / FA110）的「拉」通道（业主 2026-09-16）。
@@ -908,6 +921,15 @@ export interface AppSettings {
    * **手册未说明**：手册没有地图/瓦片服务这一章，整套口径见 `@shared/domain/map-tiles`。
    */
   mapTiles: MapTilesConfig
+
+  /**
+   * 命名的 GIS 服务库（业主追加：设置里「添加 GIS 服务」）。
+   *
+   * `mapTiles` 是"当前生效的那一份"；这里是可命名保存、一键选用的备选服务列表
+   * （用户私有的瓦片服务、常切换的商业 key 等）。条目校验见
+   * `@shared/domain/map-tiles` 的 `normaliseMapServices()`；上限 `MAX_MAP_SERVICES`。
+   */
+  mapServices: MapServiceEntry[]
 }
 
 export type AppSettingsPatch = Partial<AppSettings>
@@ -1810,6 +1832,55 @@ export interface SampleAiConfigInput {
 }
 
 /**
+ * 一条命名 AI 服务的对外摘要（业主追加：设置里「不同 AI 服务」）。
+ *
+ * **密钥本体永不出现**：只带 `apiKeyStored` 布尔（与 `SampleAiStatus` 同一纪律——
+ * 渲染层没有理由拿到密钥，拿得到就会出现在某张 devtools 截图里）。
+ */
+export interface SampleAiServiceSummary {
+  id: string
+  name: string
+  provider: AiServicePresetId
+  endpoint: string
+  model: string
+  apiKeyStored: boolean
+}
+
+/**
+ * 服务库 + 当前启用项的完整状态（`SAMPLE_AI_SERVICES` 通道的返回）。
+ *
+ * `ready`/`blockedReason` 描述的是**当前启用**那一服务（与 `SampleAiStatus` 同一份
+ * `describeAiReadiness()` 判据）；没有启用任何服务时 `ready=false`、
+ * `blockedReason='no-endpoint'`（照实说，不假装有一个配置）。
+ */
+export interface SampleAiServicesStatus {
+  services: SampleAiServiceSummary[]
+  activeId: string
+  encryptionAvailable: boolean
+  canStoreApiKey: boolean
+  ready: boolean
+  blockedReason?: 'disabled' | 'no-endpoint' | 'bad-endpoint' | 'no-model'
+  promptVersion: number
+  maxBatch: number
+  timeoutMs: number
+}
+
+/** `SAMPLE_AI_SERVICE_SAVE` 的入参：新增（无 id）或更新（有 id）一条命名服务。 */
+export interface SampleAiServiceInput {
+  /** 更新时给；新增不传。 */
+  id?: string
+  name: string
+  provider: AiServicePresetId
+  endpoint: string
+  model: string
+  /**
+   * 这个服务的密钥：`undefined` = 不动已存的；`null`/空串 = 清除。
+   * 与 `SampleAiConfigInput.apiKey` 同一套三态语义。
+   */
+  apiKey?: string | null
+}
+
+/**
  * 一批 AI 标注的结果。
  *
  * 五个计数刻意分开：`skippedHuman`（人工标签，绝不覆盖）、`skippedWeak`（设备弱标签，
@@ -2080,6 +2151,11 @@ export interface RendererApi {
   recordings: {
     query(query: RecordingQuery): Promise<DeviceResult<RecordingPage>>
     syncDevice(deviceId: string): Promise<DeviceResult<number>>
+    /**
+     * 把一条本机录音**另存为**到操作员选的位置（保存对话框 + 复制文件）。
+     * 返回 `{ path }`；取消对话框返回 `null`。**权限归 `viewRecordings`**。
+     */
+    export(recordingId: string): Promise<DeviceResult<{ path: string } | null>>
   }
 
   /**
@@ -2108,6 +2184,14 @@ export interface RendererApi {
     aiStatus(): Promise<DeviceResult<SampleAiStatus>>
     /** 保存 AI 配置；返回保存后的状态（界面不用自己拼一遍）。 */
     saveAiConfig(input: SampleAiConfigInput): Promise<DeviceResult<SampleAiStatus>>
+    /** 命名的 AI 服务库 + 当前启用项状态（密钥只回"存没存"布尔）。 */
+    aiServices(): Promise<DeviceResult<SampleAiServicesStatus>>
+    /** 新增/更新一条命名服务；`input.id` 缺省 = 新增。 */
+    saveAiService(input: SampleAiServiceInput): Promise<DeviceResult<SampleAiServicesStatus>>
+    /** 删除一条命名服务（连同它的密钥）；删的是当前启用项则启用回落到第一条/空。 */
+    deleteAiService(id: string): Promise<DeviceResult<SampleAiServicesStatus>>
+    /** 选用哪条服务为当前启用（空串 = 全部不启用）。 */
+    setActiveAiService(id: string): Promise<DeviceResult<SampleAiServicesStatus>>
     /**
      * 让配置好的大模型给一批样本**提候选标签**（`label_source = 'ai'`）。
      *

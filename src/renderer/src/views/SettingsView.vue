@@ -15,12 +15,22 @@ import { useI18n } from 'vue-i18n'
 import type { AppSettingsPatch } from '@shared/ipc/contract'
 import {
   MAP_TILE_PRESETS,
+  MAX_MAP_SERVICES,
   defaultMapTilesConfig,
+  mapServiceProblem,
   mapTilesProblem,
+  newMapServiceId,
+  tileUrl,
   timeZoneCenter,
+  type MapServiceEntry,
   type MapTilesConfig,
   type MapTilesProblem
 } from '@shared/domain/map-tiles'
+import {
+  AI_SERVICE_PRESETS,
+  isAiServicePreset,
+  type AiServicePresetId
+} from '@shared/domain/sample-ai'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { RELEASE, formatVersion, parsePlainDate } from '@shared/release'
@@ -54,6 +64,7 @@ import EmailSettingsSection from '@renderer/components/EmailSettingsSection.vue'
 import AppModal from '@renderer/components/AppModal.vue'
 import ChangePasswordDialog from '@renderer/components/ChangePasswordDialog.vue'
 import { useSessionStore } from '@renderer/stores/session'
+import { useSamplesStore } from '@renderer/stores/samples'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
@@ -86,6 +97,11 @@ const TABS = [
    * 默认关闭、只允许 https、XYZ 模板 + 可选 key + 署名都在这一页里。
    */
   { id: 'map', labelKey: 'settingsUi.tabMap' },
+  /*
+   * AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。多命名服务 + 单选启用；
+   * 数据走样本 store 的四条新通道（配置本体在 app_meta，不经设置表的草稿/自动保存）。
+   */
+  { id: 'ai', labelKey: 'settingsUi.tabAi' },
   /*
    * 「数据接入」页签**删掉了**（业主 2026-09-19 第 13 批第 1 条：
    * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）。
@@ -130,6 +146,8 @@ interface Draft {
    * patchFromDraft() 只做一次浅拷贝，字段名不可能漂移。**默认关闭**。
    */
   mapTiles: MapTilesConfig
+  /** 命名的 GIS 服务库（业主追加）：与 mapTiles 同走草稿 → 补丁 → 自动保存。 */
+  mapServices: MapServiceEntry[]
 }
 
 const draft = reactive<Draft>({
@@ -143,7 +161,8 @@ const draft = reactive<Draft>({
   postAlarmSeconds: 20,
   ringBufferSeconds: 60,
   autoPlayCameraLive: true,
-  mapTiles: defaultMapTilesConfig()
+  mapTiles: defaultMapTilesConfig(),
+  mapServices: []
 })
 
 const formError = ref('')
@@ -169,6 +188,7 @@ function seedFromStore(): void {
   draft.ringBufferSeconds = current.ringBufferSeconds
   draft.autoPlayCameraLive = current.autoPlayCameraLive
   draft.mapTiles = { ...current.mapTiles }
+  draft.mapServices = current.mapServices.map((service) => ({ ...service }))
 }
 
 onMounted(async () => {
@@ -261,7 +281,292 @@ function applyMapPreset(id: MapTilesConfig['service']): void {
   const preset = MAP_TILE_PRESETS[id]
   draft.mapTiles.urlTemplate = preset.urlTemplate
   draft.mapTiles.attribution = preset.attribution
+  // 不同服务商的 key 互不通用（也不该互发）：换预置就把旧的清掉，别留给下一个服务商。
+  draft.mapTiles.apiKey = ''
 }
+
+// ---------------------------------------------------------------------------
+// GIS 服务库（业主追加：设置里「添加 GIS 服务」）
+// ---------------------------------------------------------------------------
+//
+// 库本身在草稿里（`draft.mapServices`）——添加/编辑/删除都改草稿，走同一条自动保存。
+// 编辑器是页内内联表单（不是弹窗）：这一页其它块都是内联展开，服务库不另起交互模式。
+const mapServiceEditing = ref(false)
+const mapServiceEditor = reactive({
+  /** `''` = 新增；否则是更新已有条目的 id。 */
+  id: '',
+  name: '',
+  service: 'custom' as MapTilesConfig['service'],
+  urlTemplate: '',
+  apiKey: '',
+  attribution: ''
+})
+const mapServiceError = ref('')
+/** 「测试瓦片」结果：'none' 未测 / 'ok' 加载成功 / 'fail' 加载失败。 */
+const mapServiceTest = ref<'none' | 'ok' | 'fail'>('none')
+const mapServiceTesting = ref(false)
+
+function startAddMapService(): void {
+  mapServiceEditing.value = true
+  mapServiceEditor.id = ''
+  mapServiceEditor.name = ''
+  mapServiceEditor.service = 'custom'
+  mapServiceEditor.urlTemplate = ''
+  mapServiceEditor.apiKey = ''
+  mapServiceEditor.attribution = ''
+  mapServiceError.value = ''
+  mapServiceTest.value = 'none'
+}
+
+function startEditMapService(id: string): void {
+  const entry = draft.mapServices.find((service) => service.id === id)
+  if (!entry) return
+  mapServiceEditing.value = true
+  mapServiceEditor.id = entry.id
+  mapServiceEditor.name = entry.name
+  mapServiceEditor.service = entry.service
+  mapServiceEditor.urlTemplate = entry.urlTemplate
+  mapServiceEditor.apiKey = entry.apiKey
+  mapServiceEditor.attribution = entry.attribution
+  mapServiceError.value = ''
+  mapServiceTest.value = 'none'
+}
+
+function cancelMapServiceEdit(): void {
+  mapServiceEditing.value = false
+  mapServiceError.value = ''
+  mapServiceTest.value = 'none'
+}
+
+/** 编辑器里点预置：填模板与署名、清 Key（与 `applyMapPreset` 同一条 G2 修复纪律）。 */
+function applyMapServicePreset(id: MapTilesConfig['service']): void {
+  mapServiceEditor.service = id
+  applyMapPresetToEditor(id)
+}
+
+function applyMapPresetToEditor(id: MapTilesConfig['service']): void {
+  if (id === 'custom') return
+  const preset = MAP_TILE_PRESETS[id]
+  mapServiceEditor.urlTemplate = preset.urlTemplate
+  mapServiceEditor.attribution = preset.attribution
+  mapServiceEditor.apiKey = ''
+}
+
+/** 编辑器当前内容拼成一条临时条目，用共享层判据校验/试瓦片 —— 与主进程同一份规则。 */
+function mapServiceEditorEntry(): MapServiceEntry {
+  return {
+    id: mapServiceEditor.id || 'draft',
+    name: mapServiceEditor.name.trim(),
+    service: mapServiceEditor.service,
+    urlTemplate: mapServiceEditor.urlTemplate.trim(),
+    apiKey: mapServiceEditor.apiKey.trim(),
+    attribution: mapServiceEditor.attribution.trim()
+  }
+}
+
+function saveMapService(): void {
+  const entry = mapServiceEditorEntry()
+  const problem = mapServiceProblem(entry)
+  if (problem) {
+    mapServiceError.value = mapTilesProblemText(problem)
+    return
+  }
+  if (entry.id === 'draft' && draft.mapServices.length >= MAX_MAP_SERVICES) {
+    mapServiceError.value = t('settingsUi.mapServiceTooMany')
+    return
+  }
+  const record: MapServiceEntry = { ...entry, id: entry.id === 'draft' ? newMapServiceId() : entry.id }
+  const index = draft.mapServices.findIndex((service) => service.id === record.id)
+  if (index >= 0) draft.mapServices[index] = record
+  else draft.mapServices.push(record)
+  mapServiceEditing.value = false
+  mapServiceError.value = ''
+}
+
+function deleteMapService(id: string): void {
+  const entry = draft.mapServices.find((service) => service.id === id)
+  if (!entry) return
+  if (!window.confirm(t('settingsUi.mapServiceDeleteConfirm', { name: entry.name }))) return
+  draft.mapServices = draft.mapServices.filter((service) => service.id !== id)
+}
+
+/** 「应用」：把条目内容抄进当前底图配置并打开开关（服务库→生效只有这一条路）。 */
+function applyMapService(id: string): void {
+  const entry = draft.mapServices.find((service) => service.id === id)
+  if (!entry) return
+  draft.mapTiles.service = entry.service
+  draft.mapTiles.urlTemplate = entry.urlTemplate
+  draft.mapTiles.apiKey = entry.apiKey
+  draft.mapTiles.attribution = entry.attribution
+  draft.mapTiles.enabled = true
+}
+
+/**
+ * 「把当前配置保存为服务」：打开编辑器并预填当前表单内容（名称留空让用户起），
+ * 保存走 `saveMapService()` 同一条路。
+ *
+ * 不用 `window.prompt()`：Electron 渲染进程不支持它（静默返回 null），
+ * 内联编辑器反正已经是这一页的既有交互。
+ */
+function saveCurrentAsMapService(): void {
+  mapServiceEditing.value = true
+  mapServiceEditor.id = ''
+  mapServiceEditor.name = ''
+  mapServiceEditor.service = draft.mapTiles.service
+  mapServiceEditor.urlTemplate = draft.mapTiles.urlTemplate
+  mapServiceEditor.apiKey = draft.mapTiles.apiKey
+  mapServiceEditor.attribution = draft.mapTiles.attribution
+  mapServiceError.value = ''
+  mapServiceTest.value = 'none'
+}
+
+/**
+ * 「测试瓦片」：用编辑器当前内容拼一张 z=3/x=4/y=2 的真实瓦片地址，以 `<img>` 试加载。
+ *
+ * 渲染层 CSP `img-src` 允许 https:（connect-src 仍 'none'，不会变成数据通道）；
+ * 失败只说明"这台机器此刻拿不到这块瓦片"（没外网 / key 错 / 服务拒绝），足够排查配置。
+ */
+function testMapServiceTile(): void {
+  const entry = mapServiceEditorEntry()
+  if (entry.urlTemplate === '') {
+    mapServiceError.value = t('settingsUi.mapErrTemplateRequired')
+    return
+  }
+  const url = tileUrl({ enabled: false, ...entry }, 3, 4, 2)
+  if (url === '') {
+    mapServiceError.value = mapTilesProblemText(mapServiceProblem(entry) ?? 'templateInvalid')
+    mapServiceTest.value = 'fail'
+    return
+  }
+  mapServiceTesting.value = true
+  mapServiceTest.value = 'none'
+  mapServiceError.value = ''
+  const image = new Image()
+  const finish = (ok: boolean): void => {
+    mapServiceTesting.value = false
+    mapServiceTest.value = ok ? 'ok' : 'fail'
+  }
+  image.onload = () => finish(true)
+  image.onerror = () => finish(false)
+  image.src = url
+}
+
+// ---------------------------------------------------------------------------
+// AI 服务（业主追加：设置里支持「不同 AI 服务」）
+// ---------------------------------------------------------------------------
+//
+// 与 GIS 服务库同一交互（内联表单 + 单选启用），但数据**不走设置表**：配置本体在
+// `app_meta`、密钥在 safeStorage，读写都过样本 store 的四条新通道，改完立即生效
+// （没有"草稿/自动保存"这一层——服务库的写操作本身就是一次落库）。
+const samples = useSamplesStore()
+
+/** 切到 AI 页签时才读服务库（这一页不是人人都进，别让每次进设置都多一次 IPC）。 */
+watch(activeTab, (tab) => {
+  if (tab === 'ai') void samples.loadAiServices()
+})
+
+const aiServiceEditing = ref(false)
+const aiServiceEditor = reactive({
+  id: '',
+  name: '',
+  provider: 'custom' as AiServicePresetId,
+  endpoint: '',
+  model: '',
+  /** 留空 = 不改动已存密钥（与样本页同一三态语义）。 */
+  apiKey: ''
+})
+const aiServiceError = ref('')
+
+/** 厂家预置按钮（点选填 endpoint/model；密钥永远手填，不预置）。 */
+const AI_PRESET_UI = AI_SERVICE_PRESETS.map((preset) => ({
+  id: preset.id,
+  labelKey: `settingsUi.aiPreset_${preset.id}`
+}))
+
+function startAddAiService(): void {
+  aiServiceEditing.value = true
+  aiServiceEditor.id = ''
+  aiServiceEditor.name = ''
+  aiServiceEditor.provider = 'custom'
+  aiServiceEditor.endpoint = ''
+  aiServiceEditor.model = ''
+  aiServiceEditor.apiKey = ''
+  aiServiceError.value = ''
+}
+
+function startEditAiService(id: string): void {
+  const service = samples.aiServices?.services.find((item) => item.id === id)
+  if (!service) return
+  aiServiceEditing.value = true
+  aiServiceEditor.id = service.id
+  aiServiceEditor.name = service.name
+  aiServiceEditor.provider = service.provider
+  aiServiceEditor.endpoint = service.endpoint
+  aiServiceEditor.model = service.model
+  aiServiceEditor.apiKey = ''
+  aiServiceError.value = ''
+}
+
+function cancelAiServiceEdit(): void {
+  aiServiceEditing.value = false
+  aiServiceError.value = ''
+}
+
+/** 点厂家预置：只填地址与模型，不碰名称/密钥。 */
+function applyAiPreset(id: AiServicePresetId): void {
+  const preset = AI_SERVICE_PRESETS.find((item) => item.id === id)
+  if (!preset) return
+  aiServiceEditor.provider = id
+  aiServiceEditor.endpoint = preset.endpoint
+  aiServiceEditor.model = preset.model
+}
+
+async function saveAiService(): Promise<void> {
+  const ok = await samples.saveAiService({
+    ...(aiServiceEditor.id === '' ? {} : { id: aiServiceEditor.id }),
+    name: aiServiceEditor.name.trim(),
+    provider: isAiServicePreset(aiServiceEditor.provider) ? aiServiceEditor.provider : 'custom',
+    endpoint: aiServiceEditor.endpoint.trim(),
+    model: aiServiceEditor.model.trim(),
+    ...(aiServiceEditor.apiKey === '' ? {} : { apiKey: aiServiceEditor.apiKey })
+  })
+  if (!ok) {
+    aiServiceError.value = samples.error || t('settingsUi.aiServiceSaveFailed')
+    return
+  }
+  aiServiceEditing.value = false
+  aiServiceError.value = ''
+}
+
+async function deleteAiService(id: string): Promise<void> {
+  const service = samples.aiServices?.services.find((item) => item.id === id)
+  if (!service) return
+  if (!window.confirm(t('settingsUi.aiServiceDeleteConfirm', { name: service.name }))) return
+  await samples.deleteAiService(id)
+}
+
+/** 单选「启用」：选用该服务（radio 的 v-model 直接落 activeId）。 */
+async function setActiveAiService(id: string): Promise<void> {
+  await samples.setActiveAiService(id)
+}
+
+/** 当前启用服务在界面上显示的就绪态（照主进程 `servicesStatus()` 的判断说话）。 */
+const aiActiveText = computed(() => {
+  const status = samples.aiServices
+  if (!status) return t('settingsUi.aiServiceUnknown')
+  if (status.ready) return t('settingsUi.aiServiceReady')
+  // blockedReason 的四语言文案复用样本页那组（同一域层判据、同一批原因）。
+  switch (status.blockedReason) {
+    case 'no-endpoint':
+      return t('samplesUi.aiBlockedNoEndpoint')
+    case 'bad-endpoint':
+      return t('samplesUi.aiBlockedBadEndpoint')
+    case 'no-model':
+      return t('samplesUi.aiBlockedNoModel')
+    default:
+      return t('samplesUi.aiBlockedDisabled')
+  }
+})
 
 /** 电脑时区；拿不到时退回 UTC（国际标准时区名，查表落到世界中心）。 */
 const detectedTimeZone = computed(() => {
@@ -332,7 +637,8 @@ function patchFromDraft(): AppSettingsPatch {
       urlTemplate: draft.mapTiles.urlTemplate.trim(),
       apiKey: draft.mapTiles.apiKey.trim(),
       attribution: draft.mapTiles.attribution.trim()
-    }
+    },
+    mapServices: draft.mapServices.map((service) => ({ ...service }))
   }
 }
 
@@ -352,14 +658,13 @@ function draftDiffersFromStore(): boolean {
     const stored = (current as unknown as Record<string, unknown>)[key]
     const next = patch[key]
     /**
-     * 嵌套块**逐字段**比。
-     *
-     * `patchFromDraft()` 每次都新建那个对象，所以引用比较永远为真 —— 后果是"没改也在保存"。
-     * 逐字段比才是"草稿与已存值是否不同"的原意。
-     *
-     * （原来这条注释举的例子是 `iotIngest`；第 13 批第 1 条把那一块搬进添加设备之后，
-     * 这一页的补丁里已经没有嵌套块了 —— 判断留着，因为下一个人加回来时它仍然是对的。）
+     * 数组（`mapServices` 服务库）**整体序列化比**：条目是嵌套对象，逐字段展开比较
+     * 会被 `patchFromDraft()` 的新引用骗过（每次都"有差异"→ 每 600ms 白写一次库）。
+     * 服务库最多 20 条、字段都是短字符串，JSON 比较的代价可以忽略。
      */
+    if (Array.isArray(next)) {
+      return JSON.stringify(stored) !== JSON.stringify(next)
+    }
     if (next !== null && typeof next === 'object') {
       const before = stored as Record<string, unknown> | undefined
       if (!before) return true
@@ -598,7 +903,9 @@ const RESTORE_ITEMS = computed(() => [
   /** 数据接入（业主 2026-09-19 第 1 条）：恢复默认会把监听**关掉**，所以必须列出来。 */
   t('settingsUi.restoreItemIotIngest'),
   /** 在线地图底图（GIS）：恢复默认会把底图关掉，必须列出来。 */
-  t('settingsUi.restoreItemMapTiles')
+  t('settingsUi.restoreItemMapTiles'),
+  /** GIS 服务库：恢复默认会清空已保存的命名服务，也要列出来。 */
+  t('settingsUi.restoreItemMapServices')
 ])
 
 const restoreOpen = ref(false)
@@ -1017,6 +1324,149 @@ async function confirmRestore(): Promise<void> {
           <p class="muted settings-hint">{{ t('settingsUi.mapAttributionHint') }}</p>
         </div>
 
+        <!--
+          GIS 服务库（业主追加：设置里「添加 GIS 服务」）。
+          命名保存多份服务、一键应用；「应用」= 抄进上方当前配置并打开开关。
+        -->
+        <div class="settings-group">
+          <span class="settings-group__title" data-map-service-group>{{ t('settingsUi.mapServiceGroup') }}</span>
+          <p class="muted settings-hint">{{ t('settingsUi.mapServiceHint') }}</p>
+
+          <ul v-if="draft.mapServices.length > 0" class="map-service-list" data-map-services>
+            <li v-for="service in draft.mapServices" :key="service.id" class="map-service-row">
+              <span class="map-service-row__name">{{ service.name }}</span>
+              <span class="map-service-row__template mono">{{ service.urlTemplate }}</span>
+              <span class="btn-row">
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  data-map-service-apply
+                  @click="applyMapService(service.id)"
+                >
+                  {{ t('settingsUi.mapServiceApply') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  data-map-service-edit
+                  @click="startEditMapService(service.id)"
+                >
+                  {{ t('settingsUi.mapServiceEdit') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn--sm btn--danger"
+                  data-map-service-delete
+                  @click="deleteMapService(service.id)"
+                >
+                  {{ t('settingsUi.mapServiceDelete') }}
+                </button>
+              </span>
+            </li>
+          </ul>
+          <p v-else class="muted settings-hint">{{ t('settingsUi.mapServiceEmpty') }}</p>
+
+          <div class="btn-row">
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-map-service-add
+              @click="startAddMapService()"
+            >
+              {{ t('settingsUi.mapServiceAdd') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-map-service-save-current
+              @click="saveCurrentAsMapService()"
+            >
+              {{ t('settingsUi.mapServiceSaveCurrent') }}
+            </button>
+          </div>
+
+          <div v-if="mapServiceEditing" class="map-service-editor" data-map-service-editor>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapServiceName') }}</span>
+              <input v-model="mapServiceEditor.name" class="input" type="text" data-map-service-name />
+            </label>
+            <span class="field-label">{{ t('settingsUi.mapPresetsLabel') }}</span>
+            <div class="map-presets">
+              <button
+                v-for="preset in MAP_PRESET_UI"
+                :key="preset.id"
+                type="button"
+                class="btn"
+                :class="{ 'btn--primary': mapServiceEditor.service === preset.id }"
+                :data-map-service-preset="preset.id"
+                @click="applyMapServicePreset(preset.id)"
+              >
+                {{ t(preset.labelKey) }}
+              </button>
+            </div>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapUrlTemplate') }}</span>
+              <input
+                v-model="mapServiceEditor.urlTemplate"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                :placeholder="MAP_URL_PLACEHOLDER"
+                data-map-service-url
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapKey') }}</span>
+              <input
+                v-model="mapServiceEditor.apiKey"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                data-map-service-key
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.mapAttribution') }}</span>
+              <input v-model="mapServiceEditor.attribution" class="input" type="text" data-map-service-attribution />
+            </label>
+            <p v-if="mapServiceError" class="form-error" data-map-service-error role="alert">
+              {{ mapServiceError }}
+            </p>
+            <p
+              v-else-if="mapServiceTest === 'ok'"
+              class="settings-hint map-service-test--ok"
+              data-map-service-test-ok
+            >
+              {{ t('settingsUi.mapServiceTestOk') }}
+            </p>
+            <p
+              v-else-if="mapServiceTest === 'fail'"
+              class="form-error"
+              data-map-service-test-fail
+              role="alert"
+            >
+              {{ t('settingsUi.mapServiceTestFail') }}
+            </p>
+            <div class="btn-row">
+              <button
+                type="button"
+                class="btn btn--sm"
+                :disabled="mapServiceTesting"
+                data-map-service-test
+                @click="testMapServiceTile()"
+              >
+                {{ mapServiceTesting ? t('settingsUi.mapServiceTesting') : t('settingsUi.mapServiceTest') }}
+              </button>
+              <button type="button" class="btn btn--sm btn--primary" data-map-service-save @click="saveMapService()">
+                {{ t('settingsUi.mapServiceSave') }}
+              </button>
+              <button type="button" class="btn btn--sm" data-map-service-cancel @click="cancelMapServiceEdit()">
+                {{ t('settingsUi.mapServiceCancel') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="settings-group">
           <span class="settings-group__title">{{ t('settingsUi.mapTimezone') }}</span>
           <p class="muted settings-hint" data-settings-map-timezone>
@@ -1029,6 +1479,126 @@ async function confirmRestore(): Promise<void> {
             }}
           </p>
           <p class="muted settings-hint">{{ t('settingsUi.mapTimezoneHint') }}</p>
+        </div>
+      </section>
+
+      <!--
+        AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。
+        厂家预置按钮 + 命名服务列表（单选启用）+ 内联添加/编辑。
+        密钥输入框留空 = 不改动已存密钥；只显示"已保存/未保存"，永不回显。
+      -->
+      <section v-if="activeTab === 'ai'" class="card settings-panel" role="tabpanel">
+        <div class="settings-group">
+          <span class="settings-group__title" data-ai-service-group>{{ t('settingsUi.aiServiceGroup') }}</span>
+          <p class="muted settings-hint">{{ t('settingsUi.aiServiceHint') }}</p>
+          <p class="muted settings-hint" data-ai-active-status>
+            {{ aiActiveText }}
+          </p>
+
+          <ul v-if="samples.aiServices && samples.aiServices.services.length > 0" class="map-service-list" data-ai-services>
+            <li v-for="service in samples.aiServices.services" :key="service.id" class="map-service-row">
+              <label class="ai-service-row__active">
+                <input
+                  type="radio"
+                  name="active-ai-service"
+                  :checked="samples.aiServices?.activeId === service.id"
+                  :data-ai-service-active="service.id"
+                  @change="setActiveAiService(service.id)"
+                />
+                <span class="map-service-row__name">{{ service.name }}</span>
+              </label>
+              <span class="map-service-row__template mono">{{ service.endpoint }}</span>
+              <span class="muted">{{ service.apiKeyStored ? t('settingsUi.aiServiceKeyStored') : t('settingsUi.aiServiceKeyNone') }}</span>
+              <span class="btn-row">
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  data-ai-service-edit
+                  @click="startEditAiService(service.id)"
+                >
+                  {{ t('settingsUi.mapServiceEdit') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn--sm btn--danger"
+                  data-ai-service-delete
+                  @click="deleteAiService(service.id)"
+                >
+                  {{ t('settingsUi.mapServiceDelete') }}
+                </button>
+              </span>
+            </li>
+          </ul>
+          <p v-else class="muted settings-hint">{{ t('settingsUi.aiServiceEmpty') }}</p>
+
+          <div class="btn-row">
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-ai-service-add
+              @click="startAddAiService()"
+            >
+              {{ t('settingsUi.aiServiceAdd') }}
+            </button>
+          </div>
+
+          <div v-if="aiServiceEditing" class="map-service-editor" data-ai-service-editor>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.aiServiceName') }}</span>
+              <input v-model="aiServiceEditor.name" class="input" type="text" data-ai-service-name />
+            </label>
+            <span class="field-label">{{ t('settingsUi.aiPresetLabel') }}</span>
+            <div class="map-presets">
+              <button
+                v-for="preset in AI_PRESET_UI"
+                :key="preset.id"
+                type="button"
+                class="btn"
+                :class="{ 'btn--primary': aiServiceEditor.provider === preset.id }"
+                :data-ai-preset="preset.id"
+                @click="applyAiPreset(preset.id)"
+              >
+                {{ t(preset.labelKey) }}
+              </button>
+            </div>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.aiServiceEndpoint') }}</span>
+              <input
+                v-model="aiServiceEditor.endpoint"
+                class="input mono"
+                type="text"
+                spellcheck="false"
+                placeholder="https://host/v1/chat/completions"
+                data-ai-service-endpoint
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.aiServiceModel') }}</span>
+              <input v-model="aiServiceEditor.model" class="input mono" type="text" data-ai-service-model />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('settingsUi.aiServiceKey') }}</span>
+              <input
+                v-model="aiServiceEditor.apiKey"
+                class="input mono"
+                type="password"
+                spellcheck="false"
+                :placeholder="t('settingsUi.aiServiceKeyPlaceholder')"
+                data-ai-service-key
+              />
+            </label>
+            <p v-if="aiServiceError" class="form-error" data-ai-service-error role="alert">
+              {{ aiServiceError }}
+            </p>
+            <div class="btn-row">
+              <button type="button" class="btn btn--sm btn--primary" data-ai-service-save @click="saveAiService()">
+                {{ t('settingsUi.mapServiceSave') }}
+              </button>
+              <button type="button" class="btn btn--sm" data-ai-service-cancel @click="cancelAiServiceEdit()">
+                {{ t('settingsUi.mapServiceCancel') }}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1147,12 +1717,12 @@ async function confirmRestore(): Promise<void> {
         它原来在整页最底部（业主 2026-09-16：「应该放在最底部，避免影响排版」）。
         拆页签之后"最底部"的语义变成"关于这一页的最后"：它仍然是**读完整页之后**才做的决定，
         而不再与语言/存储这些**编辑项**混在一条长列里。
-        确认对话框仍然逐项列出 13 项范围（见下面 `AppModal`），这一条没有变。
+        确认对话框仍然逐项列出 16 项范围（见下面 `AppModal`），这一条没有变。
       -->
       <section v-if="activeTab === 'about'" class="card settings-panel" role="tabpanel">
         <div class="danger-action">
           <!--
-            这里**故意不写那句"会重置哪些、不会动哪些"的说明**：确认对话框已经逐项列出 13 项
+            这里**故意不写那句"会重置哪些、不会动哪些"的说明**：确认对话框已经逐项列出 16 项
             范围、并明确写了哪些东西不会被动（见下面 `AppModal`）。同一件事写两遍，改一处就会
             不一致——而这一页刚刚才因为"每张卡片都写名字"被要求去掉重复。
           -->
@@ -1442,6 +2012,63 @@ async function confirmRestore(): Promise<void> {
 /* URL 模板整行：它是这一页最长的一个值，挤在半列里会看不到完整域名。 */
 .settings-map-form__wide {
   grid-column: 1 / -1;
+}
+
+/* GIS / AI 服务库共用的行与编辑器。列表行 = 名称 + 模板摘要 + 操作按钮。 */
+.map-service-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.map-service-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+}
+
+.map-service-row__name {
+  font-weight: 600;
+  min-width: 96px;
+}
+
+/* 模板/地址摘要：长地址截断，别把整个布局顶穿。 */
+.map-service-row__template {
+  flex: 1;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.ai-service-row__active {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 编辑器：内联展开的一块表单，与上面的列表分开。 */
+.map-service-editor {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.map-service-test--ok {
+  color: var(--color-success, #2e7d32);
 }
 
 </style>

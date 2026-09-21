@@ -522,62 +522,6 @@ export function toAlertViewModels(entries: readonly EventCenterEntry[]): AlertVi
 }
 
 // ---------------------------------------------------------------------------
-// KPI（规格 §8）
-// ---------------------------------------------------------------------------
-
-export interface EventKpis {
-  /** 参与统计的告警条数（= 界面已加载的行数，见 `kpiScope` 说明）。 */
-  total: number
-  critical: number
-  high: number
-  /** 等级未知（`severityUnknown`）的条数：单独一档，不混进 `info`。 */
-  unknownSeverity: number
-  /** 等着人确认的条数（排除没有确认能力的来源）。 */
-  unacknowledged: number
-  /**
-   * 平均确认耗时（ms）。
-   *
-   * **恒为 `null`**：三路来源都没有把"确认时刻"带进 `EventCenterEntry`
-   * （`alarms` / 联动待处理记录里有没有这一列，本模块无从知道）。界面据此显示
-   * 「—」而不是 0 —— 0 秒会被读成"确认得飞快"。
-   */
-  avgAckMs: number | null
-  /** 聚合出的事件数（规格 §14）。Phase 6 才实现，所以恒为 `null`（界面不显示这一格）。 */
-  incidents: number | null
-}
-
-/**
- * KPI 统计。
- *
- * **作用域**：`alerts` 是界面**已加载**的那一页（`EventCenterPage.items`），不是全库。
- * 主进程的 `severity` 过滤是**按来源整路跳过**的（`event-center-service.ts`：
- * `input.severity !== deriveEventSeverity(source)` 直接返回空），所以"整个筛选结果"
- * 的等级分布拿不到 —— 要拿就得在主进程再聚合一遍。界面因此把作用域印在 KPI 条上
- * （`eventsUi.kpiScope`），而不是把一页的数字说成全量。
- */
-export function eventKpis(alerts: readonly AlertViewModel[]): EventKpis {
-  let critical = 0
-  let high = 0
-  let unknownSeverity = 0
-  let unacknowledged = 0
-  for (const alert of alerts) {
-    if (alert.severityUnknown) unknownSeverity += 1
-    else if (alert.severity === 'critical') critical += 1
-    else if (alert.severity === 'high') high += 1
-    if (!alert.statusLocked && alert.status === 'new') unacknowledged += 1
-  }
-  return {
-    total: alerts.length,
-    critical,
-    high,
-    unknownSeverity,
-    unacknowledged,
-    avgAckMs: null,
-    incidents: null
-  }
-}
-
-// ---------------------------------------------------------------------------
 // 筛选（规格 §9）
 // ---------------------------------------------------------------------------
 

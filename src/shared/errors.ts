@@ -76,6 +76,13 @@ export interface AppErrorShape {
   message: string
   /** Optional operator-facing detail. Must never contain credentials or tokens. */
   detail?: string
+  /**
+   * `true` = 渲染层桥接失败的兜底错误（`callApi` catch 那一支：IPC 未实现、
+   * 主进程抛了未包装异常、或返回值无法结构化克隆）。它说的是「这个软件自己坏了」，
+   * 不是「这台设备/这次操作坏了」——界面据此把它放进**顶栏通知**而不是页面内的大字横幅
+   * （业主：「无法连接到主进程，请重启应用 这类的提示只需要在标题栏提示即可」）。
+   */
+  bridge?: boolean
 }
 
 /** Uniform envelope returned across every IPC boundary. */

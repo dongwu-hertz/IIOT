@@ -54,30 +54,19 @@ describe('告警等级与备注：界面侧的三条政策', () => {
     )
   })
 
-  it('筛选器把 severity 真的写进了 query（否则选了没反应）', () => {
-    /*
-     * ⚠ 2026-09-19 第 15 轮改写了这一条的判据。
-     *
-     * 原来钉的是 `if (filters.severity !== '') query.severity = filters.severity` ——
-     * "有值才带上"的写法。它确实把 severity 送进了 query，但**清空那一半是坏的**：
-     * store 的 `applyQuery()` 是合并补丁，缺席的键不会清掉上一次的值，于是把等级选回
-     * "全部等级"列表仍然只显示原来那一档。现在每一格都**显式**给出（清空时 `undefined`），
-     * 所以判据换成这一条；"清空真的清得掉"由 GUI 探针在真窗口里验（设 2099 年 → 0 条 →
-     * 清空 → 回到原来的条数）。
-     */
-    assert.ok(
-      /severity: filters\.severity === '' \? undefined : filters\.severity,/.test(view),
-      'filters.severity 必须**显式**进入 AlarmQuery（清空时给 undefined，不能缺席）'
+  it('等级筛选器已按业主重构移除（等级仍存在于徽标与抽屉改判）', () => {
+    // 2026 重构：告警中心筛选只留「标题 + 内容 + 时间范围」。等级筛选下拉删掉了，
+    // 但等级本身没死 —— 表格徽标（上面两条）与抽屉里的人工改判仍在。
+    // 这两条钉的是"删除是完整的"：筛选行里不许残留 severity 下拉，省得它无声回来。
+    const simple = view.slice(view.indexOf('data-alarm-simple-filters'))
+    assert.equal(
+      simple.includes("t('alarmsUi.filterSeverity')"),
+      false,
+      '筛选行里又出现了已删除的等级下拉'
     )
-    assert.ok(view.includes("severity: ''"), '筛选初值必须是"全部等级"')
-  })
-
-  it('清空筛选时 severity 也回到初值，而且 query 里那一格真的被清掉', () => {
-    const reset = /function reset\(\)[\s\S]*?\n}/.exec(view)?.[0] ?? ''
-    assert.ok(reset.includes("filters.severity = ''"), 'reset() 必须清掉 severity')
-    // 界面清掉还不够：`buildQuery()` 里那一格必须**总是**存在（缺席 = 清不掉）。
-    const build = /function buildQuery\(\)[\s\S]*?\n}/.exec(view)?.[0] ?? ''
-    assert.ok(build.includes('severity:'), 'buildQuery() 里 severity 那一格缺席时会清不掉')
+    assert.equal(view.includes('filters.severity'), false, '筛选状态里还留着 severity 那一格')
+    // 抽屉里的人工改判仍在（等级是本仓库自己的划分，可人工改判这一点没变）。
+    assert.ok(view.includes('changeSeverity('), '抽屉里的人工改判没了')
   })
 
   it('store 的写入方法返回三态，并且不吞掉 saved === false', () => {

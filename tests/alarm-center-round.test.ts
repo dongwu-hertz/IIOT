@@ -139,104 +139,48 @@ describe('② 筛选卡在最上面', () => {
   })
 })
 
-describe('③ 简单筛选 / 更多筛选（更多默认收起）', () => {
-  it('简单筛选那三个**一直显示**：设备 / 等级 / 确认状态', () => {
+describe('③ 筛选行（业主重构：标题 + 内容 + 一个日历；更多筛选删除）', () => {
+  it('筛选行只有 标题 / 内容 / 时间范围 三个字段，外加重置', () => {
+    // 切片右边界用表格开头：详情抽屉里复用了 filterDevice/filterChannel 做字段标签，
+    // 切到文件尾会把它们误当成"筛选行残留"。
     const simple = view.slice(
       view.indexOf('data-alarm-simple-filters'),
-      view.indexOf('data-alarm-more-filters')
+      view.indexOf('<table class="table">')
     )
-    assert.ok(simple.length > 0, '找不到简单筛选那一行')
-    for (const key of ['filterDevice', 'filterSeverity', 'filterAck']) {
-      assert.ok(simple.includes(`t('alarmsUi.${key}')`), `简单筛选里少了 ${key}`)
+    assert.ok(simple.length > 0, '找不到筛选行（[data-alarm-simple-filters]）')
+    for (const key of ['filterTitle', 'filterContent', 'filterTimeRange']) {
+      assert.ok(simple.includes(`t('alarmsUi.${key}')`), `筛选行里少了 ${key}`)
     }
-    /*
-     * 简单那三个字段**没有**被 v-if 门住（"一直显示"就是这句话）。
-     *
-     * 切片到"更多筛选开关"为止：`data-alarm-more-filters` 那一段的 `v-if="moreOpen"` 在属性顺序上
-     * 排在它的 data 钩子**之前**，所以拿那个钩子当右边界会把 `v-if` 一起圈进来（第一版就是这样
-     * 红的 —— 断言的是"更多筛选默认收起"那段代码，而不是简单筛选）。
-     */
-    const simpleFields = view.slice(
-      view.indexOf('data-alarm-simple-filters'),
-      view.indexOf('filter-more-toggle')
-    )
-    assert.equal(/v-if=/.test(simpleFields), false, '简单筛选里出现了条件渲染（它必须一直显示）')
-  })
-
-  it('更多筛选那四个被门住，而且默认收起', () => {
-    const more = view.slice(view.indexOf('data-alarm-more-filters'))
-    for (const key of ['filterFrom', 'filterTo', 'filterChannel', 'filterType']) {
-      assert.ok(more.includes(`t('alarmsUi.${key}')`), `更多筛选里少了 ${key}`)
+    // 旧筛选（设备/等级/确认状态/通道/类型）与「更多筛选」整个删掉了：
+    // 它们要么回到关键字搜索，要么业主明确说不要。任何一项长回来都是漂移。
+    for (const gone of ['filterDevice', 'filterSeverity', 'filterAck', 'filterChannel', 'filterType', 'filterFrom', 'filterTo']) {
+      assert.equal(
+        simple.includes(`t('alarmsUi.${gone}')`),
+        false,
+        `筛选行里又出现了已删除的 ${gone}`
+      )
     }
-    assert.match(
-      view,
-      /v-if="moreOpen"[\s\S]{0,200}data-alarm-more-filters/,
-      '更多筛选没有被 moreOpen 门住'
-    )
-    assert.match(
-      view,
-      /const moreOpen = ref\(false\)/,
-      'moreOpen 的初值不是 false（业主第 3 条：更多筛选默认收起）'
-    )
+    assert.equal(simple.includes('data-action="toggle-alarm-filters"'), false, '「更多筛选」开关又长回来了')
+    assert.equal(view.includes('data-alarm-more-filters'), false, '「更多筛选」面板又长回来了')
   })
 
-  it('开关有 aria-expanded 与稳定的探针钩子，而且真的切换', () => {
-    assert.match(
-      view,
-      /data-action="toggle-alarm-filters"[\s\S]{0,200}:aria-expanded="moreOpen"/,
-      '开关缺 aria-expanded（读屏说不出它开着还是收着）'
-    )
-    assert.match(view, /@click="moreOpen = !moreOpen"/, '开关没有真的切换')
-    assert.match(view, /:aria-controls="'alarm-more-filters'"/, '开关没有指向它控制的那一块')
-  })
-
-  it('收起时生效的筛选项数**说得出来**（否则列表变短没人解释）', () => {
-    assert.match(
-      view,
-      /const advancedFilterCount = computed\(/,
-      '没有统计生效中的"更多筛选"'
-    )
-    // 四项都要计进去：两个时间 + 通道 + 类型。
-    const counter = view.slice(view.indexOf('const advancedFilterCount'))
-    const body = counter.slice(0, counter.indexOf('\n})'))
-    for (const field of ['filters.channelId', 'filters.alarmType', 'filters.from', 'filters.to']) {
-      assert.ok(body.includes(field), `生效项统计里漏了 ${field}`)
-    }
-    assert.match(
-      view,
-      /moreFiltersActive', \{ count: advancedFilterCount\.value \}/,
-      '按钮没有显示生效项数'
-    )
-    assert.match(view, /\{\{ moreFiltersLabel \}\}/, '按钮没有用那个文案')
-  })
-
-  it('重置按钮一直在（收起"更多"之后仍然清得掉）', () => {
-    const simple = view.slice(
-      view.indexOf('data-alarm-simple-filters'),
-      view.indexOf('data-alarm-more-filters')
-    )
-    assert.ok(simple.includes('data-action="reset-alarm-filters"'), '简单筛选里没有重置按钮')
+  it('标题/内容搜索框与日历范围选择器都渲染，重置按钮在', () => {
+    assert.ok(view.includes('data-filter-title'), '标题搜索框没渲染')
+    assert.ok(view.includes('data-filter-content'), '内容搜索框没渲染')
+    assert.ok(view.includes('<DateRangePicker'), '日历范围选择器没用上')
+    assert.ok(view.includes('data-action="reset-alarm-filters"'), '筛选行里没有重置按钮')
   })
 
   it('每一格筛选都**显式**进 query：清空 = undefined，不能缺席', () => {
     /*
      * 这是探针在真窗口里抓到的一个**既有缺陷**（2026-09-19 第 15 轮）：
-     * `buildQuery()` 原来写成"有值才带上"，而 store 的 `applyQuery()` 是**合并补丁** ——
-     * 缺席的键不会清掉上一次的值。于是"把筛选清空"这条路上列表仍然是被筛过的：
-     * 探针把「开始时间」设成 2099 年（0 条），再清空，**仍然是 0 条**。
-     * `severity` / `channelId` / `alarmType` / `acknowledged` / `to` 五格当时同样清不掉。
+     * `buildQuery()` 写成"有值才带上"，而 store 的 `applyQuery()` 是**合并补丁** ——
+     * 缺席的键不会清掉上一次的值。于是"把筛选清空"这条路上列表仍然是被筛过的。
+     * 重构后只剩四格，但这条纪律一条都不能少。
      */
     const build = view.slice(view.indexOf('function buildQuery'), view.indexOf('async function reload'))
     assert.ok(build.length > 0, '找不到 buildQuery()')
-    for (const key of [
-      'deviceId',
-      'channelId',
-      'alarmType',
-      'severity',
-      'from',
-      'to',
-      'acknowledged'
-    ]) {
+    for (const key of ['title', 'content', 'from', 'to', 'deviceId']) {
       assert.match(
         build,
         new RegExp(`\\b${key}:`),
@@ -246,20 +190,34 @@ describe('③ 简单筛选 / 更多筛选（更多默认收起）', () => {
     assert.match(build, /undefined/, 'buildQuery() 里没有"清空"的写法（undefined）')
   })
 
-  it('三条新文案四语言齐全，占位符一致', () => {
+  it('行右键菜单：查看详情 / 回放 / 下载 / 加入样本 / 确认', () => {
+    for (const hook of ['data-alarm-row-menu', 'data-menu-replay', 'data-menu-download', 'data-menu-sample', 'data-menu-ack']) {
+      assert.ok(view.includes(hook), `右键菜单缺 ${hook}`)
+    }
+    assert.ok(view.includes('@contextmenu="openRowMenu('), '表格行没有接 contextmenu')
+    // 无本机录音的条目下载要禁用并写出原因（不能点出一个报错对话框）。
+    assert.ok(view.includes("t('alarmsUi.menuNoRecording')"), '下载禁用原因没接文案')
+  })
+
+  it('回放证据：视频（MP4 容器）与抓图（听诊盒子族）两节都在抽屉里', () => {
+    assert.ok(view.includes("t('alarmsUi.videoTitle')"), '抽屉没有视频那一节')
+    assert.ok(view.includes("t('alarmsUi.snapshotsTitle')"), '抽屉没有抓图那一节')
+    assert.ok(view.includes('localRecordingContainer'), '没有用录音容器选播放器')
+  })
+
+  it('筛选行新文案四语言齐全，下载回执占位符一致', () => {
     for (const locale of LOCALES) {
-      for (const key of ['moreFilters', 'hideMoreFilters', 'moreFiltersActive']) {
+      for (const key of ['filterTitle', 'filterContent', 'filterTimeRange', 'menuDetail', 'menuReplay', 'menuDownload', 'menuAddSample', 'menuAck']) {
         const value = messageAt(locale, `alarmsUi.${key}`)
         assert.equal(typeof value, 'string', `${locale} 缺 alarmsUi.${key}`)
         assert.ok(String(value).trim() !== '', `${locale} 的 alarmsUi.${key} 是空的`)
-        assert.equal(String(value).includes('@'), false, `${locale} 的 ${key} 含裸 @`)
       }
     }
     for (const locale of ['en', 'es', 'tr']) {
       assert.deepEqual(
-        (String(messageAt(locale, 'alarmsUi.moreFiltersActive')).match(/\{(\w+)\}/g) ?? []).sort(),
-        (String(messageAt('zh-CN', 'alarmsUi.moreFiltersActive')).match(/\{(\w+)\}/g) ?? []).sort(),
-        `${locale} 的 moreFiltersActive 占位符与中文不一致`
+        (String(messageAt(locale, 'alarmsUi.downloadDone')).match(/\{(\w+)\}/g) ?? []).sort(),
+        (String(messageAt('zh-CN', 'alarmsUi.downloadDone')).match(/\{(\w+)\}/g) ?? []).sort(),
+        `${locale} 的 downloadDone 占位符与中文不一致`
       )
     }
   })

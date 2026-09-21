@@ -88,6 +88,7 @@ import type { SampleLabelDimension, SampleLabelSource } from '@shared/domain/sam
 import type {
   SampleAiConfigInput,
   SampleAiLabelRequest,
+  SampleAiServiceInput,
   SampleExportRequest,
   SampleQuery,
   E2SyncRequest
@@ -219,7 +220,8 @@ const api: RendererApi = {
   recordings: {
     query: (query: RecordingQuery) => ipcRenderer.invoke(IpcChannels.RECORDING_QUERY, query),
     syncDevice: (deviceId: string) =>
-      ipcRenderer.invoke(IpcChannels.RECORDING_SYNC_DEVICE, deviceId)
+      ipcRenderer.invoke(IpcChannels.RECORDING_SYNC_DEVICE, deviceId),
+    export: (recordingId: string) => ipcRenderer.invoke(IpcChannels.RECORDING_EXPORT, recordingId)
   },
 
   /** 本地异常声纹样本库（schema v7）。 */
@@ -240,6 +242,13 @@ const api: RendererApi = {
       ipcRenderer.invoke(IpcChannels.SAMPLE_AI_SAVE_CONFIG, input),
     aiLabel: (request: SampleAiLabelRequest) =>
       ipcRenderer.invoke(IpcChannels.SAMPLE_AI_LABEL, request),
+    /** 命名的 AI 服务库（设置页 AI 页签）：列表 / 增改 / 删 / 选用。 */
+    aiServices: () => ipcRenderer.invoke(IpcChannels.SAMPLE_AI_SERVICES),
+    saveAiService: (input: SampleAiServiceInput) =>
+      ipcRenderer.invoke(IpcChannels.SAMPLE_AI_SERVICE_SAVE, input),
+    deleteAiService: (id: string) => ipcRenderer.invoke(IpcChannels.SAMPLE_AI_SERVICE_DELETE, id),
+    setActiveAiService: (id: string) =>
+      ipcRenderer.invoke(IpcChannels.SAMPLE_AI_SERVICE_SET_ACTIVE, id),
     setLabel: (
       sampleId: string,
       dimension: SampleLabelDimension,

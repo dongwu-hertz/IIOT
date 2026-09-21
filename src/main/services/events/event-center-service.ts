@@ -54,7 +54,9 @@ import type {
   EventSourceKind,
   EventSourceStatus,
   EventStatus,
-  EventAlarmLookup
+  EventAlarmLookup,
+  EventDeviceStatusLookup,
+  DeviceStatusEventLike
 } from '@shared/domain/event-center'
 import {
   allowedStatusTargets,
@@ -84,6 +86,7 @@ import {
   deriveRecordingContainer,
   detectRemoteRecordingId,
   deviceDetectEntryId,
+  deviceStatusEntryId,
   eventCenterPerSourceCap,
   eventEntryIdPayload,
   eventSourceFromEntryId,
@@ -207,6 +210,13 @@ export interface EventCenterServiceOptions {
   detectLibrary: EventCenterDetectLibrary
   linkage: EventCenterLinkageSource
   alarms: EventAlarmLookup
+  /**
+   * 设备上线 / 离线事件（业主追加的第四路来源，schema v17）。
+   *
+   * 可选注入：缺省是**空实现**（永远 0 条、确认 0 条）——事件中心照常工作，只是这一路
+   * 没有数据。这样不接线存储的测试不必先造一张表（与 `detectLogLimit` 同一模式）。
+   */
+  deviceStatus?: EventDeviceStatusLookup
   recordings: EventRecordingLookup
   /** 图片证据的回环端点（详情抽屉的 Evidence 页签）。 */
   images: EventCenterImageServer
@@ -365,6 +375,13 @@ export class EventCenterService {
     // ---- 相机检测日志（设备 HTTP） ---------------------------------------
     if (requested.has('deviceDetect')) {
       const collected = await this.collectDeviceDetects(input, deviceFilter, perSourceCap)
+      statuses.push(collected.status)
+      pool.push(...collected.entries)
+    }
+
+    // ---- 设备上线 / 离线（本机 SQLite，schema v17） ------------------------
+    if (requested.has('deviceStatus') && this.options.deviceStatus) {
+      const collected = this.collectDeviceStatus(input, deviceFilter, perSourceCap)
       statuses.push(collected.status)
       pool.push(...collected.entries)
     }
@@ -837,6 +854,22 @@ export class EventCenterService {
       })
     }
 
+    // ---- 设备状态事件（我们自己的表，与声纹告警同一做法） -----------------
+    const statusIds = groups.get('deviceStatus') ?? []
+    if (statusIds.length > 0 && this.options.deviceStatus) {
+      try {
+        const affected = this.options.deviceStatus.acknowledge(statusIds.map(eventEntryIdPayload), true)
+        acknowledged += affected
+        perSource.push({ source: 'deviceStatus', acknowledged: affected })
+      } catch (error) {
+        perSource.push({ source: 'deviceStatus', acknowledged: 0, error: describeError(error) })
+        deviceLog().warn('事件中心：设备状态事件确认失败', {
+          count: statusIds.length,
+          reason: describeError(error)
+        })
+      }
+    }
+
     if (unrecognised > 0) {
       appLog().warn('事件中心：确认请求里有无法识别来源的标识', { count: unrecognised })
     }
@@ -1012,9 +1045,61 @@ export class EventCenterService {
     return { entries, status }
   }
 
+  /**
+   * 设备上线 / 离线事件（本机 SQLite，schema v17）。
+   *
+   * 与 `collectLocalAlarms` 的差别：等级**不是来源固有单值**（ONLINE → info /
+   * OFFLINE → warning 是写库时算好的两档），所以等级筛选不下推短路，而是交给 SQL
+   * （`severity` 列就是这么存在的理由）。截断同样是精确的：`total - items`。
+   */
+  private collectDeviceStatus(
+    input: EventCenterQuery,
+    deviceFilter: string | undefined,
+    perSourceCap: number
+  ): { entries: EventCenterEntry[]; status: EventSourceStatus } {
+    const source: EventSourceKind = 'deviceStatus'
+    // 先取到局部变量：可选属性在方法调用之间不会被 TS 收窄。
+    const lookup = this.options.deviceStatus
+    if (!lookup) {
+      return { entries: [], status: { source, ok: true, items: 0, truncated: 0, untimed: 0 } }
+    }
+    try {
+      const page = lookup.query({
+        ...(deviceFilter !== undefined ? { deviceId: deviceFilter } : {}),
+        ...(input.from !== undefined ? { from: input.from } : {}),
+        ...(input.to !== undefined ? { to: input.to } : {}),
+        ...(input.acknowledged !== undefined ? { acknowledged: input.acknowledged } : {}),
+        ...(input.severity !== undefined ? { severity: input.severity } : {}),
+        limit: perSourceCap,
+        offset: 0
+      })
+      const entries = page.items.map((event) => this.mapDeviceStatus(event))
+      const truncated = Math.max(0, page.total - page.items.length)
+      return { entries, status: { source, ok: true, items: entries.length, truncated, untimed: 0 } }
+    } catch (error) {
+      deviceLog().warn('事件中心：设备状态事件读取失败', { reason: describeError(error) })
+      return { entries: [], status: { source, ok: false, error: describeError(error), items: 0, truncated: 0, untimed: 0 } }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // 映射
   // -------------------------------------------------------------------------
+
+  /** 设备状态事件 → 事件中心条目。设备名用**写入时刻的快照**（设备可能已改名/删除）。 */
+  private mapDeviceStatus(event: DeviceStatusEventLike): EventCenterEntry {
+    return {
+      id: deviceStatusEntryId(event.id),
+      source: 'deviceStatus',
+      deviceId: event.deviceId,
+      deviceName: event.deviceName,
+      at: event.at,
+      atApproximate: false,
+      severity: event.severity,
+      kind: event.status === 'ONLINE' ? 'deviceOnline' : 'deviceOffline',
+      acknowledged: event.acknowledged
+    }
+  }
 
   private mapLocalAlarm(alarm: AlarmEvent): EventCenterEntry {
     const entry: EventCenterEntry = {
@@ -1191,7 +1276,7 @@ export function containerOf(recording: Recording): NonNullable<EventCenterEntry[
 }
 
 function emptyCounts(): Record<EventSourceKind, number> {
-  return { deviceDetect: 0, linkage: 0, localAlarm: 0 }
+  return { deviceDetect: 0, linkage: 0, localAlarm: 0, deviceStatus: 0 }
 }
 
 function clampLimit(value: number): number {

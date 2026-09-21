@@ -22,6 +22,7 @@ import {
   DeviceRepository
 } from './database/device-repository'
 import { AlarmRepository, RecordingRepository } from './database/alarm-repository'
+import { DeviceStatusEventRepository } from './database/device-status-event-repository'
 import { EventStatusRepository } from './database/event-status-repository'
 import { IncidentRepository } from './database/incident-repository'
 import { SampleRepository } from './database/sample-repository'
@@ -306,6 +307,8 @@ export async function initServices(): Promise<AppServices> {
   const channelRepo = new ChannelRepository(db)
   const alarmRepo = new AlarmRepository(db)
   const recordingRepo = new RecordingRepository(db)
+  /** 设备上线 / 离线事件（schema v17，业主：事件中心把设备离线纳入时间线）。 */
+  const deviceStatusEventRepo = new DeviceStatusEventRepository(db)
   /** 处置工作流（状态 + Activity，schema v13）：事件中心自己的两张表。 */
   const eventStatusRepo = new EventStatusRepository(db)
   /** Incident 与它的关联（schema v14）：人工创建 + 手动关联，规格 §14.2 的 V1。 */
@@ -416,6 +419,12 @@ export async function initServices(): Promise<AppServices> {
      */
     getIngestConfig: () => settings.get().iotIngest,
     listLocalAddresses,
+    /** 设备状态翻转落事件（schema v17）：`record` 同步落库，失败由 DeviceService 兜住记日志。 */
+    deviceStatusEvents: {
+      record: (input) => {
+        deviceStatusEventRepo.record(input)
+      }
+    },
 
     /**
      * Build a StreamManager for one device.
@@ -812,6 +821,7 @@ export async function initServices(): Promise<AppServices> {
     detectLibrary,
     linkage,
     alarms: alarmRepo,
+    deviceStatus: deviceStatusEventRepo,
     recordings: {
       findById: (id) => recordingRepo.findById(id),
       listByDevice: (deviceId) => recordingRepo.query({ deviceId, limit: 1000, offset: 0 }).items

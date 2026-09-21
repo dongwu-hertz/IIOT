@@ -89,6 +89,29 @@ export const zhCN = {
     description: '切换后立即生效，并会记住你的选择。'
   },
 
+  /** 日历范围选择器（告警中心 / 事件中心共用的「一个日历」）。 */
+  picker: {
+    placeholder: '选择时间范围',
+    presetAll: '全部',
+    presetToday: '今天',
+    preset1h: '最近 1 小时',
+    preset24h: '最近 24 小时',
+    preset7d: '最近 7 天',
+    prevMonth: '上个月',
+    nextMonth: '下个月',
+    startTime: '开始时刻',
+    endTime: '结束时刻',
+    clear: '清除',
+    confirm: '确定',
+    sun: '日',
+    mon: '一',
+    tue: '二',
+    wed: '三',
+    thu: '四',
+    fri: '五',
+    sat: '六'
+  },
+
   /**
    * Application chrome: the sidebar, the topbar and the window title.
    *
@@ -121,7 +144,7 @@ export const zhCN = {
        * 与 `/alarms`（只有声纹设备自己的告警行）不同：这一个页面按时间倒序合并
        * 三路来源——相机检测日志、本机告警联动、声纹告警。
        */
-      events: '事件与告警中心',
+      events: '事件中心',
       recordings: '录音文件',
       samples: '样本库',
       settings: '系统设置',
@@ -229,6 +252,53 @@ export const zhCN = {
     restoreItemMapTiles: '在线地图底图（开关、XYZ 模板、密钥与署名）',
     tabAccount: '账号',
     tabAbout: '关于与维护',
+    /** AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。 */
+    tabAi: 'AI 服务',
+
+    /** GIS 服务库（地图页签内，业主追加：「添加 GIS 服务」）。 */
+    mapServiceGroup: 'GIS 服务',
+    mapServiceHint: '把常用的瓦片服务命名保存起来，切换时一键应用；「应用」会覆盖上方当前配置并打开开关。',
+    mapServiceEmpty: '还没有保存的 GIS 服务。',
+    mapServiceAdd: '添加服务',
+    mapServiceSaveCurrent: '把当前配置保存为服务',
+    mapServiceApply: '应用',
+    mapServiceEdit: '编辑',
+    mapServiceDelete: '删除',
+    mapServiceDeleteConfirm: '删除 GIS 服务「{name}」？',
+    mapServiceSave: '保存服务',
+    mapServiceCancel: '取消',
+    mapServiceName: '服务名称',
+    mapServiceTest: '测试瓦片',
+    mapServiceTesting: '测试中…',
+    mapServiceTestOk: '样例瓦片加载成功，这个地址可以用。',
+    mapServiceTestFail: '样例瓦片加载失败（无外网、密钥错或服务拒绝）。',
+    mapServiceTooMany: 'GIS 服务数量已达上限',
+
+    /** AI 服务库（AI 页签内）。 */
+    aiServiceGroup: 'AI 服务',
+    aiServiceHint: '添加常用的 AI 服务（OpenAI 兼容接口），选中哪条就用哪条给样本提候选标签；密钥只保存在本机，界面不回显。',
+    aiServiceEmpty: '还没有保存的 AI 服务。',
+    aiServiceAdd: '添加服务',
+    aiServiceName: '服务名称',
+    aiServiceEndpoint: '接口地址',
+    aiServiceModel: '模型',
+    aiServiceKey: '密钥（API Key）',
+    aiServiceKeyPlaceholder: '留空 = 不改动已存的密钥',
+    aiServiceKeyStored: '密钥已保存',
+    aiServiceKeyNone: '未存密钥',
+    aiServiceDeleteConfirm: '删除 AI 服务「{name}」？它的密钥会一并删除。',
+    aiServiceSaveFailed: '保存 AI 服务失败',
+    aiServiceTooMany: 'AI 服务数量已达上限',
+    aiServiceUnknown: '尚未读取服务状态',
+    aiServiceReady: '当前服务已就绪',
+    aiPresetLabel: '厂家预置（点选填地址与模型）',
+    aiPreset_openai: 'OpenAI',
+    aiPreset_deepseek: 'DeepSeek',
+    aiPreset_moonshot: 'Moonshot',
+    aiPreset_zhipu: '智谱 GLM',
+    aiPreset_qwen: '通义千问',
+    aiPreset_ollama: 'Ollama（本地）',
+    aiPreset_custom: '自定义',
 
     /** 存储页第一组的小标题：**存储位置** + 保留策略（页签名已经是"存储"，卡片不再重复写）。 */
     storageGroupLocation: '位置与保留',
@@ -321,6 +391,7 @@ export const zhCN = {
     restoreItemAlarmLinkage: '告警联动（含邮件服务器、收件人、模板与冷却）',
     restoreItemAlarmSounds: '告警声音库（声音类型与所选音频文件）',
     restoreItemIotIngest: '数据接入（HTTP 推流 / MQTT 的开关、监听地址与端口）',
+    restoreItemMapServices: 'GIS 服务库（已保存的命名瓦片服务列表）',
     restoreWarnStorage: '存储路径会被改回默认值。磁盘上已有的录音与文件不会被删除，只是不再被指向；需要保留原路径时请先记下它。',
     restoreKeeps: '设备列表、通道、录像与录音文件、告警记录、账号与账号权限都不会被改动。',
     restoreConfirm: '恢复默认值',
@@ -526,6 +597,23 @@ export const zhCN = {
     filterType: '告警类型',
     filterAllTypes: '全部类型',
     filterFrom: '开始时间',
+    /** 筛选行（业主重构：标题 + 内容 + 一个日历）。 */
+    filterTitle: '标题',
+    filterTitleHint: '按设备名搜索',
+    filterContent: '内容',
+    filterContentHint: '按备注 / 告警原因搜索',
+    filterTimeRange: '时间范围',
+    /** 行右键菜单。 */
+    menuDetail: '查看详情',
+    menuReplay: '回放',
+    menuDownload: '下载告警',
+    menuAddSample: '加入样本',
+    menuAck: '确认',
+    menuUnack: '取消确认',
+    menuNoRecording: '这条告警没有本机录音，无法下载',
+    downloadDone: '已保存到 {path}',
+    videoTitle: '告警视频',
+    snapshotsTitle: '告警抓图',
     filterTo: '结束时间',
     filterAck: '确认状态',
     filterAllChannels: '全部通道',
@@ -2242,7 +2330,8 @@ export const zhCN = {
     eventSource: {
       deviceDetect: '相机检测日志',
       linkage: '本机告警联动',
-      localAlarm: '声纹设备告警'
+      localAlarm: '声纹设备告警',
+      deviceStatus: '设备状态'
     },
     eventSeverity: {
       info: '提示',
@@ -2254,7 +2343,9 @@ export const zhCN = {
       deviceDetect: '完成一次检测',
       deviceDetectAlarm: '设备判定为告警的检测',
       linkageAlarm: '本机联动告警',
-      localAlarm: '声纹设备告警'
+      localAlarm: '声纹设备告警',
+      deviceOnline: '设备上线',
+      deviceOffline: '设备离线'
     },
     detectFileKind: {
       power_spectrum_photo: '功率谱图片',
@@ -2297,7 +2388,7 @@ export const zhCN = {
       viewAlarms: '查看告警',
       viewRecordings: '查看录像',
       viewTrends: '查看趋势',
-      viewEvents: '查看事件与告警中心'
+      viewEvents: '查看事件中心'
     },
     /**
      * 每一项权限**管住哪些操作**（与 `PERMISSION_OPERATIONS` 一一对应）。
@@ -2318,7 +2409,7 @@ export const zhCN = {
       viewAlarms: '告警中心、联动引擎状态与待处理告警',
       viewRecordings: '录音/录像列表、回放数据与录像播放地址',
       viewTrends: '历史趋势查询、覆盖范围与统计',
-      viewEvents: '事件与告警中心的查询与相机检测库'
+      viewEvents: '事件中心的查询与相机检测库'
     },
     /**
      * 六种预定义告警声音（手册 §17.2.7 第 5439 行的 six pre-defined alarm sound
@@ -3275,6 +3366,7 @@ export const zhCN = {
     },
 
     searchPlaceholder: '搜索设备、事件、指标',
+    filterTimeRange: '时间范围',
     searchScope: '搜索只在已加载的 {loaded} 条里生效',
 
     savedViewTitle: '视图',

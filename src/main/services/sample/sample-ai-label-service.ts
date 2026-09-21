@@ -44,9 +44,12 @@ import type {
   SampleAiConfigInput,
   SampleAiLabelOutcome,
   SampleAiLabelRequest,
-  SampleAiStatus
+  SampleAiServiceInput,
+  SampleAiServicesStatus,
+  SampleAiStatus,
+  SampleAiServiceSummary
 } from '@shared/ipc/contract'
-import type { SampleAiStore, StoredAiSettings } from './sample-ai-store'
+import type { SampleAiStore, StoredActiveAi } from './sample-ai-store'
 import type { SampleLabelService } from './sample-label-service'
 import { appLog } from '../logging/logger'
 
@@ -85,17 +88,87 @@ export class SampleAiLabelService {
   }
 
   status(): SampleAiStatus {
-    return toStatus(this.store.read())
+    return toStatus(this.store.readActive())
   }
 
+  /**
+   * 旧单配置写法的兼容层：写到 **active 服务**（endpoint/model/Key/enabled）。
+   *
+   * 样本页表单不改、通道不改，行为与单配置时代一致 —— "启用"开关并入 activeId：
+   * 关 = 清空 activeId（配置保留），开 = 恢复指向该服务。
+   */
   saveConfig(input: SampleAiConfigInput): SampleAiStatus {
-    this.store.save({
+    this.store.saveActiveConfig({
       enabled: input.enabled === true,
       endpoint: typeof input.endpoint === 'string' ? input.endpoint : '',
       model: typeof input.model === 'string' ? input.model : '',
       ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey })
     })
     return this.status()
+  }
+
+  // -------------------------------------------------------------------------
+  // 命名的 AI 服务库（业主追加：设置里「不同 AI 服务」）
+  // -------------------------------------------------------------------------
+
+  /** 服务库 + active 服务就绪态（设置页 AI 页签的数据源）。 */
+  servicesStatus(): SampleAiServicesStatus {
+    const stored = this.store.read()
+    const active = stored.services.find((service) => service.id === stored.activeId)
+    // 就绪 = 全局开关开着 **且** active 服务本身配齐了。关了开关就照实说 'disabled'。
+    const readiness = !stored.enabled
+      ? ({ ready: false, reason: 'disabled' } as const)
+      : active
+        ? describeAiReadiness({ enabled: true, endpoint: active.endpoint, model: active.model })
+        : ({ ready: false, reason: 'no-endpoint' } as const)
+    const status: SampleAiServicesStatus = {
+      services: stored.services.map(
+        (service): SampleAiServiceSummary => ({
+          id: service.id,
+          name: service.name,
+          provider: service.provider,
+          endpoint: service.endpoint,
+          model: service.model,
+          apiKeyStored: stored.keys[service.id]?.stored === true
+        })
+      ),
+      activeId: stored.activeId,
+      encryptionAvailable: stored.encryptionAvailable,
+      canStoreApiKey: stored.encryptionAvailable,
+      ready: readiness.ready,
+      promptVersion: SAMPLE_AI_PROMPT_VERSION,
+      maxBatch: SAMPLE_AI_MAX_BATCH,
+      timeoutMs: SAMPLE_AI_TIMEOUT_MS
+    }
+    if (!readiness.ready && 'reason' in readiness && readiness.reason !== undefined) {
+      status.blockedReason = readiness.reason
+    }
+    return status
+  }
+
+  /** 新增/更新一条命名服务；不合法抛错（store 层给的原因照传给调用方）。 */
+  saveService(input: SampleAiServiceInput): SampleAiServicesStatus {
+    const result = this.store.saveService({
+      ...(typeof input.id === 'string' && input.id !== '' ? { id: input.id } : {}),
+      name: typeof input.name === 'string' ? input.name : '',
+      endpoint: typeof input.endpoint === 'string' ? input.endpoint : '',
+      model: typeof input.model === 'string' ? input.model : '',
+      ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey })
+    })
+    if (result.error) throw new Error(result.error)
+    return this.servicesStatus()
+  }
+
+  /** 删除一条服务（连同密钥）。删的是 active 由 store 回落，返回最新状态。 */
+  deleteService(id: string): SampleAiServicesStatus {
+    if (!this.store.deleteService(id)) throw new Error('要删除的服务不存在')
+    return this.servicesStatus()
+  }
+
+  /** 选用哪条为当前启用（空串 = 全部不启用）。 */
+  setActiveService(id: string): SampleAiServicesStatus {
+    if (!this.store.setActive(id)) throw new Error('要选用的服务不存在')
+    return this.servicesStatus()
   }
 
   /**
@@ -105,7 +178,7 @@ export class SampleAiLabelService {
    * 说明是别的调用方直接调的 —— 那时静默返回会让调用方以为"AI 看过了，没有可标的"。
    */
   async label(request: SampleAiLabelRequest = {}): Promise<SampleAiLabelOutcome> {
-    const stored = this.store.read()
+    const stored = this.store.readActive()
     const readiness = describeAiReadiness(stored.config)
     if (!readiness.ready) {
       throw new Error(`AI 标注未配置：${readiness.reason ?? 'unknown'}`)
@@ -307,7 +380,7 @@ export class SampleAiLabelService {
 }
 
 /** 存储状态 → IPC 形状（**只**带"有没有密钥"，不带密钥）。 */
-export function toStatus(stored: StoredAiSettings): SampleAiStatus {
+export function toStatus(stored: StoredActiveAi): SampleAiStatus {
   const readiness = describeAiReadiness(stored.config)
   const status: SampleAiStatus = {
     enabled: stored.config.enabled,

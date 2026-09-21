@@ -48,13 +48,17 @@ import { isRecordingContainerFormat } from './models'
 /**
  * 事件的来源。取值**同时**是 `domain.eventSource.<value>` 的目录键，
  * 因此界面不需要任何查表。
+ *
+ * `deviceStatus`（业主追加）：设备**上线 / 离线**的翻转记录（schema v17），
+ * 与「告警」是不同性质的内容 —— 它说的是"这台设备还看不看得见"，不是"它看见了什么"。
  */
-export type EventSourceKind = 'deviceDetect' | 'linkage' | 'localAlarm'
+export type EventSourceKind = 'deviceDetect' | 'linkage' | 'localAlarm' | 'deviceStatus'
 
 export const EVENT_SOURCE_KINDS: readonly EventSourceKind[] = [
   'deviceDetect',
   'linkage',
-  'localAlarm'
+  'localAlarm',
+  'deviceStatus'
 ]
 
 /** 收窄来自 IPC / 数据库边界的取值。 */
@@ -147,6 +151,10 @@ export type EventKind =
   | 'linkageAlarm'
   /** 声纹设备自身上报的告警位。 */
   | 'localAlarm'
+  /** 设备从离线恢复在线（业主追加的设备状态事件）。 */
+  | 'deviceOnline'
+  /** 设备被判离线（连续探测失败达标，业主追加的设备状态事件）。 */
+  | 'deviceOffline'
 
 // ---------------------------------------------------------------------------
 // 检测结果文件
@@ -326,11 +334,12 @@ export interface EventGroupMember {
 // 标识构造
 // ---------------------------------------------------------------------------
 
-/** 三路来源的 id 前缀。取值是 `EventSourceKind` 的机器可读短名。 */
+/** 各路来源的 id 前缀。取值是 `EventSourceKind` 的机器可读短名。 */
 export const EVENT_ID_PREFIX: Readonly<Record<EventSourceKind, string>> = {
   deviceDetect: 'detect',
   linkage: 'linkage',
-  localAlarm: 'alarm'
+  localAlarm: 'alarm',
+  deviceStatus: 'status'
 }
 
 const ID_SEPARATOR = ':'
@@ -363,6 +372,11 @@ export function linkageEntryId(eventId: string): string {
 /** `alarm:<alarmId>`。 */
 export function localAlarmEntryId(alarmId: string): string {
   return `${EVENT_ID_PREFIX.localAlarm}${ID_SEPARATOR}${alarmId}`
+}
+
+/** `status:<eventId>`（设备状态事件的库内 id 本身即全局唯一）。 */
+export function deviceStatusEntryId(eventId: string): string {
+  return `${EVENT_ID_PREFIX.deviceStatus}${ID_SEPARATOR}${eventId}`
 }
 
 /** 从一条 id 还原来源；前缀不认识时返回 `undefined`（不猜）。 */
@@ -697,6 +711,34 @@ export interface EventRecordingLookup {
 export interface EventAlarmLookup {
   query(query: AlarmQuery): AlarmPage
   acknowledge(ids: readonly string[], acknowledged: boolean): number
+}
+
+/**
+ * 事件中心需要的设备状态事件读取能力（由 `DeviceStatusEventRepository` 提供，
+ * 业主追加的第四路来源「设备上线 / 离线」）。
+ */
+export interface EventDeviceStatusLookup {
+  query(query: {
+    deviceId?: string
+    from?: number
+    to?: number
+    acknowledged?: boolean
+    severity?: EventSeverity
+    limit: number
+    offset?: number
+  }): { items: DeviceStatusEventLike[]; total: number }
+  acknowledge(ids: readonly string[], acknowledged: boolean): number
+}
+
+/** 仓储行在域层的形状（避免事件中心服务反向依赖主进程仓储类型）。 */
+export interface DeviceStatusEventLike {
+  id: string
+  deviceId: string
+  deviceName: string
+  status: 'ONLINE' | 'OFFLINE'
+  severity: EventSeverity
+  at: number
+  acknowledged: boolean
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ import {
 } from '@shared/domain/iot-ingest'
 import {
   defaultMapTilesConfig,
+  normaliseMapServices,
   normaliseMapTilesConfig
 } from '@shared/domain/map-tiles'
 import { appLog } from '../logging/logger'
@@ -102,7 +103,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
    * **默认关闭**：离线优先；关着时地图页仍走本机 SVG 网格，不出网。
    * 只允许 https 的 XYZ 模板、可选 key、启用时必须署名；规则见 @shared/domain/map-tiles。
    */
-  mapTiles: defaultMapTilesConfig()
+  mapTiles: defaultMapTilesConfig(),
+
+  /**
+   * 命名的 GIS 服务库（业主追加：设置里「添加 GIS 服务」）。
+   *
+   * 默认空库；`mapTiles` 仍是"当前生效的那一份"。条目逐条归一化（坏条目丢弃记日志，
+   * 一条坏服务不作废整个库），规则见 `@shared/domain/map-tiles`。
+   */
+  mapServices: []
 }
 
 /**
@@ -141,7 +150,8 @@ export const RESTORABLE_SETTING_KEYS = [
   'alarmLinkage',
   'alarmSounds',
   'iotIngest',
-  'mapTiles'
+  'mapTiles',
+  'mapServices'
 ] as const satisfies readonly (keyof AppSettings)[]
 
 export type RestorableSettingKey = (typeof RESTORABLE_SETTING_KEYS)[number]
@@ -252,6 +262,20 @@ const VALIDATORS: {
       appLog().warn('地图底图配置不合法，整键拒绝', { field: 'mapTiles' })
     }
     return config
+  },
+
+  /**
+   * 命名的 GIS 服务库（业主追加）。
+   *
+   * 与 `mapTiles` 的"整键拒绝"刻意不同：这里是一条**列表**，一条坏条目只丢那一条
+   * （记日志），不让整个库作废 —— 与 `alarmLinkage` 逐字段回落同一哲学。
+   */
+  mapServices: (value) => {
+    const { services, issues } = normaliseMapServices(value)
+    if (issues.length > 0) {
+      appLog().warn('GIS 服务库存在非法条目，已丢弃', { issues })
+    }
+    return services
   }
 }
 
@@ -396,7 +420,7 @@ export class SettingsService extends EventEmitter {
    * ---------------------------------------------------------------------------
    * 它到底动了什么（这一段就是实现，不是注释里的承诺）
    * ---------------------------------------------------------------------------
-   * 只写 `RESTORABLE_SETTING_KEYS` 那 15 个键，值取自 `DEFAULT_SETTINGS`，并把
+   * 只写 `RESTORABLE_SETTING_KEYS` 那 16 个键，值取自 `DEFAULT_SETTINGS`，并把
    * `storageRoot` 落回平台默认。其余一切**不经过这里**：
    *
    *   - `devices` / `channels` / `recordings` / `alarms` / `users`：本类只持有

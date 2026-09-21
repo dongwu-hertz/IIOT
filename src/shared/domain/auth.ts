@@ -365,6 +365,7 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
   viewRecordings: [
     'recording:query',
     'recording:playback-data',
+    'recording:export',
     'camera-nvr:video-url',
     /**
      * 本地样本库（schema v7）：这个库是**从录音派生的**，打标签/删样本是对派生物的注解，
@@ -397,7 +398,12 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
     /** AI 标注：同上 —— 它读到的是同一批样本，写进去的是**候选**标签（不覆盖人工标注）。 */
     'sample:ai-status',
     'sample:ai-save-config',
-    'sample:ai-label'
+    'sample:ai-label',
+    /** 命名的 AI 服务库（业主追加）：与上面三条同一批 —— 管的是同一份候选标注配置。 */
+    'sample:ai-services',
+    'sample:ai-service-save',
+    'sample:ai-service-delete',
+    'sample:ai-service-set-active'
   ],
   /**
    * 趋势的读 + **导出 CSV**（业主 2026-09-19 第 13 批第 6 条：「支持数据导出」）。
