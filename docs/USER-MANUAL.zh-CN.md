@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 |---|---|
 | 产品名称 | HAIS（原 HERTZINNO Acoustic Box Manager，HERTZINNO 出品） |
-| 版本 | V1.0.18（发布日期：2026-09-21） |
+| 版本 | V1.0.19（发布日期：2026-09-21） |
 | 适用平台 | Windows 10 / Windows 11（64 位） |
 | 软件性质 | 永久免费 |
 | 官网 | https://www.hertzinno.com |
@@ -90,7 +90,7 @@ HAIS（原 HERTZINNO Acoustic Box Manager）是一款面向工业现场声学监
 
 ### 2.1 获取安装包
 
-安装包文件名为 `HAIS-<版本>-<发布日期>-x64-setup.exe`（例如 `HAIS-1.0.18-2026-09-21-x64-setup.exe`），由 HERTZINNO 随设备交付，也可联系厂家支持获取。安装包体积约 127 MB（内置视频转封装组件）。
+安装包文件名为 `HAIS-<版本>-<发布日期>-x64-setup.exe`（例如 `HAIS-1.0.19-2026-09-21-x64-setup.exe`），由 HERTZINNO 随设备交付，也可联系厂家支持获取。安装包体积约 127 MB（内置视频转封装组件）。
 
 ### 2.2 安装步骤
 
@@ -247,7 +247,7 @@ HAIS（原 HERTZINNO Acoustic Box Manager）是一款面向工业现场声学监
 
 ### 5.4 页脚
 
-页脚固定显示版权信息、官网、联系邮箱与版本号（如 `v1.0.18·2026年9月21日`），不随内容滚动。
+页脚固定显示版权信息、官网、联系邮箱与版本号（如 `v1.0.19·2026年9月21日`），不随内容滚动。
 
 ---
 
@@ -710,4 +710,4 @@ HAIS（原 HERTZINNO Acoustic Box Manager）是一款面向工业现场声学监
 
 ---
 
-*本说明书基于 HAIS V1.0.18（2026-09-21 发布，原 HERTZINNO Acoustic Box Manager）编写；软件后续版本的界面与功能如有变化，请以软件内实际界面为准。*
+*本说明书基于 HAIS V1.0.19（2026-09-21 发布，原 HERTZINNO Acoustic Box Manager）编写；软件后续版本的界面与功能如有变化，请以软件内实际界面为准。*
