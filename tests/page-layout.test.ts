@@ -100,11 +100,12 @@ describe('页面内容列：左对齐、流式（不是定宽居中列）', () =
     )
   })
 
-  it('左、上间距的唯一来源是 .app-content 的固定内边距', () => {
+  it('左、上间距的唯一来源是 .app-content 的固定内边距（20260921 批第 10 条：收紧为原值的 10%）', () => {
     const content = ruleBody(css, '.app-content')
-    assert.match(content, /padding:\s*var\(--space-6\)/)
-    // 间距本身是固定像素值（`--space-6: 24px`）：任何窗口尺寸下它都是同一个数，
-    // 这正是「无论窗口的大小都和左边、上边保持固定的距离」的实现方式。
+    // 24px × 0.1 = 2.4px：业主「左侧和上侧的空间调整为现在的 10%」，四边同收保持对称。
+    // 仍是 token 的固定倍数 —— 任何窗口尺寸下量到的都是同一个数。
+    assert.match(content, /padding:\s*calc\(var\(--space-6\)\s*\*\s*0\.1\)/)
+    // 间距基准本身是固定像素值（`--space-6: 24px`）。
     const root = ruleBody(css, ':root')
     assert.match(root, /--space-6:\s*24px/)
     assert.match(root, /--space-1:\s*4px/)

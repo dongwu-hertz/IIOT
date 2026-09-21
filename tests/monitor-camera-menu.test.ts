@@ -89,7 +89,6 @@ function envWith(capabilities: CameraNvrCapabilities): CameraNvrEnvironment {
     deviceName: '相机 A',
     recording: false,
     fullscreen: false,
-    overlay: true,
     hasUsableSource: true,
     capabilities
   }

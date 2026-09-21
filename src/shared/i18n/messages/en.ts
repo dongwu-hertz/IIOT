@@ -41,6 +41,8 @@ export const en: MessageSchema = {
     INVALID_RESPONSE: 'The device returned data in an unrecognised format',
     DEVICE_ERROR: 'The device reported an error',
     STORAGE_ERROR: 'A local storage operation failed',
+    RECORDING_EMPTY: 'Recording failed: the file was empty (0 bytes) and has been deleted. Check disk space and the camera stream, then try again',
+    RECORDING_INCOMPLETE: 'Recording failed: the file is incomplete (missing the moov index) and has been deleted. The video stream may have been interrupted during recording',
     DISK_FULL: 'Not enough free disk space; non-essential recording is paused',
     NETWORK_ERROR: 'Network connection failed',
     VALIDATION_ERROR: 'The input is not valid',
@@ -49,6 +51,8 @@ export const en: MessageSchema = {
     fallback: 'The operation failed',
     deviceDetail: 'Device response: {detail}',
     withCode: '{message} ({code})',
+    /** Technical diagnostic detail (e.g. ffmpeg's stderr tail) appended after the catalogue message; the detail is technical English shared by all locales. */
+    withDetail: '{message} ({detail})',
     bridgeUnavailable: 'Cannot reach the main process. Please restart the app.',
     bridgeUnavailableDetail: '{message}: {detail}',
     FORBIDDEN: 'This account is not allowed to perform that action',
@@ -1574,6 +1578,8 @@ presets, the licence boundaries
     zoomReset: 'Back to time-zone centre',
     zoomLevel: 'Zoom {zoom}',
     tilesError: '{failed} of {total} basemap tiles did not load (network unavailable or service refused); device markers and lists are unaffected.',
+    /** Hint on the canvas while the basemap switch is off (owner batch 20260921 item 9: the map must not look "empty" without saying why). */
+    tilesOffHint: 'GIS base map is off · enable it in Settings → GIS Services',
     sonarHint: 'The air sonar’s snapshots come from the linked dome camera: one per second, up to three.'
   },
 
@@ -2303,8 +2309,6 @@ presets, the licence boundaries
     menuExitFullscreen: 'Exit full screen',
     menuCopyRtsp: 'Copy RTSP address',
     menuOpenExternal: 'Open in external player',
-    menuShowOverlay: 'Show overlay',
-    menuHideOverlay: 'Hide overlay',
     /*
      * The three new entries the frozen menu model already references.
      *
@@ -2681,6 +2685,16 @@ presets, the licence boundaries
     viewNeedsCamera: 'A third-party RTSP source has video only',
     viewSpectrogramNote: 'Colour shows relative strength within one frame only',
     viewStreamError: 'This acoustic stream could not be opened',
+    /** One (camera, view) pair may appear only once on the whole wall (owner batch 20260921 item 1). */
+    viewAlreadyShown: 'This content is already shown in another window of this camera (the same content may appear only once)',
+    /** Badge for (camera, view) pairs already on the wall, in the picker. */
+    viewInUse: 'On wall',
+    /** Rotation indicator: {shown} streams on screen / {total} including queued. */
+    rotationIndicator: 'Rotation {shown}/{total}',
+    rotationPauseTitle: 'Pause rotation',
+    rotationResumeTitle: 'Resume rotation',
+    /** Shown when every window is full and the new item joins the rotation queue ({position} = queue position). */
+    queuedNotice: 'All windows are full — added to the rotation queue (position {position})',
     manualTitle: 'Third-party cameras (hand-typed RTSP)',
     manualNote: 'The manual does not describe third-party RTSP: the address goes to the bundled ffmpeg as typed. This app checks the shape only, never reachability (when it cannot connect, the cell shows the ffmpeg text itself). The address lives in memory only for this run — it usually carries a password and is never written to disk.',
     manualWhere: 'To put one into a cell, use the video wall on the overview page: click a cell and pick it from the list.',
@@ -2742,72 +2756,6 @@ presets, the licence boundaries
     limitSummary: '{active} of {max} live streams',
     layoutShrunk: 'The layout shrank: {count} cell(s) were stopped.'
   },
-
-  channelWall: {
-    title: 'Channel wall',
-    summary: '{count} channels',
-    layoutLabel: 'Pane layout',
-    layout1: '1 pane',
-    layout2: '2 panes',
-    layout4: '4 panes',
-    layout8: '8 panes',
-    prevPage: 'Previous',
-    nextPage: 'Next',
-    pageIndicator: 'Page {page} of {total}',
-    loading: 'Reading channels…',
-    empty: 'No channels to show',
-    noChannelTable:
-      '{count} devices have not returned a channel table, so their channels are not listed.',
-    cameraStreamLabel: 'Voiceprint image',
-    cameraMatrixOnly:
-      'This camera pushes a numeric matrix rather than an image frame, so the wall does not re-plot it.',
-    cameraOtherDevice: 'The stream is running on another camera',
-    cameraStale: 'Data stopped ({seconds} s ago)',
-
-    // 名字说的是「按下去会发生什么」；此刻是收起的还是展开的由 `aria-expanded` 表达。
-    collapse: 'Collapse the channel wall',
-    expand: 'Expand the channel wall',
-    collapsedNoChannel: 'No channel is online right now',
-
-    graphLabel: 'Graph type',
-
-    // 四种图形，每一种都对应设备端真实推送的一种载荷（见 `lib/channelWall.ts`）。
-    // `deviceHasNoData` 是结构性的事实：这个设备家族根本没有这种载荷，
-    // 所以它与「未监测」「尚无数据」必须读起来是不同的话。
-    graph: {
-      voiceprint: 'Voiceprint image',
-      spl: 'Sound-pressure line',
-      spectrum: 'Spectrum',
-      spectrogram: 'Spectrogram',
-      deviceHasNoData: 'This device does not provide this kind of data',
-      splCaption: '{value} dB · {count} points',
-      lineAxis: '{count} lines · the x axis is the line index (device reports no sample rate)',
-      // The unit is THIS REPOSITORY'S label, not the device's: the payload field is
-      // `sound_pressure_level`, and no box manual in this repository defines its
-      // unit (the only dB definition here comes from the FA371 camera guide).
-      // `splUnitNote` is the provenance, hung on the readout's `title`.
-      splUnit: 'dB',
-      splUnitNote:
-        'Label used by this application: the device field is sound_pressure_level and its unit has no source in the device documentation (this repository has no box manual), so it is not a calibrated measurement.'
-    },
-
-    // The most recent alarm record for one channel, from the LOCAL alarm database.
-    // The wording is deliberately "latest alarm", never "alarming now": the IPC
-    // contract has no per-channel live alarm push, so the latter would be invented.
-    alarm: {
-      recent: 'Latest alarm',
-      loading: 'Reading…',
-      failed: 'Could not read the alarm records',
-      none: 'No alarm records',
-      entry: '{type} · {time} · {ack}'
-    },
-
-    reason: {
-      notMonitored: 'Not monitored',
-      deviceOffline: 'Device is offline, so no realtime data is available'
-    }
-  },
-
   /**
    * System messages — the application-level failures section inside the panel behind the
    * topbar alarm icon (owner, 2026-09-18).

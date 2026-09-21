@@ -30,6 +30,17 @@ export const ErrorCodes = {
   DEVICE_ERROR: 'DEVICE_ERROR',
   /** Local storage failure (SQLite, file write, path not writable). */
   STORAGE_ERROR: 'STORAGE_ERROR',
+  /**
+   * 手动录像停止后产物是 0 字节（已删除）。
+   *
+   * WHY A DEDICATED CODE（业主 20260921 批第 6 条：手动录像保存显示「操作失败」）
+   * 渲染层 `errorMessage()` 按码翻译，抛 STORAGE_ERROR 时用户只看到泛泛的
+   * 「本地存储操作失败」，而主进程写得很具体的原因（文件为空/请检查磁盘与码流）
+   * 到不了屏幕上。这两个码让操作员直接看到「该检查什么」。
+   */
+  RECORDING_EMPTY: 'RECORDING_EMPTY',
+  /** 手动录像停止后产物不完整（缺 moov 索引，已删除）：流在录制中途断了。 */
+  RECORDING_INCOMPLETE: 'RECORDING_INCOMPLETE',
   /** Free disk space fell below the configured safety floor. */
   DISK_FULL: 'DISK_FULL',
   /** Transport-level failure before a response existed (DNS, TCP reset, TLS). */
@@ -159,6 +170,8 @@ export const DEFAULT_ERROR_MESSAGES: Record<ErrorCode, string> = {
   INVALID_RESPONSE: '设备返回的数据格式不符合预期',
   DEVICE_ERROR: '设备返回错误',
   STORAGE_ERROR: '本地存储读写失败',
+  RECORDING_EMPTY: '录像保存失败：录像文件为空（0 字节），已删除。请检查磁盘空间与相机码流后重试',
+  RECORDING_INCOMPLETE: '录像保存失败：录像文件不完整（缺少 moov 索引），已删除。视频流可能在录制过程中中断',
   DISK_FULL: '磁盘剩余空间不足，已停止非必要录音',
   NETWORK_ERROR: '网络连接失败',
   VALIDATION_ERROR: '输入参数不合法',

@@ -82,6 +82,17 @@ export function errorMessage(error?: AppErrorShape): string {
       : translateCode(error.code)
   }
 
+  /**
+   * 录像保存失败的两个具体结局（业主 20260921 批第 6 条）：空文件 / 文件不完整。
+   * 目录消息直接说「该检查什么」；ffmpeg .stderr 尾巴经 `detail` 追加在括号里 —
+   * 它是技术诊断（ffmpeg 只说英语），四语言共用。
+   */
+  if (error.code === 'RECORDING_EMPTY' || error.code === 'RECORDING_INCOMPLETE') {
+    const detail = error.detail?.trim()
+    const message = translateCode(error.code)
+    return detail ? i18n.global.t('errors.withDetail', { message, detail }) : message
+  }
+
   // An app-authored message still wins when the code is unknown or generic: it
   // is more specific than anything a catalogue keyed only by code can say.
   const message = error.message?.trim()

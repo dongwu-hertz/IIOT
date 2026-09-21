@@ -42,6 +42,8 @@ export const es: MessageSchema = {
     INVALID_RESPONSE: 'El equipo devolvió datos con un formato no reconocido',
     DEVICE_ERROR: 'El equipo informó de un error',
     STORAGE_ERROR: 'Falló una operación de almacenamiento local',
+    RECORDING_EMPTY: 'Error al guardar la grabación: el archivo estaba vacío (0 bytes) y se ha eliminado. Compruebe el espacio en disco y la corriente de la cámara e inténtelo de nuevo',
+    RECORDING_INCOMPLETE: 'Error al guardar la grabación: el archivo está incompleto (falta el índice moov) y se ha eliminado. La corriente de vídeo pudo interrumpirse durante la grabación',
     DISK_FULL: 'Espacio en disco insuficiente; la grabación no esencial está en pausa',
     NETWORK_ERROR: 'Falló la conexión de red',
     VALIDATION_ERROR: 'Los datos introducidos no son válidos',
@@ -50,6 +52,8 @@ export const es: MessageSchema = {
     fallback: 'La operación falló',
     deviceDetail: 'Respuesta del equipo: {detail}',
     withCode: '{message} ({code})',
+    /** Detalle técnico (p. ej. la última línea de stderr de ffmpeg) añadido tras el mensaje del catálogo; el detalle es inglés técnico compartido por todos los idiomas. */
+    withDetail: '{message} ({detail})',
     bridgeUnavailable: 'No se puede contactar con el proceso principal. Reinicie la aplicación.',
     bridgeUnavailableDetail: '{message}: {detail}',
     FORBIDDEN: 'Esta cuenta no tiene permiso para realizar esa acción',
@@ -1536,6 +1540,8 @@ export const es: MessageSchema = {
     zoomReset: 'Volver al centro de la zona horaria',
     zoomLevel: 'Zoom {zoom}',
     tilesError: 'No se cargaron {failed} de {total} teselas del mapa base (red no disponible o servicio rechazado); los marcadores y las listas no se ven afectados.',
+    /** Aviso sobre el lienzo mientras el interruptor del mapa base está apagado (lote del propietario 20260921, punto 9: el mapa no debe verse «vacío» sin decir por qué). */
+    tilesOffHint: 'Mapa base GIS desactivado · actívalo en Ajustes → Servicios GIS',
     sonarHint: 'Las capturas del sónar de aire vienen de la cúpula PTZ enlazada: una por segundo, hasta tres.'
   },
 
@@ -2261,8 +2267,6 @@ export const es: MessageSchema = {
     menuExitFullscreen: 'Salir de pantalla completa',
     menuCopyRtsp: 'Copiar dirección RTSP',
     menuOpenExternal: 'Abrir en un reproductor externo',
-    menuShowOverlay: 'Mostrar superposición',
-    menuHideOverlay: 'Ocultar superposición',
     /*
      * Las tres entradas nuevas que el modelo del menú ya referencia.
      *
@@ -2628,6 +2632,16 @@ export const es: MessageSchema = {
     viewNeedsCamera: 'Una fuente RTSP de terceros solo tiene vídeo',
     viewSpectrogramNote: 'El color solo indica la fuerza relativa dentro de una misma trama',
     viewStreamError: 'No se pudo abrir este flujo acústico',
+    /** Una pareja (cámara, vista) solo puede aparecer una vez en toda la pared (lote del propietario 20260921, punto 1). */
+    viewAlreadyShown: 'Este contenido ya se muestra en otra ventana de esta cámara (el mismo contenido solo puede aparecer una vez)',
+    /** Marca de las parejas (cámara, vista) ya presentes en la pared, en el selector. */
+    viewInUse: 'En pantalla',
+    /** Indicador de rotación: {shown} flujos en pantalla / {total} incluyendo la cola. */
+    rotationIndicator: 'Rotación {shown}/{total}',
+    rotationPauseTitle: 'Pausar rotación',
+    rotationResumeTitle: 'Reanudar rotación',
+    /** Se muestra cuando todas las ventanas están ocupadas y el elemento nuevo entra en la cola de rotación ({position} = posición en la cola). */
+    queuedNotice: 'Todas las ventanas están ocupadas: añadido a la cola de rotación (posición {position})',
     manualTitle: 'Cámaras de terceros (RTSP escrito a mano)',
     manualNote: 'El manual no describe la conexión RTSP de terceros: la dirección se entrega tal cual al ffmpeg integrado. Esta aplicación solo comprueba la forma, nunca la accesibilidad (si no puede conectar, la celda muestra el texto del propio ffmpeg). La dirección solo existe en memoria durante esta ejecución: suele llevar contraseña y no se escribe en disco.',
     manualWhere: 'Para poner una en una celda, use el muro de vídeo de la página de resumen: pulse una celda y elíjala en la lista.',
@@ -2689,73 +2703,6 @@ export const es: MessageSchema = {
     limitSummary: '{active} de {max} flujos en directo',
     layoutShrunk: 'La disposición se redujo: se detuvieron {count} celdas.'
   },
-
-  channelWall: {
-    title: 'Muro de canales',
-    summary: '{count} canales',
-    layoutLabel: 'Distribución de paneles',
-    layout1: '1 panel',
-    layout2: '2 paneles',
-    layout4: '4 paneles',
-    layout8: '8 paneles',
-    prevPage: 'Anterior',
-    nextPage: 'Siguiente',
-    pageIndicator: 'Página {page} de {total}',
-    loading: 'Leyendo canales…',
-    empty: 'No hay canales que mostrar',
-    noChannelTable:
-      '{count} dispositivos aún no han devuelto su tabla de canales, por lo que sus canales no aparecen.',
-    cameraStreamLabel: 'Imagen de huella vocal',
-    cameraMatrixOnly:
-      'Esta cámara envía una matriz numérica en lugar de un fotograma de imagen, así que el muro no la redibuja.',
-    cameraOtherDevice: 'El flujo se está ejecutando en otra cámara',
-    cameraStale: 'Los datos se detuvieron (hace {seconds} s)',
-
-    // 名字说的是「按下去会发生什么」；此刻是收起的还是展开的由 `aria-expanded` 表达。
-    collapse: 'Contraer el muro de canales',
-    expand: 'Expandir el muro de canales',
-    collapsedNoChannel: 'Ahora mismo no hay ningún canal en línea',
-
-    graphLabel: 'Tipo de gráfico',
-
-    // 四种图形，每一种都对应设备端真实推送的一种载荷（见 `lib/channelWall.ts`）。
-    // `deviceHasNoData` 是结构性的事实：这个设备家族根本没有这种载荷，
-    // 所以它与「未监测」「尚无数据」必须读起来是不同的话。
-    graph: {
-      voiceprint: 'Imagen de huella vocal',
-      spl: 'Línea de presión sonora',
-      spectrum: 'Espectro',
-      spectrogram: 'Espectrograma',
-      deviceHasNoData: 'Este dispositivo no proporciona este tipo de datos',
-      splCaption: '{value} dB · {count} puntos',
-      lineAxis:
-        '{count} líneas · el eje X es el índice de línea (el dispositivo no informa la frecuencia de muestreo)',
-      // La unidad es una anotación DE ESTE REPOSITORIO, no del equipo: el campo del
-      // payload es `sound_pressure_level` y ningún manual de caja de este repositorio
-      // define su unidad (la única definición de dB aquí viene de la guía de la cámara
-      // FA371). `splUnitNote` es la procedencia, colgada del `title` de la lectura.
-      splUnit: 'dB',
-      splUnitNote:
-        'Anotación de esta aplicación: el campo del equipo es sound_pressure_level y su unidad no tiene respaldo en la documentación del equipo (este repositorio no incluye el manual de la caja), así que no es una medición calibrada.'
-    },
-
-    // La alarma MÁS RECIENTE de un canal, tomada de la base de datos local de alarmas.
-    // El texto dice siempre "última alarma", nunca "alarmando ahora": el contrato IPC
-    // no tiene ningún aviso de alarma por canal en vivo, así que lo segundo sería inventado.
-    alarm: {
-      recent: 'Última alarma',
-      loading: 'Leyendo…',
-      failed: 'No se pudieron leer los registros de alarma',
-      none: 'Sin registros de alarma',
-      entry: '{type} · {time} · {ack}'
-    },
-
-    reason: {
-      notMonitored: 'Sin monitorear',
-      deviceOffline: 'El dispositivo está fuera de línea, así que no hay datos en tiempo real'
-    }
-  },
-
   /**
    * Mensajes del sistema: los fallos de nivel de aplicación dentro del panel que hay detrás
    * del icono de alarma de la barra superior (propietario, 2026-09-18).

@@ -50,6 +50,8 @@ export const tr: MessageSchema = {
     INVALID_RESPONSE: 'Cihaz tanınmayan bir biçimde veri döndürdü',
     DEVICE_ERROR: 'Cihaz bir hata bildirdi',
     STORAGE_ERROR: 'Yerel depolama işlemi başarısız oldu',
+    RECORDING_EMPTY: 'Kayıt başarısız: dosya boştu (0 bayt) ve silindi. Disk alanını ve kamera akışını kontrol edip yeniden deneyin',
+    RECORDING_INCOMPLETE: 'Kayıt başarısız: dosya eksik (moov dizini yok) ve silindi. Video akışı kayıt sırasında kesilmiş olabilir',
     DISK_FULL: 'Disk alanı yetersiz; zorunlu olmayan kayıt duraklatıldı',
     NETWORK_ERROR: 'Ağ bağlantısı başarısız oldu',
     VALIDATION_ERROR: 'Girilen değerler geçerli değil',
@@ -58,6 +60,8 @@ export const tr: MessageSchema = {
     fallback: 'İşlem başarısız oldu',
     deviceDetail: 'Cihaz yanıtı: {detail}',
     withCode: '{message} ({code})',
+    /** Teknik tanı ayrıntısı (ör. ffmpeg'in stderr son satırı) katalog mesajından sonra eklenir; ayrıntı tüm dillerce ortak teknik İngilizcedir. */
+    withDetail: '{message} ({detail})',
     bridgeUnavailable: 'Ana sürece ulaşılamıyor. Uygulamayı yeniden başlatın.',
     bridgeUnavailableDetail: '{message}: {detail}',
     FORBIDDEN: 'Bu hesabın söz konusu işlemi yapma yetkisi yok',
@@ -1539,6 +1543,8 @@ export const tr: MessageSchema = {
     zoomReset: 'Saat dilimi merkezine dön',
     zoomLevel: 'Yakınlaştırma {zoom}',
     tilesError: 'Temel harita döşemelerinin {failed} / {total} tanesi yüklenemedi (ağ yok veya servis reddetti); cihaz işaretleri ve listeler etkilenmez.',
+    /** Altlık anahtarı kapalıyken tuval üzerindeki ipucu (sahip 20260921 partisi, madde 9: harita «boş» görünmemeli, nedenini söylemeden). */
+    tilesOffHint: 'GIS altlığı kapalı · Ayarlar → GIS Hizmetleri bölümünden açın',
     sonarHint: 'Hava sonarının görüntüleri bağlı kubbe kameradan gelir: saniyede bir, en fazla üç.'
   },
 
@@ -2264,8 +2270,6 @@ export const tr: MessageSchema = {
     menuExitFullscreen: 'Tam ekrandan çık',
     menuCopyRtsp: 'RTSP adresini kopyala',
     menuOpenExternal: 'Harici oynatıcıda aç',
-    menuShowOverlay: 'Bilgi katmanını göster',
-    menuHideOverlay: 'Bilgi katmanını gizle',
     /*
      * Menü modelinin zaten başvurduğu üç yeni giriş.
      *
@@ -2631,6 +2635,16 @@ export const tr: MessageSchema = {
     viewNeedsCamera: 'Üçüncü taraf RTSP kaynağında yalnızca görüntü var',
     viewSpectrogramNote: 'Renk yalnızca aynı karedeki görece gücü gösterir',
     viewStreamError: 'Bu akustik akış açılamadı',
+    /** Aynı (kamera, görünüm) çifti tüm duvarda yalnızca bir kez görünebilir (sahip 20260921 partisi, madde 1). */
+    viewAlreadyShown: 'Bu içerik bu kameranın başka bir penceresinde zaten gösteriliyor (aynı içerik yalnızca bir kez görünebilir)',
+    /** Seçicide duvarda zaten olan (kamera, görünüm) çiftlerinin rozeti. */
+    viewInUse: 'Ekranda',
+    /** Döngü göstergesi: {shown} ekrandaki akış / {total} kuyruk dahil. */
+    rotationIndicator: 'Döngü {shown}/{total}',
+    rotationPauseTitle: 'Döngüyü duraklat',
+    rotationResumeTitle: 'Döngüye devam et',
+    /** Tüm pencereler doluğunda yeni öğe döngü kuyruğuna girince gösterilir ({position} = kuyruktaki sıra). */
+    queuedNotice: 'Tüm pencereler dolu — döngü kuyruğuna eklendi (sıra {position})',
     manualTitle: 'Üçüncü taraf kameralar (elle yazılan RTSP)',
     manualNote: 'Kılavuz üçüncü taraf RTSP bağlantısını açıklamıyor: adres olduğu gibi paketlenmiş ffmpeg’e verilir. Bu uygulama yalnızca biçimi denetler, erişilebilirliği asla (bağlanamazsa hücre ffmpeg’in kendi metnini gösterir). Adres yalnızca bu çalışma sırasında bellekte durur: genellikle parola taşır ve diske yazılmaz.',
     manualWhere: 'Bir hücreye koymak için genel bakış sayfasındaki video duvarını kullanın: bir hücreye tıklayıp listeden seçin.',
@@ -2692,72 +2706,6 @@ export const tr: MessageSchema = {
     limitSummary: '{max} akıştan {active} tanesi',
     layoutShrunk: 'Düzen küçüldü: {count} hücre durduruldu.'
   },
-
-  channelWall: {
-    title: 'Kanal duvarı',
-    summary: '{count} kanal',
-    layoutLabel: 'Bölme düzeni',
-    layout1: '1 bölme',
-    layout2: '2 bölme',
-    layout4: '4 bölme',
-    layout8: '8 bölme',
-    prevPage: 'Önceki',
-    nextPage: 'Sonraki',
-    pageIndicator: 'Sayfa {page} / {total}',
-    loading: 'Kanallar okunuyor…',
-    empty: 'Gösterilecek kanal yok',
-    noChannelTable:
-      '{count} cihaz henüz kanal tablosunu döndürmediği için kanalları listelenmiyor.',
-    cameraStreamLabel: 'Ses izi görüntüsü',
-    cameraMatrixOnly:
-      'Bu kamera görüntü karesi yerine sayısal bir matris gönderiyor, bu yüzden duvar onu yeniden çizmez.',
-    cameraOtherDevice: 'Akış başka bir kamerada çalışıyor',
-    cameraStale: 'Veri durdu ({seconds} sn önce)',
-
-    // 名字说的是「按下去会发生什么」；此刻是收起的还是展开的由 `aria-expanded` 表达。
-    collapse: 'Kanal duvarını daralt',
-    expand: 'Kanal duvarını genişlet',
-    collapsedNoChannel: 'Şu anda çevrimiçi kanal yok',
-
-    graphLabel: 'Grafik türü',
-
-    // 四种图形，每一种都对应设备端真实推送的一种载荷（见 `lib/channelWall.ts`）。
-    // `deviceHasNoData` 是结构性的事实：这个设备家族根本没有这种载荷，
-    // 所以它与「未监测」「尚无数据」必须读起来是不同的话。
-    graph: {
-      voiceprint: 'Ses izi görüntüsü',
-      spl: 'Ses basıncı çizgisi',
-      spectrum: 'Spektrum',
-      spectrogram: 'Spektrogram',
-      deviceHasNoData: 'Bu cihaz bu tür veri sağlamıyor',
-      splCaption: '{value} dB · {count} nokta',
-      lineAxis: '{count} çizgi · X ekseni çizgi sırasıdır (cihaz örnekleme hızını bildirmiyor)',
-      // Birim BU DEPONUN etiketidir, cihazın değil: yükteki alan adı
-      // `sound_pressure_level` ve bu depodaki hiçbir kutu kılavuzu birimini tanımlamıyor
-      // (buradaki tek dB tanımı FA371 kamera kılavuzundan geliyor). `splUnitNote`
-      // bu kaynağı söyler ve okumanın `title` özniteliğine asılır.
-      splUnit: 'dB',
-      splUnitNote:
-        'Bu uygulamanın etiketi: cihaz alanı sound_pressure_level ve biriminin cihaz belgelerinde dayanağı yok (bu depoda kutu kılavuzu yok), bu yüzden kalibre edilmiş bir ölçüm sayılmaz.'
-    },
-
-    // Bir kanalın EN SON alarm kaydı; yerel alarm veritabanından okunur.
-    // Metin her zaman "en son alarm" der, "şu anda alarm veriyor" demez: IPC sözleşmesinde
-    // kanal başına canlı alarm bildirimi yok, bu yüzden ikincisi uydurma olurdu.
-    alarm: {
-      recent: 'En son alarm',
-      loading: 'Okunuyor…',
-      failed: 'Alarm kayıtları okunamadı',
-      none: 'Alarm kaydı yok',
-      entry: '{type} · {time} · {ack}'
-    },
-
-    reason: {
-      notMonitored: 'İzlenmiyor',
-      deviceOffline: 'Cihaz çevrimdışı olduğu için gerçek zamanlı veri yok'
-    }
-  },
-
   /**
    * Sistem mesajları: üst çubuktaki alarm simgesinin arkasındaki panelde yer alan
    * uygulama düzeyindeki hatalar (mal sahibi, 2026-09-18).

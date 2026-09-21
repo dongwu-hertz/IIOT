@@ -126,11 +126,12 @@ describe('B. 墙上那两个入口：喂给浮层的锚点是「那一格」，�
     assert.match(items, /optionsForCell\(cell\)/)
   })
 
-  it('选中之后先收起浮层、换相机时先停掉旧的一路、最后读回那一格', () => {
+  it('选中之后先收起浮层、把 (设备, 视图) 交给 store、最后读回那一格', () => {
     const pick = between(wall, 'async function pickDevice(', '\n}\n', 'pickDevice')
     assert.match(pick, /closePicker\(false\)/)
-    assert.match(pick, /stopCell\(cell\)/)
-    assert.match(pick, /wall\.placeDevice\(slot, deviceId\)/)
+    // 被替换的旧内容只有在本格失去它的最后一份时才停会话（同 id 还显示在别格就不停）。
+    assert.match(pick, /await stopCell\(cell\)/)
+    assert.match(pick, /wall\.placeDevice\(slot, deviceId, view\)/)
     // 键盘用户选完之后焦点要留在这一格（否则掉到 body，下一次 Tab 从窗口开头重来）。
     assert.match(pick, /\.focus\(\)/)
   })
@@ -166,5 +167,26 @@ describe('C. 四语言文案', () => {
     // 空白格与「已经有一台」的那一格读起来必须是两件事：一个问「放哪台」，
     // 一个问「换成哪台」。新增第二条词条会让同一件事有两个名字。
     assert.match(wall, /pickerLabel[\s\S]*?cameraWallUi\.replaceDevice[\s\S]*?cameraWallUi\.pickDevice/)
+  })
+})
+
+describe('D. 两步选择（业主 2026-09-21 批「同一相机的不同数据进不同窗口」）', () => {
+  it('相机项带 views：点进第二步选内容，已在墙上的 (相机, 视图) 禁用并标出', () => {
+    // 组件侧：第二步的渲染、禁用与派发（select 带视图）。
+    assert.match(picker, /views\?: readonly CameraPickerViewOption\[\]/)
+    assert.match(picker, /function chooseView\(/)
+    assert.match(picker, /:disabled="option\.inUse"/)
+    assert.match(picker, /data-camera-picker-view/)
+    assert.match(picker, /emit\('select', item\.id, option\.mode\)/)
+    assert.match(picker, /item\.views !== undefined/, '相机与手填源的一步/两步分支没了')
+  })
+
+  it('墙的候选项给每台相机四个视图按钮，并逐组合查重', () => {
+    assert.match(wall, /cameraWallUi\.viewInUse/)
+    assert.match(wall, /viewsTitle: t\('cameraNvrUi\.menuDisplay'\)/)
+    assert.match(wall, /findWallItem\(wall\.model, device\.id, mode\) >= 0/)
+    assert.match(wall, /CAMERA_CELL_VIEW_MODES\.map\(/)
+    // 手填源照旧一步选中（它只有画面），不会长出第二步。
+    assert.match(wall, /name: `\$\{source\.name\}（\$\{t\('cameraWallUi\.manualSuffix'\)\}）`/)
   })
 })

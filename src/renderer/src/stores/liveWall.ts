@@ -5,7 +5,7 @@
  *   1. 产品要求「档位、格子分配与声音选择在**会话内**保持，档位至少活过导航」。
  *      组件里的 `ref` 会随路由卸载消失，所以状态必须住在组件之外（store）。
  *   2. 档位额外写进 localStorage，沿用本仓库既有的 `hertzinno.` 前缀与
- *      `try/catch` 写法（`composables/useLocale.ts`、`stores/channelWall.ts`）。
+ *      `try/catch` 写法（`composables/useLocale.ts`、`lib/cameraLivePrefs.ts`）。
  *      格子分配**只在内存里**：它指的是「哪台相机在哪一格」，而设备 id 是数据库
  *      主键，重启后可能对应另一台设备 —— 把一个可能过期的 id 从磁盘上恢复出来，
  *      会在启动时静默拉一路谁也没要求的视频。
@@ -34,16 +34,20 @@ import {
   cameraCellCount,
   cameraCellStartPermission,
   cameraWallSummary,
+  cellViewSwitchPermission,
   clearCameraCell,
   clearCameraWallCells,
   createCameraWallModel,
+  enqueueWallItem,
   focusSlotForDevice,
   isCameraWallLayout,
   isWallCapableDevice,
   manualSourceById,
   manualSourcesOf,
   removeDeviceFromWall,
+  removeIdFromQueue,
   removeManualSource as removeManualSourceFromModel,
+  rotateWallOnce,
   setActiveSlot,
   setAudioSlot,
   setCameraCellView,
@@ -52,7 +56,8 @@ import {
   updateManualSource as updateManualSourceInModel,
   type CameraCellStatus,
   type CameraWallLayout,
-  type CameraWallModel
+  type CameraWallModel,
+  type WallQueueItem
 } from '@renderer/lib/cameraWall'
 import { isManualRtspId, type ManualRtspSource } from '@shared/domain/rtsp-source'
 import type { CameraCellViewMode } from '@shared/domain/camera-cell-view'
@@ -107,19 +112,29 @@ function readStoredViews(): CameraView[] {
 }
 
 /**
- * 「某台设备为什么空了」的记录。
+ * 「某台设备/内容为什么空了、排在第几位」的记录。
  *
  * 单独存一份而不是塞进格子模型：模型是纯的、可逐位比较的（见
  * `lib/cameraWall.ts`），而原因是一次性事件的说明文字，用过就该消失。
  */
 export interface CameraWallNotice {
-  kind: 'device-removed' | 'device-offline' | 'layout-shrunk' | 'limit-exceeded'
+  kind:
+    | 'device-removed'
+    | 'device-offline'
+    | 'layout-shrunk'
+    | 'limit-exceeded'
+    /** 切换视图被拒：同 (id, view) 已在别格。 */
+    | 'already-shown'
+    /** 被替换下来的内容进了轮询队列（`position` = 队列位置，1 起）。 */
+    | 'queued'
   deviceName?: string
   /** `layout-shrunk` 时被停掉的路数。 */
   count?: number
   /** `limit-exceeded` 时的上限与当前路数。 */
   max?: number
   active?: number
+  /** `queued` 时那一项在轮询队列里的位置（1 起）。 */
+  position?: number
 }
 
 export const useCameraWallStore = defineStore('cameraWall', () => {
@@ -216,27 +231,43 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
   // -------------------------------------------------------------------------
 
   /**
-   * 把一台相机放进某一格。
+   * 把一台相机放进某一格（可带视图；缺省 = 播放）。
    *
-   * 三条入口（设备树双击、拖拽、下拉选择）都走这里，所以「一台相机最多一格」
-   * 只有一份实现：已经在别格时会**移动**过来，而不是变成两格。
+   * 三条入口（设备树双击、拖拽、选择器两步选择）都走这里，所以「同一 (id, view)
+   * 全墙唯一」只有一份实现：别格已有同组合时会**移动**过来，同 id 只出现在别的
+   * **视图**上时则两格共存。
+   *
+   * 被替换下来的内容（`evicted`）**进轮询队列**：格子满了再放 = 覆盖，而覆盖不
+   * 等于丢弃（业主 2026-09-21 批「超出窗口数自动轮询」），它排队等着下一轮轮换。
    */
-  function placeDevice(slot: number, deviceId: string): { ok: boolean; movedFrom: number | null } {
+  function placeDevice(
+    slot: number,
+    deviceId: string,
+    view?: CameraCellViewMode
+  ): { ok: boolean; movedFrom: number | null; evicted: WallQueueItem | null } {
     const device = deviceList.value.find((item) => item.id === deviceId)
     /**
      * 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）不在设备表里，所以它必须**先**判：
      * `isWallCapableDevice(undefined)` 会把它当成"不是相机"拒掉，而它明明是一条可用的源。
      */
     if (!isManualRtspId(deviceId) && !isWallCapableDevice(device)) {
-      return { ok: false, movedFrom: null }
+      return { ok: false, movedFrom: null, evicted: null }
     }
     if (isManualRtspId(deviceId) && !manualSourceById(model.value, deviceId)) {
-      return { ok: false, movedFrom: null }
+      return { ok: false, movedFrom: null, evicted: null }
     }
-    const result = assignCamera(model.value, slot, deviceId)
+    const result = assignCamera(model.value, slot, deviceId, view)
     model.value = result.model
+    if (result.evicted !== null) {
+      model.value = enqueueWallItem(model.value, result.evicted.id, result.evicted.view)
+      const queue = model.value.queue ?? []
+      const at = queue.findIndex(
+        (item) => item.id === result.evicted?.id && item.view === result.evicted?.view
+      )
+      if (at >= 0) notice.value = { kind: 'queued', position: at + 1 }
+    }
     clearRefusal()
-    return { ok: result.changed, movedFrom: result.movedFrom }
+    return { ok: result.changed, movedFrom: result.movedFrom, evicted: result.evicted }
   }
 
   // -------------------------------------------------------------------------
@@ -264,10 +295,10 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     return true
   }
 
-  /** 删掉一条手填源：占用它的格子一起清空，并交出需要停掉的会话 id。 */
+  /** 删掉一条手填源：占用它的格子一起清空，把它从轮询队列里清掉，并交出需要停掉的会话 id。 */
   function removeManualSource(id: string): { toStop: string[]; clearedSlots: number[] } {
     const result = removeManualSourceFromModel(model.value, id)
-    model.value = result.model
+    model.value = removeIdFromQueue(result.model, id)
     if (result.clearedSlots.length === 0) return { toStop: [], clearedSlots: [] }
     forgetState(id)
     if (model.value.audioSlot === null && audioSlot.value !== null) setAudio(null)
@@ -284,18 +315,60 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
   }
 
   function clearCell(slot: number): void {
-    model.value = clearCameraCell(model.value, slot)
+    const id = model.value.slots[slot] ?? null
+    let next = clearCameraCell(model.value, slot)
+    // 手动清空 = 操作员明确说"这一格的东西我不要了"：它同时**退出轮询队列**，
+    // 否则下一轮轮换会把它又轮回来。
+    if (id !== null) next = removeIdFromQueue(next, id)
+    model.value = next
     clearRefusal()
   }
 
   /**
    * 设置某一格的视图（播放 / 1 秒时域图 / 频域图 / 时频谱图，业主 2026-09-18 第 10 批第 2 条）。
    *
-   * 空格与「这一格不支持的视图」都被纯函数拒掉（手填 RTSP 只有画面），所以这里不再判一次 ——
-   * 判两次的下场是两处慢慢分叉。
+   * 先问 `cellViewSwitchPermission()`：同 (id, view) 已在别格时**拒绝并说明**
+   * （业主 2026-09-21 批「相同内容只允许一次」），而不是静默切成两格一样的图。
+   * 空格与「这一格不支持的视图」仍由纯函数拒掉，所以这里不再判第二次。
    */
   function setCellView(slot: number, view: CameraCellViewMode): void {
+    if (cellViewSwitchPermission(model.value, slot, view) === 'already-shown') {
+      notice.value = { kind: 'already-shown' }
+      return
+    }
     model.value = setCameraCellView(model.value, slot, view)
+  }
+
+  /**
+   * 轮询队列（业主 2026-09-21 批「超出窗口数自动轮询」）。
+   *
+   * 只读投影：模型里的 `queue` 是可选字段（缺席 = 空队），模板与组件靠这个
+   * computed 取值，不用每次写 `?? []`。
+   */
+  const queue = computed<readonly WallQueueItem[]>(() => model.value.queue ?? [])
+
+  /**
+   * 轮一轮（界面每 `WALL_ROTATION_INTERVAL_MS` 调一次）。
+   *
+   * 把纯函数的结果落到模型上，并如实交出「哪一格、轮走了什么、轮进了什么」，
+   * 调用方据此停被轮走的会话、起新进来的会话。队空时 `{ changed: false }`，
+   * 调用方什么都不用做。
+   */
+  function rotateOnce(): {
+    changed: boolean
+    slot: number | null
+    evicted: WallQueueItem | null
+    incoming: WallQueueItem | null
+  } {
+    const result = rotateWallOnce(model.value)
+    model.value = result.model
+    if (!result.changed) return { changed: false, slot: null, evicted: null, incoming: null }
+    return {
+      changed: true,
+      slot: result.slot,
+      evicted: result.evicted,
+      incoming: result.incoming
+    }
   }
 
   function setActive(slot: number): void {
@@ -397,7 +470,8 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
       const device = list.find((item) => item.id === deviceId)
       if (!device) {
         const result = removeDeviceFromWall(model.value, deviceId)
-        model.value = result.model
+        // 设备没了，它的排号也作废：留在队里只会轮出一个指向不存在源的格子。
+        model.value = removeIdFromQueue(result.model, deviceId)
         removedSlots.push(...result.clearedSlots)
         forgetState(deviceId)
         toStop.add(deviceId)
@@ -435,6 +509,8 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     model.value = cleared.model
     states.value = {}
     refusal.value = null
+    // 队列与游标随格子一起没了：`clearCameraWallCells()` 重建的模型不带它们
+    // （业主 2026-09-21 批：离开页面 = 连"等位的内容"一起清掉）。
     return cleared.assigned
   }
 
@@ -535,6 +611,8 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     summary,
     /** 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）。 */
     manualSources,
+    /** 轮询队列（业主 2026-09-21 批「超出窗口数自动轮询」）。 */
+    queue,
     // actions
     bindDevices,
     applyStates,
@@ -550,6 +628,7 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     slotForDevice,
     clearCell,
     setCellView,
+    rotateOnce,
     setActive,
     toggleAudio,
     setAudio,

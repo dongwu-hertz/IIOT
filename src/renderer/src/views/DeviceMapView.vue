@@ -78,6 +78,7 @@ import {
   deviceMapLayout,
   mapGridSteps,
   mapProjector,
+  type MapBounds,
   type MapDeviceInput
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
@@ -190,19 +191,63 @@ const mapInputs = computed<MapDeviceInput[]>(() =>
 const layout = computed(() =>
   deviceMapLayout(mapInputs.value, CANVAS.width, CANVAS.height, MAP_PADDING)
 )
-const grid = computed(() => {
-  const bounds = layout.value.bounds
-  return bounds ? mapGridSteps(bounds) : { lat: [], lon: [] }
+
+/**
+ * 默认视野：一台已定位设备都没有时的兜底经纬度范围（业主 20260921 批第 9 条：
+ * 「地图信息里面都是空的，没有显示 GIS 信息」）。没有它，`mapBounds` 返回空、
+ * 网格整个缺席，画布就是一块灰底 —— 看起来"地图坏了"。兜底视野以时区中心城市为心
+ * （与在线底图的 `timeZoneCenter` 同一取值），给一个约一个省范围的网格：
+ * 中国用户看到中国网格，海外用户看到自己所在的网格。
+ *
+ * 只在**没有落点**时生效：有落点时永远用真实范围（设备相对位置不被兜底视野扭曲）。
+ */
+const LAT_SPAN_FALLBACK = 24
+const LON_SPAN_FALLBACK = 32
+
+const fallbackBounds = computed<MapBounds>(() => {
+  const center = timeZoneView
+  const clampLat = (value: number) => Math.max(-80, Math.min(80, value))
+  let minLon = center.longitude - LON_SPAN_FALLBACK / 2
+  let maxLon = center.longitude + LON_SPAN_FALLBACK / 2
+  // 跨 ±180° 经线时整体平移一圈：投影器只做线性插值，跨线会让网格整个错位。
+  if (minLon < -180) {
+    minLon += 360
+    maxLon += 360
+  } else if (maxLon > 180) {
+    minLon -= 360
+    maxLon -= 360
+  }
+  return {
+    minLat: clampLat(center.latitude - LAT_SPAN_FALLBACK / 2),
+    maxLat: clampLat(center.latitude + LAT_SPAN_FALLBACK / 2),
+    minLon,
+    maxLon
+  }
 })
+
+/** 网格/投影真正用的视野：真实落点范围优先，没有落点用兜底视野（网格不再缺席）。 */
+const effectiveBounds = computed<MapBounds>(() => layout.value.bounds ?? fallbackBounds.value)
+
+const grid = computed(() => mapGridSteps(effectiveBounds.value))
 
 /**
  * 网格线与设备落点用**同一个投影器**（`mapProjector`）：抄第二份算式迟早会与点错位，
  * 而错位的表现是"设备看起来不在那个刻度上"。
  */
 const project = computed(() => {
-  const bounds = layout.value.bounds
-  return bounds ? mapProjector(bounds, CANVAS.width, CANVAS.height, MAP_PADDING) : null
+  const bounds = effectiveBounds.value
+  return mapProjector(bounds, CANVAS.width, CANVAS.height, MAP_PADDING)
 })
+
+/** 网格刻度文案：纬度标南/北，经度标西/东（`31.2°N` / `121.4°E` 这种读法）。 */
+function latLabel(latitude: number): string {
+  const hemi = latitude >= 0 ? 'N' : 'S'
+  return `${Math.abs(latitude).toFixed(1)}°${hemi}`
+}
+function lonLabel(longitude: number): string {
+  const hemi = longitude >= 0 ? 'E' : 'W'
+  return `${Math.abs(longitude).toFixed(1)}°${hemi}`
+}
 
 function gridLineY(latitude: number): number {
   return project.value ? project.value.y(latitude) : 0
@@ -780,7 +825,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page map-page">
     <p v-if="actionError" class="alert alert--danger" role="alert">{{ actionError }}</p>
 
     <EmptyState v-if="devices.devices.length === 0" :title="t('devices.empty')" />
@@ -862,8 +907,9 @@ onUnmounted(() => {
             data-map-canvas
           >
             <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" :class="{ 'map-canvas__bg--transparent': tileConfig }" />
-            <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。**没有落点时没有视野**，网格随之缺席。 -->
-            <g v-if="project" class="map-grid">
+            <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。没有落点时用兜底视野
+                 （`effectiveBounds`），网格与坐标刻度始终在场 —— 这就是这一页的 GIS 信息本体。 -->
+            <g class="map-grid">
               <line
                 v-for="latitude in grid.lat"
                 :key="`lat-${latitude}`"
@@ -880,6 +926,25 @@ onUnmounted(() => {
                 :y1="0"
                 :y2="CANVAS.height"
               />
+              <!-- 坐标刻度：纬度贴左缘、经度贴下缘（业主 20260921 批第 9 条：网格要读出 GIS 信息）。 -->
+              <text
+                v-for="latitude in grid.lat"
+                :key="`lat-label-${latitude}`"
+                class="map-grid__label"
+                x="6"
+                :y="gridLineY(latitude) - 4"
+              >
+                {{ latLabel(latitude) }}
+              </text>
+              <text
+                v-for="longitude in grid.lon"
+                :key="`lon-label-${longitude}`"
+                class="map-grid__label"
+                :x="gridLineX(longitude) + 4"
+                :y="CANVAS.height - 6"
+              >
+                {{ lonLabel(longitude) }}
+              </text>
             </g>
             <g
               v-for="marker in displayMarkers"
@@ -907,6 +972,15 @@ onUnmounted(() => {
               <text class="map-marker__label" x="12" y="4">{{ marker.name }}</text>
             </g>
           </svg>
+
+          <!--
+            底图没开时如实说一声（业主 20260921 批第 9 条：「地图信息里面都是空的」——
+            出厂默认离线优先、底图关闭，画布只剩网格，操作员需要知道去哪开）。
+            点位与网格不依赖底图，开不开都在。
+          -->
+          <div v-if="!tileConfig" class="map-tiles-off" data-map-tiles-off role="status">
+            {{ t('mapUi.tilesOffHint') }}
+          </div>
 
           <!--
             署名与缩放控制放在 SVG **外面**（同一层、z-index 更高）：
@@ -1314,11 +1388,23 @@ onUnmounted(() => {
 .map-panel {
   /* 上下不再有分隔线（见上面那段注释）。 */
   border: none;
-  padding-block: var(--space-2);
+  /* 业主 20260921 批第 9 条：地图→设备列表空隙收到现在的 10%（8px → 0.8px）。 */
+  padding-block: calc(var(--space-2) * 0.1);
+}
+
+/*
+ * 本页纵向流间隙整体收到 10%（业主 20260921 批第 9 条）：原来 地图→列表 ≈ 44px
+ * （padding 8 + .page gap 20 + .map-split margin 16）、列表→实时数据 ≈ 36px
+ * （gap 20 + margin 16），现在分别 ≈ 4.4px / 3.6px。只作用本页：`.map-page` 覆盖
+ * 全局 `.page` 的 gap，不动其它分支页。
+ */
+.map-page {
+  gap: calc(var(--space-5) * 0.1);
 }
 
 .map-block {
-  margin-top: var(--space-4);
+  /* 同上：设备列表→实时数据间距 16px → 1.6px。 */
+  margin-top: calc(var(--space-4) * 0.1);
 }
 
 /*
@@ -1508,6 +1594,29 @@ onUnmounted(() => {
   color: var(--color-warning);
   font-size: 11.5px;
   pointer-events: none;
+}
+
+/* 底图未启用提示：与 .map-tile-error 同款做法，位置在左下（右下角是署名位）。 */
+.map-tiles-off {
+  position: absolute;
+  left: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 3;
+  max-width: 62%;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border, rgba(148, 163, 184, 0.4));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--color-text-muted, #64748b);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
+/* 网格坐标刻度（业主 20260921 批第 9 条）：小字、压线角上、不抢落点的视觉权重。 */
+.map-grid__label {
+  fill: var(--color-text-muted, #64748b);
+  font-size: 10px;
+  user-select: none;
 }
 
 .map-status {

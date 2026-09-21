@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Device detail — 设备概览 + 设备配置（Phase 9）+ 设备维护（Phase 10）。
  *
@@ -25,7 +25,7 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import { channelState } from '@renderer/lib/channelState'
-import { resolveChannelCount } from '@renderer/lib/channelWall'
+import { resolveChannelCount } from '@renderer/lib/channelCount'
 import { formatDateTime, formatRelativeTime, formatSampleRate } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'

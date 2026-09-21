@@ -118,7 +118,6 @@ const ENV: CameraNvrEnvironment = {
   deviceName: 'camera 1',
   recording: false,
   fullscreen: false,
-  overlay: true,
   hasUsableSource: true,
   // 设备族能力：声学相机有实时视频与告警模型。
   capabilities: { liveVideo: true, alarmModel: true }
@@ -200,7 +199,6 @@ describe('context menu enablement (the single rule)', () => {
       'toggle-fullscreen',
       'copy-rtsp',
       'open-external',
-      'toggle-overlay',
       'alarm-config'
     ])
     assert.ok(!actions.includes('playback'))
@@ -226,7 +224,6 @@ describe('context menu enablement (the single rule)', () => {
       'toggle-fullscreen',
       'copy-rtsp',
       'open-external',
-      'toggle-overlay',
       'playback',
       'download-detect',
       'close-tile',
@@ -351,14 +348,7 @@ describe('context menu enablement (the single rule)', () => {
     assert.equal(itemFor(liveState(), 'open-external').enabled, true)
   })
 
-  it('treats overlay and full screen as pure UI toggles', () => {
-    const on = itemFor(liveState(), 'toggle-overlay', { ...ENV, overlay: true })
-    assert.equal(on.labelKey, 'cameraNvrUi.menuHideOverlay')
-    assert.equal(on.checked, true)
-    const off = itemFor(liveState(), 'toggle-overlay', { ...ENV, overlay: false })
-    assert.equal(off.labelKey, 'cameraNvrUi.menuShowOverlay')
-    assert.equal(off.checked, false)
-
+  it('treats full screen as a pure UI toggle', () => {
     assert.equal(
       itemFor(liveState(), 'toggle-fullscreen', { ...ENV, fullscreen: false }).labelKey,
       'cameraNvrUi.menuFullscreen'
@@ -373,18 +363,19 @@ describe('context menu enablement (the single rule)', () => {
 
   it('keeps the item order and grouping stable', () => {
     const menu = buildCameraNvrMenu(liveState(), ENV)
-    // 本地动作在前、设备动作（告警配置）在后；分组线把叠加信息与告警配置分开。
+    // 本地动作在前、设备动作（告警配置）在后；分组线把本机组与设备组分开。
     assert.deepEqual(
       menu.map((item) => item.action),
-      ['capture', 'toggle-fullscreen', 'copy-rtsp', 'open-external', 'toggle-overlay', 'alarm-config']
+      ['capture', 'toggle-fullscreen', 'copy-rtsp', 'open-external', 'alarm-config']
     )
     assert.deepEqual(
       menu.filter((item) => item.separatorBefore).map((item) => item.action),
-      ['toggle-overlay', 'alarm-config']
+      ['alarm-config']
     )
     /*
-     * 声明了 `cellViews` 之后（画面墙就是这一组），「显示方式」出现在**全屏与叠加信息之间**、
-     * **不带分隔线** —— 它与叠加信息都是"这一格怎么画"，与"对相机做什么"分开。
+     * 声明了 `cellViews` 之后（画面墙就是这一组），「显示方式」出现在**外部播放器
+     * 之后**、**不带分隔线** —— 它是"这一格怎么画"，不是"对相机做什么"。
+     * 「显示/隐藏叠加信息」已按业主 2026-09-21 批整体移除（叠加条永远显示）。
      */
     const wallMenu = buildCameraNvrMenu(liveState(), {
       ...ENV,
@@ -398,13 +389,12 @@ describe('context menu enablement (the single rule)', () => {
         'copy-rtsp',
         'open-external',
         'display',
-        'toggle-overlay',
         'alarm-config'
       ]
     )
     assert.deepEqual(
       wallMenu.filter((item) => item.separatorBefore).map((item) => item.action),
-      ['toggle-overlay', 'alarm-config']
+      ['alarm-config']
     )
   })
 

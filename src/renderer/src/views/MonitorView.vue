@@ -1125,7 +1125,6 @@ const flipActive = computed(
  * 菜单项的可用性判断只发生在那个函数里——面板按钮读的是同一个 `captureReadiness`，
  * 所以「菜单亮着但按钮灰着」这种漂移在结构上不可能发生。
  */
-const overlayVisible = ref(true)
 const stageEl = ref<HTMLElement | null>(null)
 const fullscreen = ref(false)
 const recording = ref(false)
@@ -1205,7 +1204,6 @@ const nvrEnvironment = computed<CameraNvrEnvironment>(() => ({
   deviceName: selectedDevice.value?.name ?? '',
   recording: recording.value,
   fullscreen: fullscreen.value,
-  overlay: overlayVisible.value,
   hasUsableSource: cameraActive.value,
   /**
    * 设备族能力：决定菜单项的**存在**，而不是是否可点。
@@ -1428,9 +1426,6 @@ async function onMenuSelect(action: CameraNvrAction): Promise<void> {
       return
     case 'open-external':
       await openInExternalPlayer()
-      return
-    case 'toggle-overlay':
-      overlayVisible.value = !overlayVisible.value
       return
     /*
      * ⑤：这两项与总览的画面墙是同一对弹窗组件，所以这里的实现只有"打开哪一个"。
@@ -1904,7 +1899,8 @@ const sessionLabel = computed(() => {
           ></video>
           <p v-else class="camera-live__placeholder">{{ cameraStatusLabel }}</p>
 
-          <div v-if="overlayVisible" class="camera-live__overlay">
+          <!-- 叠加条永远显示（业主 2026-09-21 批移除了「显示/隐藏叠加信息」那一项）。 -->
+          <div class="camera-live__overlay">
             <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayDevice', { name: selectedDevice?.name ?? '' }) }}</span>
             <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayStatus', { status: cameraStatusLabel }) }}</span>
             <span class="camera-live__overlay-line">

@@ -2,22 +2,30 @@
  * 多路实时视频墙的**模型**（纯函数，零 Vue、零副作用、零 I/O）
  *
  * 为什么这些判断必须离开模板
- * 「同一台相机只能占一格」「还能不能再开一路」「设备被删掉时那一格怎么办」
+ * 「同一内容只能出现一次」「还能不能再开一路」「设备被删掉时那一格怎么办」
  * 「哪一格能出声」都**由模型决定**，不是渲染。写进 `<template>` 之后它们就再也没法
  * 被单元测试直接调用（模板只能在浏览器里跑），而它们恰好是最容易出错的部分：
- * 同一台相机出现在两格里会让主进程的第二路 start 把第一格顶掉；超过并发预算
+ * 同一内容的播放出现在两格里会让主进程的第二路 start 把第一格顶掉；超过并发预算
  * 那一路如果只显示一个永远转的圈，操作员会以为相机坏了
  *
- * 依赖纪律（与 `lib/channelState.ts` / `lib/channelWall.ts` 同一条）
+ * 依赖纪律（与 `lib/channelState.ts` 同一条）
  * 本模块运行时不导入 `@renderer/*`：`scripts/rewrite-aliases.cjs` 只重写
  * `@shared/` 与 `@main/`，所以引了 `@renderer/*` 的模块无法在测试进程里被加载
  * 因此这里只依赖 `@shared/domain/*`（纯类型与纯函数）
  *
- * 「一台相机最多一格」与「一次可以开多路相机」是两条不同的规则
- *   - 前者（产品明确要求过）由 `findCameraSlot()` / `assignCamera()` 保证
- *     同一台相机不会被放进第二格，双击/拖拽/下拉三条入口走的是同一个函数；
+ * 「同一内容最多一次」与「一次可以开多路相机」是两条不同的规则
+ *   - 前者（业主 2026-09-21 批）：墙上一格的身份是 **(源 id, 视图)** —— 同一台相机的
+ *     画面与时域图是**两个不同的内容**，允许各占一格；同一个 (id, view) 全墙唯一，
+ *     重复放置 = 移动（`findWallItem()` / `assignCamera()` 保证），双击/拖拽/下拉
+ *     三条入口走的是同一个函数。只有 `play` 视图占 RTSP 会话，所以「已经在别格」
+ *     的拒绝（`already-shown`）只在目标是播放、且别格已有同 id 的播放时成立；
  *   - 后者（本机主进程能不能同时扛住 N 路） `cameraStreamLimitReached()`
  *     决定，上限来自 `AppSettings.maxConcurrentCameraStreams`
+ *
+ * 放不进窗口的内容进**轮询队列**（业主 2026-09-21 批「超出窗口数自动轮询」）：
+ * 被替换下来的 (id, view) 不丢弃，排在 `queue` 里等 `rotateWallOnce()` 逐格轮换。
+ * 队列只在内存里（与格子分配一样不持久化），`normaliseCameraWallModel()` 负责把
+ * 坏输入修成合法队列。
  */
 
 import type { Channel, Device, DeviceKind, DeviceStatus } from '@shared/domain/models'
@@ -56,12 +64,10 @@ import {
  * `docs/Ivms4200-UX-REFERENCE.md` §1.1），9 分屏 3×3 — 产品负责人明确要
  *  9 换掉原来 8
  *
- * **与通道墙的那一套（1 / 4 / 8 / 16）刻意不同，也刻意不 import
- * `lib/channelWall.ts`**：视频墙的一格是一台相机，档位是几何排布；通道墙的一格是
- * 声纹盒子的一路通道，9 分屏对应的是 AE08 的 8 路通道，是**通道数决定的**，
- * 换成 9 只会得到 9 个画不出通道的格子。两处共用一个数组，会让「其中一面墙想改
- * 档位」变成对另一面墙的意外改动；`tests/camera-wall.test.ts` 会断言两套档位
- * **各自**是什么，而不是断言它们相同
+ * 刻意自持这一份档位数组、不与其它「墙」共用：视频墙的一格是一台相机，档位
+ * 只是几何排布；两处共用一个数组，会让「其中一面墙想改档位」变成对另一面墙的
+ * 意外改动；`tests/camera-wall.test.ts` 会断言这套档位**各自**是什么，而不是
+ * 断言它们相同
  */
 export const CAMERA_WALL_LAYOUTS = [1, 4, 9, 16] as const
 
@@ -248,7 +254,9 @@ export function clearCustomDivision(
  *
  * 前七种与主进程的 `CameraLiveStatus` 一一对应（`idle` 表示「这一格还没有开
  * 拉流」），后面三种是**只存在于界面**的事实：
- *   - `already-shown`  — 该相机已经在另一格里（产品明确要求「一台相机最多一格」）
+ *   - `already-shown`  — 同一内容（同 id 同播放视图）已经在另一格里：两路同 id 的
+ *     ffmpeg 回环会互相顶掉，这一格再开没有意义（业主 2026-09-21 批把这条限制从
+ *     「一台相机最多一格」放宽成「同一内容最多一次」，chart 视图互不争用）；
  *   - `device-removed` — 设备被删除了，这一格已经清空；
  *   - `device-offline` — 设备离线，画面已停止
  *
@@ -356,6 +364,26 @@ export interface CameraWallModel {
    * 理由与 `manualSources` 相同：既有代码与测试大量构造模型字面量。
    */
   views?: readonly (CameraCellViewMode | null)[]
+  /**
+   * 轮询队列（业主 2026-09-21 批「超出窗口数自动轮询」）：放不进窗口的 (源, 视图)
+   * 按先入先出排在这里，等 `rotateWallOnce()` 逐格轮换上墙。
+   *
+   * **只在内存里**，与格子分配一样不持久化（文件头说明了理由：数据库主键重启后可能
+   * 对应另一台设备，恢复出来只会静默拉一路谁也没要求的流）。做成可选的理由与
+   * `views` 相同：既有代码与测试大量构造模型字面量。
+   */
+  queue?: readonly WallQueueItem[]
+  /**
+   * 轮换游标：下一次 `rotateWallOnce()` 从哪一格开始轮（`% 格数` 取格）。
+   * 内存-only，同 `queue`。
+   */
+  rotateCursor?: number
+}
+
+/** 轮询队列里的一项：一个 (源 id, 视图) 组合。 */
+export interface WallQueueItem {
+  id: string
+  view: CameraCellViewMode
 }
 
 /** 一格的渲染模型（`buildCameraCells()` 的产物）
@@ -495,13 +523,42 @@ export function normaliseCameraWallModel(input: unknown): CameraWallModel {
     return isCameraCellViewMode(value) && value !== DEFAULT_CAMERA_CELL_VIEW ? value : null
   })
 
+  /**
+   * 轮询队列规范化（内存-only 字段，坏输入同样要修成**永远合法**）：
+   *   - 只认 `{ id: 非空字符串, view: 四种之一 }`，其余丢弃；
+   *   - 按 (id, view) 去重；
+   *   - 与格子上**可见**的 (id, view) 去重 —— 已经在墙上显示的内容没有资格排队
+   *     （可见项进队由 `enqueueWallItem()` 判，normalise 是最后一道闸）。
+   */
+  const rawQueue = Array.isArray(raw.queue) ? raw.queue : []
+  const queued = new Set<string>()
+  const queue: WallQueueItem[] = []
+  for (const item of rawQueue) {
+    const id = (item as Partial<WallQueueItem> | null | undefined)?.id
+    const view = (item as Partial<WallQueueItem> | null | undefined)?.view
+    if (typeof id !== 'string' || id === '' || !isCameraCellViewMode(view)) continue
+    const key = `${id}${view}`
+    if (queued.has(key)) continue
+    const visible = cleanSlots.some(
+      (slot, index) => slot === id && (views[index] ?? DEFAULT_CAMERA_CELL_VIEW) === view
+    )
+    if (visible) continue
+    queued.add(key)
+    queue.push({ id, view })
+  }
+
+  const rawCursor = typeof raw.rotateCursor === 'number' ? Math.floor(raw.rotateCursor) : 0
+  const rotateCursor = rawCursor >= 0 && Number.isFinite(rawCursor) ? rawCursor : 0
+
   return {
     layout,
     slots: cleanSlots,
     audioSlot: audioSlotFinal,
     activeSlot,
     manualSources,
-    views
+    views,
+    queue,
+    rotateCursor
   }
 }
 
@@ -511,17 +568,72 @@ export function normaliseCameraWallModel(input: unknown): CameraWallModel {
 
 /**
  * 这台相机在第几格；`-1` 表示不在墙上
- * 「一台相机最多一格」的判定
+ *
+ * 注意（业主 2026-09-21 批）：一格的身份是 **(id, 视图)**，同一台相机**可以**占多格
+ * （画面一格、时域图一格……）。这个函数回答的是「同 id 的**第一个**格号」，给仍然
+ * 按"这台设备在哪"提问的调用方（清理、双击高亮）；「同 id 同视图在哪一格」用
+ * `findWallItem()`。
  */
 export function findCameraSlot(model: CameraWallModel, deviceId: string): number {
   if (deviceId === '') return -1
   return model.slots.findIndex((slot) => slot === deviceId)
 }
 
+/**
+ * 同 id 同**有效视图**的内容在第几格；`-1` 表示这个组合不在墙上。
+ *
+ * 「相同内容只允许一次」的判定：`views[i]` 不是合法值时按默认（播放）算，
+ * 与 `cellViewAt()` 同一口径 —— 判重与渲染必须看同一个视图，否则会出现
+ * 「模型说没重复、界面画了两份」。
+ */
+export function findWallItem(
+  model: CameraWallModel,
+  id: string,
+  view: CameraCellViewMode
+): number {
+  if (id === '') return -1
+  return model.slots.findIndex((slot, index) => slot === id && cellViewAt(model, index) === view)
+}
+
 /** 这一格绑的是哪台相机（空格返 `null`）
 */
 export function cameraSlotDevice(model: CameraWallModel, index: number): string | null {
   return model.slots[index] ?? null
+}
+
+/**
+ * 这一格此刻**能不能**开始拉流，以及不能时的原因
+ *
+ * `activeStreams` 由调用方给出（主进程 `camera-live:limits` 的 `active`，或界面
+ * 自己的估计），`maxStreams` 是设置里的上限。两者都由外部传进来，这样这个函数是
+ * 纯的，而「用哪个数字」这件事留在 store 里显式可见
+ *
+ * 判定顺序就是操作员的心智顺序：格子已经被占 -> 同一内容已在别格 -> 超预算。
+ *
+ * `already-shown`（业主 2026-09-21 批改为按内容判）：**只有**目标是播放、且别格
+ * 已有同 id 的播放时才拒绝 —— chart 视图走 FA371 WebSocket 通道、不占 RTSP 会话，
+ * 同一张图放两格互不争用；同一台相机「画面 + 时域图」同理。两路同 id 的 ffmpeg
+ * 回环才会互相顶掉（`RtspSession` 的 start 会替换旧会话），那才是必须拒绝的。
+ */
+export function cameraCellStartPermission(
+  model: CameraWallModel,
+  index: number,
+  deviceId: string,
+  activeStreams: number,
+  maxStreams: number
+): { allowed: boolean; refusal: CameraCellStatus | null } {
+  const size = wallCellCount(model)
+  if (index < 0 || index >= size || deviceId === '') {
+    return { allowed: false, refusal: null }
+  }
+  if (cellViewAt(model, index) === DEFAULT_CAMERA_CELL_VIEW) {
+    const other = findWallItem(model, deviceId, DEFAULT_CAMERA_CELL_VIEW)
+    if (other >= 0 && other !== index) return { allowed: false, refusal: 'already-shown' }
+  }
+  if (cameraStreamLimitReached(activeStreams, maxStreams)) {
+    return { allowed: false, refusal: 'limit-exceeded' }
+  }
+  return { allowed: true, refusal: null }
 }
 
 /**
@@ -540,34 +652,6 @@ export function activeCameraStreams(cells: readonly { status: CameraCellStatus }
 */
 export function assignedCameraIds(model: CameraWallModel): string[] {
   return model.slots.filter((slot): slot is string => slot !== null)
-}
-
-/**
- * 这一格此刻**能不能**开始拉流，以及不能时的原因
- *
- * `activeStreams` 由调用方给出（主进程 `camera-live:limits`  `active`，或界面
- * 自己的估计），`maxStreams` 是设置里的上限。两者都由外部传进来，这样这个函
- * 是纯的，而「用哪个数字」这件事留在 store 里显式可见
- *
- * 判定顺序就是操作员的心智顺序：格子已经被 -> 这台相机已经在别 -> 超预算
- */
-export function cameraCellStartPermission(
-  model: CameraWallModel,
-  index: number,
-  deviceId: string,
-  activeStreams: number,
-  maxStreams: number
-): { allowed: boolean; refusal: CameraCellStatus | null } {
-  const size = wallCellCount(model)
-  if (index < 0 || index >= size || deviceId === '') {
-    return { allowed: false, refusal: null }
-  }
-  const other = findCameraSlot(model, deviceId)
-  if (other >= 0 && other !== index) return { allowed: false, refusal: 'already-shown' }
-  if (cameraStreamLimitReached(activeStreams, maxStreams)) {
-    return { allowed: false, refusal: 'limit-exceeded' }
-  }
-  return { allowed: true, refusal: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +685,16 @@ export function setCameraWallLayout(
   )
 
   return {
-    model: { layout, slots, audioSlot, activeSlot, manualSources: model.manualSources, views },
+    model: {
+      layout,
+      slots,
+      audioSlot,
+      activeSlot,
+      manualSources: model.manualSources,
+      views,
+      queue: model.queue ?? [],
+      rotateCursor: model.rotateCursor ?? 0
+    },
     evictedDeviceIds
   }
 }
@@ -610,46 +703,65 @@ export function setCameraWallLayout(
  * 把一台相机放进某一格 —
  * **双击设备树、拖拽、下拉选择共用的唯一入口**
  *
- * 「一台相机最多一格」在这里被执行：如果这台相机已经在另一格（且不是这一格）
- * 它会**移动**到目标格，源格清空。移动而不是新增，是因为同一台相机的两路会话
- * 在主进程里会互相顶掉（`RtspSession` 的 start 会替换旧会话），界面上出现两格
- * 「正在启动」而只有一格有画面，是比拒绝更糟的结果
+ * 一格的身份是 **(id, view)**（业主 2026-09-21 批），三条规矩：
+ *   1. 别格已有同 (id, targetView) -> **移动**：源格清空（视图一起回默认），
+ *      出声标记跟着走。移动而不是新增，是因为两路同 id 同视图的会话在主进程里
+ *      会互相顶掉（`RtspSession` 的 start 会替换旧会话）。
+ *   2. 同 id 只出现在**其它视图**的格上 -> 保留那些格，本格照放：同一台相机的
+ *      画面与时域图是两种内容，允许各占一格（chart 视图不占 RTSP 会话）。
+ *   3. 本格原有内容被替换时如实交出 `evicted`（{ id, view }），调用方据此决定
+ *      停会话 / 进轮询队列 —— 它**没有**被静默丢弃。
+ *
+ * `view` 缺省 = 播放（双击、拖拽、自动起播都放画面）。本格换进来的视图就是
+ * `targetView`，不再是"一律回默认"：从选择器第二步选了「时域图」进来，这一格
+ * 落地就是时域图。
  */
 export function assignCamera(
   model: CameraWallModel,
   index: number,
-  deviceId: string
-): { model: CameraWallModel; movedFrom: number | null; changed: boolean } {
+  deviceId: string,
+  view?: CameraCellViewMode
+): {
+  model: CameraWallModel
+  movedFrom: number | null
+  changed: boolean
+  evicted: WallQueueItem | null
+} {
   const size = wallCellCount(model)
   if (index < 0 || index >= size || deviceId === '') {
-    return { model, movedFrom: null, changed: false }
+    return { model, movedFrom: null, changed: false, evicted: null }
   }
+  const targetView: CameraCellViewMode =
+    view !== undefined && isCameraCellViewMode(view) ? view : DEFAULT_CAMERA_CELL_VIEW
 
-  const previous = findCameraSlot(model, deviceId)
-  if (previous === index) return { model, movedFrom: null, changed: false }
+  const previous = findWallItem(model, deviceId, targetView)
+  if (previous === index) return { model, movedFrom: null, changed: false, evicted: null }
+
+  // 本格原来的内容（被替换时如实交出去；空格没有可交的东西）。
+  const currentId = model.slots[index] ?? null
+  const evicted: WallQueueItem | null =
+    currentId === null ? null : { id: currentId, view: cellViewAt(model, index) }
 
   const slots = [...model.slots]
-  if (previous >= 0) slots[previous] = null
+  const views = cellViewsOf(model)
+  if (previous >= 0) {
+    slots[previous] = null
+    views[previous] = DEFAULT_CAMERA_CELL_VIEW
+  }
   slots[index] = deviceId
+  views[index] = targetView
 
-  // 把出声标记跟着相机走：移动一格之后声音不应该留在原来那个空格上
+  // 把出声标记跟着内容走：移动一格之后声音不应该留在原来那个空格上
   const audioSlot =
     model.audioSlot === previous ? index : model.audioSlot !== null && model.audioSlot < size
       ? model.audioSlot
       : null
 
-  /**
-   * 视图**跟着源走的是"清空"而不是"搬家"**：一格换成另一台设备之后，原来那个"时频图"
-   * 是**上一台的**画法选择，新那一台不一定支持（比如换成了手填 RTSP，它只有画面）。
-   * 所以换进来的那一格一律回默认（播放）。
-   */
-  let views = resetViewAt(model.views ?? [], index, size)
-  if (previous >= 0) views = resetViewAt(views, previous, size)
-
   return {
     model: { ...model, slots, audioSlot, activeSlot: index, views },
     movedFrom: previous >= 0 ? previous : null,
-    changed: true
+    changed: true,
+    evicted
   }
 }
 
@@ -727,14 +839,21 @@ export function toggleAudioSlot(model: CameraWallModel, index: number): CameraWa
 // 每一格的视图（业主 2026-09-18 第 10 批第 2 条）
 // ---------------------------------------------------------------------------
 
+/**
+ * 这一格的**有效视图**：`views[i]` 不是合法值时按默认（播放）算。
+ *
+ * 与 `cellViewsOf()` 同一口径，给「只问一格」的调用方（判重、轮换、覆盖）用；
+ * 判重与渲染必须看同一个视图，否则会出现「模型说没重复、界面画了两份」。
+ */
+export function cellViewAt(model: CameraWallModel, index: number): CameraCellViewMode {
+  const value = model.views?.[index]
+  return isCameraCellViewMode(value) ? value : DEFAULT_CAMERA_CELL_VIEW
+}
+
 /** 每一格的视图（缺席 = 播放），长度与格数一致。 */
 export function cellViewsOf(model: CameraWallModel): CameraCellViewMode[] {
   const size = wallCellCount(model)
-  const views = model.views ?? []
-  return Array.from({ length: size }, (_, index) => {
-    const value = views[index]
-    return isCameraCellViewMode(value) ? value : DEFAULT_CAMERA_CELL_VIEW
-  })
+  return Array.from({ length: size }, (_, index) => cellViewAt(model, index))
 }
 
 /** 这一格的源是什么（决定它支持哪些视图；手填 RTSP 只有画面）。 */
@@ -755,6 +874,9 @@ export function cellViewsFor(model: CameraWallModel, index: number): readonly Ca
  *
  * 两条拒绝：**空格**（没有源，切了没有意义）与**这一格不支持的视图**
  * （手填 RTSP 只有画面）。静默接受会让界面显示一个永远不动的图。
+ *
+ * 「同 (id, view) 全墙唯一」**不在这里判**：那是带提示语的产品决定，由调用方
+ * （store）先问 `cellViewSwitchPermission()` 再进来，拒绝时界面要说得出原因。
  */
 export function setCameraCellView(
   model: CameraWallModel,
@@ -772,6 +894,26 @@ export function setCameraCellView(
   return { ...model, views }
 }
 
+/**
+ * 这一格**能不能**切到某个视图；不能时给出唯一原因 `'already-shown'`。
+ *
+ * 业主 2026-09-21 批「相同内容只允许一次」：别格已有同 id 同 mode 时拒绝 ——
+ * 同一台相机的时域图放两格，是两格一模一样的图，没有意义。返回 `null` = 可以切。
+ */
+export function cellViewSwitchPermission(
+  model: CameraWallModel,
+  index: number,
+  mode: CameraCellViewMode
+): 'already-shown' | null {
+  const size = wallCellCount(model)
+  if (index < 0 || index >= size) return null
+  if (!isCameraCellViewMode(mode)) return null
+  const id = model.slots[index]
+  if (id === null || id === undefined || id === '') return null
+  const other = findWallItem(model, id, mode)
+  return other >= 0 && other !== index ? 'already-shown' : null
+}
+
 /** 把某一格的视图恢复成默认（换源 / 清格时用；`null` 表示"没设过"）。 */
 function resetViewAt(
   views: readonly (CameraCellViewMode | null)[],
@@ -781,6 +923,104 @@ function resetViewAt(
   const next = Array.from({ length: size }, (_, at) => views[at] ?? null)
   if (index >= 0 && index < size) next[index] = null
   return next
+}
+
+// ---------------------------------------------------------------------------
+// 轮询队列（业主 2026-09-21 批「超出窗口数自动轮询」）
+// ---------------------------------------------------------------------------
+
+/**
+ * 把一个 (id, view) 排进轮询队列。
+ *
+ * 两条不重复：**已在墙上可见**（某一格已经是这个组合）与**已在队里** ——
+ * 队列是"等位的内容"，不是收藏夹。手填 RTSP 只有 `play`，天然不会重复。
+ */
+export function enqueueWallItem(
+  model: CameraWallModel,
+  id: string,
+  view: CameraCellViewMode
+): CameraWallModel {
+  if (id === '') return model
+  if (!isCameraCellViewMode(view)) return model
+  if (findWallItem(model, id, view) >= 0) return model
+  const queue = model.queue ?? []
+  if (queue.some((item) => item.id === id && item.view === view)) return model
+  return { ...model, queue: [...queue, { id, view }] }
+}
+
+/**
+ * 从队列里**清掉某个 id 的所有项**。
+ *
+ * 三处同步清（store 负责调用）：设备被删除、格子被手动清空、手填源被删除 ——
+ * 内容已经不在墙上了，排在队里只会轮出一个指向不存在源的格子。
+ */
+export function removeIdFromQueue(model: CameraWallModel, id: string): CameraWallModel {
+  const queue = model.queue ?? []
+  if (!queue.some((item) => item.id === id)) return model
+  return { ...model, queue: queue.filter((item) => item.id !== id) }
+}
+
+/**
+ * 轮换一次的两种结果：队空什么都没发生 / 某一格真的换了内容。
+ * 联合类型让调用方必须先判 `changed` 才能拿 `slot` / `evicted` / `incoming`。
+ */
+export type WallRotationResult =
+  | { model: CameraWallModel; changed: false }
+  | {
+      model: CameraWallModel
+      changed: true
+      slot: number
+      /** 被轮走的那一份内容（空格 = `null`）；非空时调用方决定停会话。 */
+      evicted: WallQueueItem | null
+      /** 这一轮上墙的内容（队列头部）。 */
+      incoming: WallQueueItem
+    }
+
+/**
+ * 轮一轮：队首内容进「游标指着的那一格」，被轮走的内容排到队尾等着下次。
+ *
+ * 规则（业主 2026-09-21 批）：
+ *   1. 队空 -> 原样返回 `{ changed: false }`，游标不动；
+ *   2. `slot = rotateCursor % 格数`：一格一格顺次轮，不跳格；
+ *   3. 被轮走的内容（若非空）**补到队尾** —— 轮询是"都在台上轮流站"，不是淘汰；
+ *   4. `views[slot]` 跟着 incoming 走（`play` 记默认 `null`）；
+ *   5. 出声的那一格被轮走就静音（`audioSlot` 指着的画面没了，留着徽标就是说假话）。
+ */
+export function rotateWallOnce(model: CameraWallModel): WallRotationResult {
+  const queue = model.queue ?? []
+  if (queue.length === 0) return { model, changed: false }
+  const size = wallCellCount(model)
+  if (size === 0) return { model, changed: false }
+
+  const cursor = model.rotateCursor ?? 0
+  const slot = cursor % size
+  const incoming = queue[0] as WallQueueItem
+  const evictedId = model.slots[slot] ?? null
+  const evicted: WallQueueItem | null =
+    evictedId === null ? null : { id: evictedId, view: cellViewAt(model, slot) }
+
+  const slots = [...model.slots]
+  slots[slot] = incoming.id
+  const views = cellViewsOf(model)
+  views[slot] = incoming.view
+
+  const rest = queue.slice(1)
+  const nextQueue = evicted === null ? rest : [...rest, evicted]
+
+  return {
+    model: {
+      ...model,
+      slots,
+      views,
+      queue: nextQueue,
+      rotateCursor: cursor + 1,
+      audioSlot: model.audioSlot === slot ? null : model.audioSlot
+    },
+    changed: true,
+    slot,
+    evicted,
+    incoming
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -875,7 +1115,8 @@ export function setActiveSlot(model: CameraWallModel, index: number): CameraWall
  * 双击设备树时落在哪一格
  *
  * 规则（可预期优先于聪明）
- *   1. 这台相机已经在墙 -> 就是它那一格（双击 = 把这台相机切到眼前）
+ *   1. 这台相机的**播放**已经在墙 -> 就是它那一格（双击 = 把这台相机的画面切到
+ *      眼前；它若在别的格还有图，那些格不动）；
  *   2. 当前格是空的 -> 当前格；
  *   3. 否则第一个空格；
  *   4. 全满 -> 当前格（替换掉原来那台，等主进程 stop 旧会话）
@@ -885,7 +1126,7 @@ export function focusSlotForDevice(
   deviceId: string,
   deviceIds: readonly string[] = []
 ): number {
-  const existing = findCameraSlot(model, deviceId)
+  const existing = findWallItem(model, deviceId, DEFAULT_CAMERA_CELL_VIEW)
   if (existing >= 0) return existing
   if (model.slots[model.activeSlot] === null) return model.activeSlot
   const empty = model.slots.findIndex((slot) => slot === null)
@@ -1045,8 +1286,12 @@ export function buildCameraCells(
       }
     }
 
-    const other = findCameraSlot(model, deviceId)
-    if (other >= 0 && other !== index) {
+    /*
+     * 同一内容已在别格播放 -> `already-shown`。只按 (id, play) 判：chart 视图不占
+     * RTSP 会话，同一张图放两格互不争用；只有两路同 id 的 ffmpeg 回环才会互相顶掉。
+     */
+    const other = findWallItem(model, deviceId, DEFAULT_CAMERA_CELL_VIEW)
+    if (cellViewAt(model, index) === DEFAULT_CAMERA_CELL_VIEW && other >= 0 && other !== index) {
       return {
         ...common,
         status: 'already-shown' as CameraCellStatus,

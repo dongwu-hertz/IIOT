@@ -3,19 +3,18 @@
  *
  * WHY THIS FILE EXISTS
  * 「多路视频」这件事的难点不在画面，而在算数：
- *   - **同一台相机不能出现在两格里**（产品明确要求），三条入口（双击、拖拽、
+ *   - **同一内容不能出现在两格里**（业主 2026-09-21 批）：墙上一格的身份是
+ *     (源 id, 视图)，同一台相机的画面与时域图是两种内容、允许各占一格，
+ *     同一个 (id, view) 全墙唯一，重复放置 = 移动；三条入口（双击、拖拽、
  *     下拉）必须落到同一个判定上；
  *   - 本机的并发预算是有限的（每路一个 ffmpeg + 一个回环服务），**超过上限的
  *     那一路必须被明确拒绝**，而不是先起一路再失败；
  *   - 换档位变小、删设备、设备离线时，**不能留下指向死设备的格子**；
- *   - 声音全局至多一格。
+ *   - 声音全局至多一格；
+ *   - 放不进窗口的内容进**轮询队列**，`rotateWallOnce()` 逐格轮换、被轮走的
+ *     排到队尾，而不是被丢弃。
  * 这些判断全部住在 `src/renderer/src/lib/cameraWall.ts`（纯函数、零运行时依赖），
  * 所以它们能在没有浏览器的情况下被直接断言 —— 本文件只测它，不测 Vue 模板。
- *
- * 另外把两套档位的**关系**钉住：相机墙是 1 / 4 / 9 / 16（9 = 3×3，产品负责人
- * 要求用 9 取代 8），通道墙是 1 / 4 / 8 / 16（8 = AE08 的 8 路通道）。它们故意
- * 不同，所以这里断言的是「1/4/16 共有、9 与 8 各自独有」，而不是断言两套相等 ——
- * 相等曾经是对的，现在不再是产品要的东西。
  *
  * 中文注释是仓库约定（见 `tests/channel-state.test.ts`）。
  */
@@ -36,23 +35,29 @@ import {
   cameraCellStartPermission,
   cameraWallColumns,
   cameraWallSummary,
+  cellViewAt,
+  cellViewSwitchPermission,
+  cellViewsOf,
   clearCameraCell,
   clearCameraDevice,
   createCameraWallModel,
+  enqueueWallItem,
   findCameraSlot,
+  findWallItem,
   focusSlotForDevice,
   isCameraWallLayout,
   isWallCapableDevice,
   normaliseCameraWallModel,
   placeCameraPicker,
   removeDeviceFromWall,
+  removeIdFromQueue,
+  rotateWallOnce,
   setActiveSlot,
   setAudioSlot,
   setCameraWallLayout,
   toggleAudioSlot,
   type CameraWallModel
 } from '../src/renderer/src/lib/cameraWall'
-import { CHANNEL_WALL_LAYOUTS } from '../src/renderer/src/lib/channelWall'
 import { layoutIconGeometry } from '../src/renderer/src/lib/layoutIcon'
 import { cameraStreamLimitMessage, cameraStreamLimitReached } from '../src/shared/domain/camera-live'
 import type { CameraLiveState } from '../src/shared/domain/camera-live'
@@ -153,34 +158,6 @@ describe('视频墙的档位与画面格数', () => {
     assert.deepEqual([...CAMERA_WALL_LAYOUTS], [1, 4, 9, 16])
   })
 
-  it('与通道墙的档位**故意不同**：通道墙的 8 是 AE08 的 8 路通道', () => {
-    // 两套档位曾经写成相同，现在必须不同，而且这个不同是产品决定：
-    //   相机墙一格 = 一台相机 —— 档位只是几何排布，用行业标准的 1 / 4 / 9 / 16；
-    //   通道墙一格 = 声纹盒子的一路通道 —— 它的档位是**通道数**的档位：8 对应 AE08 的
-    //   8 路通道（产品这一轮要求「通道墙应该支持 1、2、4、8 通道」，1/2/4 是它的一半、
-    //   四分之一、八分之一），换成 9 只会得到 9 个画不出通道的格子，而 9 是相机墙的
-    //   产品要求（3×3 的安防标准档位）。
-    // 所以这里断言的是「差异的形状」而不是「相等」：1 与 4 仍然共有，但两块墙**各自
-    // 都有对方没有的档位**（相机墙 9/16，通道墙 2/8）—— 这一条就是「故意不同」本身。
-    assert.deepEqual([...CHANNEL_WALL_LAYOUTS], [1, 2, 4, 8])
-    assert.equal((CHANNEL_WALL_LAYOUTS as readonly number[]).includes(9), false)
-    assert.equal((CHANNEL_WALL_LAYOUTS as readonly number[]).includes(16), false)
-    assert.equal((CAMERA_WALL_LAYOUTS as readonly number[]).includes(8), false)
-    assert.equal((CAMERA_WALL_LAYOUTS as readonly number[]).includes(2), false)
-    const shared = CAMERA_WALL_LAYOUTS.filter((layout) =>
-      (CHANNEL_WALL_LAYOUTS as readonly number[]).includes(layout)
-    )
-    assert.deepEqual([...shared], [1, 4])
-    // 两块墙各自独有：相机墙有 9 / 16，通道墙有 2 / 8。
-    for (const [own, other] of [
-      [CAMERA_WALL_LAYOUTS, CHANNEL_WALL_LAYOUTS],
-      [CHANNEL_WALL_LAYOUTS, CAMERA_WALL_LAYOUTS]
-    ] as const) {
-      const exclusive = own.filter((layout) => !(other as readonly number[]).includes(layout))
-      assert.ok(exclusive.length > 0, '一面墙的档位被另一面完全包含了：那就不是“故意不同”')
-    }
-  })
-
   it('档位就是槽位数，每行格数按 1 / 2 / 3 / 4 排', () => {
     assert.equal(cameraCellCount(1), 1)
     assert.equal(cameraCellCount(4), 4)
@@ -238,7 +215,7 @@ describe('视频墙的档位与画面格数', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 格子分配：一台相机最多一格
+// 格子分配：一格的身份是 (源 id, 视图)
 // ---------------------------------------------------------------------------
 
 describe('格子分配', () => {
@@ -247,19 +224,72 @@ describe('格子分配', () => {
     assert.equal(model.changed, true)
     assert.deepEqual(model.model.slots, [null, null, 'cam-1', null])
     assert.equal(model.movedFrom, null)
+    assert.equal(model.evicted, null, '空格没有可交出去的内容')
+    // 缺省视图 = 播放（有效视图口径，null 与 'play' 一回事）。
+    assert.equal(cellViewAt(model.model, 2), 'play')
   })
 
-  it('同一台相机放进第二格时是**移动**，不是出现两格', () => {
+  it('同一 (id, 视图) 放进第二格时是**移动**，不是出现两格', () => {
     let model = assignCamera(createCameraWallModel(4), 0, 'cam-1').model
     const second = assignCamera(model, 3, 'cam-1')
     model = second.model
     assert.equal(second.movedFrom, 0)
     assert.deepEqual(model.slots, [null, null, null, 'cam-1'])
-    // 无论走哪条入口，同一台相机在模型里只有一个位置。
-    assert.equal(model.slots.filter((slot) => slot === 'cam-1').length, 1)
+    // 无论走哪条入口，同一 (id, 播放) 在模型里只有一个位置。
+    assert.equal(
+      model.slots.filter((slot, index) => slot === 'cam-1' && cellViewAt(model, index) === 'play')
+        .length,
+      1
+    )
   })
 
-  it('放进同一格是幂等的（不产生「改动」）', () => {
+  it('同一台相机**不同视图**各占一格：两种内容可以共存', () => {
+    let model = assignCamera(createCameraWallModel(4), 0, 'cam-1').model
+    const placed = assignCamera(model, 2, 'cam-1', 'spectrum')
+    model = placed.model
+    assert.deepEqual(model.slots, ['cam-1', null, 'cam-1', null])
+    assert.equal(cellViewAt(model, 0), 'play')
+    assert.equal(cellViewAt(model, 2), 'spectrum')
+    // 这是新增共存，不是移动：没有源格被清空。
+    assert.equal(placed.movedFrom, null)
+    assert.equal(placed.evicted, null)
+  })
+
+  it('别格已有同 (id, 视图) 时放进来 = 移动那一格，其它视图的格原样保留', () => {
+    let model = assignCamera(createCameraWallModel(4), 0, 'cam-1').model
+    model = assignCamera(model, 1, 'cam-1', 'spectrum').model
+    // 再把 (cam-1, 播放) 放到第 3 格：播放那一格移动，spectrum 那一格不动。
+    const moved = assignCamera(model, 3, 'cam-1')
+    assert.equal(moved.movedFrom, 0)
+    assert.deepEqual(moved.model.slots, [null, 'cam-1', null, 'cam-1'])
+    assert.equal(cellViewAt(moved.model, 1), 'spectrum')
+    assert.equal(cellViewAt(moved.model, 3), 'play')
+  })
+
+  it('放进来的视图就是目标视图，不再是"一律回默认"', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1', 'timedomain').model
+    assert.equal(cellViewAt(model, 0), 'timedomain')
+    // 缺省（双击/拖拽）仍是播放。
+    model = assignCamera(model, 1, 'cam-2').model
+    assert.equal(cellViewAt(model, 1), 'play')
+  })
+
+  it('替换覆盖时如实交出 evicted（本格原来的内容），空格则没有', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1', 'spectrum').model
+    const replaced = assignCamera(model, 0, 'cam-2')
+    assert.deepEqual(replaced.evicted, { id: 'cam-1', view: 'spectrum' })
+    // 移动同样可能挤掉目标格原有内容：两份都如实报。
+    const full = assignCamera(createCameraWallModel(4), 1, 'cam-9').model
+    const movedOnto = assignCamera(full, 1, 'cam-1')
+    assert.equal(movedOnto.evicted?.id, 'cam-9')
+    assert.equal(movedOnto.evicted?.view, 'play')
+    // 空格落子：没有 evicted。
+    assert.equal(assignCamera(createCameraWallModel(4), 2, 'cam-1').evicted, null)
+  })
+
+  it('放进同一格同一个视图是幂等的（不产生「改动」）', () => {
     const model = assignCamera(createCameraWallModel(4), 1, 'cam-1').model
     const again = assignCamera(model, 1, 'cam-1')
     assert.equal(again.changed, false)
@@ -271,9 +301,10 @@ describe('格子分配', () => {
     assert.equal(assignCamera(model, -1, 'cam-1').changed, false)
     assert.equal(assignCamera(model, 4, 'cam-1').changed, false)
     assert.equal(assignCamera(model, 0, '').changed, false)
+    assert.equal(assignCamera(model, -1, 'cam-1').evicted, null)
   })
 
-  it('移动相机时出声标记跟着走，不会留在原来的空格上', () => {
+  it('移动内容时出声标记跟着走，不会留在原来的空格上', () => {
     let model = assignCamera(createCameraWallModel(4), 0, 'cam-1').model
     model = setAudioSlot(model, 0)
     const moved = assignCamera(model, 2, 'cam-1').model
@@ -282,14 +313,54 @@ describe('格子分配', () => {
     assert.equal(moved.audioSlot, 2)
   })
 
-  it('findCameraSlot 回答「这台相机在第几格」', () => {
-    const model = fullWall()
+  it('findCameraSlot 回答「这台相机在第几格」（同 id 第一个格号）；findWallItem 按 (id, 视图) 精确找', () => {
+    let model = fullWall()
     assert.equal(findCameraSlot(model, 'cam-3'), 2)
     assert.equal(findCameraSlot(model, 'cam-9'), -1)
     assert.equal(findCameraSlot(model, ''), -1)
+    // 一台相机两格：findWallItem 按视图区分，findCameraSlot 给第一个。
+    model = assignCamera(model, 0, 'cam-3', 'spectrum').model
+    assert.equal(findWallItem(model, 'cam-3', 'play'), 2)
+    assert.equal(findWallItem(model, 'cam-3', 'spectrum'), 0)
+    assert.equal(findWallItem(model, 'cam-3', 'timedomain'), -1)
+    assert.equal(findWallItem(model, '', 'play'), -1)
   })
 
-  it('双击一台相机：已在墙上就回到它那一格，否则落在空格', () => {
+  it('cellViewAt 把坏值/缺省回落成播放；合法值原样给出（与 cellViewsOf 同一口径）', () => {
+    const model = {
+      layout: 4,
+      slots: ['cam-1', 'cam-2', null, null],
+      audioSlot: null,
+      activeSlot: 0,
+      views: ['nope', 'spectrum', undefined, null]
+    } as unknown as CameraWallModel
+    assert.equal(cellViewAt(model, 0), 'play', '坏值按默认算')
+    assert.equal(cellViewAt(model, 1), 'spectrum', '合法值原样给出')
+    assert.equal(cellViewAt(model, 2), 'play', '缺席按默认算')
+    assert.deepEqual(cellViewsOf(model), ['play', 'spectrum', 'play', 'play'])
+    // 空格上的视图由 normalise 清掉（坏输入修成永远合法的模型），cellViewAt 只回答"有效视图"。
+    const normalised = normaliseCameraWallModel(model)
+    assert.equal(cellViewAt(normalised, 2), 'play')
+  })
+
+  it('cellViewSwitchPermission：同 (id, 视图) 已在别格时拒绝，其余放行', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = assignCamera(model, 1, 'cam-1', 'spectrum').model
+    // 第 2 格放 cam-1：播放与 spectrum 都已被占，切这两个被拒。
+    model = assignCamera(model, 2, 'cam-1', 'timedomain').model
+    assert.equal(cellViewSwitchPermission(model, 2, 'play'), 'already-shown')
+    assert.equal(cellViewSwitchPermission(model, 2, 'spectrum'), 'already-shown')
+    assert.equal(cellViewSwitchPermission(model, 2, 'timedomain'), null, '切自己现在那个不算重复')
+    assert.equal(cellViewSwitchPermission(model, 2, 'spectrogram'), null)
+    // 本格已是目标视图时也不拒（同格同视图 = 没动）。
+    assert.equal(cellViewSwitchPermission(model, 1, 'spectrum'), null)
+    // 空格与越界：没有可切的源，交给 setCameraCellView 拒，permission 不报重复。
+    assert.equal(cellViewSwitchPermission(model, 3, 'play'), null)
+    assert.equal(cellViewSwitchPermission(model, 99, 'play'), null)
+  })
+
+  it('双击一台相机：它的播放已在墙上就回到那一格，否则落在空格', () => {
     const model = assignCamera(createCameraWallModel(4), 2, 'cam-2').model
     assert.equal(focusSlotForDevice(model, 'cam-2'), 2)
     // 一台全新的相机落在第一个空格（第 1 格），而不是追到最后一格。
@@ -312,6 +383,13 @@ describe('格子分配', () => {
     assert.equal(focusSlotForDevice(fullWall(), 'cam-1', ['cam-1']), 0)
   })
 
+  it('相机的播放已在墙上、图也在墙上：双击仍然落在**播放**那一格', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 1, 'cam-1').model
+    model = assignCamera(model, 3, 'cam-1', 'spectrogram').model
+    assert.equal(focusSlotForDevice(model, 'cam-1'), 1)
+  })
+
   it('相机比格子多：多出来的那几台不会被硬塞进某一格', () => {
     let model = createCameraWallModel(4)
     // 先用 4 台把 4 格装满。
@@ -329,7 +407,7 @@ describe('格子分配', () => {
     assert.equal(findCameraSlot(model, 'cam-4'), -1, '被替换掉的那一台不再在墙上')
     assert.equal(findCameraSlot(model, 'cam-5'), fifth)
 
-    // 无论怎么分配，墙上永远不会有重复的相机，也不会超过 4 台。
+    // 无论怎么分配，墙上永远不会有超过 4 格，也不会有两个相同的 (id, 播放)。
     assert.equal(model.slots.filter((slot) => slot !== null).length, 4)
     assert.equal(new Set(model.slots.filter((slot) => slot !== null)).size, 4)
   })
@@ -365,11 +443,47 @@ describe('并发上限（超过并发上限）', () => {
     assert.equal(refused.refusal, 'limit-exceeded')
   })
 
-  it('同一台相机已在另一格时拒绝的原因是 already-shown，与预算无关', () => {
+  it('同一内容的播放已在别格时拒绝的原因是 already-shown，与预算无关', () => {
     const model = assignCamera(createCameraWallModel(4), 0, 'cam-1').model
     const refused = cameraCellStartPermission(model, 2, 'cam-1', 0, 4)
     assert.equal(refused.allowed, false)
     assert.equal(refused.refusal, 'already-shown')
+    // 目标格自己就是那一个播放格：不算"别格已有"。
+    const same = cameraCellStartPermission(model, 0, 'cam-1', 0, 4)
+    assert.equal(same.allowed, true)
+    assert.equal(same.refusal, null)
+  })
+
+  it('同一台相机的**图**不占 RTSP 会话：chart 格与播放格互不争用', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = assignCamera(model, 1, 'cam-1', 'spectrum').model
+    // cam-1 的播放已在第 0 格：别的格再放 cam-1 的**播放**仍被拒（两路 ffmpeg 会互顶）。
+    const playDup = cameraCellStartPermission(model, 2, 'cam-1', 0, 4)
+    assert.equal(playDup.allowed, false)
+    assert.equal(playDup.refusal, 'already-shown')
+    // 但第 1 格那个 spectrum 本身起不了流（它是图），也不挡别的格起 cam-1 ——
+    // 同一台相机的图 + 画面是两种内容，允许同时存在。
+    const chartCell = cameraCellStartPermission(model, 1, 'cam-1', 0, 4)
+    assert.equal(chartCell.allowed, true, 'chart 视图不占会话，不该按 already-shown 拒')
+    // 预算照常是另一条独立的线：满了照样拒。
+    const limited = cameraCellStartPermission(model, 2, 'cam-2', 4, 4)
+    assert.equal(limited.allowed, false)
+    assert.equal(limited.refusal, 'limit-exceeded')
+  })
+
+  it('渲染模型里：chart 视图与别格的播放共存时不再报 already-shown', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = assignCamera(model, 1, 'cam-1', 'spectrum').model
+    const cells = buildCameraCells(model, {
+      devices: [camera('cam-1')],
+      states: { 'cam-1': liveState('cam-1', 'playing', { url: 'http://127.0.0.1:9/t/stream.mp4' }) },
+      maxStreams: 4
+    })
+    assert.equal(cells[0]?.status, 'playing')
+    // 第 1 格是 spectrum 视图：与第 0 格的播放是两种内容，不该报"已在别格"。
+    assert.notEqual(cells[1]?.status, 'already-shown')
   })
 
   it('数占用只看 starting/playing，不看空格与失败格', () => {
@@ -779,7 +893,6 @@ describe('画面格的右键菜单（NVR 式）', () => {
       deviceName: '相机 A',
       recording: false,
       fullscreen: false,
-      overlay: true,
       hasUsableSource: true,
       capabilities: WALL_CAPABILITIES,
       ...overrides
@@ -794,7 +907,7 @@ describe('画面格的右键菜单（NVR 式）', () => {
     })
   }
 
-  it('正在播放的一格：十项按固定顺序给出，本机动作仍然排在设备侧动作之前', () => {
+  it('正在播放的一格：九项按固定顺序给出，本机动作仍然排在设备侧动作之前', () => {
     const menu = buildCameraNvrMenu(playing(), wallEnv())
     assert.deepEqual(
       menu.map((item) => item.action),
@@ -805,7 +918,7 @@ describe('画面格的右键菜单（NVR 式）', () => {
         'open-external',
         // 第 12 批新增：四颗视图按钮从控制条移进这里（与「叠加信息」同属"怎么画"）。
         'display',
-        'toggle-overlay',
+        // 「显示/隐藏叠加信息」已按业主 2026-09-21 批移除：叠加条永远显示。
         'playback',
         'download-detect',
         'close-tile',
@@ -814,10 +927,10 @@ describe('画面格的右键菜单（NVR 式）', () => {
     )
     // 设备侧动作永远最后：清空这一格虽然排在本机组末尾，也必须在告警配置之前。
     assert.equal(menu[menu.length - 1]?.action, 'alarm-config')
-    // 分组线：叠加信息、回放、清空、告警配置各自开一段。
+    // 分组线：回放、清空、告警配置各自开一段（叠加信息那一项已经不在了）。
     assert.deepEqual(
       menu.filter((item) => item.separatorBefore).map((item) => item.action),
-      ['toggle-overlay', 'playback', 'close-tile', 'alarm-config']
+      ['playback', 'close-tile', 'alarm-config']
     )
   })
 
@@ -932,6 +1045,172 @@ describe('画面格的右键菜单（NVR 式）', () => {
         assert.ok((messages.get(`domain.eventDownloadStage.${stage}`) ?? '').trim().length > 0, `${locale} 缺 domain.eventDownloadStage.${stage}`)
       }
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 轮询队列与轮换（业主 2026-09-21 批「超出窗口数自动轮询」）
+// ---------------------------------------------------------------------------
+
+describe('轮询队列（enqueue / remove / normalise）', () => {
+  it('排进队：可见或已在队的不重复入队', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    // 已在墙上可见：(cam-1, play) 进不了队。
+    assert.equal(enqueueWallItem(model, 'cam-1', 'play'), model)
+    // 同一个 (id, view) 排一次就够。
+    const once = enqueueWallItem(model, 'cam-2', 'spectrum')
+    assert.deepEqual(once.queue, [{ id: 'cam-2', view: 'spectrum' }])
+    assert.equal(enqueueWallItem(once, 'cam-2', 'spectrum'), once)
+    // 同 id 不同视图是两个内容：照收。
+    const twice = enqueueWallItem(once, 'cam-2', 'timedomain')
+    assert.deepEqual(twice.queue, [
+      { id: 'cam-2', view: 'spectrum' },
+      { id: 'cam-2', view: 'timedomain' }
+    ])
+    // 空 id / 坏视图不收。
+    assert.equal(enqueueWallItem(model, '', 'play'), model)
+    assert.equal(enqueueWallItem(model, 'cam-2', 'nope' as never), model)
+  })
+
+  it('内容回到墙上就从队里清掉（与可见性去重同一条规则）', () => {
+    let model = createCameraWallModel(4)
+    model = enqueueWallItem(model, 'cam-2', 'play')
+    assert.equal((model.queue ?? []).length, 1)
+    // 这一格放进了同一内容：队列里那一份失去资格。
+    model = assignCamera(model, 1, 'cam-2').model
+    assert.equal(enqueueWallItem(model, 'cam-2', 'play'), model, '可见内容不该重复进队')
+  })
+
+  it('removeIdFromQueue：按 id 清掉所有项，没动到就不产生新对象', () => {
+    let model = createCameraWallModel(4)
+    model = enqueueWallItem(model, 'cam-1', 'play')
+    model = enqueueWallItem(model, 'cam-2', 'spectrum')
+    model = enqueueWallItem(model, 'cam-1', 'spectrogram')
+    const cleaned = removeIdFromQueue(model, 'cam-1')
+    assert.deepEqual(cleaned.queue, [{ id: 'cam-2', view: 'spectrum' }])
+    // 不存在的 id 是 no-op（纯函数的「没变就返回原对象」）。
+    assert.equal(removeIdFromQueue(cleaned, 'cam-9'), cleaned)
+    // 没有队列的模型上清任何东西都是原样返回。
+    const empty = createCameraWallModel(4)
+    assert.equal(removeIdFromQueue(empty, 'cam-9'), empty)
+  })
+
+  it('normalise：坏项丢弃、按 (id, view) 去重、与格子上可见的 (id, view) 去重', () => {
+    const normalised = normaliseCameraWallModel({
+      layout: 4,
+      slots: ['cam-1', null, null, null],
+      audioSlot: null,
+      activeSlot: 0,
+      queue: [
+        { id: 'cam-1', view: 'play' }, // 已在墙上可见：丢
+        { id: 'cam-2', view: 'spectrum' },
+        { id: 'cam-2', view: 'spectrum' }, // 重复：丢
+        { id: '', view: 'play' }, // 坏 id：丢
+        { id: 'cam-3', view: 'nope' }, // 坏视图：丢
+        { id: 'cam-4', view: 'timedomain' },
+        null, // 坏项：丢
+        'junk' // 坏项：丢
+      ],
+      rotateCursor: -5
+    })
+    assert.deepEqual(normalised.queue, [
+      { id: 'cam-2', view: 'spectrum' },
+      { id: 'cam-4', view: 'timedomain' }
+    ])
+    // 负游标修回 0。
+    assert.equal(normalised.rotateCursor, 0)
+    // 缺 `queue` 字段就是空队。
+    assert.deepEqual(normaliseCameraWallModel(createCameraWallModel(4)).queue, [])
+  })
+})
+
+describe('轮询轮换（rotateWallOnce）', () => {
+  it('队空：什么都不发生，游标不动', () => {
+    const model = createCameraWallModel(4)
+    const result = rotateWallOnce(model)
+    assert.equal(result.changed, false)
+    assert.equal(result.model, model)
+    assert.equal(result.model.rotateCursor ?? 0, 0)
+  })
+
+  it('队首进游标指着的那一格，被轮走的排到队尾', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = enqueueWallItem(model, 'cam-2', 'play')
+    const result = rotateWallOnce(model)
+    assert.equal(result.changed, true)
+    if (!result.changed) return
+    assert.equal(result.slot, 0)
+    assert.equal(result.incoming.id, 'cam-2')
+    assert.deepEqual(result.evicted, { id: 'cam-1', view: 'play' })
+    assert.deepEqual(result.model.slots, ['cam-2', null, null, null])
+    // 被轮走的 (cam-1, play) 补到队尾：轮询是"轮流站"，不是淘汰。
+    assert.deepEqual(result.model.queue, [{ id: 'cam-1', view: 'play' }])
+    assert.equal(result.model.rotateCursor, 1)
+  })
+
+  it('游标逐格推进：一格一格顺次轮，不跳格', () => {
+    let model = createCameraWallModel(4)
+    for (let index = 0; index < 4; index += 1) {
+      model = assignCamera(model, index, `cam-${index + 1}`).model
+    }
+    model = enqueueWallItem(model, 'cam-9', 'play')
+    model = enqueueWallItem(model, 'cam-10', 'play')
+    const first = rotateWallOnce(model)
+    assert.equal(first.changed, true)
+    if (!first.changed) return
+    assert.equal(first.slot, 0)
+    const second = rotateWallOnce(first.model)
+    assert.equal(second.changed, true)
+    if (!second.changed) return
+    assert.equal(second.slot, 1)
+    assert.deepEqual(second.model.slots.slice(0, 2), ['cam-9', 'cam-10'])
+    assert.equal(second.model.rotateCursor, 2)
+  })
+
+  it('进格的视图跟着 incoming 走，且不残留上一格留下的 spectrum', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = enqueueWallItem(model, 'cam-2', 'spectrum')
+    const result = rotateWallOnce(model)
+    assert.equal(result.changed, true)
+    if (!result.changed) return
+    assert.equal(result.model.slots[0], 'cam-2')
+    assert.equal(cellViewAt(result.model, 0), 'spectrum')
+    assert.equal(result.model.views?.[0], 'spectrum')
+    // 下一轮轮到播放进来：第 1 格落 cam-3，视图是播放（默认），
+    // 而第 0 格那个 spectrum **不被波及**。
+    const back = rotateWallOnce({
+      ...result.model,
+      queue: [{ id: 'cam-3', view: 'play' }]
+    })
+    assert.equal(back.changed, true)
+    if (!back.changed) return
+    assert.equal(back.model.slots[1], 'cam-3')
+    assert.equal(cellViewAt(back.model, 1), 'play')
+    assert.equal(cellViewAt(back.model, 0), 'spectrum')
+  })
+
+  it('被轮走的那一格是出声格时静音', () => {
+    let model = createCameraWallModel(4)
+    model = assignCamera(model, 0, 'cam-1').model
+    model = setAudioSlot(model, 0)
+    model = enqueueWallItem(model, 'cam-2', 'play')
+    const result = rotateWallOnce(model)
+    assert.equal(result.changed, true)
+    if (!result.changed) return
+    assert.equal(result.model.audioSlot, null, '出声格被轮走必须静音，不留悬空徽标')
+  })
+
+  it('空格被轮：没有 evicted，队尾不补空项', () => {
+    const model = enqueueWallItem(createCameraWallModel(4), 'cam-1', 'play')
+    const result = rotateWallOnce(model)
+    assert.equal(result.changed, true)
+    if (!result.changed) return
+    assert.equal(result.evicted, null)
+    assert.deepEqual(result.model.queue, [])
+    assert.equal(result.model.slots[0], 'cam-1')
   })
 })
 

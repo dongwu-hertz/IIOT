@@ -63,6 +63,8 @@ export const zhCN = {
     INVALID_RESPONSE: '设备返回的数据格式无法识别',
     DEVICE_ERROR: '设备报告了一个错误',
     STORAGE_ERROR: '本地存储操作失败',
+    RECORDING_EMPTY: '录像保存失败：录像文件为空（0 字节），已删除。请检查磁盘空间与相机码流后重试',
+    RECORDING_INCOMPLETE: '录像保存失败：录像文件不完整（缺少 moov 索引），已删除。视频流可能在录制过程中中断',
     DISK_FULL: '磁盘可用空间不足，已暂停非必要录音',
     NETWORK_ERROR: '网络连接失败',
     VALIDATION_ERROR: '输入内容不合法',
@@ -74,6 +76,8 @@ export const zhCN = {
     deviceDetail: '设备返回：{detail}',
     /** Appends the code so support can triage a screenshot. */
     withCode: '{message}（{code}）',
+    /** 技术诊断细节（如 ffmpeg 的 stderr 尾行）追加在目录消息之后；细节本身是技术英语，四语言共用。 */
+    withDetail: '{message}（{detail}）',
     bridgeUnavailable: '无法连接到主进程，请重启应用',
     bridgeUnavailableDetail: '{message}：{detail}',
     FORBIDDEN: '当前账户没有执行该操作的权限',
@@ -1788,6 +1792,8 @@ export const zhCN = {
     zoomReset: '回到时区中心',
     zoomLevel: '缩放 {zoom}',
     tilesError: '底图有 {failed} / {total} 块没有加载出来（网络不可用或服务拒绝）；设备点位与列表不受影响。',
+    /** 底图开关关着时画布上的提示（业主 20260921 批第 9 条：地图不能看起来"是空的"而不说为什么）。 */
+    tilesOffHint: 'GIS 底图未启用 · 到「设置 → GIS 服务」开启在线底图',
     sonarHint: '空气声呐的抓图来自联动的球机：每 1 秒一张，最多 3 张。'
   },
 
@@ -2552,8 +2558,6 @@ export const zhCN = {
     menuExitFullscreen: '退出全屏',
     menuCopyRtsp: '复制 RTSP 地址',
     menuOpenExternal: '在外部播放器打开',
-    menuShowOverlay: '显示叠加信息',
-    menuHideOverlay: '隐藏叠加信息',
     /*
      * 三项新入口（模型 `camera-nvr.ts` 已经在引用这三个键，本轮补齐）。
      *
@@ -2742,7 +2746,7 @@ export const zhCN = {
   /**
    * 多路实时视频墙（监控页的分屏直播）。
    *
-   * 与 `cameraLiveUi` / `channelWall` 同一条硬规则：**本块任何一条消息都不得
+   * 与 `cameraLiveUi` / `cameraStreamUi` 同一条硬规则：**本块任何一条消息都不得
    * 包含 `@`**（vue-i18n 的 linked-message 记法，渲染时编译失败，
    * `tests/i18n.test.ts` 会编译每一条消息）。
    *
@@ -2933,6 +2937,16 @@ export const zhCN = {
     viewNeedsCamera: '第三方 RTSP 源只有画面',
     viewSpectrogramNote: '颜色只表示同一帧内谱线的相对强弱',
     viewStreamError: '声学数据这一路打不开',
+    /** 同一 (相机, 视图) 全墙唯一（业主 20260921 批第 1 条：相同内容只允许出现一次）。 */
+    viewAlreadyShown: '该内容已在此相机的其它窗口显示（相同内容只允许出现一次）',
+    /** 选择器里已经上墙的 (相机, 视图) 组合角标。 */
+    viewInUse: '已在窗口',
+    /** 轮询指示器：{shown} 当前在屏的路数 / {total} 全部路数（含排队）。 */
+    rotationIndicator: '轮询 {shown}/{total}',
+    rotationPauseTitle: '暂停轮询',
+    rotationResumeTitle: '继续轮询',
+    /** 格子全满时新放进去的内容进轮询队列（{position} = 队列位置）。 */
+    queuedNotice: '窗口已满，已加入轮询队列（第 {position} 个）',
     manualTitle: '第三方相机（手填 RTSP）',
     manualNote: '手册未说明第三方 RTSP 接入：地址按原样交给内置 ffmpeg，本机只判形状、不判能不能连上（连不上时画面格会显示 ffmpeg 的原文）。地址只在本次运行内有效 —— 它常带口令，不写盘。',
     manualWhere: '放进画面格在总览页的视频墙里：点一格，在列表里选它。',
@@ -3017,106 +3031,6 @@ export const zhCN = {
     limitSummary: '同时直播 {active} / {max} 路',
     layoutShrunk: '分屏档位变小，{count} 个画面格的直播已停止。'
   },
-
-  channelWall: {
-    title: '通道墙',
-    summary: '共 {count} 路通道',
-    layoutLabel: '分屏档位',
-    layout1: '1 分屏',
-    layout2: '2 分屏',
-    layout4: '4 分屏',
-    layout8: '8 分屏',
-    prevPage: '上一页',
-    nextPage: '下一页',
-    pageIndicator: '第 {page} / {total} 页',
-    loading: '正在读取通道…',
-    empty: '暂无可展示的通道',
-    noChannelTable: '有 {count} 台设备尚未返回通道表，因此没有列出它们的通道。',
-    cameraStreamLabel: '声纹图像',
-    cameraMatrixOnly: '这台相机推送的是数值矩阵而不是图像帧，通道墙不重新绘图。',
-    cameraOtherDevice: '数据流在另一台相机上',
-    cameraStale: '数据已停止（{seconds} 秒前）',
-
-    /*
-     * 收起 / 展开。
-     *
-     * 名字说的是**按下去会发生什么**（与相机墙的播放按钮同一条规矩），
-     * 此刻是收起的还是展开的由 `aria-expanded` 表达 —— 两件事各说各的，
-     * 读屏软件报出来就是「展开通道墙，已收起，按钮」。
-     */
-    collapse: '收起通道墙',
-    expand: '展开通道墙',
-    /*
-     * 默认收起时的那一句：说出**为什么**是收起的，否则一排空白看起来像坏了。
-     * 收起的默认值来自「有没有通道在线」，所以这句话也必须只在那种情况下出现。
-     */
-    collapsedNoChannel: '当前没有在线通道',
-
-    graphLabel: '图形类型',
-
-    /*
-     * 四种图形。名字就是产品要求里的说法（声压线 / 频谱图 / 时谱图 / 声纹图），
-     * 每一种都对应设备端真实推送的一种载荷（见 `lib/channelWall.ts` 的
-     * `CHANNEL_GRAPH_KINDS`）。
-     *
-     * `deviceHasNoData` 是**结构性**的事实：这台设备的家族根本没有这种载荷
-     * （相机没有时频通道，声纹盒子没有图像），它与会话在不在、通不通无关，
-     * 所以它与「未监测」「尚无数据」必须读起来是不同的话。
-     *
-     * `splCaption` / `lineAxis` 是画得出来时折线下面的角注：一个是真实读数，
-     * 一个是“横轴到底是什么”。后者的存在理由：实测这台相机没有任何接口能给出
-     * 采样率，编一个 Hz 轴比按谱线序号标注更糟。
-     */
-    graph: {
-      voiceprint: '声纹图',
-      spl: '声压线',
-      spectrum: '频谱图',
-      spectrogram: '时谱图',
-      deviceHasNoData: '该设备不提供这种数据',
-      splCaption: '{value} dB · {count} 点',
-      lineAxis: '{count} 条谱线 · 横轴为谱线序号（设备未上报采样率）',
-      /*
-       * 声压读数的单位。
-       *
-       * **这个 `dB` 是本仓库的标注，设备侧没有手册依据**：设备推上来的字段名是
-       * `sound_pressure_level`（`protocol/mappers.ts` 的 `spl`），本仓库里没有任何
-       * 盒子手册能证明它是声压级的分贝值 —— `docs/reference/*` 全是 FA371 相机文档，
-       * 而唯一一处 dB 定义（20 µPa 基准）来自那本相机手册。数值照常显示（所有者要的
-       * 是那个数），但这四个字母是标注，不是计量结果。
-       *
-       * `splUnitNote` 是它的出处：挂在读数与单位元素的 `title` 上，值本身保持 `dB`
-       * 这个短写法（8 分屏下格子只有几十像素宽）。
-       */
-      splUnit: 'dB',
-      splUnitNote:
-        '本仓库的标注：设备字段是 sound_pressure_level，其单位在设备手册中没有依据（本仓库没有盒子手册），不可当作计量校准结果。'
-    },
-
-    /*
-     * 每一路通道的最近一条告警（本地告警库的记录）。
-     *
-     * 措辞固定为「最近告警」，**不是「正在告警」**：契约里没有任何「这一路此刻正在
-     * 告警」的推送（`PushChannels` 里与告警沾边的两条都是设备级、且不带通道号），
-     * 写「正在告警」就是编的（见 `ChannelWall.vue` 文件头）。
-     *
-     * 四种情况必须读起来是不同的事：读取中 / 读取失败 / 无告警记录 / 最近一条是什么。
-     * 后者的确认状态复用告警页的词条（`alarmsUi.ackAcknowledged` / `ackUnacknowledged`），
-     * 同一件事不在两处起名字。
-     */
-    alarm: {
-      recent: '最近告警',
-      loading: '读取中…',
-      failed: '告警记录读取失败',
-      none: '无告警记录',
-      entry: '{type} · {time} · {ack}'
-    },
-
-    reason: {
-      notMonitored: '未监测',
-      deviceOffline: '设备离线，无法获取实时数据'
-    }
-  },
-
   /**
    * 系统消息 —— 顶栏那颗告警图标后面的面板里，**应用级**失败那一段（业主 2026-09-18）。
    *

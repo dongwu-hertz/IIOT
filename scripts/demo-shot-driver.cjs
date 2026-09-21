@@ -2192,10 +2192,10 @@ async function runManualRtspDrill(win, layout) {
       problems.push('控制条上没有「音量」那一颗')
     }
     if (!place.volumePopOpen) {
-      problems.push('点了「音量」之后没有弹出竖条浮层（[data-cell-volume-pop]）')
+      problems.push('点了「音量」之后没有弹出音量浮层（[data-cell-volume-pop]）')
     }
     if (!place.slider) {
-      problems.push('音量浮层里没有竖条滑杆')
+      problems.push('音量浮层里没有滑杆')
     } else {
       const { width, height, writingMode, direction } = place.slider
       if (!(height > width)) {

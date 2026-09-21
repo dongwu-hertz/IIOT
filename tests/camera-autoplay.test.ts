@@ -656,18 +656,25 @@ describe('CameraVideoWall template', () => {
     assert.ok(settleStart >= 0 && (settles[0] ?? -1) > settleStart, '定时器不在一次性补读函数里')
   })
 
-  it('整份组件里唯一的 setInterval 是逐格录像计时器，而且它逐格可清', () => {
-    // 录像指示器上的时长必须走动，所以组件里**确实**需要一条周期任务。它必须满足：
-    //   - 只有一处（第一处 `setInterval` 在 `startRecordingTimer()` 里）；
-    //   - 计时器按格号存进一张表，停止/清空格子/卸载时都能清掉（否则就是一个
-    //     持有闭包的静默泄漏，而同一条规则在 `MonitorView` 上也写着）；
-    //   - 停止那一刻时长归零，不会留着一个还在走的旧基准。
+  it('组件里只有两条周期任务：录像计时器（逐格可清）与轮询轮换（卸载即清）', () => {
+    // 录像指示器上的时长必须走动、轮询队列每 10 秒要轮一格，所以组件里**确实**需要
+    // 周期任务。它们必须满足：
+    //   - 各只有一处（`startRecordingTimer()` 里一处；轮换那处在挂载时挂上）；
+    //   - 录像计时器按格号存进一张表，停止/清空格子/卸载时都能清掉（否则就是一个
+    //     持有闭包的静默泄漏，而同一条规则在 `MonitorView` 上也写着）；轮换那条在
+    //     `onUnmounted` 里 `clearInterval`，离开页面就不许再转；
+    //   - 录像那条停止那一刻时长归零，不会留着一个还在走的旧基准。
     const timers = [...source.matchAll(/setInterval\(/g)]
-    assert.equal(timers.length, 1, `组件里有 ${timers.length} 处 setInterval，只允许录像计时器一处`)
+    assert.equal(timers.length, 2, `组件里有 ${timers.length} 处 setInterval，只允许录像计时器与轮换各一处`)
     const start = source.indexOf('function startRecordingTimer')
     const stop = source.indexOf('function stopRecordingTimer')
     assert.ok(start >= 0 && stop >= 0, '没有录像计时器的启停函数')
     assert.ok((timers[0]?.index ?? -1) > start, 'setInterval 不在 startRecordingTimer() 里')
+    // 轮换那一条：常量 + 挂载时挂 + 卸载时清，三件套缺一不可。
+    assert.match(source, /WALL_ROTATION_INTERVAL_MS = 10_000/)
+    const mounted = source.slice(source.indexOf('onMounted(async () => {'))
+    assert.ok(mounted.slice(0, mounted.indexOf('\n})')).includes('setInterval(onRotationTick'), '挂载时没有起轮换定时器')
+    assert.match(source, /clearInterval\(rotationTimer\)/)
     assert.match(source, /recordingTimers\.set\(/)
     assert.match(source, /recordingTimers\.delete\(/)
     assert.match(source, /function stopAllRecordingTimers\(\)/)
@@ -754,16 +761,16 @@ describe('CameraVideoWall: 画面格右键菜单与逐格录像', () => {
     }
   })
 
-  it('模型给出的十个动作全部有派发分支（没有一个掉进静默的 default）', () => {
+  it('模型给出的九个动作全部有派发分支（没有一个掉进静默的 default）', () => {
     // 菜单项与派发之间唯一的契约就是 action id。少一个 case，那一项点了没反应 ——
-    // 这是本仓库明确禁止的「静默的不可点」。
+    // 这是本仓库明确禁止的「静默的不可点」。「显示/隐藏叠加信息」已按业主 2026-09-21
+    // 批移除，所以这里也没有它的分支。
     const actions = [
       'toggle-recording',
       'snapshot',
       'toggle-fullscreen',
       'copy-rtsp',
       'open-external',
-      'toggle-overlay',
       'playback',
       'download-detect',
       'close-tile',
@@ -807,8 +814,13 @@ describe('CameraVideoWall: 画面格右键菜单与逐格录像', () => {
     )
   })
 
-  it('叠加信息的开关与结果提示都是**逐格**的，录像指示器不跟着叠加条一起隐藏', () => {
-    assert.match(source, /v-if="cell\.status !== 'empty' && nvrOf\(cell\.index\)\.overlay"/)
+  it('叠加条永远显示（业主 2026-09-21 批移除了开关），结果提示与录像指示器仍逐格', () => {
+    // 「显示/隐藏叠加信息」整体移除：非空格的叠加条没有开关条件，状态必须一直在场。
+    assert.match(source, /v-if="cell\.status !== 'empty'" class="camera-wall__overlay"/)
+    assert.equal(source.includes('nvrOf(cell.index).overlay'), false, '叠加条又读上了按格开关')
+    assert.equal(source.includes('toggleCellOverlay'), false, '叠加开关的处理函数又回来了')
+    assert.equal(source.includes('toggle-overlay'), false, '菜单里又出现了「显示/隐藏叠加信息」')
+    // 逐格的另外两条还在：录像指示器与结果提示各自按格号判定。
     assert.match(source, /v-if="nvrOf\(cell\.index\)\.recording"/)
     assert.match(source, /v-if="cellNvrMessage\(cell\)"/)
     // 逐格状态按格号索引，而不是整页一份。

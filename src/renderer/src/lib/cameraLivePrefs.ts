@@ -3,7 +3,7 @@
  * 「音量可调并**记住**」）。
  *
  * WHY localStorage AND NOT THE DATABASE
- * 与 `stores/channelWall.ts` / `composables/useLocale.ts` 同一条既有约定：这是**这台机器上
+ * 与 `stores/liveWall.ts` / `composables/useLocale.ts` 同一条既有约定：这是**这台机器上
  * 这个人的看法**（"这一路声音开多大"），不是设备事实、也不是要跟着账号走的设置。
  * 写进 `window.api.settings` 会让它变成一台设备的属性，而它其实只属于坐在这里的人。
  *

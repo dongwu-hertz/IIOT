@@ -125,8 +125,8 @@ const { t } = useI18n()
  *
  * 为什么记在 localStorage 而不是数据库设置里：它是**这台机器上这个人的界面偏好**，
  * 与"软件怎么工作"无关（同一个 profile 换个人用，界面偏好本来就该跟着走）。
- * 仓库里已有同样的先例：频道墙的折叠状态（`stores/channelWall.ts` 的
- * `CHANNEL_WALL_COLLAPSED_STORAGE_KEY`）。
+ * 仓库里已有同样的先例：实时视频墙的档位持久化（`stores/liveWall.ts`）与
+ * 界面语言（`composables/useLocale.ts`）。
  *
  * 读不到/写不了（隐私模式、配额满、被策略禁掉）时**静默降级为展开**：一个界面偏好丢了
  * 不该让侧栏打不开，所以两个方向都不抛。

@@ -1070,7 +1070,6 @@ selectChannel(3) -> features_stream 无数据           ✗ CH3 已禁用，设�
 | 12 | `domain/models.ts` | ⬜ 待改：`NetworkConfig.ipMode`（mapper 层已实现，域模型待同步） |
 | 13 | `protocol/dto.ts` + `device-api-client.ts` + `config-service.ts` | ✅ 已改（2026 年轮次）：`set_passageway` 的 `chinfoArray` 改为**单个通道对象**；`set_devinfo` 补 `msgBody`；并给**实测证明必需**的 `set_samplingrate` / `set_timeset` / `set_rs485` / `set_modbus_para` / `set_date_push` 补上 `msgBody` 信封（见 §5A.0） |
 | 14 | `renderer/views/DevicesView.vue` | ✅ 已改（2026 年轮次）：声纹设备改名时**设备侧失败就回滚本机那一半**，并把「设备的原文 + 本机已恢复原名」一起说给操作员（此前只显示设备错误、本机留在新名字上，界面与设备从此不一致） |
-| 15 | `renderer/components/ChannelWall.vue` + `lib/channelWall.ts` | ✅ 已改（2026 年轮次）：「共 N 路通道」不再把**相机格**数进去（8 路盒子 + 1 台相机曾显示「共 9 路通道」） |
 
 **已验证**：上述 1–6 项修改后，用项目自身代码连接真机，
 `token-header` 策略**首次尝试即命中**（81 ms），设备信息 / 网络 / 8 通道 / 采样率

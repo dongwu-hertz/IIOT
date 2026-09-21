@@ -13,8 +13,9 @@
  *   3. **接线**（源码守卫）：墙把 `pcmData` / `fftData` 交给谁、离开页面有没有停订阅。
  *
  * 三条口径也在这一份里钉住（手册未说明的地方**不许编**）：
- *   · 频率轴没有 `binHz` 时只标"第 N 根谱线"，绝不编一个 Hz 轴；
- *   · 色标只表示同一帧内的相对强弱；
+ *   · 频率轴没有 `binHz` 时只标"第 N 根谱线"/行号，绝不编一个 Hz 轴；
+ *   · 频率上限 = min(binHz × binCount, 100kHz)（业主 2026-09-21 第 5 批）；
+ *   · 色标只表示同一帧内的相对强弱（红外热力 11 档，对齐分析工作台设计稿）；
  *   · 时域图拼**固定 1 秒**（实测一帧 100 ms ⇒ 10 帧），不够就画多少算多少。
  *
  * 中文注释是仓库约定（见 `tests/channel-state.test.ts`）。
@@ -42,14 +43,21 @@ import { en } from '../src/shared/i18n/messages/en'
 import { es } from '../src/shared/i18n/messages/es'
 import { tr } from '../src/shared/i18n/messages/tr'
 import {
+  binsWithinMaxHz,
   concatWaveform,
+  formatFrequencyTick,
+  frequencyAxisTicks,
+  frequencyTicks,
   normalise,
   pushCapped,
+  SPECTRUM_MAX_HZ,
   spectrogramColor,
   spectrogramColumn,
   spectrogramMatrix,
+  spectrogramRowTicks,
   spectrumAxisLabels,
   spectrumBars,
+  spectrumMaxHz,
   waveformColumns,
   waveformFrames
 } from '../src/renderer/src/lib/cameraCellChart'
@@ -144,17 +152,86 @@ describe('图表的纯计算', () => {
     assert.deepEqual(normalise([-5, 5]), [0, 1])
   })
 
-  it('频域图的轴：有 binHz 才写 Hz，没有就写"第 N 根谱线"（**不编采样率**）', () => {
+  it('频域图的轴：有 binHz 才写 Hz（上限封顶 100kHz），没有就写"第 N 根谱线"（**不编采样率**）', () => {
     const withHz = spectrumAxisLabels(512, 200)
     assert.equal(withHz.unit, 'hz')
-    assert.equal(withHz.left, '0 Hz')
-    assert.equal(withHz.right, '102 kHz', '512 × 200 Hz = 102.4 kHz，四舍五入到 kHz')
+    assert.equal(withHz.left, '0')
+    // 512 × 200 Hz = 102.4 kHz，超出业主给的上限 ⇒ 标到 100kHz 为止（不标 102）。
+    assert.equal(withHz.right, '100 kHz')
 
     const without = spectrumAxisLabels(512, undefined)
     assert.equal(without.unit, 'bin')
     assert.equal(without.right, `#${CAMERA_CELL_SPECTRUM_BARS}`)
     // `binHz = 0` 也是"不知道"，不能当成 0 Hz。
     assert.equal(spectrumAxisLabels(512, 0).unit, 'bin')
+  })
+
+  it('频率上限：min(binHz × binCount, 100kHz)；没有 binHz 是 null（走"第 N 根"降级）', () => {
+    assert.equal(SPECTRUM_MAX_HZ, 100_000, '业主原话：「Y轴是频率上限，最大是 100kHz」')
+    assert.equal(spectrumMaxHz(512, 200), 100_000, '102.4 kHz 封顶到 100 kHz')
+    assert.equal(spectrumMaxHz(512, 10), 5_120, '没超上限就照实标')
+    assert.equal(spectrumMaxHz(512, undefined), null)
+    assert.equal(spectrumMaxHz(512, 0), null, 'binHz = 0 也是"不知道"')
+  })
+
+  it('频率刻度：1/2/5×10^n 好看步长，最多 4 个，首尾固定是 0 与上限', () => {
+    assert.deepEqual(frequencyTicks(100_000), [0, 50_000, 100_000], '100k：0 / 中点 / 上限')
+    assert.deepEqual(frequencyTicks(96_000), [0, 50_000, 96_000], '上限不是好看数也要标出真值')
+    assert.deepEqual(frequencyTicks(48_000), [0, 20_000, 40_000, 48_000])
+    assert.ok(frequencyTicks(123_456).length <= 4, '刻度个数封顶 4 个')
+    assert.equal(frequencyTicks(123_456)[frequencyTicks(123_456).length - 1], 100_000, '超 100k 也封顶')
+    assert.deepEqual(frequencyTicks(0), [0])
+  })
+
+  it('频率刻度文案：≥10k 取整到 kHz，否则 1 位小数；0 只写 "0"', () => {
+    assert.equal(formatFrequencyTick(0), '0')
+    assert.equal(formatFrequencyTick(500), '500 Hz')
+    assert.equal(formatFrequencyTick(1_500), '1.5 kHz')
+    assert.equal(formatFrequencyTick(9_999), '10.0 kHz')
+    assert.equal(formatFrequencyTick(10_000), '10 kHz')
+    assert.equal(formatFrequencyTick(50_000), '50 kHz')
+    assert.equal(formatFrequencyTick(100_000), '100 kHz')
+  })
+
+  it('频率轴刻度（带位置）：上限 100k 时 0/中点/上限均匀分布；没有 binHz 返回 null', () => {
+    const ticks = frequencyAxisTicks(100_000)
+    assert.deepEqual(
+      ticks,
+      [
+        { frac: 0, label: '0' },
+        { frac: 0.5, label: '50 kHz' },
+        { frac: 1, label: '100 kHz' }
+      ],
+      '0 在下/左，上限在上/右'
+    )
+    assert.equal(frequencyAxisTicks(null), null, '不替"不知道"编频率')
+  })
+
+  it('时频谱图没有 binHz 时退回**行号**刻度（诚实降级，第 0 行在下）', () => {
+    const ticks = spectrogramRowTicks(CAMERA_CELL_SPECTRUM_ROWS)
+    assert.ok(ticks.length >= 2 && ticks.length <= 4)
+    assert.equal(ticks[0]!.label, '#0', '第 0 行（低频）在最下面')
+    assert.equal(ticks[ticks.length - 1]!.label, `#${CAMERA_CELL_SPECTRUM_ROWS - 1}`)
+    assert.equal(ticks[0]!.frac, 0)
+    assert.equal(ticks[ticks.length - 1]!.frac, 1)
+  })
+
+  it('时频谱图只保留 ≤100kHz 的 bin 参与抽稀（有 binHz 时）', () => {
+    // 400 根谱线 @1kHz/bin ⇒ 频宽 400kHz；前 101 根（≤100kHz）全是 1，其余全是 1000。
+    const bins = Array.from({ length: 400 }, (_, index) => (index < 101 ? 1 : 1000))
+    assert.equal(binsWithinMaxHz(bins, 1000).length, 101)
+    assert.equal(binsWithinMaxHz(bins, undefined).length, 400, '没有 binHz 无从取舍，整帧参与')
+    assert.equal(binsWithinMaxHz(bins, 0).length, 400, 'binHz = 0 同样无从取舍')
+    assert.equal(binsWithinMaxHz([1, 2], 200_000).length, 1, 'binHz 比上限还宽也至少留 1 根')
+
+    // 只抽 ≤100kHz 的部分 ⇒ 每行峰值都是 1 ⇒ 归一化后满列（不掺 1000 的那些行）。
+    const capped = spectrogramMatrix([bins], 1, CAMERA_CELL_SPECTRUM_ROWS, 1000)
+    assert.deepEqual(
+      capped[0],
+      Array.from({ length: CAMERA_CELL_SPECTRUM_ROWS }, () => 1)
+    )
+    const uncapped = spectrogramMatrix([bins], 1, CAMERA_CELL_SPECTRUM_ROWS, undefined)
+    assert.notDeepEqual(uncapped[0], capped[0], '不封顶时 1000 会把大部分行压回接近 0')
   })
 
   it('时频谱图：一列 = 一帧抽稀成 rows 行，低频在第 0 行', () => {
@@ -176,12 +253,19 @@ describe('图表的纯计算', () => {
     assert.deepEqual(spectrogramMatrix([], CAMERA_CELL_SPECTROGRAM_COLUMNS, CAMERA_CELL_SPECTRUM_ROWS)[0], null)
   })
 
-  it('色标：两端与越界都夹住，而且 0 与 1 明显不同', () => {
+  it('色标：红外热力 11 档（蓝→青→绿→黄→橙→红），两端与越界都夹住，0 与 1 明显不同', () => {
     const low = spectrogramColor(0)
     const high = spectrogramColor(1)
+    assert.deepEqual(low, [16, 42, 131], '#102a83（设计稿 visualMap 最冷一档）')
+    assert.deepEqual(high, [214, 32, 31], '#d6201f（设计稿 visualMap 最热一档）')
     assert.notDeepEqual(low, high)
     assert.deepEqual(spectrogramColor(-5), low)
     assert.deepEqual(spectrogramColor(9), high)
+    // 逐档索引映射：档位内部不改变颜色（不做档间渐变）。
+    assert.deepEqual(spectrogramColor(0.1), spectrogramColor(0.14))
+    assert.notDeepEqual(spectrogramColor(0.14), spectrogramColor(0.16), '0.15 是第 1/2 档的分界')
+    assert.notDeepEqual(spectrogramColor(0), spectrogramColor(0.5))
+    assert.notDeepEqual(spectrogramColor(0.5), spectrogramColor(1))
     for (const value of [0.25, 0.5, 0.75]) {
       const [r, g, b] = spectrogramColor(value)
       for (const channel of [r, g, b]) {
@@ -279,14 +363,17 @@ describe('墙的模型：视图逐格保存', () => {
     assert.deepEqual([...cellViewsFor(model, 1)], ['play'])
   })
 
-  it('换源时视图**回落成播放**（那是上一台的画法选择）', () => {
+  it('换源时视图 = 目标视图（缺省播放；业主 2026-09-21 批不再"一律回默认"）', () => {
     let model = setCameraCellView(modelWith(), 0, 'timedomain')
-    // 把 0 号格换成另一台相机：视图必须回默认。
+    // 把 0 号格换成另一台相机（不带视图 = 放画面）：视图就是播放。
     model = assignCamera(model, 0, 'dev-camera-2').model
     assert.equal(cellViewsOf(model)[0], 'play')
-    // 换到"手填源"上更是如此（它压根没有那三种视图）。
+    // 换成手填源（它压根没有那三种视图）同理。
     model = assignCamera(setCameraCellView(model, 0, 'spectrum'), 0, MANUAL).model
     assert.equal(cellViewsOf(model)[0], 'play')
+    // 明确指定视图时，落地就是这个视图：换进来一台"时域图"格，它就是时域图。
+    model = assignCamera(model, 0, 'dev-camera-2', 'timedomain').model
+    assert.equal(cellViewsOf(model)[0], 'timedomain')
   })
 
   it('清格 / 换档位时视图一起清掉（不然下次放大档位会"复活"到别的格上）', () => {

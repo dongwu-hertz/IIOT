@@ -29,7 +29,6 @@ export const CAMERA_NVR_ACTIONS = [
   'toggle-fullscreen',
   'copy-rtsp',
   'open-external',
-  'toggle-overlay',
   /**
    * 四种显示方式（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
    *
@@ -59,14 +58,12 @@ export type CameraNvrAction = (typeof CAMERA_NVR_ACTIONS)[number]
  * 否则「菜单为什么灰着」就又要靠一次 IPC 往返才能回答。
  */
 export interface CameraNvrEnvironment {
-  /** 设备名，用于「显示叠加信息」时叠在画面上的标题。 */
+  /** 设备名，用于菜单头部与结果提示。 */
   deviceName: string
   /** 主进程是否正在为这台相机手动录像（录像中该项读「停止录像」）。 */
   recording: boolean
   /** 是否处于全屏（决定该项读「全屏」还是「退出全屏」）。 */
   fullscreen: boolean
-  /** 叠加信息是否可见。 */
-  overlay: boolean
   /**
    * 当前是否存在**可用的 RTSP 源**（活动会话）。
    *
@@ -162,7 +159,7 @@ export interface CameraNvrMenuItem {
   disabledReasonKey?: string
   /** 禁用的**原始**诊断文字（设备/主进程给的），优先于上面的通用文案。 */
   disabledReasonText?: string
-  /** 开关型菜单项的当前状态（叠加信息）。 */
+  /** 开关/单选型菜单项的当前状态（「显示方式」的 ✓）。 */
   checked?: boolean
   /** 该组之前画一条分隔线，模仿安全监控软件的菜单分组。 */
   separatorBefore?: boolean
@@ -346,7 +343,7 @@ export function buildCameraNvrMenu(
       /*
        * 显示方式（播放 / 1 秒时域图 / 频域图 / 时频谱图）。
        *
-       * 它紧挨着「叠加信息」摆在一起、**不带分隔线**：两项都是"这一格怎么画"，
+       * 它紧挨着「外部播放器」、**不带分隔线**：两项都是"这一格怎么画"，
        * 而不是"对相机做什么"。业主第 12 批把四颗视图按钮从控制条上撤走之后，
        * 这里是它们唯一的入口。
        */
@@ -358,14 +355,6 @@ export function buildCameraNvrMenu(
         ? {}
         : { disabledReasonKey: 'cameraWallUi.viewNeedsCamera' }),
       submenu: displayItems
-    },
-    {
-      action: 'toggle-overlay',
-      labelKey: env.overlay ? 'cameraNvrUi.menuHideOverlay' : 'cameraNvrUi.menuShowOverlay',
-      visible: liveVideo,
-      enabled: true,
-      checked: env.overlay,
-      separatorBefore: true
     },
     {
       /*

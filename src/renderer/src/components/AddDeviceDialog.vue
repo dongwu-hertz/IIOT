@@ -29,7 +29,7 @@ import {
   type IngestMetricKey,
   type IngestProtocol
 } from '@shared/domain/iot-ingest'
-import { resolveChannelCount } from '@renderer/lib/channelWall'
+import { resolveChannelCount } from '@renderer/lib/channelCount'
 import { formatDateTime } from '@renderer/lib/format'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useIngestStore } from '@renderer/stores/ingest'

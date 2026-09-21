@@ -499,13 +499,13 @@ export class CameraCaptureService {
         tail
       })
       throw new AppError(
-        ErrorCodes.STORAGE_ERROR,
+        probe.size === 0 ? ErrorCodes.RECORDING_EMPTY : ErrorCodes.RECORDING_INCOMPLETE,
         probe.size === 0
           ? '录像文件为空（0 字节），已删除。请检查磁盘空间与相机码流后重试。'
           : `录像文件不完整（缺少 moov 索引，${probe.size} 字节），已删除。${
               tail || '视频流可能在录制过程中中断了。'
             }`,
-        active.relativePath
+        [active.relativePath, tail ? `ffmpeg: ${tail}` : ''].filter(Boolean).join(' · ')
       )
     }
 

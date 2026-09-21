@@ -129,10 +129,23 @@ function configureSession(): void {
     callback({ cancel: !allowed })
   })
 
-  // Deny every permission request: this app needs none of them.
+  /*
+   * Deny every permission request except the async clipboard write.
+   *
+   * WHY THE CLIPBOARD IS THE EXCEPTION（业主 20260921 批第 7 条：复制 RTSP 显示复制失败）
+   * `navigator.clipboard.writeText` goes through Chromium's permission broker as
+   * `clipboard-sanitized-write`. With the old deny-everything handler, every copy in
+   * the renderer (RTSP address, account names, push endpoint URLs — six call sites)
+   * rejected with NotAllowedError and landed on the「复制失败」fallback message.
+   * Denying everything EXCEPT this one permission keeps the security posture
+   * (no notifications/geolocation/media) while making copy work as users expect.
+   */
   defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
-    appLog().warn('Denied renderer permission request', { permission })
-    callback(false)
+    const allowed = permission === 'clipboard-sanitized-write'
+    if (!allowed) {
+      appLog().warn('Denied renderer permission request', { permission })
+    }
+    callback(allowed)
   })
 }
 

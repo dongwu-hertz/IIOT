@@ -145,13 +145,13 @@ describe('地图右上角的半透明状态栏（第 11 批第 4 条）', () => 
     }
   })
 
-  it('地图卡片上下那两条线已删，上下间距收到 8px（业主 2026-09-19 追加第 2 条）', () => {
+  it('地图卡片上下那两条线已删，上下间距收到 10%（20260921 批第 9 条；原本是 8px）', () => {
     /*
      * 原话：「地图显示卡片的上下有两个线条， 这个线条可以删除， 重新调整下地图卡片上下的间距」。
      *
      * 那两条线是 `.map-panel` 的 `border-top` / `border-bottom`（当时与设备管理页那张扁平表
-     * 是同一套做法）；删掉之后内边距从 `--space-4`（16px，按"线 + 16px = 别页卡片那一档"配的）
-     * 收到 `--space-2`（8px）。
+     * 是同一套做法）；删掉之后内边距从 `--space-4`（16px）收到 `--space-2`（8px），
+     * 20260921 批第 9 条再收到 10%（≈0.8px，与 .map-page gap、.map-split margin 同比例）。
      *
      * 反向断言必须读**去注释**的源码：这一轮的注释里点名写了 `border-top` / `border-bottom`。
      */
@@ -160,14 +160,14 @@ describe('地图右上角的半透明状态栏（第 11 批第 4 条）', () => 
     assert.equal(
       /border-(top|bottom)\s*:/.test(block),
       false,
-      '地图那一块又加回了上下边线（业主第 2 条要求删掉）'
+      '地图那一块又加回了上下边线（业主要求删掉）'
     )
     // 显式写 `border: none` 是允许的（去掉边线的另一种写法），但任何带宽度/颜色的边框都不行。
     const shorthand = /border\s*:\s*([^;]+);/.exec(block)
     if (shorthand) {
       assert.equal(shorthand[1]?.trim(), 'none', `地图那一块还有边框：${shorthand[1]}`)
     }
-    assert.match(block, /padding-block: var\(--space-2\);/, '上下间距不是 8px')
+    assert.match(block, /padding-block: calc\(var\(--space-2\)\s*\*\s*0\.1\);/, '上下间距不是 10%')
     assert.match(mapCode, /data-map-panel/, '找不到地图那一块')
   })
 
@@ -246,8 +246,20 @@ describe('地图右上角的半透明状态栏（第 11 批第 4 条）', () => 
       false,
       '画布仍然在没有落点时不渲染（那看起来像页面坏了）'
     )
-    // 网格与落点各自有条件：没有视野就没有网格，落点循环本来就是空的。
-    assert.match(mapCode, /<g v-if="project" class="map-grid">/, '网格没有按"有没有视野"判断')
+    /*
+     * 20260921 批第 9 条：网格不再按"有没有视野"判断 —— 没有落点时用兜底视野
+     * （effectiveBounds = 真实范围 ?? 时区中心 ±十几个度），网格与坐标刻度永远在场。
+     * 断言从「v-if="project"」改为「无条件渲染 + 兜底视野来源在场」。
+     */
+    assert.match(mapCode, /<g class="map-grid">/, '网格应当无条件渲染')
+    assert.match(mapSource, /effectiveBounds/, '没有兜底视野')
+    assert.match(mapSource, /fallbackBounds/, '没有兜底视野的实现')
+    // 坐标刻度（业主：GIS 信息要读得出数字）。
+    assert.match(mapCode, /map-grid__label/, '网格没有坐标刻度')
+    assert.match(mapSource, /function latLabel\(/, '纬度刻度格式化缺席')
+    assert.match(mapSource, /function lonLabel\(/, '经度刻度格式化缺席')
+    // 底图未启用提示。
+    assert.match(mapCode, /data-map-tiles-off/, '底图未启用提示缺席')
   })
 })
 

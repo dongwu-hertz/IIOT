@@ -89,15 +89,14 @@ const ORPHANED_OVERVIEW_KEYS = [
   'common.viewAll'
 ]
 
-describe('总览页只剩视频墙与通道墙', () => {
+describe('总览页只剩实时视频墙', () => {
   const template = templateBlock(overview)
 
-  it('两块内容都在：实时视频墙（自动起播）与通道墙', () => {
+  it('实时视频墙（自动起播）在', () => {
     // 自动起播是总览页独有的属性，而且必须是**这一个标签**上的（跨标签的贪婪匹配会
     // 在属性被挪到别处时照样通过）。
     assert.match(template, /<CameraVideoWall[^>]*auto-play[^>]*\/>/)
     assert.match(template, /:active-device-id="devices\.selectedDeviceId"/)
-    assert.match(template, /<ChannelWall\s*\/>/)
   })
 
   it('「最近告警」与「设备状态」两张卡确实删掉了（不是藏起来）', () => {
