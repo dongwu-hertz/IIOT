@@ -694,6 +694,17 @@ if (!gotTheLock) {
         }
       })
 
+      /**
+       * 瓦片缓存下载进度（业主 20260921 批）：设置页发起下载后，主进程每处理一块
+       * 瓦片推一次 `MapTileCacheProgress`（收尾 `done = true`），设置页的进度条靠它推进。
+       * 与上面几条同一条规矩：进度由主进程拥有，只能它推。
+       */
+      services.mapTiles.on('progress', (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(PushChannels.MAP_CACHE_PROGRESS, progress)
+        }
+      })
+
       mainWindow = createWindow()
 
       app.on('activate', () => {

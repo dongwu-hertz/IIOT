@@ -159,6 +159,13 @@ export interface DeviceServiceOptions {
    * 缺省不做事：测试里构造 `DeviceService` 不必先造一个接入服务。
    */
   syncIngest?: (need: { http: boolean; mqtt: boolean }) => void
+  /**
+   * 保存设备 GIS 坐标后的回执（业主 20260921 批）：设备 add/update 落到一条**完整**
+   * 点位（经纬度都是有限数）时调用，接线层把它写成 `mapTiles.defaultCenter`（地图
+   * 初始中心）。注入口而不是直接拿设置服务：本层不持有设置服务，测试也不必造一个。
+   * 缺省不做事。
+   */
+  onGisCenter?: (center: { latitude: number; longitude: number }) => void
 }
 
 /**
@@ -232,6 +239,8 @@ export class DeviceService extends EventEmitter {
   private readonly onIngestNeedChanged?: (need: { http: boolean; mqtt: boolean }) => void
   /** 设备状态翻转事件落库（schema v17）；测试不注入时就是 undefined（不留历史）。 */
   private readonly deviceStatusEvents?: DeviceServiceOptions['deviceStatusEvents']
+  /** 保存 GIS 坐标后的回执（见 `DeviceServiceOptions.onGisCenter`）。 */
+  private readonly onGisCenter?: (center: { latitude: number; longitude: number }) => void
 
   constructor(options: DeviceServiceOptions) {
     super()
@@ -245,6 +254,7 @@ export class DeviceService extends EventEmitter {
     this.listLocalAddresses = options.listLocalAddresses ?? listLocalAddresses
     this.onIngestNeedChanged = options.syncIngest
     this.deviceStatusEvents = options.deviceStatusEvents
+    this.onGisCenter = options.onGisCenter
     this.resolver = new AuthStrategyResolver(this.transport)
   }
 
@@ -812,7 +822,9 @@ export class DeviceService extends EventEmitter {
      * IP 地址模式（协议 `none` / 不给方案）流程不变。
      */
     if (ingest !== undefined && usesIngest(ingest.protocol)) {
-      return this.addPushDevice(withPlan)
+      const added = await this.addPushDevice(withPlan)
+      this.syncMapDefaultCenter(added)
+      return added
     }
 
     validateAddInput(input)
@@ -839,8 +851,16 @@ export class DeviceService extends EventEmitter {
      */
     const resolved: AddDeviceInput = { ...withPlan, kind }
 
-    if (kind === 'acousticCamera') return this.addCamera(resolved)
-    if (kind === 'auscultationBox') return this.addAuscultation(resolved)
+    if (kind === 'acousticCamera') {
+      const added = await this.addCamera(resolved)
+      this.syncMapDefaultCenter(added)
+      return added
+    }
+    if (kind === 'auscultationBox') {
+      const added = await this.addAuscultation(resolved)
+      this.syncMapDefaultCenter(added)
+      return added
+    }
 
     const probe = await this.probe({
       ip: input.ip,
@@ -881,7 +901,9 @@ export class DeviceService extends EventEmitter {
       authStrategy: probe.authStrategy
     })
 
-    return this.get(device.id)
+    const added = this.get(device.id)
+    this.syncMapDefaultCenter(added)
+    return added
   }
 
   /**
@@ -970,12 +992,29 @@ export class DeviceService extends EventEmitter {
     }
     const updated = this.devices.update(resolved)
     if (!updated) throw new AppError(ErrorCodes.VALIDATION_ERROR, `设备不存在: ${input.id}`)
+    this.syncMapDefaultCenter(updated)
     // A changed address invalidates the cached client.
     this.runtime.delete(input.id)
     this.emit('changed')
     // 协议可能这一次被改了（http → none），监听的开关跟着变。
     this.syncIngest()
     return updated
+  }
+
+  /**
+   * 设备行里有一条**完整 GIS 点位**时，把它交给接线层写成地图默认中心
+   * （业主 20260921 批）。判据刻意比 `isPointComplete()` 严：那个函数把
+   * 「两个都没给」也算成对（它服务的是表单校验），而这里缺一个坐标就必须不动。
+   */
+  private syncMapDefaultCenter(device: Device): void {
+    if (!this.onGisCenter) return
+    const installation = device.installation
+    if (!installation) return
+    const latitude = installation.gisLatitude
+    const longitude = installation.gisLongitude
+    if (typeof latitude !== 'number' || !Number.isFinite(latitude)) return
+    if (typeof longitude !== 'number' || !Number.isFinite(longitude)) return
+    this.onGisCenter({ latitude, longitude })
   }
 
   remove(id: string): void {

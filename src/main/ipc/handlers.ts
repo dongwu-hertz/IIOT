@@ -58,7 +58,10 @@ import type {
   SampleExportRequest,
   E2SyncRequest,
   /** IoT 接入的读数（业主 2026-09-19 第 1 条）：监听事实 + 收数统计。 */
-  IotIngestRuntimeStatus
+  IotIngestRuntimeStatus,
+  /** 瓦片缓存下载（业主 20260921 批）：入参收窄后的形状 + 返回类型。 */
+  MapTileCacheRequest,
+  MapTileCacheResult
 } from '@shared/ipc/contract'
 import { isAiServicePreset } from '@shared/domain/sample-ai'
 import { AppError, ErrorCodes, toResult, type DeviceResult } from '@shared/errors'
@@ -210,6 +213,41 @@ function pickModeNumbers(source: unknown, keys: readonly string[]): Record<strin
  * 同一个 `validatePtzPatch()`，放在服务层一处，免得出现"界面允许、主进程拒绝"这种只有某台
  * 设备上才暴露的不一致。
  */
+/**
+ * 瓦片缓存下载入参的收窄（渲染层送什么都不会把主控权拿走）。
+ *
+ * 与 `normalisePtzPatch()` 同一套纪律：**只认已知键、只认对应类型**，其余丢掉或给 NaN
+ * （服务层的 `validateRequest()` 会按共享层判据再拒绝一次）。范围校验不在这里 ——
+ * 缩放级别区间、区域「南 < 北」这些判据与界面共用一份，放在服务层一处。
+ */
+function sanitiseTileCacheRequest(input: unknown): MapTileCacheRequest {
+  if (input === null || typeof input !== 'object') {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, '缓存下载参数不合法')
+  }
+  const source = input as Record<string, unknown>
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+  const num = (value: unknown): number =>
+    typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN
+  const rawBounds =
+    source.bounds !== null && typeof source.bounds === 'object'
+      ? (source.bounds as Record<string, unknown>)
+      : {}
+  return {
+    service: text(source.service) as MapTileCacheRequest['service'],
+    urlTemplate: text(source.urlTemplate),
+    apiKey: text(source.apiKey),
+    attribution: text(source.attribution),
+    minZoom: num(source.minZoom),
+    maxZoom: num(source.maxZoom),
+    bounds: {
+      minLat: num(rawBounds.minLat),
+      minLon: num(rawBounds.minLon),
+      maxLat: num(rawBounds.maxLat),
+      maxLon: num(rawBounds.maxLon)
+    }
+  }
+}
+
 function normalisePtzPatch(input: unknown): E2PtzPatch {
   const out: E2PtzPatch = {}
   if (input === null || typeof input !== 'object') return out
@@ -681,6 +719,21 @@ export function registerIpcHandlers(): void {
           localAddresses: listLocalAddresses(),
           devicesWithSecret: services.devices.countIngestSecrets()
         }
+      })
+  )
+
+  /**
+   * 瓦片缓存下载（业主 20260921 批）。写存储根 + 主动出网下载，所以与
+   * `SETTINGS_UPDATE` 同档：管理员 + `manageSystemSettings`。进度经
+   * `PushChannels.MAP_CACHE_PROGRESS` 推送，结果在这里同步返回。
+   */
+  ipcMain.handle(
+    IpcChannels.MAP_CACHE_TILES,
+    (_event, rawInput: unknown): Promise<DeviceResult<MapTileCacheResult>> =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('manageSystemSettings')
+        return getServices().mapTiles.cacheTiles(sanitiseTileCacheRequest(rawInput))
       })
   )
 

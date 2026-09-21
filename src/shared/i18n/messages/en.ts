@@ -144,10 +144,35 @@ export const en: MessageSchema = {
 
     /** Tabs (owner 2026-09-17 ③: language / storage / video / alarm / email / account / about). */
     tabLanguage: 'Language',
+    tabGeneral: 'General',
+    tabIntegration: 'Integrations',
+    tabGisServices: 'GIS services',
+    cacheCardTitle: 'Cache',
+    mapSourceLabel: 'Map source',
+    mapSourceLocal: 'Local cached map',
+    mapSourceLocalHint: 'Uses tiles downloaded on this machine; download below first.',
+    mapDefaultBadge: 'Default',
+    mapKeyRequired: 'This service requires an API key',
+    mapCacheGroup: 'Tile cache download',
+    mapCacheZoomMin: 'Min zoom',
+    mapCacheZoomMax: 'Max zoom',
+    mapCacheSouth: 'South',
+    mapCacheWest: 'West',
+    mapCacheNorth: 'North',
+    mapCacheEast: 'East',
+    mapCacheUseCenter: 'Fill current center',
+    mapCacheStart: 'Start download',
+    mapCacheRunning: 'Downloading…',
+    mapCacheNeedTemplate: 'Pick a map service and fill the URL template first.',
+    mapCacheBadZoom: 'Zoom range must be {min}–{max}',
+    mapCacheBadBounds: 'The bounds are not valid',
+    mapCacheResult: 'Downloaded {downloaded} · skipped {skipped} · failed {failed} · {size}',
+    mapCacheProgressText: 'Processed {done}/{total} (failed {failed})',
+    linkageEnabledOn: 'Enabled',
+    linkageEnabledOff: 'Disabled',
     tabStorage: 'Storage',
     tabVideo: 'Video & buffering',
     tabAlarm: 'Alarms',
-    tabEmail: 'Email',
 
     /*
      * GIS / online basemap (owner 2026-09-19, extra item 1).
@@ -157,7 +182,6 @@ presets, the licence boundaries
      * presets, the licence boundaries, off-by-default, https-only, time-zone centre and zoom 2–18
      * are all this software own choices; the rules live in @shared/domain/map-tiles.
      */
-    tabMap: 'Map',
 
     mapGroupService: 'Basemap service (online tiles)',
     mapEnable: 'Enable online basemap',
@@ -188,9 +212,6 @@ presets, the licence boundaries
     mapKeyHint: 'Put the key for Tianditu and similar services here; it is stored in the local settings database and is not written to logs.',
     mapAttribution: 'Attribution text',
     mapAttributionHint: 'Shown at the bottom-right of the map; it cannot be empty while the layer is enabled.',
-    mapTimezone: 'Centre point (automatic by time zone)',
-    mapTimezoneValue: 'Computer time zone {zone} → {center}, initial zoom {zoom}',
-    mapTimezoneHint: 'Not specified by the manual: the centre table and initial zoom are the choice of this software; the zoom range is fixed at 2–18. An unknown time zone falls back to 0, 0 (zoom 2).',
     mapErrTemplateRequired: 'An XYZ template is required when the online basemap is enabled',
     mapErrTemplateProtocol: 'Only https:// addresses are allowed (no http, file or other schemes)',
     mapErrTemplateTokens: 'The XYZ template must contain the z, x and y placeholders',
@@ -203,7 +224,6 @@ presets, the licence boundaries
     tabAccount: 'Account',
     tabAbout: 'About & maintenance',
     /** AI services tab (owner request: support "different AI services" in settings). */
-    tabAi: 'AI services',
 
     /** GIS service library (inside the Map tab; owner request: "add GIS service"). */
     mapServiceGroup: 'GIS services',
@@ -2037,6 +2057,15 @@ presets, the licence boundaries
    */
   alarmSoundUi: {
     title: 'Alarm sound',
+    binding: {
+      popup: 'Alarm linkage popup sound',
+      push: 'Device push alarm sound'
+    },
+    soundOn: 'On',
+    soundOff: 'Off',
+    bindingNone: 'Not selected',
+    bindingHint: 'The selected sound plays for linkage popups and device-pushed alarms.',
+    libraryGroup: 'Sound library',
     addCustom: 'Add customized alarm sound',
     defaultColumn: 'Default',
     typeColumn: 'Type',

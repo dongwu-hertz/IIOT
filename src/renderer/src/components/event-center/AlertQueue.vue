@@ -1,56 +1,63 @@
 <script setup lang="ts">
 /**
- * 告警队列（规格 §10）。
+ * 告警队列（业主 20260921 批：表格行 + 行内展开详情）。
  *
- * 三种视图模式共用同一份数据，只改每行画多少东西：
- *   - **Compact**：一行看完 —— 时间 / 事件 / 设备（56px，规格没给数值的那一档）；
- *   - **Standard**：加等级、来源、状态与前三个指标（88px，规格的下限）；
- *   - **Evidence**：再加证据清单（录像 / 抓帧 / 结果文件数）与最多五个指标（104px）。
+ * 每行默认只显示四列：**时间 | 级别 | 事件名称 | 状态**；最左一列勾选（给筛选卡的
+ * 「确认所选」批量确认用），最右一个展开钮。点**时间**（或展开钮）在行内展开三列
+ * 小卡（事件名称 / 对应设备 / 设备状态），再点一下收起 —— 那块详情是「看一眼」
+ * 用的；完整处置（确认 / 指派 / 下载 / 关联 Incident）仍走详情抽屉：点行（勾选、
+ * 时间与展开钮除外）打开它。
  *
- * Evidence 模式**没有缩略图**：联动抓帧在我们这儿只有一条存储根相对路径
- * （`frameRelativePath`），把它变成图片需要一个新的回环图片接口，那是 Phase 4 证据页
- * 的事。这一版画的是"这条事件有哪些证据"，而不是"证据长什么样"。
+ * 「设备状态」那一格：设备状态事件（上线 / 离线）说**它自己那一次翻转**；设备告警
+ * 类说**这台设备此刻**的在线 / 离线态（行内 deviceId → 设备表，本机已有字段，
+ * 不问设备）。
  *
- * 键盘：整行是 `<button>`（可 Tab、Enter/空格打开），↑/↓ 在行间移动并同步焦点。
- * 这不是装饰 —— 一次告警风暴里操作员是连着按 ↓ 逐条看的。
+ * 键盘：↑/↓ 在行间接力选中并同步焦点 —— 一次告警风暴里操作员是连着按的。
  */
 import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import EmptyState from '@renderer/components/EmptyState.vue'
-import {
-  EVENT_ROW_HEIGHT,
-  alertSeverityLabelKey,
-  alertStatusLabelKey
-} from '@shared/domain/event-view'
-import type { AlertViewModel, EventViewMode } from '@shared/domain/event-view'
-import { eventKindLabel, eventSourceLabel } from '@renderer/lib/labels'
-import { formatDateTime, formatNumber } from '@renderer/lib/format'
+import StatusBadge from '@renderer/components/StatusBadge.vue'
+import { alertSeverityLabelKey, alertStatusLabelKey } from '@shared/domain/event-view'
+import type { AlertViewModel } from '@shared/domain/event-view'
+import type { DeviceStatus } from '@shared/domain/models'
+import { eventKindLabel } from '@renderer/lib/labels'
+import { formatDateTime } from '@renderer/lib/format'
 
 const props = defineProps<{
   alerts: readonly AlertViewModel[]
+  /** 详情抽屉当前那一条（队列里的选中高亮）。 */
   selectedId: string | null
-  viewMode: EventViewMode
+  /** 勾选中的行 id（筛选卡「确认所选」批量确认用）。 */
+  selectedIds: readonly string[]
+  /** 行内展开详情的行 id；`null` = 全部收起。 */
+  expandedId: string | null
   /** 空态文案由调用方决定：区分「设备什么都没报」与「筛选把数据排除了」。 */
   emptyTitle: string
+  /** 设备当前状态（展开详情的「设备状态」徽标按行内 deviceId 查；查不到 = 未知）。 */
+  deviceStatusOf: (deviceId: string) => DeviceStatus | undefined
 }>()
 
 const emit = defineEmits<{
   (event: 'select', alert: AlertViewModel): void
+  (event: 'toggle-selected', id: string, checked: boolean): void
+  (event: 'toggle-expand', alert: AlertViewModel): void
 }>()
 
 const { t } = useI18n()
 
 const listRef = ref<HTMLElement | null>(null)
 
-/** 每种模式显示几个指标（Compact 一个都不显示，只留一行正文）。 */
-const METRIC_LIMIT: Readonly<Record<EventViewMode, number>> = {
-  compact: 0,
-  standard: 3,
-  evidence: 5
-}
+const allSelected = computed(
+  () => props.alerts.length > 0 && props.selectedIds.length === props.alerts.length
+)
 
-const rowHeight = computed(() => EVENT_ROW_HEIGHT[props.viewMode])
-const metricLimit = computed(() => METRIC_LIMIT[props.viewMode])
+/** 全选 / 全不选：逐行发事件，状态本身由页面持有（一处事实）。 */
+function toggleAll(checked: boolean): void {
+  for (const alert of props.alerts) {
+    emit('toggle-selected', alert.id, checked)
+  }
+}
 
 /** 等级标签：「等级未知」是一个独立说法，不许印成「提示」。 */
 function severityLabel(alert: AlertViewModel): string {
@@ -64,20 +71,38 @@ function severityClass(alert: AlertViewModel): string {
   return alert.severityUnknown ? 'severity--unknown' : `severity--${alert.severity}`
 }
 
-function visibleMetrics(alert: AlertViewModel): AlertViewModel['metrics'] {
-  return alert.metrics.slice(0, metricLimit.value)
-}
-
-function hiddenMetricCount(alert: AlertViewModel): number {
-  return Math.max(0, alert.metrics.length - metricLimit.value)
-}
-
 /** 状态标签：没有确认能力的来源显示「—」，而不是一个谁也点不掉的"待处理"。 */
 function statusText(alert: AlertViewModel): string {
   if (alert.statusLocked) return '—'
   return t(alertStatusLabelKey(alert.status))
 }
 
+/** 状态徽标：等着人确认的是黄（要动作），已确认是绿，其余（调查中 / 已解决…）中性。 */
+function statusBadgeClass(alert: AlertViewModel): string {
+  if (alert.statusLocked) return 'badge'
+  if (alert.status === 'acknowledged') return 'badge badge--success'
+  if (alert.status === 'new') return 'badge badge--warning'
+  return 'badge'
+}
+
+/**
+ * 展开详情里「设备状态」那一格。
+ *
+ * 设备状态事件（上线 / 离线）取**事件自己**的翻转方向（`kind` 就在行内）；其余事件
+ * 取这台设备**此刻**的状态（设备表快照）。查不到就是「未知」，不猜。
+ */
+function deviceState(alert: AlertViewModel): DeviceStatus {
+  if (alert.kind === 'deviceOnline') return 'ONLINE'
+  if (alert.kind === 'deviceOffline') return 'OFFLINE'
+  return props.deviceStatusOf(alert.deviceId) ?? 'UNKNOWN'
+}
+
+/**
+ * ↑/↓ 换条（详情抽屉跟着开）。
+ *
+ * 顺序取**队列当前显示的**那批；换到边界就停在原地（不做环形，环形的"跳回第一条"
+ * 会让人以为自己看漏了）。焦点跟着选中行走，否则视觉选中动了、键盘焦点还在原处。
+ */
 function move(delta: number): void {
   const list = props.alerts
   if (list.length === 0) return
@@ -91,9 +116,8 @@ function move(delta: number): void {
   const alert = list[next]
   if (!alert) return
   emit('select', alert)
-  // 焦点跟着选中行走：否则视觉选中动了、键盘焦点还在原处，下一条 Enter 会打开错的那条。
   void nextTick(() => {
-    const buttons = listRef.value?.querySelectorAll<HTMLButtonElement>('.alert-row')
+    const buttons = listRef.value?.querySelectorAll<HTMLButtonElement>('.alert-table__time')
     buttons?.[next]?.focus()
   })
 }
@@ -109,64 +133,145 @@ function move(delta: number): void {
   >
     <EmptyState v-if="alerts.length === 0" :title="emptyTitle" />
 
-    <button
-      v-for="alert in alerts"
-      :key="alert.id"
-      type="button"
-      class="alert-row"
-      :class="[severityClass(alert), { 'alert-row--active': alert.id === selectedId }]"
-      :style="{ '--event-row-mode-height': `${rowHeight}px` }"
-      :aria-current="alert.id === selectedId ? 'true' : undefined"
-      @click="emit('select', alert)"
-    >
-      <span class="alert-row__head">
-        <!--
-          等级文字**每一档都印**（含紧凑模式）：左侧色条是颜色，而颜色不能是唯一的信息
-          —— 规格 §15.3 明确要求"不靠颜色单独表意"。所以紧凑模式下这一行也带着「严重 / 高 /
-          提示 / 等级未知」四个字里最合适的那个。
-        -->
-        <span class="alert-row__severity">{{ severityLabel(alert) }}</span>
-        <span class="alert-row__time">
-          {{ formatDateTime(alert.at) }}
-          <span v-if="alert.atApproximate" class="chip chip--tiny">
-            {{ t('eventsUi.approximateBadge') }}
-          </span>
-        </span>
-        <span class="alert-row__title">{{ eventKindLabel(alert.kind) }}</span>
-        <!-- 聚合（规格 §14.1）：同一组触发的次数。等于 1 时**不画** —— "×1" 是噪声。 -->
-        <span v-if="alert.occurrenceCount > 1" class="chip chip--tiny alert-row__count">
-          {{ t('eventsUi.occurrenceCount', { count: alert.occurrenceCount }) }}
-        </span>
-        <span class="alert-row__device">{{ alert.deviceName }}</span>
-      </span>
+    <table v-else class="table alert-table">
+      <thead>
+        <tr>
+          <th class="alert-table__check">
+            <input
+              type="checkbox"
+              :checked="allSelected"
+              :aria-label="t('alarmsUi.selectAll')"
+              @change="toggleAll(($event.target as HTMLInputElement).checked)"
+            />
+          </th>
+          <th>{{ t('alarmsUi.columnTime') }}</th>
+          <th>{{ t('eventsUi.filterSeverity') }}</th>
+          <th>{{ t('eventsUi.detailKind') }}</th>
+          <th>{{ t('eventsUi.overviewStatus') }}</th>
+          <th class="alert-table__expand-head" aria-hidden="true"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-for="alert in alerts" :key="alert.id">
+          <tr
+            class="alert-table__row is-clickable"
+            :class="{ 'alert-table__row--active': alert.id === selectedId }"
+            :aria-current="alert.id === selectedId ? 'true' : undefined"
+            @click="emit('select', alert)"
+          >
+            <td class="alert-table__check" @click.stop>
+              <input
+                type="checkbox"
+                :checked="selectedIds.includes(alert.id)"
+                :aria-label="t('alarmsUi.selectRow', { id: alert.id })"
+                @change="
+                  emit('toggle-selected', alert.id, ($event.target as HTMLInputElement).checked)
+                "
+              />
+            </td>
+            <td class="nowrap">
+              <!--
+                时间是展开钮：点一下展开 / 收起行内详情（再点画行 = 打开详情抽屉）。
+                caret 转 180° 表示展开态，`:aria-expanded` 把状态交给读屏。
+              -->
+              <button
+                type="button"
+                class="alert-table__time"
+                :aria-expanded="expandedId === alert.id"
+                data-action="row-expand"
+                @click.stop="emit('toggle-expand', alert)"
+              >
+                <svg
+                  class="alert-table__caret"
+                  :class="{ 'alert-table__caret--open': expandedId === alert.id }"
+                  width="10"
+                  height="10"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                {{ formatDateTime(alert.at) }}
+                <span v-if="alert.atApproximate" class="chip chip--tiny">
+                  {{ t('eventsUi.approximateBadge') }}
+                </span>
+              </button>
+            </td>
+            <td>
+              <!--
+                等级文字**每一档都印**：徽标里的颜色不能是唯一的信息（规格 §15.3：
+                不靠颜色单独表意），所以「严重 / 高 / 提示 / 等级未知」都在。
+              -->
+              <span class="alert-table__severity" :class="severityClass(alert)">
+                {{ severityLabel(alert) }}
+              </span>
+            </td>
+            <td>
+              <span class="alert-table__title">{{ eventKindLabel(alert.kind) }}</span>
+              <!-- 聚合（规格 §14.1）：同一组触发的次数。等于 1 时**不画** —— "×1" 是噪声。 -->
+              <span v-if="alert.occurrenceCount > 1" class="chip chip--tiny">
+                {{ t('eventsUi.occurrenceCount', { count: alert.occurrenceCount }) }}
+              </span>
+            </td>
+            <td>
+              <span :class="statusBadgeClass(alert)">{{ statusText(alert) }}</span>
+            </td>
+            <td class="alert-table__expand">
+              <button
+                type="button"
+                class="btn btn--ghost btn--icon alert-table__expand-btn"
+                :aria-expanded="expandedId === alert.id"
+                :aria-label="t('eventsUi.detailTitle')"
+                data-action="row-expand"
+                @click.stop="emit('toggle-expand', alert)"
+              >
+                <svg
+                  class="alert-table__caret"
+                  :class="{ 'alert-table__caret--open': expandedId === alert.id }"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </td>
+          </tr>
 
-      <span v-if="viewMode !== 'compact'" class="alert-row__meta">
-        <span class="muted">{{ eventSourceLabel(alert.source) }}</span>
-        <span class="muted">{{ statusText(alert) }}</span>
-        <span
-          v-for="metric in visibleMetrics(alert)"
-          :key="metric.field"
-          class="chip chip--tiny"
-        >
-          {{ t(metric.labelKey) }}
-          {{ formatNumber(metric.value, metric.digits) }}{{ metric.unit }}
-        </span>
-        <span v-if="hiddenMetricCount(alert) > 0" class="chip chip--tiny">
-          {{ t('eventsUi.metricMore', { count: hiddenMetricCount(alert) }) }}
-        </span>
-        <template v-if="viewMode === 'evidence'">
-          <span v-if="alert.hasRecording" class="chip chip--tiny">
-            {{ t('eventsUi.evidenceRecording') }}
-          </span>
-          <span v-if="alert.hasFrame" class="chip chip--tiny">
-            {{ t('eventsUi.evidenceFrame') }}
-          </span>
-          <span v-if="alert.evidenceFileCount > 0" class="chip chip--tiny">
-            {{ t('eventsUi.evidenceFiles', { count: alert.evidenceFileCount }) }}
-          </span>
+          <!--
+            行内详情（业主 20260921 批）：三列小卡 —— 事件名称 / 对应设备 / 设备状态。
+            简单 v-if：这块内容一屏只展开一行，不需要过渡动画的重量。
+          -->
+          <tr v-if="expandedId === alert.id" class="alert-table__detail">
+            <td colspan="6">
+              <div class="alert-detail">
+                <div class="alert-detail__card">
+                  <div class="alert-detail__label">{{ t('eventsUi.detailKind') }}</div>
+                  <div class="alert-detail__value">{{ eventKindLabel(alert.kind) }}</div>
+                </div>
+                <div class="alert-detail__card">
+                  <div class="alert-detail__label">{{ t('eventsUi.detailDevice') }}</div>
+                  <div class="alert-detail__value">{{ alert.deviceName }}</div>
+                </div>
+                <div class="alert-detail__card">
+                  <div class="alert-detail__label">{{ t('domain.eventSource.deviceStatus') }}</div>
+                  <div class="alert-detail__value">
+                    <StatusBadge :status="deviceState(alert)" />
+                  </div>
+                </div>
+              </div>
+            </td>
+          </tr>
         </template>
-      </span>
-    </button>
+      </tbody>
+    </table>
   </div>
 </template>
 
@@ -178,48 +283,108 @@ function move(delta: number): void {
   overflow: hidden;
 }
 
-.alert-row__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
+.alert-table {
+  width: 100%;
 }
 
-.alert-row__time {
-  flex: 0 0 auto;
+.alert-table__check {
+  width: 34px;
+  text-align: center;
+}
+
+.alert-table__expand-head {
+  width: 36px;
+}
+
+.alert-table__expand {
+  text-align: center;
+}
+
+/* 时间是展开钮：去掉按钮外观，只留 caret + 文本；hover 变深表示可点。 */
+.alert-table__time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--color-text-tertiary);
+  font: inherit;
   font-size: var(--font-size-meta);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
 
-.alert-row__title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: var(--font-size-card);
+.alert-table__time:hover {
+  color: var(--color-text);
+}
+
+.alert-table__caret {
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.alert-table__caret--open {
+  transform: rotate(180deg);
+}
+
+/* 级别徽标：颜色与软底都来自 `.severity--*` 那对变量（main.css token），未知是中性的。 */
+.alert-table__severity {
+  display: inline-flex;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--severity-soft, var(--color-neutral-soft));
+  color: var(--severity-accent, var(--color-text-secondary));
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.alert-table__title {
   font-weight: 600;
   color: var(--color-text);
+}
+
+.alert-table__row--active {
+  background: var(--color-accent-soft);
+}
+
+/* 展开详情行：浅底把它与正文行分开，三列小卡键值对齐。 */
+.alert-table__detail > td {
+  background: var(--color-bg-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.alert-detail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.alert-detail__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.alert-detail__label {
+  font-size: var(--font-size-meta);
+  color: var(--color-text-secondary);
+}
+
+.alert-detail__value {
+  font-size: var(--font-size-small);
   overflow-wrap: anywhere;
 }
 
-.alert-row__device {
-  flex: 0 1 auto;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-small);
-}
-
-.alert-row__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-1);
-  font-size: var(--font-size-meta);
-}
-
-.alert-row__severity {
-  font-size: var(--font-size-meta);
-  font-weight: 600;
-  color: var(--severity-accent, var(--color-text-secondary));
+@media (max-width: 900px) {
+  .alert-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

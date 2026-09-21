@@ -66,6 +66,7 @@ import { TrendStorageService } from './trend/trend-storage-service'
 import { TrendQueryService } from './trend/trend-query-service'
 import { AudioRecordingService } from './audio/recording-service'
 import { IotIngestService } from './ingest/iot-ingest-service'
+import { TileCacheService } from './map/tile-cache-service'
 import { TelemetryIntake } from './ingest/telemetry-intake'
 import { listLocalAddresses } from './ingest/local-addresses'
 import { appLog, initLogging, storageLog } from './logging/logger'
@@ -243,6 +244,12 @@ export interface AppServices {
    * 持有，这里只做装配与合并，不复制任何一份数据。
    */
   eventCenter: EventCenterService
+  /**
+   * 瓦片缓存下载（业主 20260921 批）：设置「集成 → 地图」卡发起的在线瓦片下载，
+   * 落到存储根 `map-cache/`。独立服务而不是塞进 SettingsService：它会出网下载、
+   * 写大量小文件、按块推进度 —— 失败模式与「设置表里写一格 JSON」完全不同。
+   */
+  mapTiles: TileCacheService
   alarms: AlarmService
   recordings: RecordingService
   overview: OverviewService
@@ -424,6 +431,32 @@ export async function initServices(): Promise<AppServices> {
       record: (input) => {
         deviceStatusEventRepo.record(input)
       }
+    },
+
+    /**
+     * 保存 GIS 坐标 → 写成地图默认中心（业主 20260921 批）。
+     *
+     * 每次加/改设备落到一条**完整点位**都写（取「简单可靠」的那一种：不需要判断是不是
+     * 第一台，后保存的覆盖先保存的，与操作员最近一次录入的现场一致）。只发 `mapTiles`
+     * 这一个键，模板/署名/缓存来源原样保留；缩放级别沿用已有的（第一次落 12 —— 城市级，
+     * 操作员在地图页自己再缩放）。
+     *
+     * 用 settings.update 而不是直写：同一份校验（`normaliseMapTilesConfig`）与
+     * `changed` 广播（渲染层的设置 store 跟着刷新）都白拿。
+     */
+    onGisCenter: ({ latitude, longitude }) => {
+      const current = settings.get().mapTiles
+      settings.update({
+        mapTiles: {
+          ...current,
+          defaultCenter: {
+            lat: latitude,
+            lon: longitude,
+            zoom: current.defaultCenter?.zoom ?? 12
+          }
+        }
+      })
+      appLog().info('地图默认中心已随设备 GIS 坐标更新', { latitude, longitude })
     },
 
     /**
@@ -916,6 +949,10 @@ export async function initServices(): Promise<AppServices> {
     }
   })
 
+  const mapTiles = new TileCacheService({
+    getStorageRoot: () => settings.get().storageRoot
+  })
+
   services = {
     db,
     settings,
@@ -933,6 +970,7 @@ export async function initServices(): Promise<AppServices> {
     linkage,
     detectLibrary,
     eventCenter,
+    mapTiles,
     videoFiles,
     recordingRepo,
     /**

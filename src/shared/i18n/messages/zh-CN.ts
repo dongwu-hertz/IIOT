@@ -200,10 +200,35 @@ export const zhCN = {
      * 所以它的名字带上"维护"两个字（业主 ⑯ 的措辞是「关于 / 维护」）。
      */
     tabLanguage: '语言',
+    tabGeneral: '常规',
+    tabIntegration: '集成',
+    tabGisServices: 'GIS 服务',
+    cacheCardTitle: '缓存',
+    mapSourceLabel: '地图来源',
+    mapSourceLocal: '本地缓存地图',
+    mapSourceLocalHint: '使用本机已下载的瓦片缓存；需先在下方下载缓存。',
+    mapDefaultBadge: '默认',
+    mapKeyRequired: '此服务需要 API Key',
+    mapCacheGroup: '瓦片缓存下载',
+    mapCacheZoomMin: '最小级别',
+    mapCacheZoomMax: '最大级别',
+    mapCacheSouth: '南纬',
+    mapCacheWest: '西经',
+    mapCacheNorth: '北纬',
+    mapCacheEast: '东经',
+    mapCacheUseCenter: '填入当前中心',
+    mapCacheStart: '开始下载',
+    mapCacheRunning: '正在下载…',
+    mapCacheNeedTemplate: '请先选择地图服务并填写 URL 模板。',
+    mapCacheBadZoom: '级别范围需为 {min}–{max}',
+    mapCacheBadBounds: '经纬度范围不合法',
+    mapCacheResult: '下载 {downloaded} · 跳过 {skipped} · 失败 {failed} · 共 {size}',
+    mapCacheProgressText: '已处理 {done}/{total}（失败 {failed}）',
+    linkageEnabledOn: '已启用',
+    linkageEnabledOff: '已关闭',
     tabStorage: '存储',
     tabVideo: '视频与缓冲',
     tabAlarm: '告警',
-    tabEmail: '邮箱',
 
     /*
      * GIS / 在线底图（业主 2026-09-19 追加第 1 条）。
@@ -211,7 +236,6 @@ export const zhCN = {
      * 手册未说明：手册没有地图与瓦片服务这一章。页面名、全球供应商预置、授权边界、默认关闭、
      * 只允许 https、时区推中心与缩放 2–18 都是本软件自己定的，规则见 @shared/domain/map-tiles。
      */
-    tabMap: '地图',
 
     mapGroupService: '底图服务（在线瓦片）',
     mapEnable: '启用在线底图',
@@ -242,9 +266,6 @@ export const zhCN = {
     mapKeyHint: '天地图等需要 key 的服务把 key 放在这里；密钥保存在本机设置库中，不写进日志。',
     mapAttribution: '署名文本',
     mapAttributionHint: '会显示在地图右下角；启用时不能留空。',
-    mapTimezone: '中心点（按时区自动）',
-    mapTimezoneValue: '电脑时区 {zone} → {center}，初始缩放 {zoom}',
-    mapTimezoneHint: '手册未说明：中心点表与初始缩放是本软件自己的取值，缩放范围固定 2–18；时区无法识别时落到 0, 0（缩放 2）。',
     mapErrTemplateRequired: '启用在线底图时必须填写 XYZ 模板',
     mapErrTemplateProtocol: '只允许 https:// 地址（不允许 http、file 或其它协议）',
     mapErrTemplateTokens: 'XYZ 模板必须包含 z、x、y 三个占位符',
@@ -257,7 +278,6 @@ export const zhCN = {
     tabAccount: '账号',
     tabAbout: '关于与维护',
     /** AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。 */
-    tabAi: 'AI 服务',
 
     /** GIS 服务库（地图页签内，业主追加：「添加 GIS 服务」）。 */
     mapServiceGroup: 'GIS 服务',
@@ -2260,6 +2280,15 @@ export const zhCN = {
    */
   alarmSoundUi: {
     title: '告警声音',
+    binding: {
+      popup: '告警联动弹窗提示音',
+      push: '设备推送告警提示音'
+    },
+    soundOn: '开',
+    soundOff: '关',
+    bindingNone: '未选择',
+    bindingHint: '弹窗与设备推送告警响起时使用所选声音。',
+    libraryGroup: '声音库',
     addCustom: '添加自定义声音',
     defaultColumn: '默认',
     typeColumn: '类型',

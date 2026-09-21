@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * System settings (spec section 14.4).
+ * System settings (spec section 14.4)。
  *
  * The view edits a local DRAFT and only writes it through
  * `settings.update(patch)` when the user saves. That keeps the store honest
@@ -9,13 +9,24 @@
  *
  * "最小剩余空间" is edited in GB but stored in bytes; 1 GB = 1073741824 bytes.
  * The conversion lives in `lib/format.ts` so no component does the arithmetic.
+ *
+ * ---------------------------------------------------------------------------
+ * 页签（业主 20260921 批大改）
+ * ---------------------------------------------------------------------------
+ *   常规   = 语言 / 存储 / 视频 / 缓存 四块合并的一页（紧凑双列小卡）
+ *   集成   = 邮箱(SMTP) / 地图 / AI 三张卡（地图卡含瓦片服务选择与缓存下载）
+ *   GIS 服务 = 命名 GIS 服务库（从地图卡里拆出来的自己的页签）
+ *   告警联动 / 账户 / 关于 暂留原位。
+ * 合并前 9 页 → 合并后 6 页（tests/settings-tabs.test.ts 的守卫在统一测试轮改）。
  */
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { AppSettingsPatch } from '@shared/ipc/contract'
+import type { AppSettingsPatch, MapTileCacheProgress } from '@shared/ipc/contract'
 import {
   MAP_TILE_PRESETS,
   MAX_MAP_SERVICES,
+  MAX_TILE_ZOOM,
+  MIN_TILE_ZOOM,
   defaultMapTilesConfig,
   mapServiceProblem,
   mapTilesProblem,
@@ -54,12 +65,12 @@ import {
   formatGb,
   gbToBytes
 } from '@renderer/lib/format'
-import { resultMessage } from '@renderer/lib/result'
+import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import LanguageSelect from '@renderer/components/LanguageSelect.vue'
 import LinkageSettingsSection from '@renderer/components/LinkageSettingsSection.vue'
 import AccountManagementSection from '@renderer/components/AccountManagementSection.vue'
-import AlarmSoundLibrarySection from '@renderer/components/AlarmSoundLibrarySection.vue'
+import AlarmSoundBindingSection from '@renderer/components/AlarmSoundBindingSection.vue'
 import EmailSettingsSection from '@renderer/components/EmailSettingsSection.vue'
 import AppModal from '@renderer/components/AppModal.vue'
 import ChangePasswordDialog from '@renderer/components/ChangePasswordDialog.vue'
@@ -76,44 +87,30 @@ const trends = useTrendsStore()
 const session = useSessionStore()
 
 /**
- * 页签（业主 2026-09-17 的 ③：把 语言 / 存储 / 视频 / 告警 / 邮箱 / 账号 / 关于
- * 做成**切换卡片页**）。
+ * 页签（业主 20260921 批：合并紧凑化）。
  *
  * 三个决定，都写在代码旁边免得下次被"优化"回去：
- *   1. 页签顺序按业主给的那一串（语言在最前：它是唯一一条改了立刻生效的设置）；
- *   2. 页签**不持久化**：设置页是一个"进来改一项就走"的地方，记住上次停在哪一页
- *      反而会让下次进来看到一页与预期无关的内容（默认永远落在「语言」）；
- *   3. 「设备探测」并进「视频与缓冲」这一页（业主 ④：探测与缓冲合成一组）——
- *      它们都是"这一路实时链路怎么工作"的参数，合成一页之后不必在多个页签之间来回跳。
+ *   1. 「常规」把原 语言 / 存储 / 视频 / 缓存 四页合成一页 —— 它们都是"装完调一次"
+ *      的系统项，各占一页时每一页都大半空白；
+ *   2. 「集成」收 邮箱(SMTP) / 地图 / AI —— 三块都是"本机对外接什么服务"；
+ *   3. 页签**不持久化**：设置页是一个"进来改一项就走"的地方，记住上次停在哪一页
+ *      反而会让下次进来看到一页与预期无关的内容（默认永远落在「常规」）。
+ * `tests/settings-tabs.test.ts` 钉着这张表：改页签同样要改那条守卫。
  */
 const TABS = [
-  { id: 'language', labelKey: 'settingsUi.tabLanguage' },
-  { id: 'storage', labelKey: 'settingsUi.tabStorage' },
-  { id: 'video', labelKey: 'settingsUi.tabVideo' },
+  { id: 'general', labelKey: 'settingsUi.tabGeneral' },
+  { id: 'integration', labelKey: 'settingsUi.tabIntegration' },
+  /*
+   * GIS 服务库自己的页签（业主 20260921 批：地图卡里不再展示服务库细节，
+   * 库挪到这一页；「应用」仍 = 抄进 mapTiles 并打开开关）。
+   */
+  { id: 'gis', labelKey: 'settingsUi.tabGisServices' },
   { id: 'alarm', labelKey: 'settingsUi.tabAlarm' },
-  { id: 'email', labelKey: 'settingsUi.tabEmail' },
-  /*
-   * 地图页签（业主 2026-09-19 追加第 1 条：GIS 应该支持在设置里面配置）。
-   * 默认关闭、只允许 https、XYZ 模板 + 可选 key + 署名都在这一页里。
-   */
-  { id: 'map', labelKey: 'settingsUi.tabMap' },
-  /*
-   * AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。多命名服务 + 单选启用；
-   * 数据走样本 store 的四条新通道（配置本体在 app_meta，不经设置表的草稿/自动保存）。
-   */
-  { id: 'ai', labelKey: 'settingsUi.tabAi' },
-  /*
-   * 「数据接入」页签**删掉了**（业主 2026-09-19 第 13 批第 1 条：
-   * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）。
-   * 监听设置（绑定地址 / 端口）与收数统计都搬进「添加设备 → 协议接入方式」下面那一块
-   * 「本机接入」；秘钥与逐设备的推流地址本来就在那个对话框的成功那一屏。
-   * `tests/settings-tabs.test.ts` 钉着这张表：删一个页签同样要改那条守卫。
-   */
   { id: 'account', labelKey: 'settingsUi.tabAccount' },
   { id: 'about', labelKey: 'settingsUi.tabAbout' }
 ] as const
 type SettingsTab = (typeof TABS)[number]['id']
-const activeTab = ref<SettingsTab>('language')
+const activeTab = ref<SettingsTab>('general')
 
 /** 账号页签里的改密对话框（与侧栏账户菜单是同一个组件）。 */
 const changePasswordOpen = ref(false)
@@ -191,6 +188,9 @@ function seedFromStore(): void {
   draft.mapServices = current.mapServices.map((service) => ({ ...service }))
 }
 
+/** 瓦片缓存下载进度推送的退订函数（卸载时必须释放）。 */
+let cacheProgressUnsubscribe: (() => void) | null = null
+
 onMounted(async () => {
   await settings.load()
   seedFromStore()
@@ -198,6 +198,17 @@ onMounted(async () => {
   // Read-only diagnostics; the trend writer lives in the main process and this
   // panel never configures it, it only reports what it is doing.
   void trends.loadStats()
+  // 缓存下载进度由主进程推送（业主 20260921 批）：这里订阅一次，卸载时退订。
+  cacheProgressUnsubscribe = window.events.onMapTileCacheProgress((progress) => {
+    cacheProgress.value = progress
+  })
+})
+
+onUnmounted(() => {
+  if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  autosaveTimer = 0
+  cacheProgressUnsubscribe?.()
+  cacheProgressUnsubscribe = null
 })
 
 watch(() => settings.settings, seedFromStore)
@@ -215,23 +226,24 @@ watch(
 )
 
 /**
- * 切到「存储」页签时**重读一次**两个诊断读数。
+ * 切到「常规」页签时**重读一次**两个诊断读数。
  *
  * 为什么需要它：那两个数（磁盘占用、趋势落盘计数）会随时间变，而它们原来各有一颗
  * 「刷新」按钮。按钮删掉之后，如果只在挂载时读一次，操作员在这一页上切换页签再回来
  * 会看到一个永远不会变的数字 —— 那比没有这个数更糟。
  */
 watch(activeTab, (tab) => {
-  if (tab !== 'storage') return
+  if (tab !== 'general') return
   void settings.loadDiskUsage()
   void trends.loadStats()
 })
 
 /**
- * 地图页签的全球供应商预置（顺序就是界面上按钮的顺序）。
+ * 地图页签的全球供应商预置（顺序就是界面上单选的顺序）。
  *
  * 模板与署名来自共享层（`MAP_TILE_PRESETS`）；授权边界正文来自四语言目录 ——
- * 它是给人读的，不能写死在组件里。默认档位仍是 `custom` 且总开关关闭。
+ * 它是给人读的，不能写死在组件里。OSM 排第一且是默认项（业主 20260921 批），
+ * 需要自带 key 的预置在单选旁标「需 key」。
  */
 const MAP_PRESET_UI = [
   { id: 'osm', labelKey: 'settingsUi.mapPresetOsm', boundaryKey: 'settingsUi.mapBoundaryOsm' },
@@ -245,6 +257,27 @@ const MAP_PRESET_UI = [
   { id: 'tianditu', labelKey: 'settingsUi.mapPresetTianditu', boundaryKey: 'settingsUi.mapBoundaryTianditu' },
   { id: 'custom', labelKey: 'settingsUi.mapPresetCustom', boundaryKey: 'settingsUi.mapBoundaryCustom' }
 ] as const
+
+/** 「本地缓存地图」单选（业主 20260921 批）：用已下载到存储根的瓦片，离线复用。 */
+const MAP_SOURCE_LOCAL = 'local' as const
+type MapSourceId = MapTilesConfig['service'] | typeof MAP_SOURCE_LOCAL
+
+/**
+ * 瓦片服务单选的当前值：预置/自定义读 `service`，「本地缓存地图」读 `cachePath`。
+ * 选预置/自定义会清掉 `cachePath`（来源切回在线）；选本地只翻 `cachePath`，
+ * 模板与服务保持当前值 —— 缓存是按服务下载的，也是本地未命中时的在线兜底。
+ */
+const mapSource = computed<MapSourceId>({
+  get: () => (draft.mapTiles.cachePath === 'map-cache' ? 'local' : draft.mapTiles.service),
+  set: (id: MapSourceId) => {
+    if (id === 'local') {
+      draft.mapTiles.cachePath = 'map-cache'
+      return
+    }
+    draft.mapTiles.cachePath = undefined
+    applyMapPreset(id)
+  }
+})
 
 /**
  * 模板输入框的占位例子。**故意不做成消息**：{z} 这类花括号会被 vue-i18n 当成
@@ -286,7 +319,102 @@ function applyMapPreset(id: MapTilesConfig['service']): void {
 }
 
 // ---------------------------------------------------------------------------
-// GIS 服务库（业主追加：设置里「添加 GIS 服务」）
+// 瓦片缓存下载（业主 20260921 批：选服务 + 缩放级别范围 + 区域 → 下载到存储根）
+// ---------------------------------------------------------------------------
+//
+// 设置页自己没有地图视野，所以区域是手输经纬度框 + 一颗「填入当前中心」
+// （中心 = defaultCenter，没有则时区中心，±0.025° ≈ 2.8km 见方）。
+// 进度靠 `onMapTileCacheProgress` 推送（订阅在 onMounted），结果经 IPC 返回。
+const cacheMinZoom = ref(3)
+const cacheMaxZoom = ref(16)
+const cacheBounds = reactive({ minLat: '', minLon: '', maxLat: '', maxLon: '' })
+const cacheRunning = ref(false)
+const cacheProgress = ref<MapTileCacheProgress | null>(null)
+const cacheError = ref('')
+const cacheNotice = ref('')
+
+const cacheProcessed = computed(() => {
+  const progress = cacheProgress.value
+  return progress ? progress.downloaded + progress.skipped + progress.failed : 0
+})
+
+/** 「填入当前中心」：优先设置里的 defaultCenter（设备 GIS 坐标自动写入的），其次时区中心。 */
+function fillCacheBoundsFromCenter(): void {
+  const center = draft.mapTiles.defaultCenter
+  const lat = center?.lat ?? detectedMapCenter.value.latitude
+  const lon = center?.lon ?? detectedMapCenter.value.longitude
+  cacheBounds.minLat = (lat - 0.025).toFixed(4)
+  cacheBounds.maxLat = (lat + 0.025).toFixed(4)
+  cacheBounds.minLon = (lon - 0.025).toFixed(4)
+  cacheBounds.maxLon = (lon + 0.025).toFixed(4)
+}
+
+async function startCacheDownload(): Promise<void> {
+  if (cacheRunning.value) return
+  cacheError.value = ''
+  cacheNotice.value = ''
+  cacheProgress.value = null
+
+  const template = draft.mapTiles.urlTemplate.trim()
+  if (template === '' || !/^https:\/\//i.test(template)) {
+    cacheError.value = t('settingsUi.mapCacheNeedTemplate')
+    return
+  }
+  const minZoom = Math.round(cacheMinZoom.value)
+  const maxZoom = Math.round(cacheMaxZoom.value)
+  if (
+    !Number.isInteger(minZoom) || !Number.isInteger(maxZoom) ||
+    minZoom < MIN_TILE_ZOOM || maxZoom > MAX_TILE_ZOOM || minZoom > maxZoom
+  ) {
+    cacheError.value = t('settingsUi.mapCacheBadZoom', { min: MIN_TILE_ZOOM, max: MAX_TILE_ZOOM })
+    return
+  }
+  const bounds = {
+    minLat: Number(cacheBounds.minLat),
+    minLon: Number(cacheBounds.minLon),
+    maxLat: Number(cacheBounds.maxLat),
+    maxLon: Number(cacheBounds.maxLon)
+  }
+  if (
+    !Number.isFinite(bounds.minLat) || !Number.isFinite(bounds.minLon) ||
+    !Number.isFinite(bounds.maxLat) || !Number.isFinite(bounds.maxLon) ||
+    bounds.minLat >= bounds.maxLat || bounds.minLon >= bounds.maxLon ||
+    Math.abs(bounds.minLat) > 90 || Math.abs(bounds.maxLat) > 90 ||
+    Math.abs(bounds.minLon) > 180 || Math.abs(bounds.maxLon) > 180
+  ) {
+    cacheError.value = t('settingsUi.mapCacheBadBounds')
+    return
+  }
+
+  cacheRunning.value = true
+  const result = await callApi(() =>
+    window.api.mapTiles.cacheTiles({
+      service: draft.mapTiles.service,
+      urlTemplate: template,
+      apiKey: draft.mapTiles.apiKey.trim(),
+      attribution: draft.mapTiles.attribution.trim(),
+      minZoom,
+      maxZoom,
+      bounds
+    })
+  )
+  cacheRunning.value = false
+  if (!result.success) {
+    cacheError.value = resultMessage(result)
+    return
+  }
+  const value = unwrap(result)
+  if (!value) return
+  cacheNotice.value = t('settingsUi.mapCacheResult', {
+    downloaded: value.downloaded,
+    skipped: value.skipped,
+    failed: value.failed,
+    size: formatBytes(value.bytes)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// GIS 服务库（业主追加：设置里「添加 GIS 服务」；20260921 批起在自己的页签）
 // ---------------------------------------------------------------------------
 //
 // 库本身在草稿里（`draft.mapServices`）——添加/编辑/删除都改草稿，走同一条自动保存。
@@ -460,9 +588,9 @@ function testMapServiceTile(): void {
 // （没有"草稿/自动保存"这一层——服务库的写操作本身就是一次落库）。
 const samples = useSamplesStore()
 
-/** 切到 AI 页签时才读服务库（这一页不是人人都进，别让每次进设置都多一次 IPC）。 */
+/** 切到「集成」页签时才读服务库（这一页不是人人都进，别让每次进设置都多一次 IPC）。 */
 watch(activeTab, (tab) => {
-  if (tab === 'ai') void samples.loadAiServices()
+  if (tab === 'integration') void samples.loadAiServices()
 })
 
 const aiServiceEditing = ref(false)
@@ -577,12 +705,9 @@ const detectedTimeZone = computed(() => {
   }
 })
 
-/** 时区→中心（**手册未说明**，取值在 @shared/domain/map-tiles）。 */
+/** 时区→中心（**手册未说明**，取值在 @shared/domain/map-tiles）。缓存下载的
+ * 「填入当前中心」没有 defaultCenter 时用它兜底。 */
 const detectedMapCenter = computed(() => timeZoneCenter(detectedTimeZone.value))
-const detectedMapCenterText = computed(() => {
-  const center = detectedMapCenter.value
-  return `${center.latitude.toFixed(4)}, ${center.longitude.toFixed(4)}`
-})
 
 function validate(): string {
   if (!draft.storageRoot.trim()) return t('settingsUi.errStorageRoot')
@@ -636,7 +761,12 @@ function patchFromDraft(): AppSettingsPatch {
       service: draft.mapTiles.service,
       urlTemplate: draft.mapTiles.urlTemplate.trim(),
       apiKey: draft.mapTiles.apiKey.trim(),
-      attribution: draft.mapTiles.attribution.trim()
+      attribution: draft.mapTiles.attribution.trim(),
+      // 两个新可选字段原样带上（归一化器只认合法值，坏值丢字段不炸整键）。
+      ...(draft.mapTiles.cachePath === 'map-cache' ? { cachePath: 'map-cache' as const } : {}),
+      ...(draft.mapTiles.defaultCenter
+        ? { defaultCenter: { ...draft.mapTiles.defaultCenter } }
+        : {})
     },
     mapServices: draft.mapServices.map((service) => ({ ...service }))
   }
@@ -692,11 +822,6 @@ function scheduleAutosave(): void {
     void persist()
   }, AUTOSAVE_DEBOUNCE_MS)
 }
-
-onUnmounted(() => {
-  if (autosaveTimer) window.clearTimeout(autosaveTimer)
-  autosaveTimer = 0
-})
 
 /**
  * 真的写下去。
@@ -879,7 +1004,7 @@ const APP_INFO_ROWS = computed(() => [
  * 将被重置的项，**逐项列出来**给用户确认。
  *
  * 为什么是硬编码的一张清单而不是从主进程读：主进程那边是
- * `SettingsService.RESTORABLE_SETTING_KEYS`（十五个键），而这里要显示的是
+ * `SettingsService.RESTORABLE_SETTING_KEYS`（十六个键），而这里要显示的是
  * **人能读懂的每一项名称**。两者的对应关系由 `tests/account-settings.test.ts`
  * 钉住（它断言这张清单的键集合与主进程那份**完全相同**），所以「加了新设置项却
  * 忘了写进确认对话框」会是一条失败的测试，而不是一次静默的重置。
@@ -966,10 +1091,9 @@ async function confirmRestore(): Promise<void> {
 
     <template v-else>
       <!--
-        页签（业主 2026-09-17 的 ③）。`role="tablist"` + `role="tab"` + `aria-selected`
-        不是装饰：屏幕阅读器要能说出"这是八个页签中的第几个、当前选中哪个"。
-        读屏名称用**这一页的标题**（`app.nav.settings`，与路由 meta 同一个键）——
-        `settingsUi.title` 这个键从来不存在，第一版写成它会让 aria-label 变成裸 key。
+        页签（业主 20260921 批：6 个）。`role="tablist"` + `role="tab"` + `aria-selected`
+        不是装饰：屏幕阅读器要能说出"这是几个页签中的第几个、当前选中哪个"。
+        读屏名称用**这一页的标题**（`app.nav.settings`，与路由 meta 同一个键）。
       -->
       <nav class="settings-tabs" role="tablist" :aria-label="t('app.nav.settings')">
         <button
@@ -988,346 +1112,544 @@ async function confirmRestore(): Promise<void> {
       </nav>
 
       <!--
-        语言：这一张卡片**没有标题** —— 页签已经写着「语言」了（业主 ③：不要每张卡片都写名字）。
-        它是唯一一条「改了立刻生效、而且不需要保存」的设置，所以单独一页。
+        常规（业主 20260921 批）：原 语言 / 存储 / 视频 / 缓存 四页合并成一页，
+        紧凑双列小卡（每张 = 标题 + 控件，gap 8–12px），删掉各块原有的大留白。
       -->
-      <section v-if="activeTab === 'language'" class="card settings-panel" role="tabpanel">
-        <div class="settings-language">
-          <LanguageSelect />
-        </div>
-      </section>
-
-      <section
-        v-if="activeTab === 'storage'"
-        class="card settings-panel"
-        role="tabpanel"
-      >
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.storageGroupLocation') }}</span>
-
-          <div class="field">
-            <span class="field-label">{{ t('settingsUi.storagePath') }}</span>
-            <div class="path-row">
-              <input v-model="draft.storageRoot" class="input mono" type="text" spellcheck="false" />
-              <button type="button" class="btn" :disabled="picking" @click="browse">
-                {{ picking ? t('settingsUi.picking') : t('settingsUi.browse') }}
-              </button>
+      <section v-if="activeTab === 'general'" class="card settings-panel" role="tabpanel" data-tab-panel="general">
+        <div class="mini-grid">
+          <!-- 语言：唯一一条改了立刻生效、而且不需要保存的设置 -->
+          <div class="mini-card" data-mini-card="language">
+            <span class="mini-card__title">{{ t('settingsUi.tabLanguage') }}</span>
+            <div class="settings-language">
+              <LanguageSelect />
             </div>
           </div>
 
-          <div class="form-grid settings-grid">
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.retentionDays') }}</span>
-              <input v-model.number="draft.retentionDays" class="input" type="number" min="1" />
-            </label>
+          <!-- 存储：位置 / 保留 / 最小剩余 + 磁盘占用读数 -->
+          <div class="mini-card" data-mini-card="storage">
+            <span class="mini-card__title">{{ t('settingsUi.tabStorage') }}</span>
+            <div class="field">
+              <span class="field-label">{{ t('settingsUi.storagePath') }}</span>
+              <div class="path-row">
+                <input v-model="draft.storageRoot" class="input mono" type="text" spellcheck="false" />
+                <button type="button" class="btn" :disabled="picking" @click="browse">
+                  {{ picking ? t('settingsUi.picking') : t('settingsUi.browse') }}
+                </button>
+              </div>
+            </div>
+            <div class="form-grid settings-grid">
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.retentionDays') }}</span>
+                <input v-model.number="draft.retentionDays" class="input" type="number" min="1" />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.minFreeGb') }}</span>
+                <input v-model.number="draft.minFreeGb" class="input" type="number" min="0" step="0.5" />
+              </label>
+            </div>
+            <div class="mini-card__sub">
+              <span class="mini-card__subtitle">{{ t('settingsUi.diskSection') }}</span>
+              <p v-if="disk?.belowSafetyFloor" class="alert alert--danger" role="alert">
+                {{ t('settingsUi.diskBelowFloor') }}
+              </p>
+              <div v-if="!disk" class="muted">{{ t('settingsUi.diskUnavailable') }}</div>
+              <template v-else>
+                <div class="bar" role="img" :aria-label="t('settingsUi.diskBarLabel', { percent: usedPercent })">
+                  <div
+                    class="bar__fill"
+                    :class="{ 'bar__fill--danger': disk.belowSafetyFloor }"
+                    :style="{ width: `${usedPercent}%` }"
+                  ></div>
+                </div>
+                <dl class="kv disk-kv">
+                  <div class="kv__item">
+                    <dt class="kv__label">{{ t('settingsUi.diskUsedOfTotal') }}</dt>
+                    <dd class="kv__value">
+                      {{
+                        t('settingsUi.diskUsedValue', {
+                          used: formatBytes(usedBytes),
+                          total: formatBytes(disk.totalBytes),
+                          percent: usedPercent
+                        })
+                      }}
+                    </dd>
+                  </div>
+                  <div class="kv__item">
+                    <dt class="kv__label">{{ t('settingsUi.diskFree') }}</dt>
+                    <dd class="kv__value">
+                      {{ t('settingsUi.diskFreeValue', { bytes: formatBytes(disk.freeBytes), gb: formatGb(disk.freeBytes) }) }}
+                    </dd>
+                  </div>
+                  <div class="kv__item">
+                    <dt class="kv__label">{{ t('settingsUi.diskAppUsage') }}</dt>
+                    <dd class="kv__value">
+                      {{ t('settingsUi.diskAppUsageValue', { bytes: formatBytes(disk.usedByAppBytes), percent: appPercent }) }}
+                    </dd>
+                  </div>
+                </dl>
+              </template>
+            </div>
+          </div>
 
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.minFreeGb') }}</span>
-              <input v-model.number="draft.minFreeGb" class="input" type="number" min="0" step="0.5" />
-            </label>
+          <!-- 视频：开机自动起播 -->
+          <div class="mini-card" data-mini-card="video">
+            <span class="mini-card__title">{{ t('settingsUi.tabVideo') }}</span>
+            <div class="field">
+              <span class="field-label">{{ t('settingsUi.liveSection') }}</span>
+              <!--
+                勾选框只是草稿，自动保存（600ms 防抖）之后才会写进主进程。
+                文案说明它**只在相机确实在工作时**才会起播，也说明手动停止优先——
+                否则操作员会以为关掉它才是唯一能让它不自动播的办法。
+              -->
+              <label class="toggle">
+                <input v-model="draft.autoPlayCameraLive" type="checkbox" />
+                <span>
+                  {{
+                    draft.autoPlayCameraLive
+                      ? t('settingsUi.autoPlayOn')
+                      : t('settingsUi.autoPlayOff')
+                  }}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!--
+            缓存：设备探测与缓冲（六个数）+ 趋势存储。
+            合成一组不是排版偏好：这六个数服务的是同一条实时链路 —— 探测决定
+            "多久问一次设备、几次不通算离线、一次请求等多久"，缓冲决定"告警前后各留
+            多久、环形缓冲开多大"（缓冲必须不小于 告警前 + 告警后，校验在 `validate()`）。
+          -->
+          <div class="mini-card" data-mini-card="cache">
+            <span class="mini-card__title">{{ t('settingsUi.cacheCardTitle') }}</span>
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.healthCheckMs') }}</span>
+                <input
+                  v-model.number="draft.healthCheckIntervalMs"
+                  class="input"
+                  type="number"
+                  min="1000"
+                  step="500"
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.offlineThreshold') }}</span>
+                <input
+                  v-model.number="draft.offlineFailureThreshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.requestTimeoutMs') }}</span>
+                <input
+                  v-model.number="draft.requestTimeoutMs"
+                  class="input"
+                  type="number"
+                  min="1000"
+                  step="500"
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.preAlarmSeconds') }}</span>
+                <input v-model.number="draft.preAlarmSeconds" class="input" type="number" min="0" />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.postAlarmSeconds') }}</span>
+                <input v-model.number="draft.postAlarmSeconds" class="input" type="number" min="0" />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.ringBufferSeconds') }}</span>
+                <input v-model.number="draft.ringBufferSeconds" class="input" type="number" min="1" />
+              </label>
+            </div>
+            <div class="mini-card__sub">
+              <div class="mini-card__subtitle-row">
+                <span class="mini-card__subtitle">{{ t('settingsUi.trendSection') }}</span>
+                <!-- 「立即落盘」不是刷新，是让主进程把缓冲写进库，所以留在这一页。 -->
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  :disabled="flushingTrends"
+                  @click="flushTrends"
+                >
+                  {{ flushingTrends ? t('settingsUi.trendFlushing') : t('settingsUi.trendFlushNow') }}
+                </button>
+              </div>
+              <p v-if="trends.error && !trendNotice" class="alert alert--danger" role="alert">
+                {{ trends.error }}
+              </p>
+              <p v-else-if="trendNotice" class="alert alert--success" role="status">{{ trendNotice }}</p>
+              <div v-if="!trends.stats" class="muted">{{ t('settingsUi.trendUnavailable') }}</div>
+              <dl v-else class="kv">
+                <div class="kv__item">
+                  <dt class="kv__label">{{ t('settingsUi.trendBuffered') }}</dt>
+                  <dd class="kv__value">{{ t('settingsUi.rows', { count: trends.stats.bufferedRows }) }}</dd>
+                </div>
+                <div class="kv__item">
+                  <dt class="kv__label">{{ t('settingsUi.trendFilesWritten') }}</dt>
+                  <dd class="kv__value">{{ t('settingsUi.files', { count: trends.stats.filesWritten }) }}</dd>
+                </div>
+                <div class="kv__item">
+                  <dt class="kv__label">{{ t('settingsUi.trendRowsWritten') }}</dt>
+                  <dd class="kv__value">{{ t('settingsUi.rows', { count: trends.stats.rowsWritten }) }}</dd>
+                </div>
+                <div class="kv__item">
+                  <dt class="kv__label">{{ t('settingsUi.trendLastFlush') }}</dt>
+                  <dd class="kv__value">
+                    {{ trends.stats.lastFlushAt ? formatDateTime(trends.stats.lastFlushAt) : t('settingsUi.trendNeverFlushed') }}
+                  </dd>
+                </div>
+                <div class="kv__item">
+                  <dt class="kv__label">{{ t('settingsUi.trendLastError') }}</dt>
+                  <dd class="kv__value" :class="{ 'text-danger': !!trends.stats.lastError }">
+                    {{ trends.stats.lastError || t('common.none') }}
+                  </dd>
+                </div>
+              </dl>
+            </div>
           </div>
         </div>
-      </section>
-
-      <!--
-        视频与缓冲（业主 ③ 的「视频」页；④ 要求**设备探测与缓冲合成一组**）。
-
-        一张卡片、两组：实时视频（一条自动起播）与「设备探测与缓冲」（六个数）。
-        合成一组不是排版偏好：这六个数服务的是同一条实时链路 —— 探测决定"多久问一次设备、
-        几次不通算离线、一次请求等多久"，缓冲决定"告警前后各留多久、环形缓冲开多大"。
-        拆成两张卡片时，操作员要在两张卡之间来回看着改（而它们互相约束：缓冲必须不小于
-        告警前 + 告警后，这条校验就写在下面的 `validate()` 里）。
-      -->
-      <section v-if="activeTab === 'video'" class="card settings-panel" role="tabpanel">
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.liveSection') }}</span>
-          <div class="field">
-            <span class="field-label">{{ t('settingsUi.autoPlayCameraLive') }}</span>
-            <!--
-              勾选框只是草稿，自动保存（600ms 防抖）之后才会写进主进程。
-              文案说明它**只在相机确实在工作时**才会起播，也说明手动停止优先——
-              否则操作员会以为关掉它才是唯一能让它不自动播的办法。
-            -->
-            <label class="toggle">
-              <input v-model="draft.autoPlayCameraLive" type="checkbox" />
-              <span>
-                {{
-                  draft.autoPlayCameraLive
-                    ? t('settingsUi.autoPlayOn')
-                    : t('settingsUi.autoPlayOff')
-                }}
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.probeBufferGroup') }}</span>
-          <div class="form-grid">
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.healthCheckMs') }}</span>
-              <input
-                v-model.number="draft.healthCheckIntervalMs"
-                class="input"
-                type="number"
-                min="1000"
-                step="500"
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.offlineThreshold') }}</span>
-              <input
-                v-model.number="draft.offlineFailureThreshold"
-                class="input"
-                type="number"
-                min="1"
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.requestTimeoutMs') }}</span>
-              <input
-                v-model.number="draft.requestTimeoutMs"
-                class="input"
-                type="number"
-                min="1000"
-                step="500"
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.preAlarmSeconds') }}</span>
-              <input v-model.number="draft.preAlarmSeconds" class="input" type="number" min="0" />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.postAlarmSeconds') }}</span>
-              <input v-model.number="draft.postAlarmSeconds" class="input" type="number" min="0" />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.ringBufferSeconds') }}</span>
-              <input v-model.number="draft.ringBufferSeconds" class="input" type="number" min="1" />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      <section
-        v-if="activeTab === 'storage'"
-        class="card settings-panel"
-        role="tabpanel"
-      >
-        <div class="settings-group__head">
-          <span class="settings-group__title">{{ t('settingsUi.diskSection') }}</span>
-          <!-- 这一颗「刷新」已删（业主 2026-09-19 更正第 4 条）：切到这个页签会重读一次，
-               顶栏那颗唯一的刷新也会重读这两个诊断读数。 -->
-        </div>
-
-        <p v-if="disk?.belowSafetyFloor" class="alert alert--danger" role="alert">
-          {{ t('settingsUi.diskBelowFloor') }}
-        </p>
-
-        <div v-if="!disk" class="muted">{{ t('settingsUi.diskUnavailable') }}</div>
-        <template v-else>
-          <div class="bar" role="img" :aria-label="t('settingsUi.diskBarLabel', { percent: usedPercent })">
-            <div
-              class="bar__fill"
-              :class="{ 'bar__fill--danger': disk.belowSafetyFloor }"
-              :style="{ width: `${usedPercent}%` }"
-            ></div>
-          </div>
-          <dl class="kv disk-kv">
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.diskUsedOfTotal') }}</dt>
-              <dd class="kv__value">
-                {{
-                  t('settingsUi.diskUsedValue', {
-                    used: formatBytes(usedBytes),
-                    total: formatBytes(disk.totalBytes),
-                    percent: usedPercent
-                  })
-                }}
-              </dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.diskFree') }}</dt>
-              <dd class="kv__value">
-                {{ t('settingsUi.diskFreeValue', { bytes: formatBytes(disk.freeBytes), gb: formatGb(disk.freeBytes) }) }}
-              </dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.diskAppUsage') }}</dt>
-              <dd class="kv__value">
-                {{ t('settingsUi.diskAppUsageValue', { bytes: formatBytes(disk.usedByAppBytes), percent: appPercent }) }}
-              </dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('app.storageRootPath') }}</dt>
-              <dd class="kv__value mono">{{ disk.storageRoot }}</dd>
-            </div>
-          </dl>
-        </template>
-      </section>
-
-      <section
-        v-if="activeTab === 'storage'"
-        class="card settings-panel"
-        role="tabpanel"
-      >
-        <div class="settings-group__head">
-          <span class="settings-group__title">{{ t('settingsUi.trendSection') }}</span>
-          <div class="btn-row">
-            <!-- 「刷新」那一颗已删（业主 2026-09-19 更正第 4 条）：切到页签与顶栏刷新都会重读。
-                 「立即落盘」留着 —— 它不是刷新，是让主进程把缓冲写进库。 -->
-            <button
-              type="button"
-              class="btn btn--sm"
-              :disabled="flushingTrends"
-              @click="flushTrends"
-            >
-              {{ flushingTrends ? t('settingsUi.trendFlushing') : t('settingsUi.trendFlushNow') }}
-            </button>
-          </div>
-        </div>
-
-        <p v-if="trends.error && !trendNotice" class="alert alert--danger" role="alert">
-          {{ trends.error }}
-        </p>
-        <p v-else-if="trendNotice" class="alert alert--success" role="status">{{ trendNotice }}</p>
-
-        <div v-if="!trends.stats" class="muted">{{ t('settingsUi.trendUnavailable') }}</div>
-        <template v-else>
-          <dl class="kv">
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.trendBuffered') }}</dt>
-              <dd class="kv__value">{{ t('settingsUi.rows', { count: trends.stats.bufferedRows }) }}</dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.trendFilesWritten') }}</dt>
-              <dd class="kv__value">{{ t('settingsUi.files', { count: trends.stats.filesWritten }) }}</dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.trendRowsWritten') }}</dt>
-              <dd class="kv__value">{{ t('settingsUi.rows', { count: trends.stats.rowsWritten }) }}</dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.trendLastFlush') }}</dt>
-              <dd class="kv__value">
-                {{ trends.stats.lastFlushAt ? formatDateTime(trends.stats.lastFlushAt) : t('settingsUi.trendNeverFlushed') }}
-              </dd>
-            </div>
-            <div class="kv__item">
-              <dt class="kv__label">{{ t('settingsUi.trendLastError') }}</dt>
-              <dd class="kv__value" :class="{ 'text-danger': !!trends.stats.lastError }">
-                {{ trends.stats.lastError || t('common.none') }}
-              </dd>
-            </div>
-          </dl>
-        </template>
       </section>
 
       <!--
-        告警联动（录像 / 弹窗 / 提示 / 邮件）。
-        
-        独立组件而不是并进本文件：这一块有二十多个字段、自己的草稿与「测试邮件」
-        流程，而它保存时只发 `alarmLinkage` 这一个键，因此与上面的草稿互不干扰。
+        集成（业主 20260921 批）：邮箱(SMTP) / 地图 / AI 三张卡同一页。
+        三块都是"本机对外接什么服务"，合成一页之后不必在多个页签之间来回跳。
       -->
-      <template v-if="activeTab === 'alarm'">
-        <LinkageSettingsSection />
-
-      <!--
-        告警声音库（手册 §17.2.7）与邮件设置（手册 §17.2.8）。
-
-        三块各发**一个** patch 键（`alarmSounds` / `alarmLinkage` / `alarmLinkage`），
-        所以它们互不覆盖；放在联动那一块旁边，是因为它们服务的正是同一件事
-        （告警发生时出什么声、发什么邮件）。
-      -->
-        <AlarmSoundLibrarySection />
-      </template>
-
-      <!-- 邮箱页签（手册 §17.2.8）：邮件服务器与告警收件人。 -->
-      <EmailSettingsSection v-if="activeTab === 'email'" />
-
-      <!--
-        GIS / 在线底图（业主 2026-09-19 追加第 1 条：GIS 应该支持在设置里面配置）。
-        **手册未说明**：手册没有地图与瓦片服务这一章。页面名、全球供应商预置、授权边界、
-        默认关闭、只允许 https、时区推中心与缩放 2–18 都是本软件自己定的（见
-        @shared/domain/map-tiles）。
-      -->
-      <section v-if="activeTab === 'map'" class="card settings-panel" role="tabpanel">
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.mapGroupService') }}</span>
-          <label class="toggle">
-            <input
-              v-model="draft.mapTiles.enabled"
-              type="checkbox"
-              data-settings-map-enabled
-            />
-            <span>{{ t('settingsUi.mapEnable') }}</span>
-          </label>
-          <p class="muted settings-hint">{{ t('settingsUi.mapEnableHint') }}</p>
-          <span class="field-label">{{ t('settingsUi.mapPresetsLabel') }}</span>
-          <p class="muted settings-hint">{{ t('settingsUi.mapPresetsHint') }}</p>
-          <div class="map-presets" data-settings-map-presets>
-            <button
-              v-for="preset in MAP_PRESET_UI"
-              :key="preset.id"
-              type="button"
-              class="btn"
-              :class="{ 'btn--primary': draft.mapTiles.service === preset.id }"
-              :data-map-preset="preset.id"
-              @click="applyMapPreset(preset.id)"
-            >
-              {{ t(preset.labelKey) }}
-            </button>
-          </div>
-          <ul class="map-licences" data-settings-map-boundaries>
-            <li v-for="preset in MAP_PRESET_UI" :key="preset.id" :data-map-boundary="preset.id">
-              <strong>{{ t(preset.labelKey) }}</strong>：{{ t(preset.boundaryKey, { service: t(preset.labelKey) }) }}
-            </li>
-          </ul>
-        </div>
-
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.mapGroupTemplate') }}</span>
-          <div class="form-grid settings-map-form">
-            <label class="field settings-map-form__wide">
-              <span class="field-label">{{ t('settingsUi.mapUrlTemplate') }}</span>
-              <input
-                v-model="draft.mapTiles.urlTemplate"
-                class="input mono"
-                type="text"
-                spellcheck="false"
-                :placeholder="MAP_URL_PLACEHOLDER"
-                data-settings-map-url
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.mapKey') }}</span>
-              <input
-                v-model="draft.mapTiles.apiKey"
-                class="input mono"
-                type="text"
-                spellcheck="false"
-                data-settings-map-key
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.mapAttribution') }}</span>
-              <input
-                v-model="draft.mapTiles.attribution"
-                class="input"
-                type="text"
-                data-settings-map-attribution
-              />
-            </label>
-          </div>
-          <p class="muted settings-hint">{{ t('settingsUi.mapUrlHint') }}</p>
-          <p class="muted settings-hint">{{ t('settingsUi.mapKeyHint') }}</p>
-          <p class="muted settings-hint">{{ t('settingsUi.mapAttributionHint') }}</p>
-        </div>
+      <template v-if="activeTab === 'integration'">
+        <!-- 邮箱卡：完整 SMTP 配置（服务器/端口/SSL/账号/密码/发件人/测试发送）。
+             组件自带紧凑表单与「发送测试邮件」，版式随组件走；数据仍只发 alarmLinkage 一个键。 -->
+        <EmailSettingsSection />
 
         <!--
-          GIS 服务库（业主追加：设置里「添加 GIS 服务」）。
-          命名保存多份服务、一键应用；「应用」= 抄进上方当前配置并打开开关。
+          地图卡：瓦片服务选择（预置单选，OSM 默认排第一；自定义 API；本地缓存地图）
+          + 缓存下载（缩放级别范围 + 经纬度区域 → 下载到存储根 map-cache/）。
+          GIS 服务库细节与中心点参数**不在这一页**（服务库在「GIS 服务」页签；
+          中心点由设备 GIS 坐标自动写入）。
         -->
+        <section class="card settings-panel" role="tabpanel" data-tab-panel="map" data-map-card>
+          <div class="settings-group">
+            <span class="settings-group__title">{{ t('settingsUi.mapGroupService') }}</span>
+            <label class="toggle">
+              <input
+                v-model="draft.mapTiles.enabled"
+                type="checkbox"
+                data-settings-map-enabled
+              />
+              <span>{{ t('settingsUi.mapEnable') }}</span>
+            </label>
+            <p class="muted settings-hint">{{ t('settingsUi.mapEnableHint') }}</p>
+            <span class="field-label">{{ t('settingsUi.mapSourceLabel') }}</span>
+            <!--
+              瓦片服务单选（业主 20260921 批）：预置服务 + 自定义 API + 本地缓存地图。
+              预置注明「默认」（OSM）与「需 key」（商业服务）；选中即写草稿，走自动保存。
+            -->
+            <div class="map-source-list" data-settings-map-sources>
+              <label
+                v-for="preset in MAP_PRESET_UI"
+                :key="preset.id"
+                class="map-source"
+                :class="{ 'map-source--active': mapSource === preset.id }"
+                :data-map-source="preset.id"
+              >
+                <input
+                  v-model="mapSource"
+                  type="radio"
+                  name="map-source"
+                  class="map-source__radio"
+                  :value="preset.id"
+                  :data-map-source-radio="preset.id"
+                />
+                <span class="map-source__name">{{ t(preset.labelKey) }}</span>
+                <span v-if="preset.id === 'osm'" class="badge badge--success" data-map-source-default>
+                  {{ t('settingsUi.mapDefaultBadge') }}
+                </span>
+                <span
+                  v-if="preset.id !== 'custom' && MAP_TILE_PRESETS[preset.id].keyRequired"
+                  class="badge"
+                  data-map-source-key-required
+                >
+                  {{ t('settingsUi.mapKeyRequired') }}
+                </span>
+              </label>
+              <label
+                class="map-source"
+                :class="{ 'map-source--active': mapSource === 'local' }"
+                data-map-source="local"
+              >
+                <input
+                  v-model="mapSource"
+                  type="radio"
+                  name="map-source"
+                  class="map-source__radio"
+                  :value="'local'"
+                  data-map-source-radio="local"
+                />
+                <span class="map-source__name">{{ t('settingsUi.mapSourceLocal') }}</span>
+              </label>
+            </div>
+            <ul class="map-licences" data-settings-map-boundaries>
+              <li v-for="preset in MAP_PRESET_UI" :key="preset.id" :data-map-boundary="preset.id">
+                <strong>{{ t(preset.labelKey) }}</strong>：{{ t(preset.boundaryKey, { service: t(preset.labelKey) }) }}
+              </li>
+            </ul>
+          </div>
+
+          <!-- 自定义 API：只有选中「自定义 XYZ」才展开的模板/key/署名输入。 -->
+          <div v-if="mapSource === 'custom'" class="settings-group">
+            <span class="settings-group__title">{{ t('settingsUi.mapGroupTemplate') }}</span>
+            <div class="form-grid settings-map-form">
+              <label class="field settings-map-form__wide">
+                <span class="field-label">{{ t('settingsUi.mapUrlTemplate') }}</span>
+                <input
+                  v-model="draft.mapTiles.urlTemplate"
+                  class="input mono"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="MAP_URL_PLACEHOLDER"
+                  data-settings-map-url
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapKey') }}</span>
+                <input
+                  v-model="draft.mapTiles.apiKey"
+                  class="input mono"
+                  type="text"
+                  spellcheck="false"
+                  data-settings-map-key
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapAttribution') }}</span>
+                <input
+                  v-model="draft.mapTiles.attribution"
+                  class="input"
+                  type="text"
+                  data-settings-map-attribution
+                />
+              </label>
+            </div>
+            <p class="muted settings-hint">{{ t('settingsUi.mapUrlHint') }}</p>
+            <p class="muted settings-hint">{{ t('settingsUi.mapKeyHint') }}</p>
+            <p class="muted settings-hint">{{ t('settingsUi.mapAttributionHint') }}</p>
+          </div>
+
+          <!-- 本地缓存地图：使用已下载的缓存；没下载过就先跑下面的「缓存下载」。 -->
+          <p v-if="mapSource === 'local'" class="muted settings-hint" data-map-local-hint>
+            {{ t('settingsUi.mapSourceLocalHint') }}
+          </p>
+
+          <!--
+            缓存下载（业主 20260921 批）：缩放级别范围 + 经纬度区域 → 主进程下载到
+            存储根 `map-cache/<service>/z/x/y.png`。进度经 `map:cache-progress` 推送，
+            断点续下（已存在的瓦片跳过）。
+          -->
+          <div class="settings-group" data-map-cache-group>
+            <span class="settings-group__title">{{ t('settingsUi.mapCacheGroup') }}</span>
+            <div class="form-grid cache-form">
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheZoomMin') }}</span>
+                <input
+                  v-model.number="cacheMinZoom"
+                  class="input"
+                  type="number"
+                  :min="MIN_TILE_ZOOM"
+                  :max="MAX_TILE_ZOOM"
+                  data-map-cache-min-zoom
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheZoomMax') }}</span>
+                <input
+                  v-model.number="cacheMaxZoom"
+                  class="input"
+                  type="number"
+                  :min="MIN_TILE_ZOOM"
+                  :max="MAX_TILE_ZOOM"
+                  data-map-cache-max-zoom
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheSouth') }}</span>
+                <input v-model="cacheBounds.minLat" class="input" type="number" step="0.0001" data-map-cache-min-lat />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheWest') }}</span>
+                <input v-model="cacheBounds.minLon" class="input" type="number" step="0.0001" data-map-cache-min-lon />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheNorth') }}</span>
+                <input v-model="cacheBounds.maxLat" class="input" type="number" step="0.0001" data-map-cache-max-lat />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.mapCacheEast') }}</span>
+                <input v-model="cacheBounds.maxLon" class="input" type="number" step="0.0001" data-map-cache-max-lon />
+              </label>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn btn--sm" data-map-cache-fill-center @click="fillCacheBoundsFromCenter">
+                {{ t('settingsUi.mapCacheUseCenter') }}
+              </button>
+              <button
+                type="button"
+                class="btn btn--sm btn--primary"
+                :disabled="cacheRunning"
+                data-map-cache-start
+                @click="startCacheDownload"
+              >
+                {{ cacheRunning ? t('settingsUi.mapCacheRunning') : t('settingsUi.mapCacheStart') }}
+              </button>
+            </div>
+            <p v-if="cacheError" class="form-error" role="alert" data-map-cache-error>{{ cacheError }}</p>
+            <p v-else-if="cacheNotice" class="alert alert--success" role="status" data-map-cache-notice>{{ cacheNotice }}</p>
+            <div v-if="cacheProgress" class="cache-progress" data-map-cache-progress>
+              <div class="cache-progress__bar">
+                <div
+                  class="cache-progress__fill"
+                  :style="{ width: `${cacheProgress.total > 0 ? Math.round((cacheProcessed / cacheProgress.total) * 100) : 0}%` }"
+                ></div>
+              </div>
+              <span class="muted settings-hint">
+                {{
+                  t('settingsUi.mapCacheProgressText', {
+                    done: cacheProcessed,
+                    total: cacheProgress.total,
+                    failed: cacheProgress.failed
+                  })
+                }}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <!--
+          AI 卡：厂家预置按钮 + 命名服务列表（单选启用）+ 内联添加/编辑。
+          密钥输入框留空 = 不改动已存密钥；只显示"已保存/未保存"，永不回显。
+        -->
+        <section class="card settings-panel" role="tabpanel" data-tab-panel="ai">
+          <div class="settings-group">
+            <span class="settings-group__title" data-ai-service-group>{{ t('settingsUi.aiServiceGroup') }}</span>
+            <p class="muted settings-hint">{{ t('settingsUi.aiServiceHint') }}</p>
+            <p class="muted settings-hint" data-ai-active-status>
+              {{ aiActiveText }}
+            </p>
+
+            <ul v-if="samples.aiServices && samples.aiServices.services.length > 0" class="map-service-list" data-ai-services>
+              <li v-for="service in samples.aiServices.services" :key="service.id" class="map-service-row">
+                <label class="ai-service-row__active">
+                  <input
+                    type="radio"
+                    name="active-ai-service"
+                    :checked="samples.aiServices?.activeId === service.id"
+                    :data-ai-service-active="service.id"
+                    @change="setActiveAiService(service.id)"
+                  />
+                  <span class="map-service-row__name">{{ service.name }}</span>
+                </label>
+                <span class="map-service-row__template mono">{{ service.endpoint }}</span>
+                <span class="muted">{{ service.apiKeyStored ? t('settingsUi.aiServiceKeyStored') : t('settingsUi.aiServiceKeyNone') }}</span>
+                <span class="btn-row">
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    data-ai-service-edit
+                    @click="startEditAiService(service.id)"
+                  >
+                    {{ t('settingsUi.mapServiceEdit') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--danger"
+                    data-ai-service-delete
+                    @click="deleteAiService(service.id)"
+                  >
+                    {{ t('settingsUi.mapServiceDelete') }}
+                  </button>
+                </span>
+              </li>
+            </ul>
+            <p v-else class="muted settings-hint">{{ t('settingsUi.aiServiceEmpty') }}</p>
+
+            <div class="btn-row">
+              <button
+                type="button"
+                class="btn btn--sm"
+                data-ai-service-add
+                @click="startAddAiService()"
+              >
+                {{ t('settingsUi.aiServiceAdd') }}
+              </button>
+            </div>
+
+            <div v-if="aiServiceEditing" class="map-service-editor" data-ai-service-editor>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.aiServiceName') }}</span>
+                <input v-model="aiServiceEditor.name" class="input" type="text" data-ai-service-name />
+              </label>
+              <span class="field-label">{{ t('settingsUi.aiPresetLabel') }}</span>
+              <div class="map-presets">
+                <button
+                  v-for="preset in AI_PRESET_UI"
+                  :key="preset.id"
+                  type="button"
+                  class="btn"
+                  :class="{ 'btn--primary': aiServiceEditor.provider === preset.id }"
+                  :data-ai-preset="preset.id"
+                  @click="applyAiPreset(preset.id)"
+                >
+                  {{ t(preset.labelKey) }}
+                </button>
+              </div>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.aiServiceEndpoint') }}</span>
+                <input
+                  v-model="aiServiceEditor.endpoint"
+                  class="input mono"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="https://host/v1/chat/completions"
+                  data-ai-service-endpoint
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.aiServiceModel') }}</span>
+                <input v-model="aiServiceEditor.model" class="input mono" type="text" data-ai-service-model />
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.aiServiceKey') }}</span>
+                <input
+                  v-model="aiServiceEditor.apiKey"
+                  class="input mono"
+                  type="password"
+                  spellcheck="false"
+                  :placeholder="t('settingsUi.aiServiceKeyPlaceholder')"
+                  data-ai-service-key
+                />
+              </label>
+              <p v-if="aiServiceError" class="form-error" data-ai-service-error role="alert">
+                {{ aiServiceError }}
+              </p>
+              <div class="btn-row">
+                <button type="button" class="btn btn--sm btn--primary" data-ai-service-save @click="saveAiService()">
+                  {{ t('settingsUi.mapServiceSave') }}
+                </button>
+                <button type="button" class="btn btn--sm" data-ai-service-cancel @click="cancelAiServiceEdit()">
+                  {{ t('settingsUi.mapServiceCancel') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <!--
+        GIS 服务库（业主追加：设置里「添加 GIS 服务」；20260921 批起在自己的页签）。
+        命名保存多份服务、一键应用；「应用」= 抄进「集成 → 地图」的当前配置并打开开关。
+      -->
+      <section v-if="activeTab === 'gis'" class="card settings-panel" role="tabpanel" data-tab-panel="gis">
         <div class="settings-group">
           <span class="settings-group__title" data-map-service-group>{{ t('settingsUi.mapServiceGroup') }}</span>
           <p class="muted settings-hint">{{ t('settingsUi.mapServiceHint') }}</p>
@@ -1466,141 +1788,19 @@ async function confirmRestore(): Promise<void> {
             </div>
           </div>
         </div>
-
-        <div class="settings-group">
-          <span class="settings-group__title">{{ t('settingsUi.mapTimezone') }}</span>
-          <p class="muted settings-hint" data-settings-map-timezone>
-            {{
-              t('settingsUi.mapTimezoneValue', {
-                zone: detectedTimeZone,
-                center: detectedMapCenterText,
-                zoom: detectedMapCenter.zoom
-              })
-            }}
-          </p>
-          <p class="muted settings-hint">{{ t('settingsUi.mapTimezoneHint') }}</p>
-        </div>
       </section>
 
       <!--
-        AI 服务页签（业主追加：设置里支持「不同 AI 服务」）。
-        厂家预置按钮 + 命名服务列表（单选启用）+ 内联添加/编辑。
-        密钥输入框留空 = 不改动已存密钥；只显示"已保存/未保存"，永不回显。
+        告警联动（录像 / 弹窗 / 提示 / 邮件）。
+
+        两块各自独立组件：联动配置（标题行带总开关 + 五个动作小卡）与告警声音
+        （两个绑定 + 声音库）。它们保存时各发一个键（`alarmLinkage` / `alarmSounds`），
+        互不覆盖。
       -->
-      <section v-if="activeTab === 'ai'" class="card settings-panel" role="tabpanel">
-        <div class="settings-group">
-          <span class="settings-group__title" data-ai-service-group>{{ t('settingsUi.aiServiceGroup') }}</span>
-          <p class="muted settings-hint">{{ t('settingsUi.aiServiceHint') }}</p>
-          <p class="muted settings-hint" data-ai-active-status>
-            {{ aiActiveText }}
-          </p>
-
-          <ul v-if="samples.aiServices && samples.aiServices.services.length > 0" class="map-service-list" data-ai-services>
-            <li v-for="service in samples.aiServices.services" :key="service.id" class="map-service-row">
-              <label class="ai-service-row__active">
-                <input
-                  type="radio"
-                  name="active-ai-service"
-                  :checked="samples.aiServices?.activeId === service.id"
-                  :data-ai-service-active="service.id"
-                  @change="setActiveAiService(service.id)"
-                />
-                <span class="map-service-row__name">{{ service.name }}</span>
-              </label>
-              <span class="map-service-row__template mono">{{ service.endpoint }}</span>
-              <span class="muted">{{ service.apiKeyStored ? t('settingsUi.aiServiceKeyStored') : t('settingsUi.aiServiceKeyNone') }}</span>
-              <span class="btn-row">
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  data-ai-service-edit
-                  @click="startEditAiService(service.id)"
-                >
-                  {{ t('settingsUi.mapServiceEdit') }}
-                </button>
-                <button
-                  type="button"
-                  class="btn btn--sm btn--danger"
-                  data-ai-service-delete
-                  @click="deleteAiService(service.id)"
-                >
-                  {{ t('settingsUi.mapServiceDelete') }}
-                </button>
-              </span>
-            </li>
-          </ul>
-          <p v-else class="muted settings-hint">{{ t('settingsUi.aiServiceEmpty') }}</p>
-
-          <div class="btn-row">
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-ai-service-add
-              @click="startAddAiService()"
-            >
-              {{ t('settingsUi.aiServiceAdd') }}
-            </button>
-          </div>
-
-          <div v-if="aiServiceEditing" class="map-service-editor" data-ai-service-editor>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.aiServiceName') }}</span>
-              <input v-model="aiServiceEditor.name" class="input" type="text" data-ai-service-name />
-            </label>
-            <span class="field-label">{{ t('settingsUi.aiPresetLabel') }}</span>
-            <div class="map-presets">
-              <button
-                v-for="preset in AI_PRESET_UI"
-                :key="preset.id"
-                type="button"
-                class="btn"
-                :class="{ 'btn--primary': aiServiceEditor.provider === preset.id }"
-                :data-ai-preset="preset.id"
-                @click="applyAiPreset(preset.id)"
-              >
-                {{ t(preset.labelKey) }}
-              </button>
-            </div>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.aiServiceEndpoint') }}</span>
-              <input
-                v-model="aiServiceEditor.endpoint"
-                class="input mono"
-                type="text"
-                spellcheck="false"
-                placeholder="https://host/v1/chat/completions"
-                data-ai-service-endpoint
-              />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.aiServiceModel') }}</span>
-              <input v-model="aiServiceEditor.model" class="input mono" type="text" data-ai-service-model />
-            </label>
-            <label class="field">
-              <span class="field-label">{{ t('settingsUi.aiServiceKey') }}</span>
-              <input
-                v-model="aiServiceEditor.apiKey"
-                class="input mono"
-                type="password"
-                spellcheck="false"
-                :placeholder="t('settingsUi.aiServiceKeyPlaceholder')"
-                data-ai-service-key
-              />
-            </label>
-            <p v-if="aiServiceError" class="form-error" data-ai-service-error role="alert">
-              {{ aiServiceError }}
-            </p>
-            <div class="btn-row">
-              <button type="button" class="btn btn--sm btn--primary" data-ai-service-save @click="saveAiService()">
-                {{ t('settingsUi.mapServiceSave') }}
-              </button>
-              <button type="button" class="btn btn--sm" data-ai-service-cancel @click="cancelAiServiceEdit()">
-                {{ t('settingsUi.mapServiceCancel') }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+      <template v-if="activeTab === 'alarm'">
+        <LinkageSettingsSection />
+        <AlarmSoundBindingSection />
+      </template>
 
       <!--
         账号管理（手册 §17.1）。
@@ -1840,13 +2040,6 @@ async function confirmRestore(): Promise<void> {
   border-top: 1px solid var(--color-border);
 }
 
-.settings-group__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .settings-group__title {
   font-size: 12.5px;
   font-weight: 600;
@@ -1854,13 +2047,57 @@ async function confirmRestore(): Promise<void> {
 }
 
 /*
- * 分组内的表单网格：**三列**（够宽时）。
+ * 常规页签的紧凑双列小卡（业主 20260921 批）。
  *
- * 这几个分组里的字段都是短数字（毫秒、秒、天、GB），两列在宽窗口上会留下大块空白 ——
- * 那正是"太宽松"的来源。最小 180px 让窄窗口自动退到两列、一列。
+ * 每块 = 标题 + 控件的一张小卡；minmax(300px, 1fr) 让宽窗口两列、窄窗口一列，
+ * gap 10px（8–12px 档）。卡内控件与全局表单同一套类（.field / .input / .form-grid），
+ * 只是间距收紧：这是「合并四页」而不是「发明第二套表单」。
  */
-.settings-group .form-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+}
+
+.mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+}
+
+.mini-card__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+/* 卡内的小分区（存储卡里的磁盘占用、缓存卡里的趋势存储）：一条更淡的线分隔。 */
+.mini-card__sub {
+  border-top: 1px dashed var(--color-border);
+  padding-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mini-card__subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.mini-card__subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mini-card .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 /*
@@ -1973,11 +2210,7 @@ async function confirmRestore(): Promise<void> {
   margin-left: 8px;
 }
 
-.trend-hint {
-  margin-top: var(--space-3);
-}
-
-/* 恢复默认值的范围清单。两列，一眼能数完十三项。 */
+/* 恢复默认值的范围清单。两列，一眼能数完十六项。 */
 .restore-list {
   margin: var(--space-2) 0;
   padding-left: 20px;
@@ -1985,13 +2218,40 @@ async function confirmRestore(): Promise<void> {
   font-size: 12.5px;
 }
 /*
- * 地图页签（业主 2026-09-19 追加第 1 条）。
- * 预置按钮一排、授权边界一张清单、XYZ 模板整行；三块都只是可读性样式。
+ * 地图卡（业主 2026-09-19 追加第 1 条；20260921 批重做为单选 + 缓存下载）。
+ * 单选列表、自定义模板、缓存下载的表单都只是可读性样式。
  */
-.map-presets {
+.map-source-list {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.map-source {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border: 1px solid var(--color-border, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.map-source--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.map-source__radio {
+  flex: none;
+}
+
+.map-source__name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 140px;
 }
 
 .map-licences {
@@ -2012,6 +2272,30 @@ async function confirmRestore(): Promise<void> {
 /* URL 模板整行：它是这一页最长的一个值，挤在半列里会看不到完整域名。 */
 .settings-map-form__wide {
   grid-column: 1 / -1;
+}
+
+/* 缓存下载的表单网格：短数字（级别）与经纬度各占半列起步。 */
+.cache-form {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.cache-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cache-progress__bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  overflow: hidden;
+}
+
+.cache-progress__fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.2s ease;
 }
 
 /* GIS / AI 服务库共用的行与编辑器。列表行 = 名称 + 模板摘要 + 操作按钮。 */
@@ -2067,8 +2351,15 @@ async function confirmRestore(): Promise<void> {
   gap: var(--space-2);
 }
 
+.map-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .map-service-test--ok {
   color: var(--color-success, #2e7d32);
 }
 
 </style>
+

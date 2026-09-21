@@ -140,10 +140,35 @@ export const es: MessageSchema = {
 
     /** Pestañas (propietario 2026-09-17 ③: idioma / almacenamiento / vídeo / alarmas / correo / cuenta / acerca de). */
     tabLanguage: 'Idioma',
+    tabGeneral: 'General',
+    tabIntegration: 'Integraciones',
+    tabGisServices: 'Servicios GIS',
+    cacheCardTitle: 'Caché',
+    mapSourceLabel: 'Fuente del mapa',
+    mapSourceLocal: 'Mapa local en caché',
+    mapSourceLocalHint: 'Usa las teselas descargadas en esta máquina; descárguelas primero abajo.',
+    mapDefaultBadge: 'Predeterminado',
+    mapKeyRequired: 'Este servicio requiere una clave API',
+    mapCacheGroup: 'Descarga de caché de teselas',
+    mapCacheZoomMin: 'Zoom mín.',
+    mapCacheZoomMax: 'Zoom máx.',
+    mapCacheSouth: 'Sur',
+    mapCacheWest: 'Oeste',
+    mapCacheNorth: 'Norte',
+    mapCacheEast: 'Este',
+    mapCacheUseCenter: 'Rellenar con el centro actual',
+    mapCacheStart: 'Iniciar descarga',
+    mapCacheRunning: 'Descargando…',
+    mapCacheNeedTemplate: 'Elija un servicio y complete la plantilla URL primero.',
+    mapCacheBadZoom: 'El rango debe ser {min}–{max}',
+    mapCacheBadBounds: 'Los límites no son válidos',
+    mapCacheResult: 'Descargadas {downloaded} · omitidas {skipped} · fallidas {failed} · {size}',
+    mapCacheProgressText: 'Procesadas {done}/{total} (fallidas {failed})',
+    linkageEnabledOn: 'Activado',
+    linkageEnabledOff: 'Desactivado',
     tabStorage: 'Almacenamiento',
     tabVideo: 'Vídeo y búfer',
     tabAlarm: 'Alarmas',
-    tabEmail: 'Correo',
 
     /*
      * GIS / mapa base en línea (propietario 2026-09-19, punto adicional 1).
@@ -153,7 +178,6 @@ export const es: MessageSchema = {
      * desactivado, solo https, el centro por zona horaria y el zoom 2–18 son decisiones de este
      * software; las reglas están en @shared/domain/map-tiles.
      */
-    tabMap: 'Mapa',
 
     mapGroupService: 'Servicio de mapa base (teselas en línea)',
     mapEnable: 'Activar mapa base en línea',
@@ -184,9 +208,6 @@ export const es: MessageSchema = {
     mapKeyHint: 'Pon aquí la clave de Tianditu y servicios similares; se guarda en la base de ajustes local y no se escribe en los registros.',
     mapAttribution: 'Texto de atribución',
     mapAttributionHint: 'Se muestra en la esquina inferior derecha del mapa; no puede quedar vacío mientras la capa esté activa.',
-    mapTimezone: 'Punto central (automático según la zona horaria)',
-    mapTimezoneValue: 'Zona horaria del equipo {zone} → {center}, zoom inicial {zoom}',
-    mapTimezoneHint: 'No especificado por el manual: la tabla de centros y el zoom inicial son decisiones de este programa; el rango de zoom está fijado en 2–18. Si la zona horaria no se reconoce, se usa 0, 0 (zoom 2).',
     mapErrTemplateRequired: 'La plantilla XYZ es obligatoria al activar el mapa base en línea',
     mapErrTemplateProtocol: 'Solo se permiten direcciones https:// (ni http, ni file ni otros protocolos)',
     mapErrTemplateTokens: 'La plantilla XYZ debe contener los marcadores z, x e y',
@@ -199,7 +220,6 @@ export const es: MessageSchema = {
     tabAccount: 'Cuenta',
     tabAbout: 'Acerca de y mantenimiento',
     /** Pestaña de servicios de IA (petición del propietario: admitir "distintos servicios de IA"). */
-    tabAi: 'Servicios de IA',
 
     /** Biblioteca de servicios GIS (dentro de la pestaña Mapa; petición: «añadir servicio GIS»). */
     mapServiceGroup: 'Servicios GIS',
@@ -1999,6 +2019,15 @@ export const es: MessageSchema = {
    */
   alarmSoundUi: {
     title: 'Sonido de alarma',
+    binding: {
+      popup: 'Tono de la ventana de enlace de alarmas',
+      push: 'Tono de alarma enviada por el equipo'
+    },
+    soundOn: 'Sí',
+    soundOff: 'No',
+    bindingNone: 'Sin seleccionar',
+    bindingHint: 'El sonido elegido suena para las ventanas de enlace y las alarmas enviadas por el equipo.',
+    libraryGroup: 'Biblioteca de sonidos',
     addCustom: 'Añadir sonido personalizado',
     defaultColumn: 'Predeterminado',
     typeColumn: 'Tipo',

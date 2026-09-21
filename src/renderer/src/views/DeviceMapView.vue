@@ -89,12 +89,14 @@ import {
   clampTileZoom,
   panMapCenter,
   projectToViewport,
+  tileCacheRelativePath,
   timeZoneCenter,
   viewTiles,
   type MapCenter,
   type MapTilePlacement,
   type MapTilesConfig
 } from '@shared/domain/map-tiles'
+import { toFileUrl } from '@renderer/lib/fileUrl'
 import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
 import {
   DEVICE_MAP_PAGE_SIZE,
@@ -207,7 +209,7 @@ const LAT_SPAN_FALLBACK = 24
 const LON_SPAN_FALLBACK = 32
 
 const fallbackBounds = computed<MapBounds>(() => {
-  const center = timeZoneView
+  const center = homeView.value
   const clampLat = (value: number) => Math.max(-80, Math.min(80, value))
   let minLon = center.longitude - LON_SPAN_FALLBACK / 2
   let maxLon = center.longitude + LON_SPAN_FALLBACK / 2
@@ -289,6 +291,26 @@ const systemTimeZone = (() => {
 const timeZoneView = timeZoneCenter(systemTimeZone)
 
 /**
+ * 「家」中心：设置里 `mapTiles.defaultCenter` 优先，其次时区中心（业主 20260921 批）。
+ *
+ * `defaultCenter` 是添加/编辑设备保存 GIS 坐标时主进程自动写入的 —— 操作员最近
+ * 录点位的位置就是他想看的地图。时区中心逻辑保留作兜底（还没有任何设备录点位时）。
+ */
+const homeView = computed<MapCenter>(() => {
+  const center = settings.settings?.mapTiles?.defaultCenter
+  if (
+    center &&
+    Number.isFinite(center.lat) &&
+    Number.isFinite(center.lon) &&
+    Math.abs(center.lat) <= 90 &&
+    Math.abs(center.lon) <= 180
+  ) {
+    return { latitude: center.lat, longitude: center.lon, zoom: clampTileZoom(center.zoom) }
+  }
+  return timeZoneView
+})
+
+/**
  * 当前视野。
  *
  * **普通 ref + 普通事件处理器**：绝不在 patch 期间写它（第 36 轮那条硬规矩）。
@@ -299,7 +321,7 @@ const tileErrors = ref<string[]>([])
 watch(
   tilesEnabled,
   (enabled) => {
-    mapView.value = enabled ? { ...timeZoneView } : null
+    mapView.value = enabled ? { ...homeView.value } : null
     tileErrors.value = []
   },
   { immediate: true }
@@ -314,6 +336,50 @@ const tilePlacements = computed<MapTilePlacement[]>(() => {
   return viewTiles(config, activeCenter.value, mapZoom.value, CANVAS.width, CANVAS.height)
 })
 
+/**
+ * 本地缓存来源（业主 20260921 批「本地缓存地图」）：瓦片优先走 file:// 已下载缓存，
+ * 未命中再回落在线 https（tile.url 本来就是 https，session 放行名单里两类都在）。
+ */
+const useTileCache = computed(() => tileConfig.value?.cachePath === 'map-cache')
+
+/** 存储根（appInfo 里带；渲染层没有文件系统，只能拼 file:// 让 `<img>` 自己读）。 */
+const mapStorageRoot = computed(() => settings.appInfo?.storageRoot ?? '')
+
+/** 一块瓦片的本地缓存地址；存储根还没读到时返回空串（调用方回落在线 URL）。 */
+function tileCacheUrl(tile: MapTilePlacement): string {
+  const config = tileConfig.value
+  const root = mapStorageRoot.value
+  if (!config || root === '') return ''
+  const relative = tileCacheRelativePath(config.service, tile.z, tile.x, tile.y)
+  return toFileUrl(`${root.replace(new RegExp(String.fromCharCode(92), 'g'), '/')}/${relative}`)
+}
+
+/**
+ * 每块瓦片当前走哪条路：缺省 = 本地缓存（仅本地来源时）；`'online'` = 缓存未命中
+ * 后的在线兜底；`'failed'` = 两条路都不通。与 `tileErrors` 一样按 `tile.key` 记录，
+ * 重铺瓦片时旧键被清掉（避免异步 error 串台）。
+ */
+const tileModes = ref<Record<string, 'online' | 'failed'>>({})
+
+/** 瓦片 `<img>` 的地址：本地来源先给 file:// 缓存，否则/未命中给在线 URL。 */
+function tileSrc(tile: MapTilePlacement): string {
+  if (useTileCache.value && tileModes.value[tile.key] !== 'online') {
+    const cached = tileCacheUrl(tile)
+    if (cached !== '') return cached
+  }
+  return tile.url
+}
+
+function onTileError(tile: MapTilePlacement): void {
+  // 本地缓存未命中、且在线模板可用：回落 https 原样加载一次。
+  if (useTileCache.value && tileModes.value[tile.key] !== 'online' && tile.url !== '') {
+    tileModes.value = { ...tileModes.value, [tile.key]: 'online' }
+    return
+  }
+  tileModes.value = { ...tileModes.value, [tile.key]: 'failed' }
+  if (!tileErrors.value.includes(tile.key)) tileErrors.value = [...tileErrors.value, tile.key]
+}
+
 /** 失败瓦片用**键**记录：重新铺瓦片后旧键不再参与计数（避免异步 error 串台）。 */
 const tileFailureCount = computed(
   () => tilePlacements.value.filter((tile) => tileErrors.value.includes(tile.key)).length
@@ -321,15 +387,18 @@ const tileFailureCount = computed(
 
 // 只留**当前这批瓦片**的键：老键留着没有任何用处（对应的 <img> 已经销毁），
 // 一张图拖一整天，这个数组会变成一份只进不出的失败日志（G3 修复）。
+// tileModes 同一条纪律：来源状态跟着键走，铺新瓦片时旧键一起清。
 watch(tilePlacements, (placements) => {
-  if (tileErrors.value.length === 0) return
   const live = new Set(placements.map((tile) => tile.key))
-  tileErrors.value = tileErrors.value.filter((key) => live.has(key))
+  if (tileErrors.value.length > 0) {
+    tileErrors.value = tileErrors.value.filter((key) => live.has(key))
+  }
+  const modes = tileModes.value
+  const modeKeys = Object.keys(modes)
+  if (modeKeys.some((key) => !live.has(key))) {
+    tileModes.value = Object.fromEntries(modeKeys.filter((key) => live.has(key)).map((key) => [key, modes[key] as 'online' | 'failed']))
+  }
 })
-
-function onTileError(key: string): void {
-  if (!tileErrors.value.includes(key)) tileErrors.value = [...tileErrors.value, key]
-}
 
 /** 瓦片位置：百分比（与 SVG 的 1280×720 逻辑坐标同一套）。 */
 function tileStyle(tile: MapTilePlacement): Record<string, string> {
@@ -412,9 +481,9 @@ function centerOnDevice(deviceId: string): void {
   }
 }
 
-/** 回到电脑时区推出来的默认中心（与放大/缩小共用的入口）。 */
+/** 回到家中心（defaultCenter 优先、时区兜底；与放大/缩小共用的入口）。 */
 function resetMapView(): void {
-  mapView.value = { ...timeZoneView }
+  mapView.value = { ...homeView.value }
 }
 
 /**
@@ -896,13 +965,14 @@ onUnmounted(() => {
               v-for="tile in tilePlacements"
               :key="tile.key"
               class="map-tile"
-              :src="tile.url"
+              :src="tileSrc(tile)"
               :style="tileStyle(tile)"
               alt=""
               draggable="false"
               data-map-tile
               :data-tile-key="tile.key"
-              @error="onTileError(tile.key)"
+              :data-tile-mode="tileModes[tile.key] ?? (useTileCache ? 'cache' : 'online')"
+              @error="onTileError(tile)"
             />
             <!--
               某些瓦片加载失败（没有外网、服务拒绝）时如实说一句，而不是留一块白，

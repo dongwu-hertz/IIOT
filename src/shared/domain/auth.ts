@@ -240,7 +240,12 @@ export const PERMISSION_OPERATIONS: Record<UserPermissionKey, readonly string[]>
      * 收数统计 —— 那是系统设置页上那张卡片，与 `settings:update` 在同一页、同一档权限。
      * 界面上的"数据接入"页签只有管理员进得去，所以这一条与它一致。
      */
-    'iot-ingest:status'
+    'iot-ingest:status',
+    /**
+     * 瓦片缓存下载（业主 20260921 批）：它写在设置「集成 → 地图」那张卡里、改的是
+     * 本机存储根（map-cache/），与 `settings:update` 同一档 —— 管理员 + 系统设置写入。
+     */
+    'map:cache-tiles'
   ],
   manageDevices: [
     'device:add',

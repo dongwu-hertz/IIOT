@@ -53,6 +53,14 @@ export type MapTileServiceId = (typeof MAP_TILE_SERVICES)[number]
 /** 有预置模板的那些档位（`custom` 没有预置）。 */
 export type MapTilePresetId = Exclude<MapTileServiceId, 'custom'>
 
+/** 业主 20260921 批：设备 GIS 坐标保存时由主进程写进的「地图默认中心」。 */
+export interface MapDefaultCenter {
+  lat: number
+  lon: number
+  /** 2–18（`isTileZoom` 的同一区间）。 */
+  zoom: number
+}
+
 /** 落进 `settings` 表的地图配置。 */
 export interface MapTilesConfig {
   /** 默认 `false`：离线优先，软件打开时绝不主动出网。 */
@@ -64,6 +72,19 @@ export interface MapTilesConfig {
   apiKey: string
   /** 必须显示在地图上的署名文本；启用时不能为空。 */
   attribution: string
+  /**
+   * 瓦片来源（业主 20260921 批）：`'map-cache'` = 「本地缓存地图」——渲染层优先用
+   * 已下载到存储根的本地瓦片（file://），未命中再回落在线 https；缺省 = 不用本地缓存。
+   * 只有这一个合法取值：这个字段是**来源开关**而不是随意路径（路径拼法见
+   * `tileCacheRelativePath()`，主进程写盘与渲染层读盘共用同一份）。
+   */
+  cachePath?: 'map-cache'
+  /**
+   * 地图初始中心（业主 20260921 批）：添加/编辑设备保存 GIS 坐标时由主进程自动写入。
+   * 地图页初始视野**优先用它**，其次才是 `timeZoneCenter()`（时区兜底保留）。
+   * 缺省 = 还没有任何设备录过点位。
+   */
+  defaultCenter?: MapDefaultCenter
 }
 
 /** 一个服务预置：模板、法定署名与可选子域。 */
@@ -136,14 +157,18 @@ export const MAP_TILE_PRESETS: Record<MapTilePresetId, MapTilePreset> = {
   }
 }
 
-/** 出厂默认：关闭、自定义（空模板）、无 key、无署名。 */
+/**
+ * 出厂默认：关闭（离线优先不变）、**OpenStreetMap**（业主 20260921 批：OSM 是默认项，
+ * 预置列表里排第一且默认选中）。模板与署名直接引用预置表，不抄第二份 ——
+ * 服务商改地址时只改 `MAP_TILE_PRESETS` 一处。
+ */
 export function defaultMapTilesConfig(): MapTilesConfig {
   return {
     enabled: false,
-    service: 'custom',
-    urlTemplate: '',
+    service: 'osm',
+    urlTemplate: MAP_TILE_PRESETS.osm.urlTemplate,
     apiKey: '',
-    attribution: ''
+    attribution: MAP_TILE_PRESETS.osm.attribution
   }
 }
 
@@ -253,6 +278,29 @@ export function normaliseMapTilesConfig(value: unknown): MapTilesConfig | undefi
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
     attribution: typeof raw.attribution === 'string' ? raw.attribution.trim() : ''
   }
+  /*
+   * 两个新可选字段（业主 20260921 批）**只认合法值，坏值丢掉而不是整键拒绝**：
+   * 旧版本数据里没有它们，一份带坏 `defaultCenter` 的磁盘数据不该让整份地图配置
+   * （用户配好的模板/署名）作废 —— 与上面那些互相约束的必填字段是两种性质。
+   */
+  if (raw.cachePath === 'map-cache') config.cachePath = 'map-cache'
+  if (
+    raw.defaultCenter !== undefined &&
+    raw.defaultCenter !== null &&
+    typeof raw.defaultCenter === 'object'
+  ) {
+    const center = raw.defaultCenter as Record<string, unknown>
+    const lat = center.lat
+    const lon = center.lon
+    const zoom = center.zoom
+    if (
+      typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90 &&
+      typeof lon === 'number' && Number.isFinite(lon) && Math.abs(lon) <= 180 &&
+      typeof zoom === 'number' && isTileZoom(zoom)
+    ) {
+      config.defaultCenter = { lat, lon, zoom }
+    }
+  }
   return mapTilesProblem(config) === null ? config : undefined
 }
 
@@ -296,6 +344,64 @@ export function tileUrl(config: MapTilesConfig, z: number, x: number, y: number)
     .replace(/\{y\}/g, String(y))
     .replace(/\{s\}/g, subdomain)
     .replace(/\{key\}/g, encodeURIComponent(config.apiKey.trim()))
+}
+
+// ---------------------------------------------------------------------------
+// 本地瓦片缓存（业主 20260921 批：设置里下载瓦片到存储根，离线复用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 缓存子目录名（存储根下）：`map-cache`。主进程下载写入与渲染层 `file://` 读取
+ * 共用这一个名字，不各自拼 —— 两处拼法一漂移，"下载了却读不到"就是必然的下一步。
+ */
+export const MAP_CACHE_SUBDIR = 'map-cache'
+
+/**
+ * 一块瓦片在存储根里的**相对路径**（主进程落盘与渲染层拼 `file://` 是同一份）。
+ * 结构：`map-cache/<service>/z/x/y.png`（业主 20260921 批给定的目录结构）。
+ */
+export function tileCacheRelativePath(
+  service: MapTileServiceId,
+  z: number,
+  x: number,
+  y: number
+): string {
+  return `${MAP_CACHE_SUBDIR}/${service}/${z}/${x}/${y}.png`
+}
+
+/** 一次缓存下载的经纬度区域（西南角 → 东北角，度数）。 */
+export interface TileCacheBounds {
+  minLat: number
+  minLon: number
+  maxLat: number
+  maxLon: number
+}
+
+/**
+ * 一个经纬度区域在某个缩放级别上覆盖的瓦片行列范围（两端都含）。
+ *
+ * 用 Web Mercator 的世界像素坐标算（与 `viewTiles` 同一套投影）：`floor(坐标 / 256)`
+ * 即瓦片索引。纬度先夹到 `±MAX_MERCATOR_LATITUDE`——Web Mercator 在两极之外没有瓦片。
+ */
+export function tileRangeForBounds(
+  bounds: TileCacheBounds,
+  z: number
+): { xMin: number; xMax: number; yMin: number; yMax: number } | null {
+  if (!isTileZoom(z)) return null
+  const world = TILE_SIZE * 2 ** z
+  const left = lonToWorldX(bounds.minLon, z)
+  const right = lonToWorldX(bounds.maxLon, z)
+  const top = latToWorldY(bounds.maxLat, z)
+  const bottom = latToWorldY(bounds.minLat, z)
+  if (![left, right, top, bottom].every(Number.isFinite)) return null
+  const clampX = (value: number) => Math.max(0, Math.min(world - TILE_SIZE, value))
+  const clampY = (value: number) => Math.max(0, Math.min(world - TILE_SIZE, value))
+  return {
+    xMin: Math.floor(clampX(left) / TILE_SIZE),
+    xMax: Math.floor(clampX(right) / TILE_SIZE),
+    yMin: Math.floor(clampY(top) / TILE_SIZE),
+    yMax: Math.floor(clampY(bottom) / TILE_SIZE)
+  }
 }
 
 // ---------------------------------------------------------------------------

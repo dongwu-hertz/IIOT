@@ -56,6 +56,13 @@ export interface AlarmSoundEntry {
   fileName: string
 }
 
+/** 一处「开/关 + 选哪个声音」的绑定（业主 20260921 批）。 */
+export interface AlarmSoundBinding {
+  enabled: boolean
+  /** 声音库条目 id；空串 = 未选择。 */
+  soundId: string
+}
+
 /** 声音库整块（`AppSettings.alarmSounds`）。 */
 export interface AlarmSoundLibrary {
   items: AlarmSoundEntry[]
@@ -68,6 +75,16 @@ export interface AlarmSoundLibrary {
    * 它**不是**「哪一类告警用哪个声音」——那个绑定留给下一轮。
    */
   defaultSoundId: string
+  /**
+   * **告警联动弹窗提示音**（业主 20260921 批）：联动弹窗弹出时播不播、播哪一个。
+   * 音源就是本库的条目（`soundId` 指向 `items` 里的一条）。缺省 = 关 + 未选择。
+   */
+  popup?: AlarmSoundBinding
+  /**
+   * **设备推送告警提示音**（业主 20260921 批）：设备推送的告警到达时播不播、播哪一个。
+   * 与 `popup` 同一形状、同一音源。
+   */
+  push?: AlarmSoundBinding
 }
 
 /** 出厂默认声音（新建声音项时的初值，也是「恢复默认」之后的值）。 */
@@ -227,6 +244,35 @@ export function normaliseAlarmSoundLibrary(value: unknown): {
   ]
 
   const ids = new Set(items.map((item) => item.id))
+
+  /**
+   * 两个绑定（业主 20260921 批）逐字段回落：`enabled` 只认真布尔、`soundId` 只认
+   * 库里真实存在的条目 id（ pointing at 一条已经被删掉的声音等于没选）。旧数据没有
+   * 这两个字段 —— 回落到「关 + 未选择」，不因此作废整库。
+   */
+  const normaliseBinding = (raw: unknown): AlarmSoundBinding | undefined => {
+    if (raw === undefined) return undefined
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      issues.push('binding')
+      return undefined
+    }
+    const record = raw as Record<string, unknown>
+    if (record.enabled !== undefined && typeof record.enabled !== 'boolean') {
+      issues.push('binding.enabled')
+    }
+    const soundId = typeof record.soundId === 'string' ? record.soundId.trim() : ''
+    if (record.soundId !== undefined && typeof record.soundId !== 'string') {
+      issues.push('binding.soundId')
+    }
+    if (soundId !== '' && !ids.has(soundId)) {
+      issues.push('binding.soundId(unknown)')
+      return { enabled: false, soundId: '' }
+    }
+    return { enabled: record.enabled === true, soundId }
+  }
+  const popup = normaliseBinding(source.popup)
+  const push = normaliseBinding(source.push)
+
   const rawDefault = typeof source.defaultSoundId === 'string' ? source.defaultSoundId.trim() : ''
   let defaultSoundId = rawDefault
   if (defaultSoundId === '' || !ids.has(defaultSoundId)) {
@@ -241,5 +287,8 @@ export function normaliseAlarmSoundLibrary(value: unknown): {
     selectedId = ''
   }
 
-  return { library: { items, selectedId, defaultSoundId }, issues }
+  const library: AlarmSoundLibrary = { items, selectedId, defaultSoundId }
+  if (popup) library.popup = popup
+  if (push) library.push = push
+  return { library, issues }
 }

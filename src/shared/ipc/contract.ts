@@ -167,7 +167,12 @@ import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
  * 形状与纯规则在 `@shared/domain/map-tiles`：XYZ 模板、只允许 https、可选 key/子域、
  * 时区→中心、缩放 2–18。设置页与地图页引用同一份判据，契约层只负责把它带过 IPC。
  */
-import type { MapServiceEntry, MapTilesConfig } from '../domain/map-tiles'
+import type {
+  MapServiceEntry,
+  MapTilesConfig,
+  MapTileServiceId,
+  TileCacheBounds
+} from '../domain/map-tiles'
 import type { AiServicePresetId } from '../domain/sample-ai'
 
 /**
@@ -222,6 +227,15 @@ export const IpcChannels = {
    * 扩展名判一次。返回 `null` = 用户取消。
    */
   SETTINGS_PICK_ALARM_SOUND: 'settings:pick-alarm-sound',
+
+  /**
+   * 瓦片缓存下载（业主 20260921 批：设置里选服务 + 缩放级别范围 + 经纬度区域，
+   * 把瓦片下载到存储根 `map-cache/<service>/z/x/y.png`，离线复用）。
+   *
+   * 写操作（写存储根、主动出网下载），权限与 `settings:update` 同档：管理员 +
+   * `manageSystemSettings`。进度经 `PushChannels.MAP_CACHE_PROGRESS` 推送。
+   */
+  MAP_CACHE_TILES: 'map:cache-tiles',
 
   /**
    * IoT 数据接入的运行状态（业主 2026-09-19 第 1 条）。
@@ -802,7 +816,13 @@ otify_url）。
    * 与其它遥测推送同一条理由：数据由主进程 HTTP 监听接收，渲染层只订阅；
    * 界面挂载或切换设备时先读一次状态里的最新值，之后靠这条推送同步。
    */
-  E2_REALTIME_CALLBACK_VALUE: 'e2:realtime-value'
+  E2_REALTIME_CALLBACK_VALUE: 'e2:realtime-value',
+  /**
+   * 瓦片缓存下载进度（业主 20260921 批）。每处理一块瓦片推一次
+   * `MapTileCacheProgress`（done = 收尾那一次）；订阅方按自己发起的那一次认领
+   * （同一时间只会有一个下载任务 —— 服务内部串行化）。
+   */
+  MAP_CACHE_PROGRESS: 'map:cache-progress'
 } as const
 
 /** One step of a network change, pushed while it runs. */
@@ -933,6 +953,44 @@ export interface AppSettings {
 }
 
 export type AppSettingsPatch = Partial<AppSettings>
+
+/**
+ * 瓦片缓存下载请求（`MAP_CACHE_TILES` 的入参，业主 20260921 批）。
+ *
+ * 服务 + 模板/key/署名与 `MapTilesConfig` 同一份判据（下载器就是拿它们拼 `tileUrl()`），
+ * 外加缩放级别范围与经纬度区域。主进程在 handler 层收窄未知键，服务层再按共享层
+ * 判据校验一次。
+ */
+export interface MapTileCacheRequest {
+  service: MapTileServiceId
+  urlTemplate: string
+  apiKey: string
+  attribution: string
+  minZoom: number
+  maxZoom: number
+  bounds: TileCacheBounds
+}
+
+/** 一次缓存下载的汇总结果（`downloaded + skipped + failed` 恒等于 total）。 */
+export interface MapTileCacheResult {
+  downloaded: number
+  /** 磁盘上已存在而跳过（断点续下：重复下载不会重写已有瓦片）。 */
+  skipped: number
+  failed: number
+  /** 本次真正写盘的字节数（跳过的不计）。 */
+  bytes: number
+}
+
+/** 缓存下载进度推送（`MAP_CACHE_PROGRESS`）。 */
+export interface MapTileCacheProgress {
+  downloaded: number
+  skipped: number
+  failed: number
+  total: number
+  bytes: number
+  /** 最后一次推送为真；失败中断也以 done 收尾（failed/total 如实，结果走 IPC 错误）。 */
+  done: boolean
+}
 
 export interface DiskUsage {
   storageRoot: string
@@ -1991,7 +2049,7 @@ export interface RendererApi {
      * 打开原生文件对话框挑一个告警声音文件（只放 `.wav`）。
      *
      * 返回 `null` 表示取消。**文件内容不过 IPC**，只回一个本机绝对路径 ——
-     * 试听由渲染层给 `<audio>` 一个 `file://` 地址（见 `AlarmSoundLibrarySection`）。
+     * 试听由渲染层给 `<audio>` 一个 `file://` 地址（见 `AlarmSoundBindingSection`）。
      */
     pickAlarmSound(): Promise<DeviceResult<string | null>>
   }
@@ -2004,6 +2062,15 @@ export interface RendererApi {
    */
   ingest: {
     status(): Promise<DeviceResult<IotIngestRuntimeStatus>>
+  }
+
+  /**
+   * 瓦片缓存下载（业主 20260921 批）：设置「集成 → 地图」卡里发起，
+   * 进度靠 `window.events.onMapTileCacheProgress` 推送。写存储根 + 出网下载，
+   * 所以与 `settings:update` 同档权限。
+   */
+  mapTiles: {
+    cacheTiles(input: MapTileCacheRequest): Promise<DeviceResult<MapTileCacheResult>>
   }
 
   auth: {
@@ -2894,4 +2961,11 @@ export interface RendererEvents {
   onCameraUpgradeProgress: EventSubscription<
     import('../domain/camera-upgrade').CameraUpgradeProgressEvent
   >
+
+  /**
+   * 瓦片缓存下载进度（业主 20260921 批）：下载 n/total 实时推进，
+   * 收尾那一次 `done = true`。返回退订函数，卸载时必须调用。
+   */
+  onMapTileCacheProgress: EventSubscription<MapTileCacheProgress>
 }
+

@@ -7,10 +7,10 @@
  * never inspected here — labels come from `describeAlarmMask()`, and per-row
  * chips come from the decoded `alarmTypes` array on the domain model.
  *
- * 筛选分两档（业主 2026-09-19 同一条）：
- *   · **简单筛选**一直显示（设备 / 等级 / 确认状态）—— 值守时最常用的三个；
- *   · **更多筛选**默认收起（时间起止 / 通道 / 告警类型）—— 偶尔才用一次。
- *   收起的那些**仍然在起作用**，所以按钮上带着生效项数（否则列表变短没人解释得了）。
+ * 筛选区是**字段式表单行**（业主 20260921 第二批：参照工业软件表单，左侧 label
+ * 右对齐灰字 + 右侧控件，一行一项）：设备 / 告警类型 / 时间范围 / 标题 / 内容，
+ * 每行占筛选总宽 50%（<900px 回落 100%），最后一行是操作按钮
+ * （重置 / 批量确认 / 取消确认 / 加入样本库）。
  *
  * The detail drawer embeds the shared `RecordingPlayer`, which loads the alarm's
  * local recording through `window.api.playback.load(recordingId)`. An alarm only
@@ -23,7 +23,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import type { AlarmEvent, AlarmQuery } from '@shared/domain/models'
-import { ALARM_NOTE_MAX_LENGTH } from '@shared/domain/models'
+import { ALARM_NOTE_MAX_LENGTH, AlarmType } from '@shared/domain/models'
 import type { EventSeverity } from '@shared/domain/event-center'
 /**
  * Labels come from the RENDERER's `lib/labels`, not from
@@ -51,27 +51,46 @@ const devices = useDevicesStore()
 const detailDialog = useDeviceDetailDialogStore()
 
 /**
- * 筛选（业主重构 2026：只留「标题 + 内容 + 时间范围」，同一行；更多筛选整个删掉）。
- *   · 标题 = 设备名关键字（哪台设备的）；
- *   · 内容 = 备注 / 设备告警原因文本关键字（记录里写了什么的）；
- *   · 时间范围 = 一个日历（DateRangePicker，开始与结束在同一个日历里选）。
- * `deviceId` 不在界面上 —— 它是「设备详情 → 查看告警记录」带进来的隐藏条件。
+ * 筛选（业主 20260921 第二批：字段式表单行，一行一项，每行 50% 宽）。
+ *   · 设备 = 下拉到某一台（「全部设备」= 不限）；`deviceId` 也被「设备详情 → 查看告警记录」
+ *     的 `?device=<id>` 预置成隐藏条件；
+ *   · 告警类型 = 下拉到附录 B 的某一个位（「全部类型」= 不限），直接进 `AlarmQuery.alarmType`；
+ *   · 时间范围 = 一个日历（DateRangePicker，开始与结束在同一个日历里选）；
+ *   · 标题 = 设备名关键字（哪台设备的）；内容 = 备注 / 设备告警原因文本关键字。
  */
 interface FilterState {
-  title: string
-  content: string
+  deviceId: string
+  alarmType: AlarmType | ''
   from: string
   to: string
-  deviceId: string
+  title: string
+  content: string
 }
 
 const filters = reactive<FilterState>({
-  title: '',
-  content: '',
+  deviceId: '',
+  alarmType: '',
   from: '',
   to: '',
-  deviceId: ''
+  title: '',
+  content: ''
 })
+
+/**
+ * 告警类型下拉的全部选项（附录 B，Bit0–Bit13）。
+ * `AlarmType` 是纯数字枚举，取数值成员即得升序位序——与 `alarm-mask.ts` 里
+ * `ALL_ALARM_TYPES` 同一个取法；文案走 `alarmTypeLabel()`（shared 只给稳定键，
+ * 渲染层翻译），界面不做任何 bit 运算。
+ */
+const ALARM_TYPE_OPTIONS: readonly AlarmType[] = Object.values(AlarmType).filter(
+  (value): value is AlarmType => typeof value === 'number'
+)
+
+/** 类型下拉变化：空串 = 「全部类型」，否则转回数字枚举。 */
+function onAlarmTypeChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value
+  filters.alarmType = value === '' ? '' : (Number(value) as AlarmType)
+}
 
 /**
  * 等级选项（详情抽屉里人工改判用）。
@@ -160,11 +179,12 @@ const canNext = computed(() => page.value.offset + rows.value.length < alarms.to
  */
 function buildQuery(): Partial<AlarmQuery> {
   return {
+    deviceId: filters.deviceId || undefined,
+    alarmType: filters.alarmType === '' ? undefined : filters.alarmType,
     title: filters.title.trim() || undefined,
     content: filters.content.trim() || undefined,
     from: fromDateTimeLocalValue(filters.from),
     to: fromDateTimeLocalValue(filters.to),
-    deviceId: filters.deviceId || undefined,
     limit: ALARM_PAGE_SIZE,
     offset: 0
   }
@@ -182,11 +202,12 @@ async function reload(): Promise<void> {
 }
 
 function reset(): void {
+  filters.deviceId = ''
+  filters.alarmType = ''
   filters.title = ''
   filters.content = ''
   filters.from = ''
   filters.to = ''
-  filters.deviceId = ''
   void reload()
 }
 
@@ -545,14 +566,45 @@ function openDevice(deviceId: string): void {
       它原来在「共 N 条 / 已选 M 条 + 批量动作」那一行**下面**，所以进页面第一眼看到的是
       计数与按钮，而不是"我在看哪一批"。现在顺序是：先选范围，再看结果与动作。
     -->
-    <section class="card" data-alarm-filters>
+    <section class="card alarm-filters" data-alarm-filters>
       <!--
-        业主重构：筛选只留「标题 + 内容 + 时间范围」，同一行；更多筛选整个删掉。
-        标题 = 设备名关键字；内容 = 备注/设备原因关键字；时间 = 一个日历（DateRangePicker）。
+        业主 20260921 第二批：字段式表单行（工业软件表单样式：左侧 label 右对齐灰字 +
+        右侧控件，一行一项）。设备 / 告警类型 / 时间范围 / 标题 / 内容各占一行，
+        每行（label + 控件一起）max-width 50%；最底下一行是操作按钮。
       -->
-      <div class="filter-bar alarm-filter-row" data-alarm-simple-filters>
-        <label class="field alarm-filter-row__title">
-          <span class="field-label">{{ t('alarmsUi.filterTitle') }}</span>
+      <div class="alarm-filter-form" data-alarm-simple-filters>
+        <div class="alarm-filter-row">
+          <span class="alarm-filter-row__label">{{ t('alarmsUi.filterDevice') }}</span>
+          <select v-model="filters.deviceId" class="select" data-filter-device>
+            <option value="">{{ t('alarmsUi.filterAllDevices') }}</option>
+            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
+              {{ device.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="alarm-filter-row">
+          <span class="alarm-filter-row__label">{{ t('alarmsUi.filterType') }}</span>
+          <select
+            class="select"
+            data-filter-alarm-type
+            :value="filters.alarmType"
+            @change="onAlarmTypeChange"
+          >
+            <option value="">{{ t('alarmsUi.filterAllTypes') }}</option>
+            <option v-for="type in ALARM_TYPE_OPTIONS" :key="type" :value="type">
+              {{ alarmTypeLabel(type) }}
+            </option>
+          </select>
+        </div>
+
+        <div class="alarm-filter-row">
+          <span class="alarm-filter-row__label">{{ t('alarmsUi.filterTimeRange') }}</span>
+          <DateRangePicker :from="filters.from" :to="filters.to" @apply="applyDateRange" />
+        </div>
+
+        <div class="alarm-filter-row">
+          <span class="alarm-filter-row__label">{{ t('alarmsUi.filterTitle') }}</span>
           <input
             v-model="filters.title"
             class="input"
@@ -560,10 +612,10 @@ function openDevice(deviceId: string): void {
             data-filter-title
             :placeholder="t('alarmsUi.filterTitleHint')"
           />
-        </label>
+        </div>
 
-        <label class="field alarm-filter-row__content">
-          <span class="field-label">{{ t('alarmsUi.filterContent') }}</span>
+        <div class="alarm-filter-row">
+          <span class="alarm-filter-row__label">{{ t('alarmsUi.filterContent') }}</span>
           <input
             v-model="filters.content"
             class="input"
@@ -571,63 +623,62 @@ function openDevice(deviceId: string): void {
             data-filter-content
             :placeholder="t('alarmsUi.filterContentHint')"
           />
-        </label>
+        </div>
 
-        <label class="field alarm-filter-row__range">
-          <span class="field-label">{{ t('alarmsUi.filterTimeRange') }}</span>
-          <DateRangePicker :from="filters.from" :to="filters.to" @apply="applyDateRange" />
-        </label>
-
-        <button
-          type="button"
-          class="btn filter-reset"
-          data-action="reset-alarm-filters"
-          @click="reset"
-        >
-          {{ t('common.reset') }}
-        </button>
+        <!--
+          操作行：重置 + 批量动作同一行（业主 20260921 第二批：四颗按钮挪进筛选卡）。
+          「加入样本库」需要选中行；批量确认 / 取消确认沿用原来的勾选逻辑与 IPC。
+        -->
+        <div class="btn-row alarm-filter-actions">
+          <button
+            type="button"
+            class="btn btn--sm"
+            data-action="reset-alarm-filters"
+            @click="reset"
+          >
+            {{ t('common.reset') }}
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm"
+            :disabled="bulkBusy || selectedIds.length === 0"
+            @click="bulkAcknowledge(true)"
+          >
+            {{ t('alarmsUi.bulkAcknowledge') }}
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm"
+            :disabled="bulkBusy || selectedIds.length === 0"
+            @click="bulkAcknowledge(false)"
+          >
+            {{ t('alarmsUi.bulkUnacknowledge') }}
+          </button>
+          <!--
+            「加入样本库」放在这里而不是只在抽屉里：一次巡检往往要挑十几条典型告警，
+            逐条开抽屉太慢（业主 2026-09-16 的样本库需求）。
+          -->
+          <button
+            type="button"
+            class="btn btn--sm"
+            :disabled="bulkBusy || selectedIds.length === 0"
+            @click="addSelectedToSamples"
+          >
+            {{ t('alarmsUi.addSelectedToSamples') }}
+          </button>
+        </div>
       </div>
     </section>
 
     <!--
-      计数与批量动作。放在筛选卡**下面**：它描述的是"这一批结果"，而范围在上面已经选好了。
+      计数。放在筛选卡**下面**：它描述的是"这一批结果"，而范围在上面已经选好了。
       没有页面标题（产品要求：外层框架已经写了「告警中心」），留下的是**副标题**
-      （共 N 条 / 已选 M 条）与批量按钮。
+      （共 N 条 / 已选 M 条）；批量动作已挪进上面的筛选卡操作行。
     -->
     <div class="page-header">
       <p class="page-subtitle">
         {{ t('alarmsUi.countSummary', { total: alarms.total, selected: selectedIds.length }) }}
       </p>
-      <div class="btn-row">
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="bulkBusy || selectedIds.length === 0"
-          @click="bulkAcknowledge(true)"
-        >
-          {{ t('alarmsUi.bulkAcknowledge') }}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="bulkBusy || selectedIds.length === 0"
-          @click="bulkAcknowledge(false)"
-        >
-          {{ t('alarmsUi.bulkUnacknowledge') }}
-        </button>
-        <!--
-          「加入样本库」放在这里而不是只在抽屉里：一次巡检往往要挑十几条典型告警，
-          逐条开抽屉太慢（业主 2026-09-16 的样本库需求）。
-        -->
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="bulkBusy || selectedIds.length === 0"
-          @click="addSelectedToSamples"
-        >
-          {{ t('alarmsUi.addSelectedToSamples') }}
-        </button>
-      </div>
     </div>
 
     <p v-if="alarms.error" class="alert alert--danger" role="alert">{{ alarms.error }}</p>
@@ -980,30 +1031,57 @@ function openDevice(deviceId: string): void {
 
 <style scoped>
 /*
- * 筛选行（业主重构）：标题 / 内容 / 时间范围同一行。
- * 标题与内容输入框吸收剩余宽度；时间范围选择器固定宽幅；重置贴最右。
+ * 筛选区（业主 20260921 第二批）：字段式表单行 —— 左侧 label 右对齐灰字 + 右侧控件，
+ * 一行一项；每行（label + 控件一起）占筛选总宽的 50%，<900px 回落 100%。
+ * 卡片内容随之紧凑（padding 收成 --space-3，行距 8px）。
  */
+.alarm-filters {
+  padding: var(--space-3);
+}
+
+.alarm-filter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .alarm-filter-row {
-  align-items: flex-end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* label + 控件一起 50%：与上面几行同宽，不与窄屏挤 calendar。 */
+  max-width: 50%;
 }
 
-.alarm-filter-row__title {
-  flex: 1 1 180px;
-  min-width: 140px;
+.alarm-filter-row__label {
+  flex: 0 0 72px;
+  text-align: right;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
 }
 
-.alarm-filter-row__content {
-  flex: 1 1 180px;
-  min-width: 140px;
+.alarm-filter-row .select,
+.alarm-filter-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-height-sm);
 }
 
-.alarm-filter-row__range {
-  flex: 0 0 auto;
-  width: 260px;
+/* DateRangePicker 根节点自带 min-width: 220px；50% 宽的行里要允许它收缩。 */
+.alarm-filter-row :deep(.range-picker) {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.alarm-filter-row .filter-reset {
-  margin-left: auto;
+/* 操作行：四颗按钮同一行，贴左与上面字段的控件左缘对齐。 */
+.alarm-filter-actions {
+  padding-left: calc(72px + var(--space-2));
+}
+
+@media (max-width: 900px) {
+  .alarm-filter-row {
+    max-width: 100%;
+  }
 }
 
 /* 行右键菜单：透明遮罩全屏兜点击，菜单钉在光标处。 */

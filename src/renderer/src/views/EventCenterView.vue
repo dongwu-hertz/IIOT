@@ -30,23 +30,20 @@ import type {
   EventDetectDownloadInput,
   EventDownloadProgress
 } from '@shared/ipc/contract'
-import { eventCenterPerSourceCap } from '@shared/domain/event-center'
+import { EVENT_SOURCE_KINDS, type EventSourceKind } from '@shared/domain/event-center'
 import {
   DRAWER_WIDTH_STORAGE_KEY,
   EVENT_FILTER_STORAGE_KEY,
-  EVENT_SAVED_VIEWS,
-  EVENT_VIEW_MODES,
-  EVENT_VIEW_MODE_STORAGE_KEY,
-  GROUP_WINDOW_CHOICES,
+  EVENT_SEVERITY_FILTERS,
   ackFilterToQuery,
   activityRows,
   alertOverviewFields,
+  alertSeverityLabelKey,
   alertStatusLabelKey,
   alertTimeline,
   clampDrawerWidth,
   drawerWidthForViewport,
   emptyEventFilter,
-  eventFilterCounts,
   eventFilterFromQuery,
   eventFilterToQuery,
   evidenceImageSource,
@@ -56,10 +53,8 @@ import {
   matchEventSearch,
   parseDrawerWidth,
   parseEventFilter,
-  parseEventViewMode,
   querySeverityFor,
   relatedGroups,
-  savedViewFromMs,
   serializeEventFilter,
   toAlertViewModels
 } from '@shared/domain/event-view'
@@ -68,11 +63,11 @@ import type {
   EventActivityView,
   EventDetailTab,
   EventQueueFilter,
-  EventSavedView,
-  EventStatusAction,
-  EventViewMode
+  EventSeverityFilter,
+  EventStatusAction
 } from '@shared/domain/event-view'
 import type { Fa371ResultFileKind } from '@shared/domain/fa371'
+import type { DeviceStatus } from '@shared/domain/models'
 import {
   DEFAULT_INCIDENT_THRESHOLD,
   INCIDENT_THRESHOLD_CHOICES,
@@ -85,7 +80,6 @@ import type { IncidentThreshold, IncidentView } from '@shared/domain/incident'
 import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
 import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
-import EventFilterPanel from '@renderer/components/event-center/EventFilterPanel.vue'
 import IncidentCreateDialog from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import type { IncidentCandidate } from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
@@ -104,8 +98,7 @@ import {
   formatDateTime,
   formatDuration,
   formatNumber,
-  fromDateTimeLocalValue,
-  toDateTimeLocalValue
+  fromDateTimeLocalValue
 } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { EVENT_PAGE_SIZE, eventDownloadKey, useEventCenterStore } from '@renderer/stores/eventCenter'
@@ -149,20 +142,78 @@ function readInitialFilter(): EventQueueFilter {
 
 const filters = reactive<EventQueueFilter>(readInitialFilter())
 
-/** 视图模式（规格 §10.2）：紧凑 / 标准 / 证据，记住上次选的。 */
-function readInitialViewMode(): EventViewMode {
-  try {
-    return parseEventViewMode(window.localStorage.getItem(EVENT_VIEW_MODE_STORAGE_KEY))
-  } catch {
-    return 'standard'
+/**
+ * 队列里勾选中的行 id（筛选卡操作行的「确认所选」批量确认用）。
+ *
+ * 勾选是**本次操作**的临时状态：重查（改筛选 / 翻页 / 顶栏刷新）后数据已经换了，
+ * 旧勾选没有意义，一律清空 —— 与 AlarmsView 的批量确认同一套取舍。
+ */
+const selectedIds = ref<string[]>([])
+/** 行内展开详情的行 id（业主 20260921 批：点行的「时间」展开 / 收起）；`null` = 全部收起。 */
+const expandedId = ref<string | null>(null)
+
+/**
+ * 「事件类型」下拉的选项：只列**真的会出现**的那几档（`EVENT_SEVERITY_FILTERS`）+
+ * 「等级未知」，与旧筛选面板同一口径 —— 一个永远搜不到东西的筛选项比没有更糟。
+ */
+const severityOptions = computed(() =>
+  EVENT_SEVERITY_FILTERS.map((value) => ({
+    value,
+    label: value === 'unknown' ? t('eventsUi.severityUnknown') : t(alertSeverityLabelKey(value))
+  }))
+)
+
+/** 三个下拉（来源 / 事件类型 / 状态）：只改一处，其余不动（改了就会重新查询，见下面的 watch）。取值收窄回合法集，坏值退回「全部」。 */
+function onSourceFilterChange(value: string): void {
+  filters.source = (EVENT_SOURCE_KINDS as readonly string[]).includes(value)
+    ? (value as EventSourceKind)
+    : ''
+}
+
+function onSeverityFilterChange(value: string): void {
+  filters.severity = (EVENT_SEVERITY_FILTERS as readonly string[]).includes(value)
+    ? (value as EventSeverityFilter)
+    : ''
+}
+
+function onAckFilterChange(value: string): void {
+  filters.ack = value === 'acknowledged' || value === 'unacknowledged' ? value : 'all'
+}
+
+/** 展开详情里「设备状态」徽标查的设备当前状态（行内 deviceId → 设备表；查不到由组件兜底「未知」）。 */
+function deviceStatusOf(deviceId: string): DeviceStatus | undefined {
+  return devices.byId(deviceId)?.status
+}
+
+function onToggleSelected(id: string, checked: boolean): void {
+  if (checked) {
+    if (!selectedIds.value.includes(id)) selectedIds.value = [...selectedIds.value, id]
+  } else {
+    selectedIds.value = selectedIds.value.filter((item) => item !== id)
   }
 }
 
-const viewMode = ref<EventViewMode>(readInitialViewMode())
-/** 左侧筛选面板是否展开。**不持久化**：这是本次操作的临时状态，不是偏好（规格 §16.3 只要求视图模式）。 */
-const filterPanelOpen = ref(true)
-/** 最近一次点过的内置视图；手动改任何一项筛选就清空（不给一个假的"当前视图"高亮）。 */
-const activeSavedViewId = ref<string | null>(null)
+/** 点行的「时间」（或展开钮）：展开 / 收起是同一个动作 —— 再点一下即收起。 */
+function onToggleExpand(alert: AlertViewModel): void {
+  expandedId.value = expandedId.value === alert.id ? null : alert.id
+}
+
+/**
+ * 批量确认勾选中的事件（筛选卡操作行的「确认所选」）。
+ *
+ * 走 store 的 `acknowledge`：确认按来源分派（联动 / 声纹 / 设备状态；相机检测日志
+ * 没有确认接口，主进程会明确拒绝而不是静默忽略），不写乐观更新，回来用逐来源
+ * 结果说话。失败原文留在 `store.error`（顶栏那一条红字），不另造一份。
+ */
+async function acknowledgeSelected(): Promise<void> {
+  if (selectedIds.value.length === 0) return
+  const result = await store.acknowledge([...selectedIds.value])
+  if (!result) return
+  selectedIds.value = []
+  store.notice = t('eventsUi.statusChangeDone', {
+    status: t(alertStatusLabelKey('acknowledged'))
+  })
+}
 
 /**
  * 抽屉里的那一条（规格 §16.2 的 `eventSelection`）。
@@ -196,7 +247,7 @@ const incidentError = ref('')
 /**
  * 建议卡的阈值（**可调**，业主 2026-09-18：「可以设置为可调整的」）。
  *
- * 与事件中心的其它偏好（视图模式 / 抽屉宽度 / 筛选）同一套：读一次、改了就写回本机。
+ * 与事件中心的其它偏好（抽屉宽度 / 筛选）同一套：读一次、改了就写回本机。
  * 规格 §13.2 只说"当相关性达到阈值时"，**阈值本身手册未说明** —— 所以它由操作员定，
  * 默认档与可选档写在 `@shared/domain/incident` 里（离散档位，不是一个自由输入框）。
  */
@@ -377,15 +428,14 @@ const allAlerts = computed(() => toAlertViewModels(store.items))
 /**
  * 队列里显示的告警。
  *
- * 关键字是**在已加载的这一页里**匹配的（主进程的查询没有关键字参数，三路来源的检索
- * 是三件不同的事），所以 `searchScope` 必须把这件事说出来。
+ * `matchEventSearch` 仍走纯函数：关键字留在筛选状态里（URL / localStorage 兼容，
+ * 旧链接里的 `?search=` 仍生效），只是这一版筛选卡不再提供输入框，恒为空串 = 全匹配。
  */
 const alerts = computed(() =>
   allAlerts.value.filter((alert) =>
     matchEventSearch(alert, filters.search, eventKindLabel(alert.kind))
   )
 )
-const counts = computed(() => eventFilterCounts(alerts.value))
 const page = computed(() => store.page)
 const canPrev = computed(() => page.value.offset > 0)
 const canNext = computed(() => page.value.offset + rows.value.length < store.total)
@@ -394,23 +444,14 @@ const isAdmin = computed(() => session.isAdmin)
 /** 相机检测库这一路的读况（决定下载按钮是否可用）。 */
 const detectStatus = computed(() => store.sources.find((source) => source.source === 'deviceDetect'))
 
-/**
- * 本次查询每路来源的读取上限。
- *
- * 与主进程算的是**同一个纯函数**，所以「截断说明」里的数字不会跟实际行为分叉；
- * 在渲染层算只是为了一句诚实的文案，真正的上限仍由主进程执行。
- */
-const perSourceCap = computed(() => eventCenterPerSourceCap(page.value.limit, page.value.offset))
-
 const hasActiveFilters = computed(() => isEventFilterActive(filters))
-const searchActive = computed(() => filters.search.trim() !== '')
 
 /**
  * 「来源读况」只在**有话说**时渲染。
  *
- * 三路都读到了、也没截断时，这块卡片只是三行绿字，却占掉了队列的第一屏 —— 而来源条数
- * 已经在左侧筛选面板里逐路给出了。一旦某一路失败或被截断，它立刻出现（并且是页面级的
- * 警示，不随面板折叠而消失）。
+ * 三路都读到了、也没截断时，这块卡片只是三行绿字，却占掉了队列的第一屏。一旦某一路
+ * 失败或被截断，它立刻出现（并且是页面级的警示，不随筛选卡折叠而消失）——页面顶部
+ * 那条黄色截断横幅按业主要求整段删除后，「结果被截断」这一事实由这里与徽标说清。
  */
 const sourcesNeedAttention = computed(() =>
   store.sources.some((source) => !source.ok || source.truncated > 0)
@@ -434,58 +475,28 @@ function buildQuery(): Partial<EventCenterQuery> {
   const acknowledged = ackFilterToQuery(filters.ack)
   if (acknowledged !== undefined) query.acknowledged = acknowledged
   // 聚合窗口（规格 §14.1）：0 = 不聚合。**总是带上**（包括 0），
-  // 否则"关掉聚合"会被主进程的缺省值（10 分钟）顶回来。
+  // 否则"关掉聚合"会被主进程的缺省值（10 分钟）顶回来。筛选卡这一版不再提供档位
+  // 选择，恒用状态里的默认档（10 分钟）。
   query.groupWindowMs = groupWindowMsFor(filters.groupWindow)
   return query
 }
 
 async function reload(): Promise<void> {
   closeDetail()
+  // 数据换了：勾选与行内展开都是"对这一批"的临时状态，一并清空。
+  selectedIds.value = []
+  expandedId.value = null
   await store.applyQuery(buildQuery())
 }
 
 /** 日历范围选择器（一个日历）选完：两个格一起进筛选状态，由 watch 重新查询。 */
 function applyDateRange(value: { from: string; to: string }): void {
-  activeSavedViewId.value = null
   filters.from = value.from
   filters.to = value.to
 }
 
-/** 筛选面板点一下：只改一处，其余不动（改了就会重新查询，见下面的 watch）。 */
-function patchFilter(patch: Partial<EventQueueFilter>): void {
-  activeSavedViewId.value = null
-  Object.assign(filters, patch)
-}
-
 function clearFilters(): void {
-  activeSavedViewId.value = null
   Object.assign(filters, emptyEventFilter())
-}
-
-/**
- * 应用一个内置视图（规格 §9.4）。
- *
- * 视图是**一组筛选**，不是另一份数据：它把等级/确认状态/时间窗口写进同一份筛选状态，
- * 后面走的还是同一条查询与同一份队列。
- */
-function applySavedView(view: EventSavedView): void {
-  activeSavedViewId.value = view.id
-  const fromMs = savedViewFromMs(view, Date.now())
-  const next = emptyEventFilter()
-  next.severity = view.severity ?? ''
-  next.ack = view.ack ?? 'all'
-  // 时间窗口按本机时区换算成 `datetime-local` 的字符串 —— 那个控件要的就是本地墙上时间。
-  next.from = fromMs === undefined ? '' : toDateTimeLocalValue(fromMs)
-  Object.assign(filters, next)
-}
-
-function setViewMode(mode: EventViewMode): void {
-  viewMode.value = mode
-  try {
-    window.localStorage.setItem(EVENT_VIEW_MODE_STORAGE_KEY, mode)
-  } catch {
-    // 偏好存不下不影响使用（与侧栏折叠同一条取舍：读写各自 try/catch）。
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -539,16 +550,16 @@ function persistFilter(): void {
   try {
     window.localStorage.setItem(EVENT_FILTER_STORAGE_KEY, serializeEventFilter(filters))
   } catch {
-    // 同 `setViewMode`：偏好存不下不影响使用。
+    // 偏好存不下不影响使用（与侧栏折叠同一条取舍：读写各自 try/catch）。
   }
   void router.replace({ query: eventFilterToQuery(filters) })
 }
 
 // 与 `AlarmsView` 同一条取舍：改筛选就查，不额外要求点一次「查询」。
 //
-// **但关键字不重新查询**：搜索是在**已加载的这一页**里做的（`matchEventSearch`），它不改变
-// 查询参数。把 `search` 也算进来，每敲一个字就会去读一次设备 —— 相机的检测日志是一次 HTTP
-// 请求，那不是搜索该有的代价（而且它换不来更全的结果）。
+// 三个下拉（来源 / 事件类型 / 状态）与日历都落在下面这些字段上，任何一处改动都会
+// 走到 `reload()`。关键字（`search`）留在筛选状态里只为 URL / localStorage 兼容，
+// 不改变查询参数，所以**不在**这一组里。
 watch(
   () => [
     filters.deviceId,
@@ -565,7 +576,7 @@ watch(
   }
 )
 
-// 关键字只影响地址栏与 localStorage（刷新或把链接发出去之后，还是同一个搜索词）。
+// 筛选只影响地址栏与 localStorage（刷新或把链接发出去之后，还是同一个视图）。
 watch(
   () => ({ ...filters }),
   () => {
@@ -955,6 +966,9 @@ const overviewFields = computed(() => (detail.value ? alertOverviewFields(detail
 
 async function goToPage(offset: number): Promise<void> {
   closeDetail()
+  // 翻页与重查同一条规矩：勾选与行内展开都属于"对这一批"的临时状态。
+  selectedIds.value = []
+  expandedId.value = null
   await store.goToPage(offset)
 }
 </script>
@@ -966,125 +980,102 @@ async function goToPage(offset: number): Promise<void> {
     <p v-else-if="store.notice" class="alert alert--success" role="status">{{ store.notice }}</p>
 
     <!--
-      截断说明。每路来源都有读取上限，超出的部分不会被静默丢掉——
-      这一行就是「本次结果不完整」的显式声明。
+      筛选卡（业主 20260921 批）：字段式表单行，左侧固定宽灰字 label + 右侧控件，
+      一行一项、每行占筛选总宽 50%（<900px 回落 100%）。来源 / 事件类型 / 状态由
+      旧筛选面板的 chips 改成下拉 —— 过滤逻辑与 i18n 键全部复用，只换了控件。
+      最下面是操作行：重置 + 确认所选（有勾选时才出现）。
     -->
-    <p v-if="store.truncated" class="alert alert--warning" role="status">
-      {{ t('eventsUi.truncated', { cap: perSourceCap }) }}
-    </p>
-
-    <section class="card">
-      <div class="filter-bar">
-        <div class="field event-filters__search">
-          <input
-            v-model="filters.search"
-            class="input"
-            type="search"
-            :placeholder="t('eventsUi.searchPlaceholder')"
-            :aria-label="t('eventsUi.searchPlaceholder')"
-          />
-        </div>
-
-        <label class="field event-filters__range">
+    <section class="card event-filters" data-event-filters>
+      <div class="event-filters__grid">
+        <label class="field event-filters__row">
           <span class="field-label">{{ t('eventsUi.filterTimeRange') }}</span>
           <DateRangePicker :from="filters.from" :to="filters.to" @apply="applyDateRange" />
         </label>
 
-        <button
-          v-if="hasActiveFilters"
-          type="button"
-          class="btn event-filters__clear"
-          @click="clearFilters"
-        >
-          {{ t('eventsUi.clearFilters') }}
-        </button>
-      </div>
-
-      <div class="filter-bar filter-bar--views">
-        <div class="field">
-          <span class="field-label">{{ t('eventsUi.savedViewTitle') }}</span>
-          <div class="btn-row">
-            <button
-              v-for="view in EVENT_SAVED_VIEWS"
-              :key="view.id"
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--primary': activeSavedViewId === view.id }"
-              :aria-pressed="activeSavedViewId === view.id"
-              @click="applySavedView(view)"
-            >
-              {{ t(view.labelKey) }}
-            </button>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="field-label">{{ t('eventsUi.groupWindowLabel') }}</span>
+        <label class="field event-filters__row">
+          <span class="field-label">{{ t('eventsUi.filterSource') }}</span>
           <select
-            v-model="filters.groupWindow"
             class="select"
-            data-field="group-window"
-            @change="activeSavedViewId = null"
+            data-field="event-source"
+            :value="filters.source"
+            @change="onSourceFilterChange(($event.target as HTMLSelectElement).value)"
           >
-            <option v-for="choice in GROUP_WINDOW_CHOICES" :key="choice.id" :value="choice.id">
-              {{ t(choice.labelKey) }}
+            <option value="">{{ t('eventsUi.filterAllSources') }}</option>
+            <option v-for="source in EVENT_SOURCE_KINDS" :key="source" :value="source">
+              {{ eventSourceLabel(source) }}
             </option>
           </select>
-        </div>
+        </label>
 
-        <div class="field">
-          <span class="field-label">{{ t('eventsUi.filterPanelToggle') }}</span>
-          <div class="btn-row">
-            <button
-              type="button"
-              class="btn btn--sm"
-              :aria-pressed="filterPanelOpen"
-              data-action="filter-panel-toggle"
-              @click="filterPanelOpen = !filterPanelOpen"
-            >
-              {{ t('eventsUi.filterPanelTitle') }}
-            </button>
-            <button
-              v-for="mode in EVENT_VIEW_MODES"
-              :key="mode"
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--primary': viewMode === mode }"
-              :aria-pressed="viewMode === mode"
-              :data-view-mode="mode"
-              @click="setViewMode(mode)"
-            >
-              {{ t(`eventsUi.viewMode.${mode}`) }}
-            </button>
-          </div>
-        </div>
+        <label class="field event-filters__row">
+          <span class="field-label">{{ t('eventsUi.filterSeverity') }}</span>
+          <select
+            class="select"
+            data-field="event-severity"
+            :value="filters.severity"
+            @change="onSeverityFilterChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ t('eventsUi.filterAllSeverities') }}</option>
+            <option v-for="option in severityOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <label class="field event-filters__row">
+          <span class="field-label">{{ t('eventsUi.filterAck') }}</span>
+          <select
+            class="select"
+            data-field="event-ack"
+            :value="filters.ack"
+            @change="onAckFilterChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="all">{{ t('eventsUi.ackAll') }}</option>
+            <option value="acknowledged">{{ t('eventsUi.ackAcknowledged') }}</option>
+            <option value="unacknowledged">{{ t('eventsUi.ackUnacknowledged') }}</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="event-filters__actions">
+        <!-- 「确认所选」只在勾了行时出现（没有勾选时这个操作不存在，不是一个灰按钮）。 -->
+        <button
+          v-if="selectedIds.length > 0"
+          type="button"
+          class="btn btn--primary"
+          :disabled="store.ackBusy"
+          data-action="ack-selected"
+          @click="acknowledgeSelected"
+        >
+          {{ t('alarmsUi.bulkAcknowledge') }}
+        </button>
+        <button
+          type="button"
+          class="btn"
+          data-action="reset-event-filters"
+          @click="clearFilters"
+        >
+          {{ t('common.reset') }}
+        </button>
       </div>
     </section>
 
     <div class="event-layout">
-      <EventFilterPanel
-        v-if="filterPanelOpen"
-        :filter="filters"
-        :counts="counts"
-        :devices="devices.devices"
-        :loaded="alerts.length"
-        @patch="patchFilter"
-      />
-
       <div class="event-main">
         <AlertQueue
           :alerts="alerts"
           :selected-id="selectedId"
-          :view-mode="viewMode"
+          :selected-ids="selectedIds"
+          :expanded-id="expandedId"
           :empty-title="emptyTitle"
+          :device-status-of="deviceStatusOf"
           @select="openDetail"
+          @toggle-selected="onToggleSelected"
+          @toggle-expand="onToggleExpand"
         />
 
         <div class="pager">
           <span class="muted">{{ t('eventsUi.countSummary', { total: store.total }) }}</span>
-          <span v-if="searchActive" class="muted">
-            {{ t('eventsUi.searchScope', { loaded: allAlerts.length }) }}
-          </span>
           <div class="btn-row">
             <button
               type="button"
@@ -1112,7 +1103,8 @@ async function goToPage(offset: number): Promise<void> {
       为什么」写在页面上——失败既不被吞掉，也不会让整页空白。
 
       只在**有话说**时出现（某一路失败 / 被截断）：三路都正常时这块卡片只是三行绿字，
-      却占掉队列的第一屏；来源条数已经在左侧筛选面板里逐路给出。
+      却占掉队列的第一屏。页面顶部那条黄色截断横幅删除后，「结果被截断」也由这里的
+      徽标逐路说清。
     -->
     <section v-if="sourcesNeedAttention" class="card sources">
       <h3 class="section-title">{{ t('eventsUi.sourcesTitle') }}</h3>
@@ -1687,9 +1679,57 @@ async function goToPage(offset: number): Promise<void> {
 
 <style scoped>
 /*
- * 三栏：左侧筛选面板（216，规格 §4.1）| 告警队列 | （详情抽屉是覆盖层，不占列）。
- * 面板收起来时 `1fr` 那一列自动铺满 —— 不需要第二套布局。
+ * 筛选卡（业主 20260921 批）：字段式表单行 —— 左侧固定宽灰字 label（右对齐），
+ * 右侧控件；一行一项、每行占筛选总宽 50%（<900px 回落 100%）。`.field` 全局是
+ * 上下排列（label 在上），这里把它改成左右排列。
  */
+.event-filters__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-5);
+  row-gap: var(--space-3);
+}
+
+.event-filters__row {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.event-filters__row > .field-label {
+  flex: 0 0 72px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 控件（下拉与日历选择器）吸收 label 剩下的宽度。 */
+.event-filters__row .select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.event-filters__row :deep(.range-picker) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 操作行：重置 + 确认所选（有勾选时才出现）同排，靠右与卡片边距对齐。 */
+.event-filters__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+@media (max-width: 900px) {
+  .event-filters__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .event-layout {
   display: flex;
   align-items: flex-start;
@@ -1702,21 +1742,6 @@ async function goToPage(offset: number): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-}
-
-.event-filters__search {
-  flex: 1 1 260px;
-  max-width: 320px;
-}
-
-/* 时间范围（一个日历）固定宽幅，与搜索框同一行。 */
-.event-filters__range {
-  flex: 0 0 auto;
-  width: 280px;
-}
-
-.event-filters__clear {
-  align-self: flex-end;
 }
 
 /*

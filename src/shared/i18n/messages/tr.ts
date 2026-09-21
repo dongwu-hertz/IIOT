@@ -148,10 +148,35 @@ export const tr: MessageSchema = {
 
     /** Sekmeler (mal sahibi 2026-09-17 ③: dil / depolama / video / alarmlar / e-posta / hesap / hakkında). */
     tabLanguage: 'Dil',
+    tabGeneral: 'Genel',
+    tabIntegration: 'Entegrasyonlar',
+    tabGisServices: 'GIS hizmetleri',
+    cacheCardTitle: 'Önbellek',
+    mapSourceLabel: 'Harita kaynağı',
+    mapSourceLocal: 'Yerel önbellekli harita',
+    mapSourceLocalHint: 'Bu makinede indirilmiş döşemeleri kullanır; önce aşağıdan indirin.',
+    mapDefaultBadge: 'Varsayılan',
+    mapKeyRequired: 'Bu servis bir API anahtarı gerektirir',
+    mapCacheGroup: 'Döşeme önbelleği indirmesi',
+    mapCacheZoomMin: 'Min. yakınlaştırma',
+    mapCacheZoomMax: 'Maks. yakınlaştırma',
+    mapCacheSouth: 'Güney',
+    mapCacheWest: 'Batı',
+    mapCacheNorth: 'Kuzey',
+    mapCacheEast: 'Doğu',
+    mapCacheUseCenter: 'Geçerli merkezi doldur',
+    mapCacheStart: 'İndirmeyi başlat',
+    mapCacheRunning: 'İndiriliyor…',
+    mapCacheNeedTemplate: 'Önce bir harita servisi seçin ve URL şablonunu doldurun.',
+    mapCacheBadZoom: 'Aralık {min}–{max} olmalı',
+    mapCacheBadBounds: 'Sınırlar geçerli değil',
+    mapCacheResult: 'İndirilen {downloaded} · atlanan {skipped} · başarısız {failed} · {size}',
+    mapCacheProgressText: 'İşlenen {done}/{total} (başarısız {failed})',
+    linkageEnabledOn: 'Etkin',
+    linkageEnabledOff: 'Devre dışı',
     tabStorage: 'Depolama',
     tabVideo: 'Video ve tampon',
     tabAlarm: 'Alarmlar',
-    tabEmail: 'E-posta',
 
     /*
      * GIS / çevrimiçi temel harita (mal sahibi 2026-09-19, ek madde 1).
@@ -160,7 +185,6 @@ export const tr: MessageSchema = {
      * lisans sınırları, varsayılan kapalı olma, yalnızca https, saat dilimine göre merkez ve
      * 2–18 yakınlaştırma bu yazılımın kendi tercihleridir; kurallar @shared/domain/map-tiles içinde.
      */
-    tabMap: 'Harita',
 
     mapGroupService: 'Temel harita servisi (çevrimiçi döşemeler)',
     mapEnable: 'Çevrimiçi temel haritayı etkinleştir',
@@ -191,9 +215,6 @@ export const tr: MessageSchema = {
     mapKeyHint: 'Tianditu ve benzeri servislerin anahtarını buraya koyun; yerel ayar veritabanında saklanır ve günlüklere yazılmaz.',
     mapAttribution: 'Atıf metni',
     mapAttributionHint: 'Haritanın sağ alt köşesinde gösterilir; katman etkinken boş bırakılamaz.',
-    mapTimezone: 'Merkez noktası (saat dilimine göre otomatik)',
-    mapTimezoneValue: 'Bilgisayar saat dilimi {zone} → {center}, başlangıç yakınlaştırması {zoom}',
-    mapTimezoneHint: 'Kılavuzda belirtilmemiştir: merkez tablosu ve başlangıç yakınlaştırması bu yazılımın kendi tercihidir; yakınlaştırma aralığı 2–18 olarak sabittir. Saat dilimi tanınmazsa 0, 0 (yakınlaştırma 2) kullanılır.',
     mapErrTemplateRequired: 'Çevrimiçi temel harita etkinleştirilirken XYZ şablonu zorunludur',
     mapErrTemplateProtocol: 'Yalnızca https:// adreslerine izin verilir (http, file veya başka protokoller kabul edilmez)',
     mapErrTemplateTokens: 'XYZ şablonu z, x ve y yer tutucularını içermelidir',
@@ -206,7 +227,6 @@ export const tr: MessageSchema = {
     tabAccount: 'Hesap',
     tabAbout: 'Hakkında ve bakım',
     /** YZ hizmetleri sekmesi (müşteri talebi: ayarlarda "farklı YZ hizmetleri" desteği). */
-    tabAi: 'YZ hizmetleri',
 
     /** GIS hizmet kitaplığı (Harita sekmesi içinde; talep: «GIS hizmeti ekle»). */
     mapServiceGroup: 'GIS hizmetleri',
@@ -2002,6 +2022,15 @@ export const tr: MessageSchema = {
    */
   alarmSoundUi: {
     title: 'Alarm sesi',
+    binding: {
+      popup: 'Alarm bağlantısı açılır pencere sesi',
+      push: 'Cihaz alarm gönderme sesi'
+    },
+    soundOn: 'Açık',
+    soundOff: 'Kapalı',
+    bindingNone: 'Seçilmedi',
+    bindingHint: 'Seçilen ses bağlantı pencereleri ve cihazdan gönderilen alarmlar için çalar.',
+    libraryGroup: 'Ses kitaplığı',
     addCustom: 'Özel alarm sesi ekle',
     defaultColumn: 'Öntanımlı',
     typeColumn: 'Tür',

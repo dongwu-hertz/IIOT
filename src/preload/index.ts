@@ -46,6 +46,8 @@ import type {
   Fa371VoiceprintPreview,
   Fa371WorkModeValue,
   LinkageTestEmailInput,
+  MapTileCacheProgress,
+  MapTileCacheRequest,
   MonitorState,
   MonitorSubscription,
   NetworkProgressEvent,
@@ -176,6 +178,15 @@ const api: RendererApi = {
    */
   ingest: {
     status: () => ipcRenderer.invoke(IpcChannels.IOT_INGEST_STATUS)
+  },
+
+  /**
+   * 瓦片缓存下载（业主 20260921 批）：设置「集成 → 地图」卡发起，
+   * 进度靠 `onMapTileCacheProgress` 推送。preload 只转发，校验与下载都在主进程。
+   */
+  mapTiles: {
+    cacheTiles: (input: MapTileCacheRequest) =>
+      ipcRenderer.invoke(IpcChannels.MAP_CACHE_TILES, input)
   },
 
   overview: {
@@ -615,7 +626,8 @@ const onNetworkProgress = (callback: (event: NetworkProgressEvent) => void): Uns
 const onLinkagePending = (callback: (event: PendingAlarmSnapshot) => void): Unsubscribe =>
   subscribe(PushChannels.LINKAGE_PENDING, callback)
 
-/** SN-16 ealtime_value：主进程 HTTP 回调监听收到后推给渲染层。 */
+/** SN-16 
+ealtime_value：主进程 HTTP 回调监听收到后推给渲染层。 */
 const onE2RealtimeValue = (callback: (event: E2RealtimeValueEvent) => void): Unsubscribe =>
   subscribe(PushChannels.E2_REALTIME_CALLBACK_VALUE, callback)
 
@@ -628,6 +640,14 @@ const onE2RealtimeValue = (callback: (event: E2RealtimeValueEvent) => void): Uns
 const onEventCenterDownloadProgress = (
   callback: (event: EventDownloadProgress) => void
 ): Unsubscribe => subscribe(PushChannels.EVENT_CENTER_DOWNLOAD_PROGRESS, callback)
+
+/**
+ * 瓦片缓存下载进度（业主 20260921 批）：下载 n/total 经这条推送推进，
+ * 收尾那一次 `done = true`。与其它订阅同一条纪律：返回退订函数，卸载时必须调用。
+ */
+const onMapTileCacheProgress = (
+  callback: (event: MapTileCacheProgress) => void
+): Unsubscribe => subscribe(PushChannels.MAP_CACHE_PROGRESS, callback)
 
 /**
  * 相机固件升级包的上传进度。
@@ -672,5 +692,6 @@ contextBridge.exposeInMainWorld('events', {
   onE2RealtimeValue,
   onEventCenterDownloadProgress,
   onCameraUpgradeProgress,
+  onMapTileCacheProgress,
   onAuthSession
 })
