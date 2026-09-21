@@ -255,6 +255,9 @@ describe('context menu enablement (the single rule)', () => {
      *     return，所以它**永远不会**被派发，把它塞进 `CameraNvrAction` 反而会让
      *    视图的 switch 多出一个不可达分支。
      * 两层（父项 + 子项）都按这个合并后的词表校验。
+     *
+     * 「翻转」三动作（业主 2026-09-21 第三批）只有在 context 里传了 `flips` 才产出，
+     * 所以这一组环境把 flips 也传上，否则词表里那四个 action 谁也不产出。
      */
     const vocabulary: readonly string[] = [...CAMERA_NVR_ACTIONS, ...CAMERA_NVR_SUBMENU_ACTIONS]
     const full = {
@@ -270,7 +273,9 @@ describe('context menu enablement (the single rule)', () => {
       }
     }
     const seen = new Set<string>()
-    for (const item of buildCameraNvrMenu(liveState(), full)) {
+    for (const item of buildCameraNvrMenu(liveState(), full, {
+      flips: { horizontal: false, vertical: false, quarter: true }
+    })) {
       seen.add(item.action as string)
       for (const child of item.submenu ?? []) seen.add(child.action as string)
     }
@@ -280,6 +285,75 @@ describe('context menu enablement (the single rule)', () => {
     // 合并后的词表必须**全部**被用到：一个谁也不产出的词表项意味着有人删菜单项时
     // 忘了删词表，下一个人就会照着它写出一个永远不出现的分支。
     assert.deepEqual([...seen].sort(), [...vocabulary].sort())
+  })
+
+  it('「翻转」子菜单：传了 flips 才出现，三项带当前状态的 ✓，不传则菜单不变', () => {
+    // 与监测页同一组能力（本机回放 + 检测记录下载都声明了），位置断言才有意义。
+    const monitorEnv: CameraNvrEnvironment = {
+      ...ENV,
+      capabilities: { ...ENV.capabilities, localPlayback: true, detectDownload: true }
+    }
+    /*
+     * 传（实时监测页）：出现在「外部播放器」之后、本机回放之前 —— 与「显示方式」
+     * 同族（"这一格画面怎么画"），排在本地动作组里、设备侧动作之前。
+     */
+    const flips = { horizontal: true, vertical: false, quarter: true }
+    const withFlips = buildCameraNvrMenu(liveState(), monitorEnv, { flips })
+    const flip = withFlips.find((item) => item.action === 'flip')
+    assert.ok(flip?.submenu, '传了 flips 却没有「翻转」子菜单')
+    assert.deepEqual(
+      (flip.submenu ?? []).map((child) => child.action),
+      ['flip-horizontal', 'flip-vertical', 'flip-quarter']
+    )
+    assert.deepEqual(
+      (flip.submenu ?? []).map((child) => child.labelKey),
+      [
+        'cameraNvrUi.menuFlipHorizontal',
+        'cameraNvrUi.menuFlipVertical',
+        'cameraNvrUi.menuFlipQuarter'
+      ]
+    )
+    assert.deepEqual(
+      (flip.submenu ?? []).map((child) => child.checked),
+      [true, false, true],
+      '✓ 没有跟着传入的翻转状态走'
+    )
+    assert.ok(
+      (flip.submenu ?? []).every((child) => child.enabled),
+      '翻转是纯本地画面变换，与流状态无关，恒为可点'
+    )
+    const actions = withFlips.map((item) => item.action)
+    assert.ok(
+      actions.indexOf('flip') > actions.indexOf('open-external') &&
+        actions.indexOf('flip') < actions.indexOf('playback'),
+      '「翻转」没有排在「外部播放器」之后、「本机回放」之前'
+    )
+    assert.equal(actions[actions.length - 1], 'alarm-config', '设备侧动作仍然排最后')
+
+    // 不传（画面墙）：与扩展前的菜单**逐项相同** —— 这是「新菜单项对既有页面零影响」
+    // 在本轮的那颗钉子。
+    const withoutFlips = buildCameraNvrMenu(liveState(), monitorEnv).map((item) => item.action)
+    assert.equal(
+      withoutFlips.includes('flip'),
+      false,
+      '没传 flips 的调用方菜单里出现了「翻转」'
+    )
+    assert.deepEqual(withoutFlips, [
+      'capture',
+      'toggle-fullscreen',
+      'copy-rtsp',
+      'open-external',
+      'playback',
+      'download-detect',
+      'alarm-config'
+    ])
+
+    // 声纹设备（liveVideo=false）：即使传了 flips 也不出现 —— 设备族做不到的整项不画。
+    const box = buildCameraNvrMenu(liveState(), {
+      ...ENV,
+      capabilities: { liveVideo: false, alarmModel: false }
+    }, { flips })
+    assert.equal(box.length, 0, '声纹设备的菜单应当为空（没有实时视频，翻转也无从谈起）')
   })
 
   it('disables both when RTSP is off, and carries the device fact as the reason', () => {

@@ -146,12 +146,28 @@ describe('翻转：左右 / 上下 / 90°，三个独立开关', () => {
   it('视图把 transform 写进 `style`（CSS 类里的固定值做不到三个开关的组合）', () => {
     assert.match(monitorTemplate, /:style="\{ transform: videoTransform \}"/, '画面没有绑 transform')
     assert.match(monitorCode, /const videoTransform = computed/, '没有 videoTransform')
-    for (const action of [
-      'camera-flip-horizontal',
-      'camera-flip-vertical',
-      'camera-flip-quarter'
-    ]) {
-      assert.ok(monitorTemplate.includes(`data-action="${action}"`), `控制条缺少 ${action}`)
+    /*
+     * 三个开关已按业主 2026-09-21 第三批移进右键菜单：控制条里不再有这三颗按钮，
+     * 取而代之的是——菜单调用把当前 `flip` 传成 context（「翻转」子菜单才存在、
+     * 三项才带 ✓），`onMenuSelect` 里有两个动作分支接住了它们。
+     */
+    for (const action of ['camera-flip-horizontal', 'camera-flip-vertical', 'camera-flip-quarter']) {
+      assert.equal(
+        monitorTemplate.includes(`data-action="${action}"`),
+        false,
+        `控制条里还有 ${action}（第三批要求移进右键菜单）`
+      )
+    }
+    assert.match(
+      monitorCode,
+      /buildCameraNvrMenu\(cameraLive\.value, nvrEnvironment\.value, \{ flips: flip\.value \}\)/,
+      '菜单调用没有把当前 flip 状态传成 context'
+    )
+    for (const axis of ['horizontal', 'vertical', 'quarter']) {
+      assert.ok(
+        monitorCode.includes(`case 'flip-${axis}':`),
+        `onMenuSelect 没有 flip-${axis} 分支（菜单项点了不会有反应）`
+      )
     }
   })
 })
@@ -240,21 +256,33 @@ describe('第 21 条：自动播放 / 音量 / 翻转三件事的接线', () => 
     )
   })
 
-  it('自动起播那一遍是**静音**的（浏览器的自动播放策略），出声要由滑杆那一次手势决定', () => {
+  it('自动起播那一遍是**静音**的（浏览器的自动播放策略），出声要由音量那一次手势决定', () => {
     assert.match(
       monitorCode,
-      /video\.muted = !audioUnlocked\.value \|\| video\.volume === 0/,
-      '没有"没拿到用户手势就保持静音"这条判断：带声音自动播会被浏览器拒，画面永远不出来'
+      /video\.muted = soundMuted\.value \|\| !audioUnlocked\.value \|\| video\.volume === 0/,
+      '没有"静音开关 / 没拿到用户手势就保持静音"这条判断：带声音自动播会被浏览器拒，画面永远不出来'
     )
     assert.match(
       monitorCode,
       /audioUnlocked\.value = true/,
       '没有任何地方把手势标记置为 true（那音量就永远出不来声）'
     )
-    // 换设备/重新进页面时手势要重置：那次手势是对**上一路画面**做的。
+    // 换设备/重新进页面时手势与静音要重置：那次手势是对**上一路画面**做的。
     assert.ok(
       (monitorCode.match(/audioUnlocked\.value = false/g) ?? []).length >= 2,
       '换设备或重新挂载时没有重置"有没有拿到手势"'
+    )
+    assert.ok(
+      (monitorCode.match(/soundMuted\.value = true/g) ?? []).length >= 2,
+      '换设备或重新挂载时没有把静音开关拨回静音'
+    )
+    // 静音开关本身存在，且取消静音算一次用户手势（那一下之后才允许出声）。
+    assert.match(monitorCode, /function toggleSoundMute\(/, '没有静音开关（第三批照画面墙补的）')
+    const mute = monitorCode.slice(monitorCode.indexOf('function toggleSoundMute('))
+    assert.match(
+      mute.slice(0, mute.indexOf('\n}')),
+      /if \(!soundMuted\.value\) audioUnlocked\.value = true/,
+      '取消静音没有把手势标记置上：mute 之后再也不会出声'
     )
   })
 
@@ -288,6 +316,11 @@ describe('第 21 条：自动播放 / 音量 / 翻转三件事的接线', () => 
 })
 
 describe('新增文案：四种语言齐全，占位符一致', () => {
+  /*
+   * 翻转四键（flipGroup / flipHorizontal / flipVertical / flipQuarter）已随
+   * 2026-09-21 第三批移出控制条：菜单里的措辞由 cameraNvrUi.menuFlip* 接手，
+   * cameraLiveUi.flip* 成为死键（随词条统一批次删除）。
+   */
   const REQUIRED = [
     'cameraLiveUi.pausePicture',
     'cameraLiveUi.playPicture',
@@ -296,11 +329,7 @@ describe('新增文案：四种语言齐全，占位符一致', () => {
     'cameraLiveUi.volume',
     'cameraLiveUi.volumeMuted',
     'cameraLiveUi.volumeValue',
-    'cameraLiveUi.volumeNoPicture',
-    'cameraLiveUi.flipGroup',
-    'cameraLiveUi.flipHorizontal',
-    'cameraLiveUi.flipVertical',
-    'cameraLiveUi.flipQuarter'
+    'cameraLiveUi.volumeNoPicture'
   ]
 
   it('每一条在四本目录里都有译文，而且不是照抄中文', () => {

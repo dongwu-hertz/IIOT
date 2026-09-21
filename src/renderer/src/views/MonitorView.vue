@@ -65,6 +65,8 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { ALL_STREAM_KINDS, useMonitorStore } from '@renderer/stores/monitor'
+import { useFa371StreamStore } from '@renderer/stores/fa371Stream'
+import { useFa371CameraSession } from '@renderer/composables/useFa371CameraSession'
 import { alarmTypeLabel, describeAlarmMask, eventSeverityLabel, streamKindLabel } from '@renderer/lib/labels'
 import {
   channelActivityLabelKey,
@@ -75,7 +77,7 @@ import {
   channelStateLabelKey,
   type ChannelState
 } from '@renderer/lib/channelState'
-import { channelLabel, formatBytes, formatDateTime, formatDuration, formatNumber } from '@renderer/lib/format'
+import { channelLabel, formatBytes, formatDateTime, formatDuration, formatNumber, EMPTY_VALUE } from '@renderer/lib/format'
 import {
   channelFeatureState,
   channelFeatureStateLabelKey,
@@ -1053,6 +1055,25 @@ const isSonar = computed(() => selectedDevice.value?.kind === 'auscultationBox')
 /** 声纹设备那一支（也是"没有选中设备"时的默认支，与改造前一致）。 */
 const isVoiceprint = computed(() => !isCamera.value && !isSonar.value)
 
+/**
+ * 相机声学数据流的会话**唯一**主人（业主 2026-09-21 第三批）。
+ *
+ * 声学面板按 `sections` 拆成了多份实例（右列：声纹 + 频谱；视频下方：波形 + 检测），
+ * 而「选中相机就默认开始接收、离开就停」只能有一处实现 —— 在 `useFa371CameraSession()`
+ * 里，由这一页调用一次。面板本身不再开/停任何流（见 `CameraAcousticPanel` 文件头）。
+ */
+useFa371CameraSession(selectedDeviceId, isCamera)
+
+/** 红外温度帧（/inrared_data，16 B/帧）。会话随默认接收一起开这一路；设备没推时为空。 */
+const fa371Stream = useFa371StreamStore()
+
+const infraredFrame = computed(() => fa371Stream.infrared)
+
+/** 温度数值：设备没给的字段显示 —— 0 ℃ 也是一个真实温度，不能拿 0 占位。 */
+function infraredValue(value: number | undefined, digits = 1): string {
+  return value === undefined ? EMPTY_VALUE : formatNumber(value, digits)
+}
+
 const cameraLive = ref<CameraLiveState | null>(null)
 const cameraBusy = ref(false)
 const videoEl = ref<HTMLVideoElement | null>(null)
@@ -1316,6 +1337,14 @@ function togglePicturePause(): void {
  */
 const liveVolume = ref(CAMERA_DEFAULT_VOLUME)
 const audioUnlocked = ref(false)
+/**
+ * 静音开关（业主 2026-09-21 第三批，照画面墙音量浮层的那一颗）。
+ *
+ * 与「音量值」是两件事：记住的是音量值（每台设备一份），而「要不要出声」每次都从
+ * 静音起播 —— 浏览器的自动播放策略不允许带声音自动播。解除静音是一次用户手势，
+ * 所以取消静音的同时把 `audioUnlocked` 置上。
+ */
+const soundMuted = ref(true)
 
 const liveVolumePercent = computed(() => Math.round(liveVolume.value * 100))
 
@@ -1327,23 +1356,68 @@ const liveVolumeLabel = computed(() =>
       : t('cameraLiveUi.volumeValue', { percent: liveVolumePercent.value })
 )
 
+/** 音量图标的状态：这一路正在出声（用于喇叭上有没有斜杠）。 */
+const liveSoundOn = computed(
+  () => cameraActive.value && !soundMuted.value && audioUnlocked.value && liveVolume.value > 0
+)
+
 function applyAudioOutput(): void {
   const video = videoEl.value
   if (!video) return
-  // 顺序有意义：先写 volume 再解除 muted —— 反过来的话，解除静音的那一瞬间会以旧音量
+  // 顺序有意义：先写 volume 再解 muted —— 反过来的话，解除静音的那一瞬间会以旧音量
   // 响一下（滑杆在 0 时那一瞬间是满音量）。
   video.volume = sanitiseCameraVolume(liveVolume.value)
-  video.muted = !audioUnlocked.value || video.volume === 0
+  video.muted = soundMuted.value || !audioUnlocked.value || video.volume === 0
 }
 
 function onLiveVolumeInput(event: Event): void {
   const value = (event.target as HTMLInputElement | null)?.value
   liveVolume.value = sanitiseCameraVolume(value)
-  // 拖动滑杆 = 用户手势：这一下之后才允许出声。
+  // 拖动滑杆 = 用户手势：这一下之后才允许出声，而且拖动本身就是在说要听 —— 顺手把静音摘掉。
   audioUnlocked.value = true
+  soundMuted.value = false
   applyAudioOutput()
   saveCameraVolume(selectedDeviceId.value, liveVolume.value)
 }
+
+/** 浮层里的静音开关（与画面墙那一颗同一语义：出声 / 不出声）。 */
+function toggleSoundMute(): void {
+  soundMuted.value = !soundMuted.value
+  // 取消静音是一次用户手势：从这一刻起允许出声。
+  if (!soundMuted.value) audioUnlocked.value = true
+  applyAudioOutput()
+}
+
+/**
+ * 控制条浮层（音量 / 红外，业主 2026-09-21 第三批）：图标按钮点出，点按钮与浮层
+ * **以外**收起。与波形卡那张浮层同一套做法（`mousedown` 捕获挂在 document 上），
+ * 只是这里有两个浮层共用一条关闭监听。
+ */
+const cameraVolumeOpen = ref(false)
+const infraredOpen = ref(false)
+/** 叠加信息条显隐（默认显示；业主同批把「显示/隐藏叠加信息」做成控制条上一颗开关）。 */
+const overlayVisible = ref(true)
+
+function onCameraPopsDocMouseDown(event: MouseEvent): void {
+  const target = event.target
+  if (
+    target instanceof Element &&
+    target.closest(
+      '[data-camera-volume-trigger], [data-camera-volume-pop], [data-camera-infrared], [data-camera-infrared-pop]'
+    )
+  ) {
+    return
+  }
+  cameraVolumeOpen.value = false
+  infraredOpen.value = false
+}
+
+const cameraPopsOpen = computed(() => cameraVolumeOpen.value || infraredOpen.value)
+
+watch(cameraPopsOpen, (open) => {
+  if (open) document.addEventListener('mousedown', onCameraPopsDocMouseDown, true)
+  else document.removeEventListener('mousedown', onCameraPopsDocMouseDown, true)
+})
 
 /** 画面翻转（第 21 条）：左右 / 上下 / 90°，三个独立开关。 */
 const flip = ref<CameraFlip>({ ...CAMERA_FLIP_NONE })
@@ -1470,8 +1544,15 @@ const nvrEnvironment = computed<CameraNvrEnvironment>(() => ({
   }
 }))
 
+/**
+ * 菜单项 + 翻转上下文（业主 2026-09-21 第三批）。
+ *
+ * 三个翻转开关已从控制条移进右键菜单（本页专属）：把当前 `flip` 状态作为 context
+ * 传进纯函数，「翻转」子菜单才存在、三项才带 ✓。画面墙不传 context —— 它的菜单
+ * 保持原样（那是"这一格"的菜单，翻转不是画面格的能力）。
+ */
 const menuItems = computed<CameraNvrMenuItem[]>(() =>
-  buildCameraNvrMenu(cameraLive.value, nvrEnvironment.value)
+  buildCameraNvrMenu(cameraLive.value, nvrEnvironment.value, { flips: flip.value })
 )
 
 const recordingClock = computed(() => formatDuration(recordingElapsed.value))
@@ -1670,6 +1751,19 @@ async function onMenuSelect(action: CameraNvrAction): Promise<void> {
       await openInExternalPlayer()
       return
     /*
+     * 翻转（业主 2026-09-21 第三批从控制条移进菜单）：菜单项带当前状态的 ✓，
+     * 切换走与控制条同一颗 `flip` ref —— 画面 transform 只有 `videoTransform` 一处。
+     */
+    case 'flip-horizontal':
+      toggleFlip('horizontal')
+      return
+    case 'flip-vertical':
+      toggleFlip('vertical')
+      return
+    case 'flip-quarter':
+      toggleFlip('quarter')
+      return
+    /*
      * ⑤：这两项与总览的画面墙是同一对弹窗组件，所以这里的实现只有"打开哪一个"。
      * 列表、下载、回放的逻辑都在组件里，两处不会分叉。
      */
@@ -1720,9 +1814,10 @@ onMounted(async () => {
       // 而不是显示成「没在录」。
       await refreshRecordingState()
       // 第 21 条：音量**记住**（每台设备一份）；这一路画面还没拿到用户手势，
-      // 所以起播是静音的，出声要由滑杆那一次手势决定。
+      // 所以起播是静音的，出声要由音量那一次手势决定。
       liveVolume.value = loadCameraVolume(selectedDeviceId.value)
       audioUnlocked.value = false
+      soundMuted.value = true
       // 第 24 条：告警信息（最近几条）与自动起播一起读一次。
       await loadDeviceAlarms(selectedDeviceId.value)
       await autoPlayCameraIfWorking()
@@ -1785,8 +1880,9 @@ watch(selectedDeviceId, async (id) => {
     await stopCameraLive()
     // 音量是**每台设备各记一份**的（同一间机房里两台相机的拾音电平可以差很多）。
     liveVolume.value = loadCameraVolume(id)
-    // 新的一路画面：还没拿到用户手势，出声这件事要重新由滑杆决定。
+    // 新的一路画面：还没拿到用户手势，出声这件事要重新由音量那一次手势决定。
     audioUnlocked.value = false
+    soundMuted.value = true
     await refreshCameraState()
     await refreshRecordingState()
     // 第 24 条：换了一台相机要重新读它的告警信息（否则列表还是上一台的）。
@@ -1843,6 +1939,8 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   // 音量浮层的 click-outside 监听同理：组件没了，监听必须跟着掉。
   document.removeEventListener('mousedown', onVolumePopoverDocMouseDown, true)
+  // 控制条浮层（音量 / 红外）的同一条监听同理。
+  document.removeEventListener('mousedown', onCameraPopsDocMouseDown, true)
   // 菜单是 Teleport 到 body 的浮层，卸载时它不会跟着组件消失，必须显式关闭。
   menuOpen.value = false
   void monitor.stop()
@@ -1914,28 +2012,23 @@ const sessionLabel = computed(() => {
 
       <div class="camera-board" :class="{ 'camera-board--voiceprint': isVoiceprint }">
       <!--
-        相机页的排布
+        相机页的排布（业主 2026-09-21 第三批：65/35 左右两列）
         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        原来是**一根竖列**：设备头 -> 单路直播 -> 声学图 -> 相机控制 -> 视频墙。
-        在 1440px 以上的窗口里，每一张卡都占满整幅宽度、而右侧常常是空的；同时
-        「声学图」和「相机控制」这两块互相独立的内容被强行排成上下两行。
+        设备头仍整幅宽（`camera-board__wide`）。其下是 `.camera-split`：
 
-        现在整页放进 `.camera-board`（`auto-fit` + 最小列宽的自适应板子），
-        并且**保持文档顺序不变**（顺序本身就是可访问性与 Tab 顺序）：
+          左列 65%                                右列 35%（纵向栈）
+            单路直播（视频卡，无标题）              相机控制（检测模式/场景/启停）
+            检测结果（文本列表 + 检测记录库）       告警配置（入口卡）
+            告警结果（最近几条 + 查看告警记录）     一行会话状态（状态徽标 + 停止接收）
+            声学波形（时域波形 + 电平表 + 播放）    声纹图（16:9）
+                                                    频谱图（16:9）
 
-          设备头 / 通道选择       整幅宽（`camera-board__wide`）
-          单路直播               整幅宽（画面越宽越有用，也是右键菜单的来源）
-          相机五路图谱           整幅宽（⑧：一排五张，占满整幅才排得开）
-          相机控制 + 告警入口    `span 1`：宽窗口上并排，窄到放不下就各占一整行
+        声学面板按 `sections` 拆成多份实例（`CameraAcousticPanel`），会话生命周期只有
+        一个主人（`useFa371CameraSession()`，见 script）。声纹图与频谱图在右列**上下
+        排列**（不再并排）；三个翻转开关从控制条移进了右键菜单（传 `context.flips`）。
 
-        板子只有两档：能并排就并排，不能就落回一列 —— 而"并排单元"就是下面那两块
-        面板（`span 1`，在整个板子的可用宽度 < 2×360px 时退化成整幅宽）。所以声学箱
-        那一支（没有这两块面板）的每一个子项就都是整幅宽，与加板子之前逐像素一致。
-        具名类 `camera-board__wide` 只写在"无论几列都必须整幅宽"的三块上，没有依赖
-        任何 `:not()` 之类花活。
-
-        没有断点、没有定宽列、没有居中，所以 `.page` 那边刚做完的「左对齐、流式」
-        不会被这次重排抵消。
+        窄窗口（< 1100px）两列折成一列：左右栈先后落成一整条，控件一个都不会被裁掉。
+        声纹/声呐两支不渲染 `.camera-split`，板子上其余子项的排布与加板子之前一致。
       -->
       <section class="card monitor-head camera-board__wide">
         <div class="monitor-head__row">
@@ -2086,20 +2179,15 @@ const sessionLabel = computed(() => {
            Every state below is reported honestly: "RTSP disabled" is a device fact,
            "ffmpeg missing" is an installation fact, and neither is ever shown as a
            black rectangle.
-      ------------------------------------------------------------------ -->
-      <section v-if="isCamera" class="card camera-live">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraLiveUi.title') }}</h3>
-          <!--
-            播放信息（已转发字节数 / 正在用哪个地址候选）**从页面上删掉了**（第 21 条），
-            但它没有丢：它就是这枚状态徽标的悬停说明。删的是"页面上永久占一行的一段诊断"，
-            不是这条诊断本身 —— 出问题时它仍是第一条线索。
-          -->
-          <span :class="cameraBadgeClass" :title="cameraMeta || undefined" data-camera-status>
-            {{ cameraStatusLabel }}
-          </span>
-        </div>
 
+           视频卡**无标题**（业主 2026-09-21 第三批）：原来的标题行与状态徽标整行
+           删掉 —— 状态由画面叠加条（.camera-live__overlay）回答，录制徽标保留；
+           播放信息（已转发字节数 / 地址候选）那枚徽标的悬停说明随徽标一起去了
+           控制条按钮的 title 与叠加条。
+      ------------------------------------------------------------------ -->
+      <div v-if="isCamera" class="camera-split">
+      <div class="camera-split__main">
+      <section class="card camera-live">
         <!--
           * 单通道 NVR 画面：视频填满面板，叠加信息浮在画面之上。
           * 右键菜单挂在这一层上，因为它是「视频表面」，而不是整个页面。
@@ -2130,8 +2218,8 @@ const sessionLabel = computed(() => {
           ></video>
           <p v-else class="camera-live__placeholder">{{ cameraStatusLabel }}</p>
 
-          <!-- 叠加条永远显示（业主 2026-09-21 批移除了「显示/隐藏叠加信息」那一项）。 -->
-          <div class="camera-live__overlay">
+          <!-- 叠加条默认显示；「叠加」开关（业主 2026-09-21 第三批）切换它的显隐。 -->
+          <div v-if="overlayVisible" class="camera-live__overlay">
             <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayDevice', { name: selectedDevice?.name ?? '' }) }}</span>
             <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayStatus', { status: cameraStatusLabel }) }}</span>
             <span class="camera-live__overlay-line">
@@ -2163,8 +2251,10 @@ const sessionLabel = computed(() => {
         </p>
 
         <!--
-          视频窗口下方的**通用播放器式控制条**（业主 2026-09-18 第 10 批第 22 条）：
-          暂停 / 播放 · 录制 · 查看（抓图）· 回放 · 告警配置，外加音量与三个翻转开关。
+          视频窗口下方的**通用播放器式控制条**（业主 2026-09-18 第 10 批第 22 条；
+          2026-09-21 第三批改版）：暂停 / 播放 · 启停 · 录制 · 查看（抓图）· 回放 ·
+          告警配置 · 红外 · 叠加 · 音量（图标 + 浮层，浮层内有滑杆与静音开关）。
+          三个翻转开关已移进右键菜单（「翻转」子菜单），这里不再有三颗开关。
 
           两件事与原来不同：
             · 动作**不再画在画面上方**（原来那排按钮在视频上面）；控制条在画面**下方**，
@@ -2192,6 +2282,7 @@ const sessionLabel = computed(() => {
             class="btn btn--sm"
             :class="{ 'btn--primary': !cameraActive }"
             :disabled="cameraBusy"
+            :title="cameraMeta || undefined"
             data-action="camera-power"
             @click="toggleCameraLive"
           >
@@ -2250,80 +2341,210 @@ const sessionLabel = computed(() => {
           </button>
 
           <!--
-            音量（第 21 条「音量可调并**记住**」）。没有画面时禁用并把原因说清楚 ——
-            一个按下去什么都不会发生的音量滑杆比没有它更糟（与画面墙同一条口径）。
+            红外（业主 2026-09-21 第三批）：弹层显示 /inrared_data 的四个温度数值
+            （中心 / 最高 / 最低 / 发射率）。**协议只有温度数值，没有红外视频流** ——
+            浮层里把这件事写明（cameraLiveUi.infraredNoVideo），不画一块黑布冒充热像图。
+            设备没推数据时各项显示 —。
           -->
-          <label class="camera-controls__volume">
-            <span class="muted">{{ t('cameraLiveUi.volume') }}</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              class="camera-controls__slider"
-              data-action="camera-volume"
-              :value="liveVolumePercent"
+          <span class="camera-controls__anchor">
+            <button
+              type="button"
+              class="btn btn--sm btn--icon"
+              :class="{ 'btn--primary': infraredOpen }"
+              :aria-expanded="infraredOpen"
+              :aria-label="t('cameraLiveUi.infrared')"
+              :title="t('cameraLiveUi.infrared')"
+              data-camera-infrared
+              @click="infraredOpen = !infraredOpen"
+            >
+              <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M8 2a2.6 2.6 0 0 1 2.6 2.6v4.9a3.4 3.4 0 1 1-5.2 0V4.6A2.6 2.6 0 0 1 8 2Z" fill="none" stroke="currentColor" stroke-width="1.3" />
+                <circle cx="8" cy="10.6" r="1.4" fill="currentColor" />
+              </svg>
+            </button>
+            <div
+              v-if="infraredOpen"
+              class="camera-controls__pop camera-controls__infrared"
+              data-camera-infrared-pop
+            >
+              <dl class="camera-infrared__grid">
+                <dt>{{ t('realtimeUi.metric.centerTemp') }}</dt>
+                <dd>{{ infraredValue(infraredFrame?.centerTemp) }}</dd>
+                <dt>{{ t('realtimeUi.metric.maxTemp') }}</dt>
+                <dd>{{ infraredValue(infraredFrame?.maxTemp) }}</dd>
+                <dt>{{ t('realtimeUi.metric.minTemp') }}</dt>
+                <dd>{{ infraredValue(infraredFrame?.minTemp) }}</dd>
+                <dt>{{ t('cameraLiveUi.infraredEmissivity') }}</dt>
+                <dd>{{ infraredValue(infraredFrame?.emissivity, 2) }}</dd>
+              </dl>
+              <p class="muted camera-infrared__note">{{ t('realtimeUi.tempUnitHint') }}</p>
+              <p class="muted camera-infrared__note">{{ t('cameraLiveUi.infraredNoVideo') }}</p>
+            </div>
+          </span>
+
+          <!--
+            叠加（业主 2026-09-21 第三批）：切换画面左上角那条叠加信息（设备 / 状态 / 码流）
+            的显隐。默认显示；「叠加」两个字就是开关的 aria 名（cameraLiveUi.overlayToggle）。
+          -->
+          <button
+            type="button"
+            class="btn btn--sm btn--icon"
+            :class="{ 'btn--primary': overlayVisible }"
+            :aria-pressed="overlayVisible"
+            :aria-label="t('cameraLiveUi.overlayToggle')"
+            :title="t('cameraLiveUi.overlayToggle')"
+            data-camera-overlay
+            @click="overlayVisible = !overlayVisible"
+          >
+            <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M2.4 4.4h11.2M2.4 8h11.2M2.4 11.6h7.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            </svg>
+          </button>
+
+          <!--
+            音量（第 21 条「音量可调并**记住**」；2026-09-21 第三批收成图标 + 浮层，
+            与画面墙同一套交互）。没有画面时禁用并把原因说清楚 —— 一个按下去什么都不会
+            发生的音量滑杆比没有它更糟（与画面墙同一条口径）。
+          -->
+          <span class="camera-controls__volume">
+            <button
+              type="button"
+              class="btn btn--sm btn--icon"
+              :class="{ 'btn--primary': liveSoundOn }"
               :disabled="!cameraActive"
+              :aria-expanded="cameraVolumeOpen"
               :aria-label="liveVolumeLabel"
               :title="liveVolumeLabel"
-              @input="onLiveVolumeInput"
-            />
-            <span class="muted camera-controls__percent">{{ liveVolumePercent }}%</span>
-          </label>
+              data-camera-volume-trigger
+              @click="cameraVolumeOpen = !cameraVolumeOpen"
+            >
+              <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
+                <path
+                  v-if="liveSoundOn"
+                  d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.3"
+                  stroke-linecap="round"
+                />
+                <path
+                  v-else
+                  d="M11 6 L14 10 M14 6 L11 10"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.3"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <!--
+              音量浮层：一条水平滑杆 + 一颗静音开关（画面墙那颗的同款）。滑杆的值仍然
+              按设备持久化（saveCameraVolume）；静音是「要不要出声」，不记住。
+            -->
+            <div v-if="cameraVolumeOpen" class="camera-controls__pop camera-controls__volume-pop" data-camera-volume-pop>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                class="camera-controls__slider"
+                data-action="camera-volume"
+                :value="liveVolumePercent"
+                :disabled="!cameraActive"
+                :aria-label="liveVolumeLabel"
+                :title="liveVolumeLabel"
+                @input="onLiveVolumeInput"
+              />
+              <button
+                type="button"
+                class="btn btn--sm btn--icon"
+                :class="{ 'btn--primary': !soundMuted && liveVolume > 0 }"
+                :disabled="!cameraActive"
+                :aria-pressed="!soundMuted"
+                :aria-label="liveVolumeLabel"
+                :title="liveVolumeLabel"
+                data-action="camera-volume-mute"
+                @click="toggleSoundMute"
+              >
+                <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
+                  <path
+                    v-if="!soundMuted"
+                    d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                    stroke-linecap="round"
+                  />
+                  <path
+                    v-else
+                    d="M11 6 L14 10 M14 6 L11 10"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </span>
 
-          <!-- 翻转：左右 / 上下 / 90°，三个独立开关（第 21 条）。 -->
-          <div class="camera-controls__flip" role="group" :aria-label="t('cameraLiveUi.flipGroup')">
-            <button
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--primary': flip.horizontal }"
-              :aria-pressed="flip.horizontal"
-              data-action="camera-flip-horizontal"
-              @click="toggleFlip('horizontal')"
-            >
-              {{ t('cameraLiveUi.flipHorizontal') }}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--primary': flip.vertical }"
-              :aria-pressed="flip.vertical"
-              data-action="camera-flip-vertical"
-              @click="toggleFlip('vertical')"
-            >
-              {{ t('cameraLiveUi.flipVertical') }}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--primary': flip.quarter }"
-              :aria-pressed="flip.quarter"
-              data-action="camera-flip-quarter"
-              @click="toggleFlip('quarter')"
-            >
-              {{ t('cameraLiveUi.flipQuarter') }}
-            </button>
-          </div>
+          <!--
+            翻转已移进右键菜单（业主 2026-09-21 第三批）：右键画面 →「翻转」子菜单
+            （左右 / 上下 / 90°，带当前状态的 ✓）。控制条这里不再有三颗开关。
+          -->
         </div>
       </section>
 
-      <!-- ------------------------------------------------------------------
-           相机五路实时图谱（⑧）：**排成一排**的那五张卡。
-
-           ⑦ 删掉的是它**旧的那一版式**（竖排/自动换行的五张卡），⑧ 定的是新版式（一排五张）。
-           所以这块回来了，但版式不是原来的 —— `CameraAcousticPanel` 里的 `.acam__row`
-           现在是 `repeat(auto-fit, minmax(200px, 1fr))`。
-
-           它**必须整幅宽**（`camera-board__wide`）：只占排布板一格时，按板子的列宽规则
-           算下来是 (1166 − 2×20)/3 ≈ 375px —— 五张图分 375px，每张 ~60px，表头和
-           坐标轴都放不下。实测：整幅宽之后这一排是 1166px，五张各 220px，顶边都是 767。
-      ------------------------------------------------------------------ -->
+      <!--
+        检测结果卡（业主 2026-09-21 第三批）：检测文本列表 + 「检测记录库」按钮。
+        声学面板按 sections 取用的三份实例之一；会话生命周期在页面上（composable）。
+      -->
       <CameraAcousticPanel
-        v-if="isCamera"
-        class="camera-board__wide"
-        :device-id="selectedDeviceId"
+        :sections="['detect']"
+        @open-library="downloadOpen = true"
       />
 
+      <!--
+        告警结果卡（业主 2026-09-21 第三批）：原告警入口卡里的「最近几条告警」就地列表
+        迁来成为独立卡，并保留「查看告警记录」链接（带 ?device= 预置筛选）。
+        数据与告警记录页同源（同一个 `alarms.query`）。
+      -->
+      <section class="card camera-alarm-result">
+        <div class="section-header">
+          <h3 class="section-title">{{ t('cameraAlarmUi.recentTitle') }}</h3>
+          <RouterLink
+            class="btn btn--sm"
+            :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
+            data-link="camera-alarm-history"
+          >
+            {{ t('cameraAlarmUi.goAlarmList') }}
+          </RouterLink>
+        </div>
+        <div class="camera-alarm-entry__list" data-camera-alarms>
+          <p v-if="deviceAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
+          <p v-else-if="deviceAlarms.length === 0" class="muted" data-camera-alarms-empty>
+            {{ t('cameraAlarmUi.noAlarms') }}
+          </p>
+          <ul v-else class="camera-alarm-entry__items">
+            <li v-for="alarm in deviceAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
+              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+              <span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
+              <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
+                {{ alarm.snapshotDir ? t('mapUi.hasSnapshot') : t('mapUi.noSnapshot') }}
+              </span>
+              <span v-if="alarm.deviceReason" class="muted">{{ alarm.deviceReason }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- 声学波形卡（时域波形 + 电平表 + 包络播放）随检测/告警一起放在视频下方。 -->
+      <CameraAcousticPanel :sections="['audio']" />
+      </div>
+
+      <div class="camera-split__side">
       <!--
         相机控制：**检测模式 / 应用场景 / 检测启停**。
 
@@ -2336,12 +2557,11 @@ const sessionLabel = computed(() => {
         （那个组件文件头写的就是这条理由）。
       -->
       <CameraControlPanel
-        v-if="isCamera"
         :device-id="selectedDeviceId"
         :sections="['mode', 'detect', 'preset']"
       />
 
-      <section v-if="isCamera" class="card camera-alarm-entry">
+      <section class="card camera-alarm-entry">
         <div class="section-header">
           <h3 class="section-title">{{ t('cameraNvrUi.menuAlarmConfig') }}</h3>
         </div>
@@ -2364,28 +2584,15 @@ const sessionLabel = computed(() => {
             {{ t('cameraAlarmUi.goAlarmList') }}
           </RouterLink>
         </div>
-
-        <!--
-          告警信息（第 24 条）：这一台相机**最近几条**告警，就地看得见，
-          不必先跳走。读的是同一个 `alarms.query`，与告警记录页同一份数据。
-        -->
-        <div class="camera-alarm-entry__list" data-camera-alarms>
-          <p v-if="deviceAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
-          <p v-else-if="deviceAlarms.length === 0" class="muted" data-camera-alarms-empty>
-            {{ t('cameraAlarmUi.noAlarms') }}
-          </p>
-          <ul v-else class="camera-alarm-entry__items">
-            <li v-for="alarm in deviceAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
-              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
-              <span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
-              <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
-                {{ alarm.snapshotDir ? t('mapUi.hasSnapshot') : t('mapUi.noSnapshot') }}
-              </span>
-              <span v-if="alarm.deviceReason" class="muted">{{ alarm.deviceReason }}</span>
-            </li>
-          </ul>
-        </div>
       </section>
+
+      <!--
+        声纹图 + 频谱图（业主 2026-09-21 第三批）：右列 35% 里**上下排列**（不再并排）。
+        声学面板的会话状态行（状态徽标 + 「停止接收」）随这一份实例渲染（只有一份）。
+      -->
+      <CameraAcousticPanel :sections="['voiceprint', 'spectrum']" />
+      </div>
+      </div>
 
       <!--
         * 右键菜单、告警配置、本机回放、检测记录下载四个弹窗。
@@ -3054,13 +3261,12 @@ const sessionLabel = computed(() => {
 /*
  * 实时监测页的排布板。
  *
- * 参与并排的是**上面那条简讯以外的几块**（相机控制 / 告警入口）：板子在能放下
- * 2×360px 时是两列，放不下就是一列，所以窄窗口上它们退回上下排列，控件一个都不会
- * 被裁掉（叠放 = 每块自己占满宽度）。
+ * 声纹 / 声呐两支的子项直接躺在板子上：板子在能放下 2×360px 时是两列，放不下就是
+ * 一列，所以窄窗口上它们退回上下排列，控件一个都不会被裁掉（叠放 = 每块自己占满宽度）。
  *
- * 不参与并排的三块走 `.camera-board__wide`（设备头 / 单路直播 / 相机五路图谱）：
- * 前两块本来就是整幅宽的，第三块（⑧ 的五张图）必须整幅宽才排得成一排 ——
- * 挤在 360px 的一格里，五列每张只剩 ~60px。
+ * 相机分支不同（业主 2026-09-21 第三批）：它只有设备头直接躺在板子上（整幅宽），
+ * 其余全部装进 `.camera-split`（65/35 两列容器，自己占整幅宽）——左右两列的比例
+ * 写死在那条规则上，不由板子的 auto-fit 决定。
  *
  * `minmax(0, 1fr)` 的第一个参数是 **0** 而不是 `auto`：网格项的默认最小尺寸是
  * `auto`，内容里有一个 1024 点的 ECharts canvas 时，`auto` 会让列宽顶在内容的最小
@@ -3090,10 +3296,37 @@ const sessionLabel = computed(() => {
   gap: calc(var(--space-5) * 0.1);
 }
 
-/* 无论并排成几列都必须占满整幅宽的三块：设备头 / 单路直播画面 / 相机五路图谱。 */
-.camera-board__wide,
-.camera-board > .camera-live {
+/* 无论并排成几列都必须占满整幅宽的两块：设备头 / 相机分支的 65/35 两列容器。 */
+.camera-board__wide {
   grid-column: 1 / -1;
+}
+
+/*
+ * 相机分支的左右两列（业主 2026-09-21 第三批）：左 65% 放视频与视频下方的三张卡，
+ * 右 35% 是相机控制 → 告警配置 → 状态行 → 声纹图 → 频谱图的纵向栈。
+ * `fr` 比例在任何宽度下保持 65/35；`min-width: 0` 让 ECharts 的 canvas 不顶出列宽。
+ * 窄窗口（< 1100px）折成一列 —— 两列都压到 35% 的列宽里坐标轴就读不出来了。
+ */
+.camera-split {
+  display: grid;
+  grid-template-columns: 65fr 35fr;
+  gap: var(--space-5);
+  grid-column: 1 / -1;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .camera-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.camera-split__main,
+.camera-split__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
 }
 
 /*
@@ -3782,15 +4015,15 @@ const sessionLabel = computed(() => {
 }
 
 /*
- * 单路画面的**16:9 窗口**（业主 2026-09-17 的 ⑤）。
+ * 单路画面的**16:9 窗口**（业主 2026-09-17 的 ⑤；2026-09-21 第三批去掉限宽）。
  *
  * 为什么不是"撑满卡片高度"：画面比例由设备决定，而窗口比例是我们能定的。把窗口固定成
  * 16:9（并让 `<video>` 用 `object-fit: contain` 在窗口内留黑边）之后，操作员看到的
  * 画面框不会随着窗口高度忽胖忽瘦 —— 那正是"视频窗口"与"一块会变形的黑布"的区别。
  *
- * `max-width: calc(72vh * 16 / 9)` 是**保持比例**的高度限制：窗口很高时如果只压高度，
- * 16:9 就被破坏了（画面会被挤扁或被黑边包住），所以改成限制宽度并把窗口居中。
- * 视频本身仍然 `width: 100%`，黑边来自 `object-fit`，不是来自拉伸。
+ * 窗口宽度 = 左列（65%）宽度：`aspect-ratio` 让高度由宽度算出来，16:9 随列宽。
+ * 原来的 `max-width: calc(72vh * 16 / 9)` 限宽会留下两侧空白 —— 新布局里视频要
+ * 撑满左列，限宽删掉了（全屏时比例仍由 `--fullscreen` 那条交还给屏幕）。
  */
 .camera-live__stage {
   position: relative;
@@ -3799,8 +4032,6 @@ const sessionLabel = computed(() => {
   justify-content: center;
   width: 100%;
   aspect-ratio: 16 / 9;
-  max-width: calc(72vh * 16 / 9);
-  margin-inline: auto;
   background: #000;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -3842,12 +4073,47 @@ const sessionLabel = computed(() => {
   border-top: 1px solid var(--color-border);
 }
 
+/*
+ * 音量按钮（2026-09-21 第三批收成图标 + 浮层，与画面墙同一套交互）。
+ * 相对定位做浮层锚点；`margin-left: auto` 把它推到控制条右端。
+ */
 .camera-controls__volume {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  font-size: 12px;
+}
+
+/* 红外按钮：同为浮层锚点（浮层比按钮宽，右缘对齐）。 */
+.camera-controls__anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.camera-controls__icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/*
+ * 控制条浮层（音量 / 红外）：白底细边 + 轻阴影的小卡片，贴在按钮上方、
+ * 右缘对齐按钮 —— 与画面墙音量浮层同一族做法，只是横排在控制条之上。
+ */
+.camera-controls__pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-lg);
 }
 
 .camera-controls__slider {
@@ -3858,15 +4124,36 @@ const sessionLabel = computed(() => {
   opacity: 0.5;
 }
 
-.camera-controls__percent {
-  min-width: 38px;
+/* 红外浮层：比音量浮层宽，数值排成两列（标签 / 值），下面挂两行说明。 */
+.camera-controls__infrared {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.camera-infrared__grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: 12px;
+}
+
+.camera-infrared__grid dt {
+  color: var(--color-text-secondary);
+}
+
+.camera-infrared__grid dd {
+  margin: 0;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-.camera-controls__flip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.camera-infrared__note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /*

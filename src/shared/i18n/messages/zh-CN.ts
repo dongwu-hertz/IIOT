@@ -2484,10 +2484,12 @@ export const zhCN = {
     volumeMuted: '已静音',
     volumeValue: '音量 {percent}%',
     volumeNoPicture: '还没有画面时不能调音量',
-    flipGroup: '画面翻转',
-    flipHorizontal: '左右翻转',
-    flipVertical: '上下翻转',
-    flipQuarter: '旋转 90°',
+    /** 红外浮层按钮（业主 20260921 批第三批第 2 条）。设备只报温度数值，无红外视频流。 */
+    infrared: '红外',
+    infraredNoVideo: '设备仅提供温度数值，暂无红外视频流',
+    infraredEmissivity: '发射率',
+    /** 视频信息叠加条开关。 */
+    overlayToggle: '叠加',
     dataForwarded: '已转发 {count} 字节',
     modeRemux: '直接转封装（不重新编码）',
     modeTranscode: '重新编码（兼容模式）',
@@ -2541,15 +2543,6 @@ export const zhCN = {
     fftAmplitudeAxis: '幅度（设备原始计数）',
     fftAxisFromDevice: '{lines} 条谱线；设备上报采样率后每线宽 {hz} Hz',
     fftAxisUnknown: '{lines} 条谱线；设备未上报采样率，因此横轴按谱线序号标注，频率刻度未知。',
-    energyTitle: '能量点',
-    energyValue: '能量',
-    energyPixelX: '像素横坐标',
-    energyPixelY: '像素纵坐标',
-    energySwath: '扫描角',
-    energyAzimuth: '方位角',
-    energyNoTarget: '该帧不含目标点（当前没有定位到声源）。',
-    detectTitle: '检测结果',
-    detectMode: '检测模式'
   },
 
   /**
@@ -2575,6 +2568,11 @@ export const zhCN = {
      * 四个子项的文字复用 `cameraWallUi.view*`，所以菜单与控制条从不说两种话。
      */
     menuDisplay: '显示方式',
+    /** 「画面翻转」子菜单（业主 20260921 批第三批第 2 条：翻转调整移入右键；仅相机单路面板传入 flips 时渲染）。 */
+    menuFlip: '画面翻转',
+    menuFlipHorizontal: '左右翻转',
+    menuFlipVertical: '上下翻转',
+    menuFlipQuarter: '旋转 90°',
     menuFullscreen: '全屏',
     menuExitFullscreen: '退出全屏',
     menuCopyRtsp: '复制 RTSP 地址',
@@ -2644,6 +2642,8 @@ export const zhCN = {
     /** 实时监测页那张「告警」卡片（与相机控制并排）的说明与出口。 */
     entryHint: '告警策略与告警条件在设备侧生效，这里只读取与修改它们。',
     noAlarms: '本机还没有这台相机的告警记录。',
+    /** 监测页视频下方的「告警结果」卡标题（业主 20260921 批第三批第 5 条）。 */
+    recentTitle: '告警信息',
     goAlarmList: '查看告警中心',
     // `subtitle`（「设备 {name}：告警策略与告警条件（一条策略只关联一个条件）。」）
     // 已按产品要求删除：对话框里不再出现这句话，四种语言里的这一条也一并删掉，

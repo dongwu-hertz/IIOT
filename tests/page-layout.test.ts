@@ -252,7 +252,7 @@ describe('实时监测页：删掉的、搬走的、留下的', () => {
   const monitor = stripComments(read('src/renderer/src/views/MonitorView.vue'))
   const topbar = stripComments(read('src/renderer/src/components/AppTopbar.vue'))
 
-  it('⑦ 视频墙不在实时监测页（组件仍在总览页用）；⑧ 五路图谱回来了但版式是新的', () => {
+  it('⑦ 视频墙不在实时监测页（组件仍在总览页用）；声学面板按 sections 拆用、能量点已删', () => {
     assert.equal(
       /<CameraVideoWall/.test(monitor),
       false,
@@ -268,65 +268,55 @@ describe('实时监测页：删掉的、搬走的、留下的', () => {
     assert.ok(/<CameraVideoWall/.test(overview), '总览页的视频墙被误删了')
 
     /**
-     * ⑧（业主 2026-09-17 已确认）：五张图谱＝相机那五路实时数据（fft/voiceprint/energy/pcm/
-     * detectFeedback），**排成一排**。
-     *
-     * **2026-09-18 第 10 批第 24 条推翻了那个版式的一半**：声纹图与频谱图改为
-     * **16:9 各占 50%、放在视频下方**，时域波形图在它们下面。所以这里断言的是新版式
-     * （`.acam__pair` 两列 + `.acam__stage--ratio` 16:9），不是"一排五张"。
-     * 旧断言按"被更新的要求覆盖"改写，不是删掉。
+     * 声学面板仍然是相机分支的一部分（业主 2026-09-21 第三批）：按 `sections` 拆成
+     * 多份实例 —— 视频下方是检测 + 波形，右列是声纹 + 频谱。会话只有一个主人
+     * （`useFa371CameraSession`，见下面那条㉓的断言），面板不再自己开/停流。
      */
     assert.ok(
       monitor.includes('<CameraAcousticPanel'),
-      '实时监测页没有那五张图谱（第 24 条把它们重排了，不是删掉）'
+      '实时监测页没有用声学面板（第三批按 sections 拆用，不是删掉）'
     )
-    /**
-     * 这一块必须**整幅宽**：它在排布板里只占一格时（1440 窗口下 ~378px），
-     * 两块"各占 50%"会变成各 ~180px —— 那还是并排，但坐标轴读不出来。
-     */
-    const panelUsage = between(monitor, '<CameraAcousticPanel', '/>', '相机五路图谱那一块')
     assert.ok(
-      panelUsage.includes('camera-board__wide'),
-      '相机图谱那一块没有整幅宽（camera-board__wide）—— 两块各占 50% 会挤在排布板的一格里'
+      monitor.includes(":sections=\"['detect']\""),
+      '视频下方没有检测结果卡（sections=[detect]）'
+    )
+    assert.ok(
+      monitor.includes(":sections=\"['audio']\""),
+      '视频下方没有声学波形卡（sections=[audio]）'
+    )
+    assert.ok(
+      monitor.includes(":sections=\"['voiceprint', 'spectrum']\""),
+      '右列没有声纹图 + 频谱图（sections=[voiceprint, spectrum]）'
     )
 
-    const panel = stripComments(read('src/renderer/src/components/CameraAcousticPanel.vue'))
-    const pair = ruleBody(panel, '.acam__pair')
-    /*
-     * 两列等宽（`minmax(..., 1fr)`），**不是**由窗口宽度决定。
-     *
-     * 这一条是从上一版继承下来的教训：第一版写的是 `repeat(5, …)` 加
-     * `@media (max-width: 1500px)` 退 3 列 —— 在那台探针窗口（1440）上，
-     * 列数被折叠了而**版面本身并没有变窄**：媒体查询问的是窗口，这一块的宽度由外层排布板给。
+    /**
+     * 能量点子卡整块删除（业主 2026-09-21 第三批）：模板 / 脚本 / CSS 里都不许留。
+     * `cameraStreamUi.energy*` 那六个目录键已经没人渲染，由词条统一批次删除。
      */
-    assert.match(
-      pair,
-      /grid-template-columns:\s*repeat\(\s*auto-fit\s*,\s*minmax\(/,
-      '声纹图 + 频谱图那一行不是 auto-fit 的等宽列：' + pair
-    )
-    // 退化**不许**再由窗口宽度决定（那正是上一版修掉的问题）。
+    const panel = stripComments(read('src/renderer/src/components/CameraAcousticPanel.vue'))
+    assert.equal(/energyData/.test(panel), false, '声学面板里还有 energyData 的引用')
+    assert.equal(/energyTargets/.test(panel), false, '声学面板里还有 energyTargets')
+    assert.equal(/acam__table/.test(panel), false, '声学面板里还有能量点表格的样式/用法')
     assert.equal(
-      /@media[^{]*\{[^@]*\.acam__(pair|row)\s*\{/.test(panel),
+      /cameraStreamUi\.energy/.test(panel),
       false,
-      '声纹图/频谱图那一行的列数又改回由窗口宽度（@media）决定了'
+      '声学面板里还有 cameraStreamUi.energy* 词条引用'
     )
-    // 16:9 那一层必须在，而且两处（画布与空态）共用它。
-    const ratio = ruleBody(panel, '.acam__stage--ratio')
-    assert.match(ratio, /aspect-ratio:\s*16\s*\/\s*9/, '声纹图/频谱图那一层不是 16:9：' + ratio)
-    assert.match(ratio, /min-height:\s*0/, '16:9 那一层还留着 min-height：比例会被它顶掉')
   })
 
   /**
-   * 第 23 条：「删除「相机声学数据」窗口、数据默认实时接收」。
+   * 第 23 条：「删除「相机声学数据」窗口、数据默认实时接收」—— 第三批重排后这一条
+   * 落在**会话 composable** 上（面板被拆成多份实例，生命周期只有一份）：
    *
    * 三件都要钉住，而且**每一件都能"源码里删对了但屏幕上不对"**：
    *   1. 那个窗口的标题与「开始接收」按钮真的没有了（连目录键一起删，免得被画回来）；
    *   2. 数据**默认开始接收**（`onMounted` 里就调，不是等用户点）；
    *   3. 状态**仍然看得见**：删掉窗口不等于可以不说"流没起来" —— 空了的面板与安静的房间
-   *      在屏幕上长得一样，而这一页的每一张图都靠这一行区分。
+   *      在屏幕上长得一样，而每一张图都靠这一行区分。
    */
   it('㉓ 「相机声学数据」窗口已删，数据默认实时接收，状态仍然看得见', () => {
     const panel = stripComments(read('src/renderer/src/components/CameraAcousticPanel.vue'))
+    const session = stripComments(read('src/renderer/src/composables/useFa371CameraSession.ts'))
 
     // ① 窗口没有了：标题卡片与「开始接收」都不在。
     assert.equal(/acam__head/.test(panel), false, '「相机声学数据」那个窗口又回来了（.acam__head）')
@@ -339,37 +329,69 @@ describe('实时监测页：删掉的、搬走的、留下的', () => {
     assert.ok(panel.includes("t('cameraStreamUi.sessionIdle')"), '状态行没有"未启动"这一档')
     assert.ok(panel.includes("t('cameraStreamUi.sessionRunning')"), '状态行没有"接收中"这一档')
     assert.ok(panel.includes('data-action="acam-stop"'), '没有「停止接收」—— 默认开始之后就没法关了')
+    // 多份实例同屏时状态行只渲染一份。
+    assert.ok(panel.includes('showStatus'), '状态行没有开关（多份实例会同屏）')
 
-    // ② 默认接收：挂载与换设备两条路径都要调，而且**先读一次状态**再决定。
-    const mounted = panel.slice(panel.indexOf('onMounted(async () => {'))
+    // ② 默认接收：生命周期在 composable 里 —— 挂载与换设备都走 adoptDevice()，
+    // 而它**先读一次状态**再决定开不开。
+    const mounted = session.slice(session.indexOf('onMounted(async () => {'))
     const mountedBody = mounted.slice(0, mounted.indexOf('})'))
-    assert.match(mountedBody, /refreshState\(\)[\s\S]*ensureStreaming\(\)/,
-      'onMounted 里没有"先读状态、再默认开始接收"')
+    assert.match(mountedBody, /adoptDevice\(deviceId\.value\)/, 'onMounted 没有接管当前设备')
+    const adopt = session.slice(session.indexOf('async function adoptDevice('))
+    const adoptBody = adopt.slice(0, adopt.indexOf('\n}'))
+    assert.match(adoptBody, /refreshState\(\)[\s\S]*ensureStreaming\(\)/,
+      'adoptDevice 里没有"先读状态、再默认开始接收"')
+    // 换设备：先停旧会话，再走 adoptDevice（里面的默认开始接收）。
     assert.match(
-      panel,
-      /watch\(\s*\(\) => props\.deviceId,[\s\S]*?ensureStreaming\(\)/,
-      '换了一台相机之后没有默认开始接收'
+      session,
+      /watch\(deviceId, async \(id\) => \{[\s\S]*?camera\.stop\(\)[\s\S]*?adoptDevice\(id\)/,
+      '换了一台相机之后没有"停旧会话、再默认开始接收"'
     )
     // 非管理员与"已经在收"两种情况下都不许重复开（重复订阅＝两套 socket 推同一路数据）。
-    const ensure = panel.slice(panel.indexOf('async function ensureStreaming('))
+    const ensure = session.slice(session.indexOf('async function ensureStreaming('))
     const ensureBody = ensure.slice(0, ensure.indexOf('\n}'))
     assert.match(ensureBody, /canStart\.value/, 'ensureStreaming 没有管理员判断')
     assert.match(ensureBody, /camera\.isActive/, 'ensureStreaming 没有"已经在收就不重开"的判断')
+    // 会话只有一份：监测页调用一次 composable，面板自己不 start 会话流
+    // （「停止接收」按钮的 camera.stop() 是用户动作，不在此列）。
+    assert.ok(
+      monitor.includes('useFa371CameraSession(selectedDeviceId, isCamera)'),
+      '监测页没有调用会话 composable'
+    )
+    assert.equal(
+      /camera\.start\(/.test(panel),
+      false,
+      '声学面板自己 start 会话流（会与 composable 抢会话所有权）'
+    )
   })
 
-  it('⑦ 相机控制与告警并排（告警卡片在同一块板子里，不是对话框里的一句话）', () => {
+  it('告警入口卡与告警结果卡都在相机板子里（右列入口 + 视频下方的就地列表）', () => {
     assert.ok(
       monitor.includes('class="card camera-alarm-entry"'),
-      '找不到与相机控制并排的告警卡片（.camera-alarm-entry）'
+      '找不到告警配置入口卡（.camera-alarm-entry）'
     )
-    // 告警卡片必须与相机控制同层（`.camera-board` 的网格项），否则并排不成立。
+    assert.ok(
+      monitor.includes('class="card camera-alarm-result"'),
+      '找不到告警结果卡（.camera-alarm-result，最近几条告警的独立卡）'
+    )
+    // 两张卡都必须留在 `.camera-board` 里（网格边界内），否则 65/35 重排会把它们挤出相机分支。
     const boardStart = monitor.indexOf('class="camera-board"')
     const boardEnd = monitor.indexOf('</div>', monitor.indexOf('<CameraAlarmDialog'))
-    const alarmIndex = monitor.indexOf('camera-alarm-entry')
+    const entryIndex = monitor.indexOf('camera-alarm-entry')
+    const resultIndex = monitor.indexOf('camera-alarm-result')
     assert.ok(boardStart >= 0 && boardEnd > boardStart, '找不到相机板子的边界')
     assert.ok(
-      alarmIndex > boardStart && alarmIndex < boardEnd,
-      '告警卡片不在相机板子里（并排要求它是同一个网格的子项）'
+      entryIndex > boardStart && entryIndex < boardEnd,
+      '告警入口卡不在相机板子里'
+    )
+    assert.ok(
+      resultIndex > boardStart && resultIndex < boardEnd,
+      '告警结果卡不在相机板子里'
+    )
+    // 「查看告警记录」链接带 ?device= 预置筛选，两张卡都要有出口（入口卡照旧、结果卡随列表迁入）。
+    assert.ok(
+      (monitor.match(/data-link="camera-alarm-history"/g) ?? []).length >= 2,
+      '「查看告警记录」链接没有两张卡各一份'
     )
   })
 

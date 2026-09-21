@@ -1,15 +1,13 @@
 <script setup lang="ts">
 /**
- * FA371 camera acoustic streams — the five WebSocket channels, rendered.
+ * FA371 camera acoustic streams — the WebSocket channels, rendered.
  *
  * WHY THIS PANEL EXISTS AT ALL
- * `MonitorView` used to show only the LIVE VIDEO panel for an `acousticCamera`,
- * so the five channels the main process was already receiving had no surface
- * anywhere in the UI. On this particular camera the acoustic streams are the
- * part that actually works (MEASURED: RTSP is not reachable on any port), so
- * this is the panel that carries the information.
+ * `MonitorView` shows the camera's live video as the main surface, but the acoustic
+ * streams are the part of this camera that carries the leak/PD signal, so they need
+ * a surface somewhere on the same page.
  *
- * WHAT IT SHOWS, AND WHAT EACH PANEL REFUSES TO DO
+ * WHAT EACH SECTION REFUSES TO DO
  *   /voiceprintData  the device's own rendered JPEG (MEASURED 2026-09-15:
  *                    600x400 JFIF, ~45 kB, 10 fps). If the payload is NOT a JPEG
  *                    (i.e. a numeric decode candidate such as the mock), it is
@@ -26,18 +24,22 @@
  *                    exposes no usable sample-rate endpoint, so the axis is
  *                    labelled by line number and says the frequency scale is
  *                    unknown. An invented Hz axis would be worse than none.
- *   /energyData      the target points (energy, pixel x/y, swath/azimuth) as the
- *                    raw integers they are — the manual defines no units.
  *   /detectFeedback  the text frames. An EVENT channel: an empty list here means
  *                    "no detection finished", not "broken".
  *
+ * 业主 2026-09-21 第三批：整块面板按 `sections` 取用、随新布局拆到多处
+ * （右列 35%：声纹图 + 频谱图；视频下方：波形 + 检测结果）。会话生命周期
+ * （选中即默认接收、离开即停）只有**一个**主人 —— `useFa371CameraSession()`
+ * —— 本组件是纯展示，读同一份 `fa371Stream` store，多份实例不会各开各的会话。
+ * 能量点子卡（旧第 4 块）按同一批要求整块删除。
+ *
  * EMPTY / ERROR / STALE STATES ARE THE POINT
- * Every panel distinguishes "not started", "no frames yet", "stream error" and
+ * Every section distinguishes "not started", "no frames yet", "stream error" and
  * "stale (data stopped N seconds ago)" from real data. A silent channel and a
- * quiet room are different things, so no panel ever draws a plausible flat line
+ * quiet room are different things, so no section ever draws a plausible flat line
  * for missing data.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { Fa371StreamKind } from '@shared/domain/fa371-stream'
@@ -48,9 +50,27 @@ import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
 import AudioLevelMeter from '@renderer/components/AudioLevelMeter.vue'
 import EChart from '@renderer/components/EChart.vue'
 
-const props = defineProps<{
-  /** Camera being watched. The panel never reaches a device itself. */
-  deviceId: string
+/**
+ * 可取的子卡（业主 2026-09-21 第三批：能量点已删，不再是可选项）。
+ * 不传 `sections` = 全部 —— 保持「一整块面板」的旧手感（含状态行）。
+ */
+export type CameraAcousticSection = 'voiceprint' | 'spectrum' | 'audio' | 'detect'
+
+const ALL_SECTIONS: readonly CameraAcousticSection[] = ['voiceprint', 'spectrum', 'audio', 'detect']
+
+const props = withDefaults(
+  defineProps<{
+    /** 只渲染这几块（不传＝全部，旧手感）。见 `CameraAcousticSection`。 */
+    sections?: readonly CameraAcousticSection[]
+    /** 渲染顶部那一行会话状态（状态徽标 + 「停止接收」）。多份实例同屏时只开一份。 */
+    showStatus?: boolean
+  }>(),
+  { showStatus: true }
+)
+
+const emit = defineEmits<{
+  /** 「检测记录库」按钮：打开检测记录下载弹窗（弹窗挂在页面上，这里只上报）。 */
+  (event: 'openLibrary'): void
 }>()
 
 const { t } = useI18n()
@@ -61,6 +81,14 @@ const busy = ref(false)
 const audioEnabled = ref(false)
 const audioError = ref('')
 const voiceprintCanvas = ref<HTMLCanvasElement | null>(null)
+
+const activeSections = computed<readonly CameraAcousticSection[]>(
+  () => props.sections ?? ALL_SECTIONS
+)
+
+function wants(section: CameraAcousticSection): boolean {
+  return activeSections.value.includes(section)
+}
 
 /**
  * Per-channel phase, translated.
@@ -133,68 +161,31 @@ function layoutWarning(kind: Kind): string {
 }
 
 // ---------------------------------------------------------------------------
-// Session control (ADMIN-GUARDED in the main process — see the store)
+// Session status row (display only — the lifecycle lives in
+// `useFa371CameraSession()`, owned once by the page)
 // ---------------------------------------------------------------------------
 
-async function toggleSession(): Promise<void> {
+/**
+ * 「停止接收」只在接收中显示，所以它只会走 stop 那半边；start 留在 composable 的
+ * 默认接收里（第 23 条：数据默认实时接收，页面上没有「开始接收」按钮）。
+ */
+async function stopSession(): Promise<void> {
   if (busy.value) return
   busy.value = true
   try {
-    if (camera.isActive) await camera.stop()
-    else await camera.start()
+    await camera.stop()
   } finally {
     busy.value = false
   }
 }
-
-/**
- * **默认实时接收**（业主 2026-09-18 第 10 批第 23 条：「删除「相机声学数据」窗口、
- * 数据默认实时接收」）。
- *
- * 这一块原来是一个"窗口"：标题 + 状态徽标 + 一颗「开始接收」+ 管理员说明 + 握手信息。
- * 第 23 条把那个窗口删掉、并要求数据默认就在收 —— 于是开启不再是一个动作，而是**选中相机
- * 就发生的事**。
- *
- * 三条不能省的判断：
- *   1. **先 `refreshState()` 再决定**：主进程可能还留着上一次访问时开的会话，
- *      不看就"再开一次"是重复订阅（两套 socket 推同一路数据）；
- *   2. **只有管理员才自动开**：主进程对 `fa371Stream.start` 有角色检查，非管理员点也没用
- *      —— 与其打出一次注定失败的调用，不如把那一句「属于管理员操作」照实显示出来；
- *   3. **失败不吞**：`camera.error` 会被 `sessionError` 渲染成页面上的一句话。
- *      自动开始的坏处正是"用户没点，所以失败了也没人知道"。
- */
-async function ensureStreaming(): Promise<void> {
-  if (!canStart.value || camera.isActive || busy.value) return
-  busy.value = true
-  try {
-    await camera.start()
-  } finally {
-    busy.value = false
-  }
-}
-
-/**
- * The admin guard is enforced by `fa371Stream.start` in the MAIN process: the
- * handler opens sockets on the hardware. Rendering the refusal is this
- * component's only job — mirroring `cameraLive.start` keeps the two device
- * families from disagreeing about who may start a stream, and a duplicated role
- * check is one that can disagree.
- */
-const sessionError = computed(() => {
-  if (camera.state !== 'error') return ''
-  // 'no-device' is a sentinel the store uses when nothing is selected.
-  return camera.error === 'no-device' ? t('cameraStreamUi.noDevice') : camera.error
-})
 
 /**
  * 非管理员看得到图，但开不了流 —— 那一句说明只在**这种情况**下出现。
- *
- * 用同一个 `session.isAdmin` 判断渲染，而不是等主进程拒绝：主进程那边仍然是唯一的**执行**点
- * （见上面那段注释），这里只是别让操作员对着一排空面板猜为什么。
+ * 角色检查的执行点仍然是主进程，这里只决定要不要显示这句提示。
  */
 const canStart = computed(() => session.isAdmin)
 
-/** 握手方式那一条：窗口删掉之后它是状态徽标的悬停说明（支持时要看的就是这个值）。 */
+/** 握手方式那一条：状态徽标的悬停说明（支持时要看的就是这个值）。 */
 const handshakeTitle = computed(() =>
   camera.monitorState?.handshakeAuthId
     ? t('cameraStreamUi.handshake', { id: camera.monitorState.handshakeAuthId })
@@ -206,6 +197,12 @@ const statusText = computed(() => {
   if (camera.isActive) return t('cameraStreamUi.sessionRunning')
   if (camera.state === 'error') return t('cameraStreamUi.sessionError')
   return t('cameraStreamUi.sessionIdle')
+})
+
+const sessionError = computed(() => {
+  if (camera.state !== 'error') return ''
+  // 'no-device' is a sentinel the store uses when nothing is selected.
+  return camera.error === 'no-device' ? t('cameraStreamUi.noDevice') : camera.error
 })
 
 // ---------------------------------------------------------------------------
@@ -436,17 +433,15 @@ async function toggleAudio(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// /energyData and /detectFeedback
+// /detectFeedback
 // ---------------------------------------------------------------------------
-
-const energyTargets = computed(() => camera.energy?.targets ?? [])
 
 /**
  * Envelope text of a detection package whose logs could not be mapped.
  *
  * `rawRet` / `rawMsg` are raw device fields, so this row is a diagnostic dump rather than
  * prose: when the device sent neither of them there is simply nothing to show, and the
- * table's own missing-value placeholder answers that. (This used to ask i18n for a
+ * list's own missing-value placeholder answers that. (This used to ask i18n for a
  * sentence that no catalogue ever defined, so the row rendered a bare key.)
  */
 function detectEnvelope(entry: { rawMsg?: unknown; rawRet?: unknown }): string {
@@ -482,63 +477,28 @@ const detectRows = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// Lifecycle — playback only. The STREAM session is owned by the page through
+// `useFa371CameraSession()`; this component never starts or stops it.
 // ---------------------------------------------------------------------------
 
-let clock: ReturnType<typeof setInterval> | undefined
-
-onMounted(async () => {
-  camera.selectDevice(props.deviceId)
-  // Reflect a session the main process already has (left running by a previous
-  // visit) instead of claiming "not started" for a live stream.
-  await camera.refreshState()
-  // 第 23 条：数据**默认实时接收**（原来要按一次「开始接收」）。
-  await ensureStreaming()
-  // The stale clock only exists while the page is open; the store's phases are
-  // computed from it, so leaving it out would freeze every "stale" badge at "live".
-  clock = setInterval(() => camera.touchClock(), 1_000)
-})
-
 onBeforeUnmount(() => {
-  if (clock !== undefined) clearInterval(clock)
-  // Release BOTH halves: the listeners live in the preload bridge, the sockets in
-  // the main process. Neither is released by navigation alone.
+  // The envelope player's AudioContext does not die with the component: close it.
   void player.close()
-  void camera.stop()
-  camera.unsubscribe()
 })
-
-watch(
-  () => props.deviceId,
-  async (id) => {
-    if (!id) return
-    await camera.stop()
-    camera.selectDevice(id)
-    await camera.refreshState()
-    // 换了一台相机同样默认开始接收（第 23 条）。
-    await ensureStreaming()
-  }
-)
 </script>
 
 <template>
   <!--
     `camera-board__panel` 是**给探针用的**标记类（不带任何样式）：`scripts/video-proof-driver.cjs`
-    用它认出"声学图 + 相机控制这两块应当并排的面板"。没有它，探针只能靠组件的内部
-    类名（`.acam` / `.cctl`）去猜哪两块才是那一对。
+    用它认出声学面板与相机控制那两块。多份实例（sections 拆出来的）都带这个类。
   -->
   <div class="acam camera-board__panel">
     <!--
-      **这里原来是一个窗口**（标题「相机声学数据」+ 状态徽标 + 「开始接收」+ 管理员说明 +
-      握手信息）。业主 2026-09-18 第 10 批第 23 条要求删掉那个窗口，并让数据**默认实时接收**，
-      所以它变成了**一行状态**：
-
-        · 状态还必须留着 —— 这一块的每张图都会区分"未启动 / 尚无数据 / 已停止"，
-          没有这一行的话，"面板是空的"会被读成"环境很安静"（那是本仓库明令禁止的那种错）；
-        · 「停止接收」也留着（只在接收中时出现）：默认自动开始之后，如果没有停的地方，
-          操作员就没有任何办法关掉它。
+      一行会话状态（第 23 条把那个窗口删掉之后留下的最小形态）：一枚状态徽标 +
+      一颗「停止接收」+（非管理员时）一句说明。多份实例同屏时只有传了
+      `show-status` 的那一份渲染它（生命周期只有**一个**主人，状态也只有一份）。
     -->
-    <div class="acam__status" data-acam-status>
+    <div v-if="showStatus" class="acam__status" data-acam-status>
       <span
         class="badge"
         :class="camera.isActive ? 'badge--accent' : ''"
@@ -553,7 +513,7 @@ watch(
         class="btn btn--sm"
         :disabled="busy"
         data-action="acam-stop"
-        @click="toggleSession"
+        @click="stopSession"
       >
         {{ t('cameraStreamUi.stop') }}
       </button>
@@ -565,66 +525,59 @@ watch(
       </p>
     </div>
 
-    <!--
-      视频下方（业主第 24 条）：**声纹图与频谱图 16:9 各占 50%**，并排一行。
-      两块的画布都是 `aspect-ratio: 16 / 9`（`.acam__stage--ratio`），空态也用同一个比例 ——
-      空面板与有数据的面板一样大，数据来了页面不会跳。
-    -->
-    <div class="acam__pair" data-acam-pair>
-      <!-- ---- 1. voiceprint image ---------------------------------------- -->
-      <section class="card acam__panel">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraStreamUi.voiceprintTitle') }}</h3>
-          <span :class="phaseClass('voiceprintData')">{{ phaseLabel('voiceprintData') }}</span>
-        </div>
-        <span class="muted acam__meta">{{ phaseMeta('voiceprintData') }}</span>
-        <p v-if="layoutWarning('voiceprintData')" class="alert alert--warning" role="status">
-          {{ layoutWarning('voiceprintData') }}
-        </p>
+    <!-- ---- 1. voiceprint image ---------------------------------------- -->
+    <section v-if="wants('voiceprint')" class="card acam__panel">
+      <div class="section-header">
+        <h3 class="section-title">{{ t('cameraStreamUi.voiceprintTitle') }}</h3>
+        <span :class="phaseClass('voiceprintData')">{{ phaseLabel('voiceprintData') }}</span>
+      </div>
+      <span class="muted acam__meta">{{ phaseMeta('voiceprintData') }}</span>
+      <p v-if="layoutWarning('voiceprintData')" class="alert alert--warning" role="status">
+        {{ layoutWarning('voiceprintData') }}
+      </p>
 
-        <div
-          v-if="phase('voiceprintData') === 'live' && voiceprintDataUrl"
-          class="acam__stage acam__stage--ratio"
-        >
-          <img class="acam__image" :src="voiceprintDataUrl" :alt="t('cameraStreamUi.voiceprintAlt')" />
-        </div>
-        <div
-          v-else-if="phase('voiceprintData') === 'live' && voiceprintIsMatrix"
-          class="acam__stage acam__stage--ratio"
-        >
-          <canvas ref="voiceprintCanvas" class="acam__canvas"></canvas>
-        </div>
-        <div v-else class="acam__empty acam__stage--ratio">
-          <span>{{ emptyHint('voiceprintData') }}</span>
-        </div>
-        <p v-if="voiceprintMeta" class="muted acam__meta">{{ voiceprintMeta }}</p>
-      </section>
+      <div
+        v-if="phase('voiceprintData') === 'live' && voiceprintDataUrl"
+        class="acam__stage acam__stage--ratio"
+      >
+        <img class="acam__image" :src="voiceprintDataUrl" :alt="t('cameraStreamUi.voiceprintAlt')" />
+      </div>
+      <div
+        v-else-if="phase('voiceprintData') === 'live' && voiceprintIsMatrix"
+        class="acam__stage acam__stage--ratio"
+      >
+        <canvas ref="voiceprintCanvas" class="acam__canvas"></canvas>
+      </div>
+      <div v-else class="acam__empty acam__stage--ratio">
+        <span>{{ emptyHint('voiceprintData') }}</span>
+      </div>
+      <p v-if="voiceprintMeta" class="muted acam__meta">{{ voiceprintMeta }}</p>
+    </section>
 
-      <!-- ---- 2. FFT spectrum -------------------------------------------- -->
-      <section class="card acam__panel">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraStreamUi.fftTitle') }}</h3>
-          <span :class="phaseClass('fftData')">{{ phaseLabel('fftData') }}</span>
-        </div>
-        <span class="muted acam__meta">{{ phaseMeta('fftData') }}</span>
-        <p v-if="layoutWarning('fftData')" class="alert alert--warning" role="status">
-          {{ layoutWarning('fftData') }}
-        </p>
-        <div
-          v-if="phase('fftData') === 'live'"
-          class="acam__scope acam__stage--ratio"
-        >
-          <EChart :option="fftOption" height="100%" />
-        </div>
-        <div v-else class="acam__empty acam__stage--ratio">
-          <span>{{ emptyHint('fftData') }}</span>
-        </div>
-        <p v-if="fftAxisHint" class="muted acam__meta">{{ fftAxisHint }}</p>
-      </section>
-    </div>
+    <!-- ---- 2. FFT spectrum -------------------------------------------- -->
+    <section v-if="wants('spectrum')" class="card acam__panel">
+      <div class="section-header">
+        <h3 class="section-title">{{ t('cameraStreamUi.fftTitle') }}</h3>
+        <span :class="phaseClass('fftData')">{{ phaseLabel('fftData') }}</span>
+      </div>
+      <span class="muted acam__meta">{{ phaseMeta('fftData') }}</span>
+      <p v-if="layoutWarning('fftData')" class="alert alert--warning" role="status">
+        {{ layoutWarning('fftData') }}
+      </p>
+      <div
+        v-if="phase('fftData') === 'live'"
+        class="acam__scope acam__stage--ratio"
+      >
+        <EChart :option="fftOption" height="100%" />
+      </div>
+      <div v-else class="acam__empty acam__stage--ratio">
+        <span>{{ emptyHint('fftData') }}</span>
+      </div>
+      <p v-if="fftAxisHint" class="muted acam__meta">{{ fftAxisHint }}</p>
+    </section>
 
     <!-- ---- 3. live audio (时域波形图) ---------------------------------- -->
-    <section class="card acam__panel">
+    <section v-if="wants('audio')" class="card acam__panel">
       <div class="section-header">
         <h3 class="section-title">{{ t('cameraStreamUi.audioTitle') }}</h3>
         <span :class="phaseClass('pcmData')">{{ phaseLabel('pcmData') }}</span>
@@ -667,69 +620,40 @@ watch(
       </p>
     </section>
 
-    <!--
-      能量点与检测结果（短块，两列）。
-    -->
-    <div class="acam__pair">
-      <!-- ---- 4. energy points ------------------------------------------- -->
-      <section class="card acam__panel">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraStreamUi.energyTitle') }}</h3>
-          <span :class="phaseClass('energyData')">{{ phaseLabel('energyData') }}</span>
-        </div>
-        <span class="muted acam__meta">{{ phaseMeta('energyData') }}</span>
-        <p v-if="layoutWarning('energyData')" class="alert alert--warning" role="status">
-          {{ layoutWarning('energyData') }}
-        </p>
-        <table v-if="phase('energyData') === 'live' && energyTargets.length > 0" class="acam__table">
-          <thead>
-            <tr>
-              <th scope="col">{{ t('cameraStreamUi.energyValue') }}</th>
-              <th scope="col">{{ t('cameraStreamUi.energyPixelX') }}</th>
-              <th scope="col">{{ t('cameraStreamUi.energyPixelY') }}</th>
-              <th scope="col">{{ t('cameraStreamUi.energySwath') }}</th>
-              <th scope="col">{{ t('cameraStreamUi.energyAzimuth') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(target, index) in energyTargets" :key="index">
-              <td>{{ target.energy }}</td>
-              <td>{{ target.pixelX }}</td>
-              <td>{{ target.pixelY }}</td>
-              <td>{{ target.swathAngle }}</td>
-              <td>{{ target.azimuthAngle }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-else-if="phase('energyData') === 'live'" class="acam__empty acam__empty--short">
-          <span>{{ t('cameraStreamUi.energyNoTarget') }}</span>
-        </div>
-        <div v-else class="acam__empty acam__empty--short">
-          <span>{{ emptyHint('energyData') }}</span>
-        </div>
-      </section>
-
-      <!-- ---- 5. detection feedback -------------------------------------- -->
-      <section class="card acam__panel">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraStreamUi.detectTitle') }}</h3>
-          <span :class="phaseClass('detectFeedback')">{{ phaseLabel('detectFeedback') }}</span>
-        </div>
-        <span class="muted acam__meta">{{ phaseMeta('detectFeedback') }}</span>
-        <p v-if="layoutWarning('detectFeedback')" class="alert alert--warning" role="status">
-          {{ layoutWarning('detectFeedback') }}
-        </p>
-        <ul v-if="detectRows.length > 0" class="acam__log">
-          <li v-for="row in detectRows" :key="row.key">
-            <span class="acam__log-time">{{ row.time }}</span>
-            <span>{{ row.text }}</span>
-          </li>
-        </ul>
-        <div v-else class="acam__empty acam__empty--short">
-          <span>{{ emptyHint('detectFeedback') }}</span>
-        </div>
-      </section>
-    </div>
+    <!-- ---- 4. detection feedback -------------------------------------- -->
+    <section v-if="wants('detect')" class="card acam__panel">
+      <div class="section-header">
+        <h3 class="section-title">{{ t('cameraStreamUi.detectTitle') }}</h3>
+        <span :class="phaseClass('detectFeedback')">{{ phaseLabel('detectFeedback') }}</span>
+      </div>
+      <span class="muted acam__meta">{{ phaseMeta('detectFeedback') }}</span>
+      <p v-if="layoutWarning('detectFeedback')" class="alert alert--warning" role="status">
+        {{ layoutWarning('detectFeedback') }}
+      </p>
+      <!--
+        「检测记录库」（业主 2026-09-21 第三批）：打开检测记录下载弹窗。弹窗本体挂在
+        页面上（与画面墙同一对组件），这里只发事件 —— 面板自己不持有弹窗状态。
+      -->
+      <div class="btn-row">
+        <button
+          type="button"
+          class="btn btn--sm"
+          data-action="acam-detect-library"
+          @click="emit('openLibrary')"
+        >
+          {{ t('cameraNvrUi.menuDownloadDetect') }}
+        </button>
+      </div>
+      <ul v-if="detectRows.length > 0" class="acam__log">
+        <li v-for="row in detectRows" :key="row.key">
+          <span class="acam__log-time">{{ row.time }}</span>
+          <span>{{ row.text }}</span>
+        </li>
+      </ul>
+      <div v-else class="acam__empty acam__empty--short">
+        <span>{{ emptyHint('detectFeedback') }}</span>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -757,24 +681,11 @@ watch(
 }
 
 /*
- * 并排两块（第 24 条：声纹图与频谱图 **16:9 各占 50%**）。
- *
- * `minmax(0, 1fr)` 里的 `0` 是必要的：ECharts 的 canvas 会把列撑到内容宽，
- * 用 `auto` 时横向滚动条就出来了（这一条在设备管理那张表上也踩过）。
- * 窄窗口折成一列 —— 两块各 50% 在 700px 以下都读不出坐标轴。
- */
-.acam__pair {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
-  gap: var(--space-4);
-  align-items: start;
-}
-
-/*
- * 16:9 的那一层（第 24 条）。**画布与空态用同一个比例**：空面板与有数据的面板一样大，
+ * 16:9 的那一层（原第 24 条）。**画布与空态用同一个比例**：空面板与有数据的面板一样大，
  * 数据来了页面不会跳（这一条原来是靠 `min-height: 240px` 做的，比例一定就会失效）。
  *
- * `aspect-ratio` 让高度由宽度算出来，所以"各占 50%"与"16:9"两条同时成立。
+ * `aspect-ratio` 让高度由宽度算出来；`min-height: 0` 允许列真的变窄时高度跟着缩 —
+ * ECharts 的 canvas 会把内容最小宽度顶出去，`minmax(0, …)` 那一层在排布板上挡着。
  */
 .acam__stage--ratio {
   aspect-ratio: 16 / 9;
@@ -833,8 +744,8 @@ watch(
   gap: var(--space-2);
 }
 
-/* A fixed 16:9 stage for the two ratio panels (see `.acam__stage--ratio`), and the
-   same shape for the short "no data" cases below it. */
+/* A fixed 16:9 stage for the ratio sections, and the same shape for the short
+   "no data" cases below it. */
 .acam__stage,
 .acam__empty {
   position: relative;
@@ -867,30 +778,6 @@ watch(
 
 .acam__scope {
   min-width: 0;
-}
-
-/*
- * 能量点表格：五列数字在一排五图（每张 ~220px）里必须还能读。
- *
- * `table-layout: fixed` 让五列**等宽地**分这一张卡的宽度，而不是按最长的一格去撑。
- * 这是一条**预防措施**：五个表头（能量值 / 像素X / 像素Y / 扫掠角 / 方位角）估算各占
- * ~45px，5×45 = 225px 已经压着 220px 的卡宽了。
- *
- * 未验证：这台相机离线、没有实时能量点，表格不渲染，所以"没有它会不会真溢出"没有量到。
- * 探针（`scripts/demo-shot-driver.cjs`）在量不到表格时会**明确写出来**，不会当成通过。
- */
-.acam__table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.acam__table th,
-.acam__table td {
-  text-align: left;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--color-border);
 }
 
 .acam__log {

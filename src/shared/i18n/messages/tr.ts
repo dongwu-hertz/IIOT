@@ -2205,10 +2205,12 @@ export const tr: MessageSchema = {
     volumeMuted: 'Sessiz',
     volumeValue: 'Ses {percent}%',
     volumeNoPicture: 'Ses için önce görüntü gerekir',
-    flipGroup: 'Görüntü çevirme',
-    flipHorizontal: 'Yatay çevir',
-    flipVertical: 'Dikey çevir',
-    flipQuarter: '90° döndür',
+    /** Kızılötesi açılır pencere düğmesi (sahip 20260921 partisi, üçüncü parti, madde 2). Cihaz yalnızca sıcaklık değeri verir, kızılötesi video yok. */
+    infrared: 'Kızılötesi',
+    infraredNoVideo: 'Cihaz yalnızca sıcaklık değerleri sağlar; henüz kızılötesi video akışı yok',
+    infraredEmissivity: 'Emisivite',
+    /** Video bilgi katmanı çubuğunu aç/kapat. */
+    overlayToggle: 'Katman',
     dataForwarded: '{count} bayt aktarıldı',
     modeRemux: 'Yalnızca yeniden paketleme (yeniden kodlama yok)',
     modeTranscode: 'Yeniden kodlama (uyumluluk kipi)',
@@ -2260,15 +2262,6 @@ export const tr: MessageSchema = {
     fftAxisFromDevice: '{lines} spektrum çizgisi; aygıtın bildirdiği örnekleme hızıyla her çizgi {hz} Hz kapsar',
     fftAxisUnknown:
       '{lines} spektrum çizgisi; aygıt örnekleme hızı bildirmedi, bu yüzden yatay eksen çizgi numarasıyla etiketlenir ve frekans ölçeği bilinmez.',
-    energyTitle: 'Enerji noktaları',
-    energyValue: 'Enerji',
-    energyPixelX: 'Piksel X',
-    energyPixelY: 'Piksel Y',
-    energySwath: 'Tarama açısı',
-    energyAzimuth: 'Yön açısı',
-    energyNoTarget: 'Bu çerçevede hedef noktası yok (şu anda konumlanan bir ses kaynağı yok).',
-    detectTitle: 'Algılama sonuçları',
-    detectMode: 'Algılama kipi'
   },
 
   /**
@@ -2284,6 +2277,11 @@ export const tr: MessageSchema = {
     menuAlarmConfig: 'Alarm yapılandırması…',
     /** Dört görüntüleme modu çubuktan buraya taşındı (12. parti). */
     menuDisplay: 'Görüntüleme modu',
+    /** "Görüntü çevirme" alt menüsü (sahip 20260921 partisi, üçüncü parti, madde 2: çevirme sağ tık menüsüne taşındı; yalnızca kamera tek paneli `flips` gönderdiğinde çizilir). */
+    menuFlip: 'Görüntü çevirme',
+    menuFlipHorizontal: 'Yatay çevir',
+    menuFlipVertical: 'Dikey çevir',
+    menuFlipQuarter: '90° döndür',
     menuFullscreen: 'Tam ekran',
     menuExitFullscreen: 'Tam ekrandan çık',
     menuCopyRtsp: 'RTSP adresini kopyala',
@@ -2353,6 +2351,8 @@ export const tr: MessageSchema = {
     entryHint:
       'Stratejiler ve koşullar cihazda geçerlidir; bu sayfa yalnızca okur ve düzenler.',
     noAlarms: 'Bu makinede bu kamera için henüz alarm kaydı yok.',
+    /** İzleme sayfasında videonun altındaki «Alarm sonuçları» kartının başlığı (sahip 20260921 partisi, üçüncü parti, madde 5). */
+    recentTitle: 'Alarmlar',
     goAlarmList: 'Alarm merkezini aç',
     // `subtitle` gösterilen uyarı satırıyla birlikte kaldırıldı; `refresh` eski
     // yenile düğmesinin metniydi, düğme artık yalnızca simge olduğu için adı

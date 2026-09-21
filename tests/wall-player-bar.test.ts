@@ -84,7 +84,13 @@ describe('播放器控制条：只有业主给的那六颗（第 12 批）', () 
     assert.match(nvr, /'view-play',\s*\n\s*'view-timedomain',\s*\n\s*'view-spectrum',\s*\n\s*'view-spectrogram',/, '菜单动作词表里没有那四个')
     assert.match(nvr, /action: 'display'/, '没有「显示方式」这个父项')
     assert.match(nvr, /labelKey: 'cameraNvrUi\.menuDisplay'/, '父项的文案键不对')
-    assert.match(nvr, /CAMERA_NVR_SUBMENU_ACTIONS = \['capture', 'display'\]/, '父项词表没有跟着加')
+    // 父项词表：第三批加了「翻转」父项（监测页传 flips context 才渲染，墙不传）——
+    // 词表本身必须跟着加，否则模型与派发之间的契约断了。
+    assert.match(
+      nvr,
+      /CAMERA_NVR_SUBMENU_ACTIONS = \['capture', 'display', 'flip'\]/,
+      '父项词表没有跟着加'
+    )
     // 墙对四个动作各有一条派发分支（少一条就是"点了没反应"）。
     for (const [action, mode] of [
       ['view-play', 'play'],

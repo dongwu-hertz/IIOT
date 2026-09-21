@@ -2240,10 +2240,12 @@ presets, the licence boundaries
     volumeMuted: 'Muted',
     volumeValue: 'Volume {percent}%',
     volumeNoPicture: 'Volume needs a picture first',
-    flipGroup: 'Picture flip',
-    flipHorizontal: 'Flip horizontally',
-    flipVertical: 'Flip vertically',
-    flipQuarter: 'Rotate 90°',
+    /** Infrared popover button (owner batch 20260921, third batch item 2). The device reports temperatures only, no IR video. */
+    infrared: 'Infrared',
+    infraredNoVideo: 'The device provides temperature values only; no infrared video stream yet',
+    infraredEmissivity: 'Emissivity',
+    /** Toggle for the video info overlay bar. */
+    overlayToggle: 'Overlay',
     dataForwarded: '{count} bytes forwarded',
     modeRemux: 'Re-mux only (no re-encode)',
     modeTranscode: 'Re-encode (compatibility mode)',
@@ -2295,15 +2297,6 @@ presets, the licence boundaries
     fftAxisFromDevice: '{lines} spectrum lines; at the sample rate the device reported each line spans {hz} Hz',
     fftAxisUnknown:
       '{lines} spectrum lines; the device reported no sample rate, so the horizontal axis is labelled by line number and the frequency scale is unknown.',
-    energyTitle: 'Energy points',
-    energyValue: 'Energy',
-    energyPixelX: 'Pixel X',
-    energyPixelY: 'Pixel Y',
-    energySwath: 'Swath angle',
-    energyAzimuth: 'Azimuth angle',
-    energyNoTarget: 'This frame carries no target point (no sound source located right now).',
-    detectTitle: 'Detection results',
-    detectMode: 'Detection mode'
   },
 
   /**
@@ -2323,6 +2316,11 @@ presets, the licence boundaries
     menuAlarmConfig: 'Alarm configuration…',
     /** The four display modes moved here from the player bar (owner batch 12). */
     menuDisplay: 'Display mode',
+    /** "Picture flip" submenu (owner batch 20260921, third batch item 2: flip moved into the context menu; rendered only when the camera single-panel passes `flips`). */
+    menuFlip: 'Picture flip',
+    menuFlipHorizontal: 'Flip horizontally',
+    menuFlipVertical: 'Flip vertically',
+    menuFlipQuarter: 'Rotate 90°',
     menuFullscreen: 'Full screen',
     menuExitFullscreen: 'Exit full screen',
     menuCopyRtsp: 'Copy RTSP address',
@@ -2397,6 +2395,8 @@ presets, the licence boundaries
     /** The alarm card on the live-monitoring page (side by side with camera control). */
     entryHint: 'Strategies and conditions take effect on the device; this page only reads and edits them.',
     noAlarms: 'No alarm records for this camera on this machine yet.',
+    /** Title of the "Alarm results" card below the video on the monitor page (owner batch 20260921, third batch item 5). */
+    recentTitle: 'Alarms',
     goAlarmList: 'Open the alarm center',
     // `subtitle` was deleted with the notice line it rendered; `refresh` was the
     // text label of the old refresh button, which is now icon-only and therefore

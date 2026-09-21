@@ -46,7 +46,16 @@ export const CAMERA_NVR_ACTIONS = [
   // 下载设备侧生成的检测结果文件。
   'download-detect',
   // 清空这一格（画面格自己的动作，与相机能力无关）。
-  'close-tile'
+  'close-tile',
+  /**
+   * 画面翻转三开关（左右 / 上下 / 90°，业主 2026-09-21 第三批从监测页控制条移进这里）。
+   *
+   * 与 `view-*` 同一类：是「这一格画面怎么画」，不是「对相机做什么」。只有调用方在
+   * context 里传了当前翻转状态（`context.flips`）才渲染 —— 画面墙不传，它的菜单保持原样。
+   */
+  'flip-horizontal',
+  'flip-vertical',
+  'flip-quarter'
 ] as const
 
 export type CameraNvrAction = (typeof CAMERA_NVR_ACTIONS)[number]
@@ -174,8 +183,29 @@ export interface CameraNvrMenuItem {
 }
 
 /** 只有分组用的「父项」，点击它只展开子菜单，不派发任何动作。 */
-export const CAMERA_NVR_SUBMENU_ACTIONS = ['capture', 'display'] as const
+export const CAMERA_NVR_SUBMENU_ACTIONS = ['capture', 'display', 'flip'] as const
 export type CameraNvrSubmenuAction = (typeof CAMERA_NVR_SUBMENU_ACTIONS)[number]
+
+/**
+ * 画面翻转的当前状态 —— 右键菜单「翻转」子菜单三项的 ✓ 靠它打。
+ *
+ * 形状与 `cameraLivePrefs.ts` 的 `CameraFlip` 刻意一致（三个布尔各自独立），
+ * 但这里不 import 那个类型：那个文件在渲染层，而本文件是纯域模型，被主进程测试直接跑。
+ */
+export interface CameraNvrFlips {
+  horizontal: boolean
+  vertical: boolean
+  quarter: boolean
+}
+
+/**
+ * 调用方可选的额外上下文。**缺省即「没有」**：`flips` 不传时菜单里根本不出现「翻转」
+ * 子菜单（与 `capabilities` 的「缺省不宣称」同一规矩）——画面墙不传，菜单保持原样；
+ * 实时监测页传当前翻转状态，菜单里多出一组带 ✓ 的翻转项。
+ */
+export interface CameraNvrMenuContext {
+  flips?: CameraNvrFlips
+}
 
 /**
  * 四种显示方式在菜单里的动作 id 与文案键（顺序就是 `CAMERA_CELL_VIEW_MODES` 的顺序）。
@@ -256,7 +286,8 @@ export function cameraCaptureReadiness(state: CameraLiveState | null): CameraCap
  */
 export function buildCameraNvrMenu(
   state: CameraLiveState | null,
-  env: CameraNvrEnvironment
+  env: CameraNvrEnvironment,
+  context?: CameraNvrMenuContext
 ): CameraNvrMenuItem[] {
   const readiness = cameraCaptureReadiness(state)
   const captureReason = {
@@ -355,6 +386,43 @@ export function buildCameraNvrMenu(
         ? {}
         : { disabledReasonKey: 'cameraWallUi.viewNeedsCamera' }),
       submenu: displayItems
+    },
+    {
+      /*
+       * 翻转（左右 / 上下 / 90°，业主 2026-09-21 第三批从监测页控制条移进右键菜单）。
+       *
+       * 只有调用方传了 `context.flips` 才出现（实时监测页）；画面墙不传，它的菜单里没有
+       * 这一项。三个子项各自带 ✓（复选型），文字用 `menuFlip*` —— 与控制条旧文案
+       * （`cameraLiveUi.flip*`）同一措辞，但那是「按钮」的命名空间，这是「菜单」的。
+       * 翻转是纯本地画面变换，与流状态无关，所以恒为可点。
+       */
+      action: 'flip',
+      labelKey: 'cameraNvrUi.menuFlip',
+      visible: liveVideo && context?.flips !== undefined,
+      enabled: true,
+      submenu: [
+        {
+          action: 'flip-horizontal',
+          labelKey: 'cameraNvrUi.menuFlipHorizontal',
+          visible: true,
+          enabled: true,
+          checked: context?.flips?.horizontal === true
+        },
+        {
+          action: 'flip-vertical',
+          labelKey: 'cameraNvrUi.menuFlipVertical',
+          visible: true,
+          enabled: true,
+          checked: context?.flips?.vertical === true
+        },
+        {
+          action: 'flip-quarter',
+          labelKey: 'cameraNvrUi.menuFlipQuarter',
+          visible: true,
+          enabled: true,
+          checked: context?.flips?.quarter === true
+        }
+      ]
     },
     {
       /*

@@ -2202,10 +2202,12 @@ export const es: MessageSchema = {
     volumeMuted: 'Silenciado',
     volumeValue: 'Volumen {percent}%',
     volumeNoPicture: 'El volumen necesita imagen',
-    flipGroup: 'Voltear imagen',
-    flipHorizontal: 'Voltear horizontal',
-    flipVertical: 'Voltear vertical',
-    flipQuarter: 'Girar 90°',
+    /** Botón de la capa flotante infrarroja (lote del propietario 20260921, tercer lote, punto 2). El equipo solo informa temperaturas, sin vídeo IR. */
+    infrared: 'Infrarrojo',
+    infraredNoVideo: 'El equipo solo proporciona valores de temperatura; aún no hay flujo de vídeo infrarrojo',
+    infraredEmissivity: 'Emisividad',
+    /** Alternar la barra de información superpuesta del vídeo. */
+    overlayToggle: 'Superposición',
     dataForwarded: '{count} bytes transferidos',
     modeRemux: 'Solo remultiplexado (sin recodificar)',
     modeTranscode: 'Recodificado (modo de compatibilidad)',
@@ -2257,15 +2259,6 @@ export const es: MessageSchema = {
     fftAxisFromDevice: '{lines} líneas espectrales; con la frecuencia de muestreo informada cada línea abarca {hz} Hz',
     fftAxisUnknown:
       '{lines} líneas espectrales; el dispositivo no informó de ninguna frecuencia de muestreo, así que el eje horizontal se rotula por número de línea y la escala de frecuencia es desconocida.',
-    energyTitle: 'Puntos de energía',
-    energyValue: 'Energía',
-    energyPixelX: 'Píxel X',
-    energyPixelY: 'Píxel Y',
-    energySwath: 'Ángulo de barrido',
-    energyAzimuth: 'Ángulo de acimut',
-    energyNoTarget: 'Esta trama no contiene ningún punto objetivo (ahora mismo no se localiza ninguna fuente).',
-    detectTitle: 'Resultados de detección',
-    detectMode: 'Modo de detección'
   },
 
   /**
@@ -2281,6 +2274,11 @@ export const es: MessageSchema = {
     menuAlarmConfig: 'Configuración de alarmas…',
     /** Los cuatro modos de visualización se movieron aquí desde la barra (lote 12). */
     menuDisplay: 'Modo de visualización',
+    /** Submenú «Voltear imagen» (lote del propietario 20260921, tercer lote, punto 2: el volteo pasó al menú contextual; solo se muestra cuando el panel individual de la cámara pasa `flips`). */
+    menuFlip: 'Voltear imagen',
+    menuFlipHorizontal: 'Voltear horizontal',
+    menuFlipVertical: 'Voltear vertical',
+    menuFlipQuarter: 'Girar 90°',
     menuFullscreen: 'Pantalla completa',
     menuExitFullscreen: 'Salir de pantalla completa',
     menuCopyRtsp: 'Copiar dirección RTSP',
@@ -2350,6 +2348,8 @@ export const es: MessageSchema = {
     entryHint:
       'Las estrategias y condiciones se aplican en el equipo; esta página solo las lee y las edita.',
     noAlarms: 'Aún no hay registros de alarma de esta cámara en este equipo.',
+    /** Título de la tarjeta «Resultados de alarmas» bajo el vídeo en la página de monitorización (lote del propietario 20260921, tercer lote, punto 5). */
+    recentTitle: 'Alarmas',
     goAlarmList: 'Abrir el centro de alarmas',
     // `subtitle` se eliminó junto con el aviso que se mostraba; `refresh` era el
     // texto del antiguo botón de actualizar, ahora solo con icono y por tanto

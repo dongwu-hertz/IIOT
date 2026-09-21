@@ -110,10 +110,12 @@ describe('⑤ 右键菜单与总览一致（同一份模型 + 同一批能力）
     assert.equal(capabilities.detectDownload, true)
   })
 
-  it('同一台正在播放的相机：两处的菜单只差「清空这一格」与「显示方式」', () => {
+  it('同一台正在播放的相机：两处的菜单只差「清空这一格」「显示方式」与「翻转」', () => {
     const monitorActions = buildCameraNvrMenu(
       playing(),
-      envWith(assertMonitorCapabilities(MONITOR))
+      envWith(assertMonitorCapabilities(MONITOR)),
+      // 监测页传当前翻转状态（业主 2026-09-21 第三批），菜单里因此多出一组「翻转」。
+      { flips: { horizontal: false, vertical: false, quarter: false } }
     ).map((item) => item.action)
     const wallActions = buildCameraNvrMenu(
       playing(),
@@ -129,23 +131,33 @@ describe('⑤ 右键菜单与总览一致（同一份模型 + 同一批能力）
     ).map((item) => item.action)
 
     /*
-     * 两处刻意不同的两项：
+     * 三处刻意不同的项：
      *   · `close-tile` —— 这一页只有一路画面，停止它是页头那颗按钮的事；
      *   · `display`    —— 四种视图（播放 / 时域图 / 频域图 / 时频谱图）是**画面格**的东西
      *                     （业主 2026-09-18 第 10 批第 2 条要的是"视频墙"上的四种画法），
      *                     这一页有它自己的一套声学面板，没有"这一格画什么"。第 12 批把
-     *                     那四颗按钮从控制条移进这个子菜单之后，它仍然是画面墙独有的。
+     *                     那四颗按钮从控制条移进这个子菜单之后，它仍然是画面墙独有的；
+     *   · `flip`       —— 画面翻转三开关是监测页从控制条移进菜单的（第三批）：画面墙
+     *                     不传 `flips` context，它的菜单里**没有**这一项。
      */
     assert.deepEqual(
-      wallActions.filter((action) => action !== 'close-tile' && action !== 'display'),
-      monitorActions,
-      '实时监测页的右键项与画面墙不一致（除了刻意不同的「清空这一格」与「显示方式」）'
+      wallActions.filter(
+        (action) => action !== 'close-tile' && action !== 'display' && action !== 'flip'
+      ),
+      monitorActions.filter((action) => action !== 'flip'),
+      '实时监测页的右键项与画面墙不一致（除了刻意不同的「清空这一格」「显示方式」「翻转」）'
     )
     assert.equal(wallActions.includes('display'), true, '画面墙的菜单里没有「显示方式」')
     assert.equal(
       monitorActions.includes('display'),
       false,
       '实时监测页声明了「显示方式」：这一页没有画面格，那四项点了不会有反应'
+    )
+    assert.equal(monitorActions.includes('flip'), true, '监测页的菜单里没有「翻转」')
+    assert.equal(
+      wallActions.includes('flip'),
+      false,
+      '画面墙的菜单里出现了「翻转」：它没传 flips context，不该有这一项'
     )
     assert.equal(monitorActions.includes('playback'), true, '菜单里没有本机回放')
     assert.equal(monitorActions.includes('download-detect'), true, '菜单里没有检测记录下载')
@@ -159,10 +171,15 @@ describe('⑤ 右键菜单与总览一致（同一份模型 + 同一批能力）
       MONITOR.indexOf('离开画面时把正在进行的录像正式收尾')
     )
     assert.ok(switchBody.length > 0, '读不到 onMenuSelect() 的函数体')
-    const actions = buildCameraNvrMenu(playing(), envWith(assertMonitorCapabilities(MONITOR)))
+    // 监测页传 flips context：菜单能发出的动作里因此包含三个 flip 分支。
+    const actions = buildCameraNvrMenu(
+      playing(),
+      envWith(assertMonitorCapabilities(MONITOR)),
+      { flips: { horizontal: false, vertical: true, quarter: false } }
+    )
     for (const item of actions) {
-      // `capture` 是二级菜单的父项：它自己不执行动作（模型里就没给它动作语义）。
-      if (item.action === 'capture') continue
+      // `capture` / `flip` 是二级菜单的父项：它们自己不执行动作（模型里就没给动作语义）。
+      if (item.action === 'capture' || item.action === 'flip') continue
       assert.ok(
         switchBody.includes(`case '${item.action}':`),
         `${item.action} 没有派发分支（菜单项点了不会有反应）`
@@ -196,13 +213,22 @@ describe('⑤ 16:9 视频窗口', () => {
     )
   })
 
-  it('高度上限**只压宽度**（压高度会把 16:9 破坏掉）', () => {
+  it('窗口宽度 = 左列宽度：16:9 随列宽，没有 72vh 限宽（第三批删的）', () => {
     const stage = MONITOR.slice(
       MONITOR.indexOf('.camera-live__stage {'),
       MONITOR.indexOf('}', MONITOR.indexOf('.camera-live__stage {'))
     )
-    assert.match(stage, /max-width:\s*calc\(72vh \* 16 \/ 9\)/, '没有按比例的高度限制')
-    assert.equal(/max-height/.test(stage), false, '舞台自己用了 max-height（比例会被压坏）')
+    assert.match(stage, /aspect-ratio:\s*16\s*\/\s*9/, '画面窗口不是 16:9')
+    assert.equal(
+      /max-width/.test(stage),
+      false,
+      '窗口又加了限宽（第三批要求撑满左列，两侧不留白）'
+    )
+    assert.equal(
+      /margin-inline:\s*auto/.test(stage),
+      false,
+      '窗口又居中限宽了（两侧会留空白）'
+    )
   })
 
   it('视频用 object-fit: contain 填满窗口（黑边来自留白，不是拉伸）', () => {

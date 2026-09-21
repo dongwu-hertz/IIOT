@@ -277,23 +277,21 @@ describe('B2. 实时监测页：相机块并排，声学箱分支不动', () => 
     // `minmax(0, …)` 的 0 是刻意的：`auto` 会让 1024 点的 canvas 顶出横向滚动条。
     assert.match(control + monitor, /minmax\(\d+px,\s*1fr\)/, '看不到最小列宽')
     /**
-     * 整幅宽的三块：设备头与相机五路图谱写在模板的 `class` 上（⑧ 那一块见下面那条用例），
-     * 单路直播靠 `.camera-board > .camera-live` 规则。
-     *
-     * 这里数的是**用法**（`class="…camera-board__wide"`）而不是这个类名在文件里出现的次数：
-     * 注释里也会提到它，数出现次数会被注释绊倒 —— 这条断言因此被绊倒过两次了。
+     * 整幅宽的网格项：只剩设备头（`class="…camera-board__wide"`）。视频卡与声学图谱
+     * 2026-09-21 第三批起住进 `.camera-split`（65/35 两列容器自己占整幅宽），不再
+     * 单独标 `camera-board__wide`。
      */
     assert.equal(
       count(monitor, /class="[^"]*camera-board__wide"/g),
-      2,
-      '模板里带整幅宽标记的应当恰好两处（设备头 + 相机五路图谱）'
+      1,
+      '模板里带整幅宽标记的应当恰好一处（设备头）'
     )
     assert.equal(
       count(monitor, /class="card monitor-head camera-board__wide"/g),
       1,
       '设备头不是恰好一处整幅宽标记'
     )
-    assert.match(monitor, /\.camera-board > \.camera-live/, '单路直播没有整幅宽规则')
+    assert.match(monitor, /\.camera-split \{\s[^}]*grid-column:\s*1 \/ -1/, '65/35 两列容器没有占整幅宽')
     // 覆盖层不参与网格，否则会占掉一格把并排拆散。
     /*
      * 数的是**用法**：`class="camera-board__overlay"` 恰好 4 个（右键菜单 + 告警配置 +
@@ -308,30 +306,51 @@ describe('B2. 实时监测页：相机块并排，声学箱分支不动', () => 
     assert.match(monitor, /\.camera-board__overlay \{/, '覆盖层的 display:contents 规则不见了')
   })
 
-  it('相机页的四块都在板子里，且文档顺序没变（⑦ 之后：视频墙已删；⑧：五路图谱回来了）', () => {
-    // 2026-09-21 第二批第 16 条给这块板子绑了 `:class`（声纹分支收紧间隙的修饰类），
-    // 所以这里认的是开标签前缀，不是"恰好这一个属性串"。
+  it('相机页的两列布局（业主 2026-09-21 第三批：左 65% 视频 + 下方三卡，右 35% 纵向栈）', () => {
+    // 板子的起止认**带注释的原文**：结束标记就是那条 acoustic box 的注释本身。
     const boardOpen = monitor.indexOf('<div class="camera-board"')
     const boardClose = monitor.indexOf('</div>\n\n      <!-- ---- acoustic box', boardOpen)
     assert.ok(boardOpen >= 0, '找不到 .camera-board')
     assert.ok(boardClose > boardOpen, '找不到 .camera-board 的结束位置')
-    const head = monitor.indexOf('<section class="card monitor-head camera-board__wide">')
-    const live = monitor.indexOf('<section v-if="isCamera" class="card camera-live">')
-    const acoustic = monitor.indexOf('<CameraAcousticPanel')
-    const controlPanel = monitor.indexOf('<CameraControlPanel')
-    const alarmCard = monitor.indexOf('class="card camera-alarm-entry"')
+    const splitOpen = monitor.indexOf('<div v-if="isCamera" class="camera-split">')
+    assert.ok(
+      splitOpen > boardOpen && splitOpen < boardClose,
+      '65/35 两列容器（.camera-split）不在相机板子里'
+    )
+    // 左列：视频 → 检测结果 → 告警结果 → 声学波形；右列：控制 → 告警入口 → 声纹/频谱。
+    const mainOpen = monitor.indexOf('<div class="camera-split__main">', splitOpen)
+    const sideOpen = monitor.indexOf('<div class="camera-split__side">', splitOpen)
+    assert.ok(mainOpen > splitOpen, '找不到左列（.camera-split__main）')
+    assert.ok(sideOpen > mainOpen, '找不到右列（.camera-split__side）')
+    const live = monitor.indexOf('class="card camera-live"', mainOpen)
+    const detectPanel = monitor.indexOf(":sections=\"['detect']\"", mainOpen)
+    const alarmResult = monitor.indexOf('class="card camera-alarm-result"', mainOpen)
+    const audioPanel = monitor.indexOf(":sections=\"['audio']\"", mainOpen)
     for (const [label, index] of [
-      ['设备头', head],
-      ['单路直播', live],
-      ['相机五路图谱', acoustic],
-      ['相机控制', controlPanel],
-      ['告警卡片', alarmCard]
+      ['视频卡', live],
+      ['检测结果卡', detectPanel],
+      ['告警结果卡', alarmResult],
+      ['声学波形卡', audioPanel]
     ] as const) {
-      assert.ok(index > boardOpen && index < boardClose, `${label} 不在排布板里`)
+      assert.ok(index > mainOpen && index < sideOpen, `左列少了${label}（或排到了右列）`)
     }
     assert.ok(
-      head < live && live < acoustic && acoustic < controlPanel && controlPanel < alarmCard,
-      '相机页几块的文档顺序被改变了（Tab 顺序也会跟着变）'
+      live < detectPanel && detectPanel < alarmResult && alarmResult < audioPanel,
+      '左列的文档顺序被改变了（Tab 顺序也会跟着变）'
+    )
+    const controlPanel = monitor.indexOf('<CameraControlPanel', sideOpen)
+    const alarmEntry = monitor.indexOf('class="card camera-alarm-entry"', sideOpen)
+    const spectro = monitor.indexOf(":sections=\"['voiceprint', 'spectrum']\"", sideOpen)
+    for (const [label, index] of [
+      ['相机控制', controlPanel],
+      ['告警配置入口卡', alarmEntry],
+      ['声纹图 + 频谱图', spectro]
+    ] as const) {
+      assert.ok(index > sideOpen && index < boardClose, `右列少了${label}`)
+    }
+    assert.ok(
+      controlPanel < alarmEntry && alarmEntry < spectro,
+      '右列的文档顺序被改变了（控制 → 告警配置 → 声纹/频谱）'
     )
     // ⑦ 删掉的视频墙：删的是**这一页的用法**，不是组件（总览页仍然是主视图）。
     assert.equal(
@@ -339,22 +358,90 @@ describe('B2. 实时监测页：相机块并排，声学箱分支不动', () => 
       false,
       '实时监测页又挂上了视频墙（⑦ 要求删掉它）'
     )
-    /**
-     * ⑧（业主 2026-09-17 确认）把相机声学数据按**新版式**放回来了：五路实时数据排成一排。
-     *
-     * 这里**不再**断言"它不在" —— ⑦ 删掉的是它的旧版式（竖排/自动换行的五张卡），
-     * ⑧ 定的就是新版式。要钉住的是"它在"且"它是整幅宽的那一块"：挤在板子的一格里，
-     * 五张图每张只剩 ~60px，那也"是一排"，但读不出来。
-     */
-    const usage = between(monitor, '<CameraAcousticPanel', '/>', '相机五路图谱那一块')
-    assert.ok(
-      usage.includes('camera-board__wide'),
-      '相机五路图谱没有整幅宽（camera-board__wide）—— 五张图会挤在板子的一格里'
+    // 左列视频无标题（第三批）：视频卡里没有 cameraLiveUi.title 的标题行。
+    const liveCard = between(monitor, 'class="card camera-live"', '</section>', '视频卡')
+    assert.equal(
+      liveCard.includes("t('cameraLiveUi.title')"),
+      false,
+      '视频卡里还有标题行（第三批要求删掉）'
     )
   })
 
-  it('相机页的三条既有行为一条都没有被这次重排碰到', () => {
-    // `<video>` 仍然由地址守卫（没有地址时渲染的是状态占位，不是一个空播放器）。
+  it('65/35 两列：比例写死在 .camera-split 上，窄窗口折成一列', () => {
+    const split = between(monitorCode, '.camera-split {', '}', '两列容器样式')
+    assert.match(split, /display:\s*grid/, '两列容器不是网格')
+    assert.match(
+      split,
+      /grid-template-columns:\s*65fr\s+35fr/,
+      '两列比例不是 65fr / 35fr（左视频右栈）'
+    )
+    assert.match(split, /grid-column:\s*1 \/ -1/, '两列容器没有占满整幅宽')
+    // 窄窗口退化：没有这一条，1100px 以下的窗口上两列各 ~35% 就读不出坐标轴了。
+    assert.match(
+      monitorCode,
+      /@media \(max-width: 1100px\) \{\s*\.camera-split \{\s*grid-template-columns: 1fr/,
+      '两列没有窄窗口折回一列的退化'
+    )
+    // 左右两列各自是纵向栈（卡片间隙由列容器给）。两个选择器写在同一条规则里。
+    const columnsRule = between(monitorCode, '.camera-split__main,', '}', '两列容器样式')
+    for (const column of ['.camera-split__main', '.camera-split__side']) {
+      assert.ok(columnsRule.includes(column), `两列规则的 ${column} 不见了`)
+      assert.match(columnsRule, /display:\s*flex/, `${column} 不是纵向栈`)
+      assert.match(columnsRule, /flex-direction:\s*column/, `${column} 不是纵向排列`)
+      assert.match(columnsRule, /min-width:\s*0/, `${column} 没有 min-width: 0（ECharts canvas 会顶出列宽）`)
+    }
+  })
+
+  it('视频窗口撑满左列：16:9 由列宽决定，旧的 72vh 限宽已删', () => {
+    const stage = between(monitorCode, '.camera-live__stage {', '}', '视频窗口样式')
+    assert.match(stage, /aspect-ratio:\s*16\s*\/\s*9/, '画面窗口不是 16:9')
+    assert.equal(
+      /max-width/.test(stage),
+      false,
+      '视频窗口又加了限宽（第三批要求撑满左列宽度）：' + stage
+    )
+    assert.equal(
+      /margin-inline:\s*auto/.test(stage),
+      false,
+      '视频窗口又居中限宽了（两侧会留空白）'
+    )
+  })
+
+  it('控制条新三件套：音量（图标 + 浮层 + 静音开关）/ 红外 / 叠加', () => {
+    const bar = between(monitorCode, 'data-camera-controlbar', '</div>\n      </section>', '控制条')
+    // 音量：图标触发 + 浮层（滑杆 + 静音开关），照画面墙那一颗。
+    assert.ok(bar.includes('data-camera-volume-trigger'), '控制条没有音量触发按钮')
+    assert.ok(bar.includes('data-camera-volume-pop'), '控制条没有音量浮层')
+    assert.ok(bar.includes('data-action="camera-volume-mute"'), '音量浮层里没有静音开关')
+    assert.ok(bar.includes('toggleSoundMute'), '静音开关没有接到 toggleSoundMute')
+    // 音量持久化没丢（第 21 条）：滑杆输入仍然按设备写回。
+    assert.ok(bar.includes('@input="onLiveVolumeInput"'), '音量滑杆没有接持久化输入')
+    // 红外：按钮 + 浮层 + 「没有红外视频流」的实话。
+    assert.ok(bar.includes('data-camera-infrared'), '控制条没有红外按钮')
+    assert.ok(bar.includes('data-camera-infrared-pop'), '控制条没有红外浮层')
+    assert.ok(
+      bar.includes("t('cameraLiveUi.infraredNoVideo')"),
+      '红外浮层里没有「设备仅提供温度数值」那句实话'
+    )
+    // 温度四项：中心 / 最高 / 最低 / 发射率。
+    for (const key of ['centerTemp', 'maxTemp', 'minTemp', 'infraredEmissivity']) {
+      assert.ok(bar.includes(key), `红外浮层少了 ${key}`)
+    }
+    // 叠加：默认显示、可切换。（叠加条本身在画面舞台上、控制条之外，所以在整页里认。）
+    assert.ok(bar.includes('data-camera-overlay'), '控制条没有叠加开关')
+    assert.ok(bar.includes('overlayVisible'), '叠加开关没有接状态')
+    assert.ok(monitorCode.includes('v-if="overlayVisible"'), '叠加条没有按开关显隐')
+    // 翻转开关不在控制条里了（移进右键菜单）。
+    for (const action of ['camera-flip-horizontal', 'camera-flip-vertical', 'camera-flip-quarter']) {
+      assert.equal(
+        bar.includes(`data-action="${action}"`),
+        false,
+        `控制条里还有 ${action}（第三批要求移进右键菜单）`
+      )
+    }
+  })
+
+  it('相机页的三条既有行为一条都没有被这次重排碰到', () => {    // `<video>` 仍然由地址守卫（没有地址时渲染的是状态占位，不是一个空播放器）。
     assert.ok(monitor.includes('<video\n            v-if="cameraLiveUrl"') ||
       /<video\s+v-if="cameraLiveUrl"/.test(monitor), '`<video>` 不再由地址守卫')
     assert.ok(monitor.includes('class="camera-live__video"'), '缺少 camera-live__video')
