@@ -265,7 +265,7 @@ export function registerIpcHandlers(): void {
     toResult(async () => {
       const services = getServices()
       return {
-        name: 'HERTZINNO Acoustic Box Manager',
+        name: 'HAIS',
         /*
          * NOT `app.getVersion()`.
          *

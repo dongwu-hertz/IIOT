@@ -2668,10 +2668,11 @@ const sessionLabel = computed(() => {
         在怎么变），而改造前它被统计卡与音频条压在下面 —— 一进页面要滚动才看得到。
         原来占这个位置的是多路视频墙，它按 ⑦ 删掉了。
 
-        2026-09-21 第二批：这张卡现在是**三块合一** —
+        2026-09-21 第二批：这张卡现在是**两块合一** —
           · 左侧 70% 趋势图 + 右侧 30% 当前值四行（Item 20，原先底下四张 MetricCard 已删）；
-          · 图下挂着时间轴回放（Item 19：业主「时间轴回放应该是合并到实时趋势里面的」）；
           · 卡头是「单通道 / 检测」的视图切换（Item 24）与单通道趋势的指标 chips。
+          （时间轴回放原来挂在图下，业主 20260921 又要求撤掉 —— 趋势 X 轴的缩放/平移
+          已覆盖"按时间找段"；见下方原位置的注释。）
       -->
       <section class="chart-panel card trend-panel">
         <div class="section-header">
@@ -2716,6 +2717,20 @@ const sessionLabel = computed(() => {
                 {{ t(metric.labelKey) }}
               </button>
             </div>
+            <!--
+              检测模式的数据源口径（monitorUi.detectDataNote：设备一次只开一路流，跨通道
+              时间不同步）收在这颗 ⓘ 的悬停提示里 —— 原来整句写在检测卡网格下方，
+              业主 20260921 要求只留一个悬浮入口。`cursor: help` 提示"悬停有说明"。
+            -->
+            <button
+              type="button"
+              class="trend-panel__info"
+              data-trend-info
+              :title="t('monitorUi.detectDataNote')"
+              :aria-label="t('monitorUi.detectDataNote')"
+            >
+              i
+            </button>
           </div>
         </div>
 
@@ -2763,14 +2778,12 @@ const sessionLabel = computed(() => {
         </div>
 
         <!--
-          Item 19：时间轴回放**并入趋势卡**（业主 2026-09-21 第二批：「时间轴回放应该是
-          合并到实时趋势里面的」—— 原话后半句未发完，这里按"移进趋势卡、成为它的回放
-          区块"实现；声呐分支没有趋势卡，那一支的时间轴保留原位）。
-          组件自己的标题（monitorUi.playbackSection）就是这块的标题，选中/回放逻辑原样。
+          时间轴回放原来挂在这里（趋势卡内的 .trend-panel__playback，业主 2026-09-21
+          第二批「合并到实时趋势里面」）——按业主 20260921 后续要求**整块撤掉**：
+          趋势图 X 轴的缩放/平移（EChart 的 datazoom）已经覆盖了"按时间找一段"这件事，
+          再挂一条时间轴是同一件事的第二处实现。声呐分支那一支的时间轴
+          （本页下方 isSonar 分支）不在此次范围内，保留不动。
         -->
-        <div class="trend-panel__playback">
-          <MonitorRecordingTimeline :device-id="selectedDeviceId" />
-        </div>
       </section>
 
       <!--
@@ -3105,8 +3118,9 @@ const sessionLabel = computed(() => {
         Item 24：检测模式 —— 四张指标卡（声压级 / 平稳度 / 能量比 / 主频）的 2×2 网格，
         每张卡同一坐标系里最多 8 条通道曲线（每通道一色，图例在卡内右侧标通道号）。
         数据来自 store 的 `channelFeatureHistory`：每通道各自的时间线（当前订阅那一路
-        实时进来，其余通道是上次切到它时的读数），**跨通道不同步** —— 那句口径写在
-        下面的 note 里，图本身用时间轴说真话（没数据的时段不占宽度）。不额外开连接。
+        实时进来，其余通道是上次切到它时的读数），**跨通道不同步** —— 那句口径原来
+        写在网格下方的一句说明里，业主 20260921 要求撤掉文字块、只留趋势卡卡头那颗
+        ⓘ 的悬停提示。图本身用时间轴说真话（没数据的时段不占宽度）。不额外开连接。
       -->
       <div v-show="viewMode === 'detect'" class="detect-grid">
         <section v-for="metric in DETECT_METRICS" :key="metric.key" class="card chart-panel detect-card">
@@ -3119,7 +3133,6 @@ const sessionLabel = computed(() => {
             :placeholder="detectHasData ? '' : t('monitorUi.waitingFeatures')"
           />
         </section>
-        <p class="muted detect-grid__note">{{ t('monitorUi.detectDataNote') }}</p>
       </div>
 
       <!--
@@ -3825,7 +3838,7 @@ const sessionLabel = computed(() => {
   grid-column: 1 / -1;
 }
 
-/* 卡头右侧那一组：「单通道 / 检测」切换 + 单通道趋势的指标 chips。 */
+/* 卡头右侧那一组：「单通道 / 检测」切换 + 单通道趋势的指标 chips + 检测口径的 ⓘ 悬停提示。 */
 .trend-panel__header-actions {
   display: flex;
   align-items: center;
@@ -3947,9 +3960,33 @@ const sessionLabel = computed(() => {
   color: var(--color-text-secondary);
 }
 
-/* Item 19：时间轴回放住在趋势卡里（回放区块的标题由组件自己的 monitorUi.playbackSection 回答）。 */
-.trend-panel__playback {
-  margin-top: var(--space-2);
+/*
+ * 卡头右上角那颗 ⓘ（业主 20260921）：检测模式的数据源口径（monitorUi.detectDataNote）
+ * 收在它的悬停提示里。圆形小按钮，衬线斜体 i 是这个符号最通用的画法；
+ * `cursor: help` 告诉操作员"悬停有说明"。
+ */
+.trend-panel__info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--color-border-strong, var(--color-border));
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
+}
+
+.trend-panel__info:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-secondary);
 }
 
 /*
@@ -3983,12 +4020,6 @@ const sessionLabel = computed(() => {
   display: grid;
   gap: calc(var(--space-4) * 0.1);
   grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.detect-grid__note {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-size: 11.5px;
 }
 
 @media (max-width: 900px) {

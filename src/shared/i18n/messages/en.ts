@@ -92,7 +92,7 @@ export const en: MessageSchema = {
   },
 
   app: {
-    title: 'HERTZINNO Acoustic Box Manager',
+    title: 'HAIS',
     tagline: 'Device management software',
     /** Sidebar collapse toggle (event centre spec §3.2). */
     collapseSidebar: 'Collapse sidebar',
@@ -744,6 +744,11 @@ presets, the licence boundaries
     noDeviceTitle: 'Add a device first',
     goToDevices: 'Go to Devices',
     filterDevice: 'Device',
+    /** "Alarms in the selected range" card below the trend charts (owner batch 20260921). */
+    rangeAlarmsTitle: 'Alarms in range',
+    rangeAlarmsCount: '{count} in range',
+    /** Tooltip for the drag-to-reorder metric chips. */
+    metricDragHint: 'Drag to reorder charts (click to toggle)',
     /* `filterChannel` was removed with the channel row: channels are a column
        beside the chart now (batch 13 item 4). */
     noAddress: 'no address',
@@ -840,7 +845,13 @@ presets, the licence boundaries
     breadcrumbDevices: 'Devices',
     notFoundTitle: 'Device not found',
     backToList: 'Back to device list',
-    deviceIdLabel: 'Device ID {id}',
+    /** Modal title row (owner batch 20260921): device name + ID + MAC on one line. */
+    headerId: 'ID {id}',
+    headerMac: 'MAC {mac}',
+    /** Unsaved-changes confirmation dialog (tab switch / modal close). */
+    unsavedBody: 'This tab has unsaved changes. Continuing will discard them.',
+    unsavedDiscard: 'Discard changes',
+    unsavedKeepEditing: 'Keep editing',
     refreshing: 'Refreshing…',
     openWebUi: 'Open device page',
     monitor: 'Monitor',
@@ -2103,7 +2114,7 @@ presets, the licence boundaries
   domain: {
     sensorType: {
       microphone: 'Microphone',
-      conduction: 'Conduction'
+      conduction: 'Bone conduction'
     },
     detectionMode: {
       characteristic: 'Characteristic detection',

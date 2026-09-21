@@ -467,7 +467,7 @@ npm run verify:remember
 - 真机 `e2-live-proof` **0 problems**（见上）。
 
 **出包**：`npm run dist:win:offline` →
-`release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+`release\HAIS-1.0.0-x64-setup.exe`
 （**127,043,036 字节**，sha256 `D177E377D4F85D5765D032B6FF3F02DC89C0455C0EA7D2DFD38BF753B607856B`）；
 `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 安装包**未签名**：首次运行会弹 SmartScreen（"更多信息 → 仍要运行"），这是既定状态。
@@ -518,7 +518,7 @@ npm run verify:remember
   现在缺的只剩这一件事，命令与上面这条一样，把 IP/端口换成 `--ip 192.168.110.234 --password 123456`。
 
 **出包**：`npm run dist:win:offline` →
-`release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe`
+`release\HAIS-1.0.0-x64-setup.exe`
 （**127,062,445 字节**，sha256 `C4756ABDA4FFE12329940D9C6CE125ED6B6AC32BC6B841EE824CDC3A3CFB12F3`）；
 `node scripts/verify-packaged.cjs` **25 通过 / 0 失败**。
 安装包**未签名**：首次运行会弹 SmartScreen（"更多信息 → 仍要运行"）。

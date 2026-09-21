@@ -272,7 +272,7 @@ export class SampleDatasetExporter {
       exported_at: Date.now(),
       exported_at_iso: new Date().toISOString(),
       app_version: this.appVersion,
-      app: 'HERTZINNO Acoustic Box Manager',
+      app: 'HAIS',
       files: { jsonl: JSONL_FILE, csv: CSV_FILE, audio: request.copyAudio === true ? 'audio/' : null },
       samples: selected.length,
       skipped_unlabelled: skippedUnlabelled,

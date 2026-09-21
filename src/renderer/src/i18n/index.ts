@@ -137,11 +137,11 @@ export function pageTitle(pageTitleKey?: unknown): string {
   return i18n.global.t(pageTitleKey as never)
 }
 
-/** Window/document caption for a page: `"总览 · HERTZINNO Acoustic Box Manager"`. */
+/** Window/document caption for a page: `"总览 · HAIS"`. */
 export function documentTitle(pageTitleKey?: unknown): string {
   const appName = i18n.global.t('app.title')
   const page = pageTitle(pageTitleKey)
   // No real page title yet: the caption is just the product name, rather than
-  // "HERTZINNO Acoustic Box Manager · HERTZINNO Acoustic Box Manager".
+  // "HAIS · HAIS".
   return page === appName ? appName : `${page} · ${appName}`
 }

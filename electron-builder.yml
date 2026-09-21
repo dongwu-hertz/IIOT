@@ -6,7 +6,7 @@
 # trial-expiry or phone-home configuration here — and there must never be.
 
 appId: com.hertzinno.acousticboxmanager
-productName: HERTZINNO Acoustic Box Manager
+productName: HAIS
 copyright: Copyright © 2026 HERTZINNO. All rights reserved.
 # NOTE: electron-builder has no `publisher` or `homepage` key — both are rejected
 # as unknown properties. The installer's publisher line comes from package.json's
@@ -62,7 +62,7 @@ win:
   # engines flag and IT departments block.
   # 安装包文件名（业主 2026-09-19 第 11 批第 1 条：「每个发布的软件 应该后缀发布日期，
   # 以及小版本号的变动」）。**发布用的两份配置会覆盖这一行**，拼上 `package.json` 的
-  # `releaseDate`（形如 `HERTZINNO Acoustic Box Manager-1.0.1-2026-09-19-x64-setup.exe`）：
+  # `releaseDate`（形如 `HAIS-1.0.1-2026-09-19-x64-setup.exe`）：
   #   scripts/electron-builder.offline.cjs   （npm run dist:win:offline，离线出包）
   #   scripts/electron-builder.signed.cjs    （npm run dist:win:signed，签名出包）
   # 两处都从 `scripts/release-stamp.cjs` 取同一个字符串，所以版本与日期只有一处声明。
@@ -83,7 +83,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: HERTZINNO Acoustic Box Manager
+  shortcutName: HAIS
   # Uninstall must NOT delete the user's audio library: it can be tens of
   # gigabytes of irreplaceable recordings living outside the install directory.
   deleteAppDataOnUninstall: false

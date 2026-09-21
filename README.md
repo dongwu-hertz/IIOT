@@ -1,4 +1,4 @@
-# HERTZINNO Acoustic Box Manager — Windows V1.0
+# HAIS — Windows V1.0
 
 面向 HERTZINNO Acoustic Box / FA8 系列设备的**永久免费** Windows 桌面管理软件。
 V1 以局域网（LAN）管理为核心，同时在架构上预留未来公网 Server 集中管理。

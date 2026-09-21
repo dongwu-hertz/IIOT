@@ -93,7 +93,7 @@ export const es: MessageSchema = {
   },
 
   app: {
-    title: 'HERTZINNO Acoustic Box Manager',
+    title: 'HAIS',
     tagline: 'Software de gestión de equipos',
     /** Botón para contraer la barra lateral (especificación §3.2). */
     collapseSidebar: 'Contraer barra lateral',
@@ -720,6 +720,11 @@ export const es: MessageSchema = {
     noDeviceTitle: 'Añada primero un equipo',
     goToDevices: 'Ir a Equipos',
     filterDevice: 'Equipo',
+    /** Tarjeta «Alarmas del rango seleccionado» bajo las gráficas (lote del propietario 20260921). */
+    rangeAlarmsTitle: 'Alarmas del rango',
+    rangeAlarmsCount: '{count} en el rango',
+    /** Información emergente para arrastrar y reordenar las métricas. */
+    metricDragHint: 'Arrastre para reordenar las gráficas (clic para activar)',
     noAddress: 'sin dirección',
     filterMetric: 'Métrica',
     channelHide: 'Ocultar este canal',
@@ -807,7 +812,13 @@ export const es: MessageSchema = {
     breadcrumbDevices: 'Equipos',
     notFoundTitle: 'Equipo no encontrado',
     backToList: 'Volver a la lista de equipos',
-    deviceIdLabel: 'ID del equipo {id}',
+    /** Fila de título del diálogo (lote del propietario 20260921): nombre + ID + MAC en una línea. */
+    headerId: 'ID {id}',
+    headerMac: 'MAC {mac}',
+    /** Diálogo de confirmación de cambios sin guardar (cambio de pestaña / cierre del diálogo). */
+    unsavedBody: 'Esta pestaña tiene cambios sin guardar. Si continúa, se perderán.',
+    unsavedDiscard: 'Descartar cambios',
+    unsavedKeepEditing: 'Seguir editando',
     refreshing: 'Actualizando…',
     openWebUi: 'Abrir página del equipo',
     monitor: 'Monitorizar',
@@ -2065,7 +2076,7 @@ export const es: MessageSchema = {
   domain: {
     sensorType: {
       microphone: 'Micrófono',
-      conduction: 'Conducción'
+      conduction: 'Conducción ósea'
     },
     detectionMode: {
       characteristic: 'Detección por características',

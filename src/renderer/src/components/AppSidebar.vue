@@ -190,7 +190,7 @@ onMounted(async () => {
       <img
         class="sidebar__logo"
         :src="logoUrl"
-        alt="HERTZINNO"
+        alt="HAIS"
         width="44"
         height="24"
       />

@@ -24,11 +24,14 @@ import { useRouter } from 'vue-router'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
+import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
+import { useDeviceDetailDirtyStore } from '@renderer/stores/deviceDetailDirty'
 import { channelState } from '@renderer/lib/channelState'
 import { resolveChannelCount } from '@renderer/lib/channelCount'
 import { formatDateTime, formatRelativeTime, formatSampleRate } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
+import AppModal from '@renderer/components/AppModal.vue'
 import ChannelConfigSection from '@renderer/components/device-config/ChannelConfigSection.vue'
 import AlarmProfileSection from '@renderer/components/device-config/AlarmProfileSection.vue'
 import NetworkConfigSection from '@renderer/components/device-config/NetworkConfigSection.vue'
@@ -44,13 +47,15 @@ import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 import AirSonarPtzPanel from '@renderer/components/AirSonarPtzPanel.vue'
 import { callApi } from '@renderer/lib/result'
 
-const props = defineProps<{ id: string }>()
+const props = defineProps<{ id: string; modal?: boolean }>()
 
 const { t } = useI18n()
 const router = useRouter()
 const devices = useDevicesStore()
 const uiRefresh = useUiRefreshStore()
 const config = useDeviceConfigStore()
+const detailDialog = useDeviceDetailDialogStore()
+const dirtySections = useDeviceDetailDirtyStore()
 
 type TabId =
   | 'overview'
@@ -201,6 +206,57 @@ watch(
 )
 
 /**
+ * 未保存修改确认（业主 20260921）：切页签与（弹窗语境）关弹窗前，若 RS485 / Modbus /
+ * 通道表任一还有没保存的草稿，先弹确认，「放弃修改」才放行，「继续编辑」留在原地。
+ *
+ * 三处草稿住在各自组件里，脏标记经 `stores/deviceDetailDirty` 报到这里。因为守卫会
+ * 拦下"带着脏页签离开"，任意时刻至多一处是脏的 —— 所以不需要分辨"哪个页签的脏"，
+ * 一个 `anyDirty` 就够。守卫不覆盖的两条路：头部「实时监测」跳转与全页路由的离开
+ * （业主只点了页签切换与弹窗关闭这两处，且全页路由本来就没有任何离开拦截）。
+ */
+const unsavedConfirmOpen = ref(false)
+/** 确认「放弃修改」之后要执行的动作（切页签或关弹窗），null = 没有待执行的离开。 */
+let pendingAfterDiscard: (() => void) | null = null
+
+function requestUnsavedGuard(after: () => void): void {
+  if (!dirtySections.anyDirty) {
+    after()
+    return
+  }
+  pendingAfterDiscard = after
+  unsavedConfirmOpen.value = true
+}
+
+function requestTab(tab: TabId): void {
+  if (tab === activeTab.value) return
+  requestUnsavedGuard(() => {
+    activeTab.value = tab
+  })
+}
+
+function discardUnsaved(): void {
+  unsavedConfirmOpen.value = false
+  const after = pendingAfterDiscard
+  pendingAfterDiscard = null
+  after?.()
+}
+
+function keepEditing(): void {
+  unsavedConfirmOpen.value = false
+  pendingAfterDiscard = null
+}
+
+/**
+ * 弹窗宿主（`DeviceDetailDialog`）在关闭前从这里过一遍守卫：
+ * 有未保存修改时弹自家确认，用户「放弃修改」后才真正关弹窗。
+ */
+function requestCloseGuarded(): void {
+  requestUnsavedGuard(() => detailDialog.close())
+}
+
+defineExpose({ requestCloseGuarded })
+
+/**
  * 设备回报的通道数（`GET /get_devinfo` 的 `channelCount`）。
  *
  * **它不是权威值**：真机实测那个响应里根本没有通道数字段，而协议映射在设备没给这个
@@ -317,6 +373,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   config.unsubscribeNetworkProgress()
+  // 兜底：正常情况下各配置区块卸载时已把自己的脏标记置回 false。
+  dirtySections.reset()
 })
 
 // The same component instance is reused when only the route param changes, so a
@@ -342,6 +400,8 @@ watch(
 
 function goMonitor(): void {
   devices.select(props.id)
+  // 弹窗语境：跳转前先收掉弹窗，否则详情弹窗会悬在实时监测页上面。
+  if (props.modal) detailDialog.close()
   void router.push({ path: '/monitor', query: { device: props.id } })
 }
 
@@ -372,6 +432,12 @@ async function renameDevice(): Promise<void> {
   nameNotice.value = t('deviceDetailUi.nameSaved')
 }
 
+/** 设备不存在时的退路：全页路由回列表；弹窗语境收掉弹窗即回到原页面。 */
+function backToList(): void {
+  if (props.modal) detailDialog.close()
+  else void router.push('/devices')
+}
+
 /** Human-readable device web address, shown next to the button as an explanation. */
 const webUiAddress = computed(() => {
   const current = device.value
@@ -384,26 +450,38 @@ const webUiAddress = computed(() => {
 <template>
   <div class="page">
     <!--
-      没有页面标题：这一页原来的 `h2` 写的就是设备名，而**面包屑已经写了同一个名字**，
-      两处说的是同一件事（外层框架的标题栏写的是「设备管理」，不冲突的那一份在这里）。
-      删掉 `h2` 时唯一要救的是它里面那个 `StatusBadge` —— 那是**信息**而不是标题，
-      所以它跟着面包屑走，与设备名同一行。设备 UID 那一行（副标题）留着。
+      标题行（弹窗与全页路由同一套，业主 20260921）：设备名（大号）+ 状态徽标 +
+      `ID {id}` / `MAC {mac}` / 当前采样率（小号灰字）同一行，右侧是「打开设备页面 /
+      监测」。弹窗语境这一行就是它的标题层（AppModal 自家标题栏写的也是同一个名字）；
+      全页路由语境在它上面再留一行小字「设备管理 / 设备名」——面包屑返回只在那里存在，
+      弹窗有自家关闭按钮，不画这层。
     -->
     <div class="page-header">
-      <div>
-        <div class="breadcrumb">
+      <div class="detail-header">
+        <div v-if="!modal" class="breadcrumb">
           <RouterLink to="/devices">{{ t('deviceDetailUi.breadcrumbDevices') }}</RouterLink>
           <span>/</span>
           <span class="breadcrumb__current">
             {{ device?.name ?? t('app.nav.deviceDetail') }}
-            <StatusBadge
-              v-if="device"
-              :status="device.status"
-              :connection-type="device.connectionType"
-            />
           </span>
         </div>
-        <p class="page-subtitle">{{ t('deviceDetailUi.deviceIdLabel', { id: device?.deviceUid ?? '—' }) }}</p>
+        <div class="detail-header__row">
+          <h2 class="detail-header__name">{{ device?.name ?? t('app.nav.deviceDetail') }}</h2>
+          <StatusBadge
+            v-if="device"
+            :status="device.status"
+            :connection-type="device.connectionType"
+          />
+          <span class="detail-header__meta">
+            {{ t('deviceDetailUi.headerId', { id: device?.deviceUid ?? '—' }) }}
+          </span>
+          <span class="detail-header__meta">
+            {{ t('deviceDetailUi.headerMac', { mac: device?.mac || '—' }) }}
+          </span>
+          <span class="detail-header__meta">
+            {{ t('deviceDetailUi.sampleRate') }} {{ formatSampleRate(config.sampleRate) }}
+          </span>
+        </div>
       </div>
 
       <div class="btn-row">
@@ -417,7 +495,7 @@ const webUiAddress = computed(() => {
 
     <div v-if="!device" class="card">
       <EmptyState :title="t('deviceDetailUi.notFoundTitle')">
-        <button type="button" class="btn" @click="router.push('/devices')">{{ t('deviceDetailUi.backToList') }}</button>
+        <button type="button" class="btn" @click="backToList">{{ t('deviceDetailUi.backToList') }}</button>
       </EmptyState>
     </div>
 
@@ -432,7 +510,7 @@ const webUiAddress = computed(() => {
           role="tab"
           :aria-selected="activeTab === tab.id"
           :data-tab="tab.id"
-          @click="activeTab = tab.id"
+          @click="requestTab(tab.id)"
         >
           {{ t(tab.labelKey) }}
         </button>
@@ -629,6 +707,28 @@ const webUiAddress = computed(() => {
         <MaintenanceSection :device-id="props.id" />
       </template>
     </template>
+
+    <!--
+      未保存修改确认（业主 20260921）：页签切换与（弹窗语境）关弹窗共用 —— 触发方把
+      要继续做的事交给 `requestUnsavedGuard`，这里确认「放弃修改」后才执行。Esc / 点
+      遮罩 / X 都按「继续编辑」处理（留在原地），焦点默认落在「继续编辑」上。
+    -->
+    <AppModal
+      :model-value="unsavedConfirmOpen"
+      :title="t('configCommon.unsaved')"
+      width="420px"
+      @update:model-value="keepEditing"
+    >
+      <p class="confirm-text">{{ t('deviceDetailUi.unsavedBody') }}</p>
+      <template #footer>
+        <button type="button" class="btn btn--danger" @click="discardUnsaved">
+          {{ t('deviceDetailUi.unsavedDiscard') }}
+        </button>
+        <button type="button" class="btn btn--primary" data-autofocus @click="keepEditing">
+          {{ t('deviceDetailUi.unsavedKeepEditing') }}
+        </button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -643,15 +743,41 @@ const webUiAddress = computed(() => {
 }
 
 /*
- * 面包屑的最后一段现在是**设备名 + 状态徽标**（原来那个 `h2.detail-title` 的内容）。
- * 所以这一段自己是一个 flex 行：徽标与名字之间留 8px，徽标不会被名字的长短挤走。
+ * 面包屑的最后一段在旧版里装着设备名 + 状态徽标；标题行改版（业主 20260921）之后
+ * 徽标跟着大号名字走，这一段只剩「设备管理 / 设备名」一行小字，给整段文字用。
  */
 .breadcrumb__current {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   color: var(--color-text);
   font-weight: 600;
+}
+
+/*
+ * 标题行（设备名 + ID / MAC / 采样率同一行，见模板注释）。名字是这一行里唯一的
+ * 大字；身份与读数一律小号灰字，不与名字抢层级。徽标与名字之间的间隙比 meta 略宽 —
+ * 徽标是"状态"，与名字是一组；meta 是"身份"，单独一层。
+ */
+.detail-header__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.detail-header__name {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.detail-header__meta {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.confirm-text {
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
 .detail-hint {

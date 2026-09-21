@@ -282,7 +282,7 @@ export async function initServices(): Promise<AppServices> {
 
   // ---- Logging (spec 14.3) -----------------------------------------------
   initLogging(path.join(storageRoot, 'logs'), 30)
-  appLog().info('Starting HERTZINNO Acoustic Box Manager', {
+  appLog().info('Starting HAIS', {
     version: app.getVersion(),
     electron: process.versions.electron,
     platform: `${process.platform}/${process.arch}`,

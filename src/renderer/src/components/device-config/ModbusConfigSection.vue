@@ -9,15 +9,17 @@
  * `modbus_crc` is read-only on the device and is deliberately neither shown nor
  * sent — the write endpoint does not accept it.
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import type { ModbusConfigView } from '@renderer/types/device-config'
 import { useI18n } from 'vue-i18n'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
+import { useDeviceDetailDirtyStore } from '@renderer/stores/deviceDetailDirty'
 
 const props = defineProps<{ deviceId: string }>()
 
 const { t } = useI18n()
 const config = useDeviceConfigStore()
+const dirtyRegistry = useDeviceDetailDirtyStore()
 
 const BAUD_RATES: readonly number[] = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 const DATA_BITS: readonly number[] = [5, 6, 7, 8]
@@ -75,6 +77,13 @@ function buildPatch(): Partial<ModbusConfigView> {
 }
 
 const dirty = computed(() => Object.keys(buildPatch()).length > 0)
+
+/*
+ * 脏标记同步给详情页的未保存确认（切页签 / 关弹窗时拦人）。卸载（切走 serial 页签 /
+ * 关弹窗）时置回 false：草稿随组件销毁，脏标记不能比草稿活得长。
+ */
+watch(dirty, (value) => dirtyRegistry.mark('modbus', value), { immediate: true })
+onUnmounted(() => dirtyRegistry.mark('modbus', false))
 
 function resetDraft(): void {
   const before = original.value

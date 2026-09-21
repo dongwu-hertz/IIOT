@@ -368,7 +368,7 @@ export function renderPopupHtml(request: LinkagePopupRequest): string {
   )
 
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>HERTZINNO</title>
+<html><head><meta charset="utf-8"><title>HAIS</title>
 <style>
   html,body{margin:0;height:100%;background:${colours.bg};color:${colours.text};
     font-family:"Segoe UI",system-ui,sans-serif;-webkit-user-select:none;overflow:hidden}

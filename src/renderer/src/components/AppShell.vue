@@ -28,6 +28,7 @@ import { onMounted, onUnmounted } from 'vue'
 import AppSidebar from '@renderer/components/AppSidebar.vue'
 import AppTopbar from '@renderer/components/AppTopbar.vue'
 import AppFooter from '@renderer/components/AppFooter.vue'
+import DeviceDetailDialog from '@renderer/components/DeviceDetailDialog.vue'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
 
@@ -108,5 +109,12 @@ onUnmounted(() => {
       -->
       <AppFooter />
     </div>
+    <!--
+      设备详情弹窗的全局宿主（业主 20260921）：设备管理 / 地图 / 告警 / 事件中心
+      四处入口经 `stores/deviceDetailDialog` 打开它，打开状态只有这一份。
+      放在 `.app-main` 之外、`.app-shell` 之下：遮罩是 `position: fixed`，
+      挂哪都一样盖住整个窗口，而详情路由（`/devices/:id` 整页）不经过它。
+    -->
+    <DeviceDetailDialog />
   </div>
 </template>

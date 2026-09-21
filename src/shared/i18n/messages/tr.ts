@@ -101,7 +101,7 @@ export const tr: MessageSchema = {
   },
 
   app: {
-    title: 'HERTZINNO Acoustic Box Manager',
+    title: 'HAIS',
     tagline: 'Cihaz yönetim yazılımı',
     /** Kenar çubuğunu daraltma düğmesi (olay merkezi şartnamesi §3.2). */
     collapseSidebar: 'Kenar çubuğunu daralt',
@@ -725,6 +725,11 @@ export const tr: MessageSchema = {
     noDeviceTitle: 'Önce bir cihaz ekleyin',
     goToDevices: 'Cihazlar sayfasına git',
     filterDevice: 'Cihaz',
+    /** «Aralıktaki alarmlar» kartı (sahip 20260921 partisi). */
+    rangeAlarmsTitle: 'Aralıktaki alarmlar',
+    rangeAlarmsCount: 'Aralıkta {count}',
+    /** Sıralamak için sürükleyin bilgi ipucu. */
+    metricDragHint: 'Sıralamak için sürükleyin (açmak için tıklayın)',
     noAddress: 'adres yok',
     filterMetric: 'Ölçüm',
     channelHide: 'Bu kanalı gizle',
@@ -812,7 +817,13 @@ export const tr: MessageSchema = {
     breadcrumbDevices: 'Cihazlar',
     notFoundTitle: 'Cihaz bulunamadı',
     backToList: 'Cihaz listesine dön',
-    deviceIdLabel: 'Cihaz kimliği {id}',
+    /** İletişim kutusu başlık satırı (sahip 20260921 partisi): ad + kimlik + MAC aynı satırda. */
+    headerId: 'ID {id}',
+    headerMac: 'MAC {mac}',
+    /** Kaydedilmemiş değişiklik onay iletişim kutusu (sekme değişimi / iletişim kutusu kapanışı). */
+    unsavedBody: 'Bu sekmede kaydedilmemiş değişiklikler var. Devam ederseniz kaybolurlar.',
+    unsavedDiscard: 'Değişiklikleri at',
+    unsavedKeepEditing: 'Düzenlemeye devam et',
     refreshing: 'Yenileniyor…',
     openWebUi: 'Cihaz sayfasını aç',
     monitor: 'İzle',
@@ -2068,7 +2079,7 @@ export const tr: MessageSchema = {
   domain: {
     sensorType: {
       microphone: 'Mikrofon',
-      conduction: 'İletim'
+      conduction: 'Kemik iletimi'
     },
     detectionMode: {
       characteristic: 'Karakteristik algılama',

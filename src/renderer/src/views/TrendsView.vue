@@ -32,7 +32,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
-import { CHANNEL_COUNT } from '@shared/domain/models'
+import { CHANNEL_COUNT, type AlarmEvent } from '@shared/domain/models'
 import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomBurstExceeded, trendZoomIndexRange, trendZoomIsIdentity, trendZoomShouldRecord, trendZoomWindow } from '@shared/domain/trend'
 import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
 import {
@@ -74,6 +74,7 @@ import {
   trendMetricLabel,
   trendValueText
 } from '@renderer/lib/trendMetrics'
+import { describeAlarmMask, eventSeverityLabel } from '@renderer/lib/labels'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import EChart from '@renderer/components/EChart.vue'
 
@@ -89,7 +90,6 @@ const selectedDeviceId = ref('')
 /** Local text mirrors of the custom bounds, so typing is never fought by a re-render. */
 const customFromText = ref('')
 const customToText = ref('')
-const flushing = ref(false)
 const notice = ref('')
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,54 @@ const notice = ref('')
  */
 function toggleMetric(targetMetric: TrendMetric): void {
   trends.toggleMetric(targetMetric)
+}
+
+// ---------------------------------------------------------------------------
+// 指标顺序（业主 20260921：指标 chips 支持拖拽排序）
+// ---------------------------------------------------------------------------
+
+/**
+ * chips（与图表）的显示顺序。**只活在本次会话**：排序是个人看盘习惯，不写进
+ * localStorage —— 持久化会让"清一次缓存 / 换一台机器"之后的顺序变得说不准。
+ * 默认 = `TREND_METRIC` 顺序；新增选中一个顺序表之外的量时 append 在尾部
+ * （`orderedSelectedMetrics` 里的兜底分支），已有的相对顺序不被那一次点击打乱。
+ */
+const metricOrder = ref<TrendMetric[]>(TREND_METRIC_OPTIONS.map((option) => option.key))
+
+/** 正在被拖的那个量。`dragover` 阶段读不到 `dataTransfer` 的数据，另存一份在这里。 */
+const draggingMetric = ref<TrendMetric | null>(null)
+
+/**
+ * 选中的量按 `metricOrder` 排成图：chips 的视觉顺序与图表的上下顺序是**同一个来源**，
+ * 拖一下 chips，图跟着换位。拖的是"显示顺序"，选中集合与查询都不变（不重新查库）。
+ */
+const orderedSelectedMetrics = computed<TrendMetric[]>(() => [
+  ...metricOrder.value.filter((key) => trends.metrics.includes(key)),
+  ...trends.metrics.filter((key) => !metricOrder.value.includes(key))
+])
+
+function onMetricDragStart(key: TrendMetric, event: DragEvent): void {
+  draggingMetric.value = key
+  event.dataTransfer?.setData('text/plain', key)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+/** 松手的那颗 chip 是落点：把被拖的量插到它原来的位置上，其余保持相对顺序。 */
+function onMetricDrop(target: TrendMetric): void {
+  const from = draggingMetric.value
+  draggingMetric.value = null
+  if (!from || from === target) return
+  const next = [...metricOrder.value]
+  const fromIndex = next.indexOf(from)
+  const toIndex = next.indexOf(target)
+  if (fromIndex < 0 || toIndex < 0) return
+  next.splice(fromIndex, 1)
+  next.splice(toIndex, 0, from)
+  metricOrder.value = next
+}
+
+function onMetricDragEnd(): void {
+  draggingMetric.value = null
 }
 
 /**
@@ -164,6 +212,31 @@ function granularityHint(option: { key: string; seconds: number | null }): strin
 
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
 
+/**
+ * 这一页的形态（业主 20260921：**三种设备三种页面**）：
+ *   · `acousticBox`（声纹）→ 多通道趋势：通道 chips + 每条可见通道一条线
+ *     （按设备通道表显示 8 或 2 路；设备没给通道表时兜底 `CHANNEL_COUNT` 路）；
+ *   · `acousticCamera`（声学相机）/ `auscultationBox`（空气声呐）→ 单线趋势页：
+ *     没有通道 chips，走现有的 fallback 单线 option；
+ *   · 其余机型（`pushDevice`）同样没有多通道概念，归到单线那一支。
+ *
+ * 实现成这一个 computed 而不是拆文件：两种形态共享筛选栏、图表构建与告警卡，
+ * 只有"通道有没有"分叉，分叉点全在这一个判据上。
+ */
+const isMultiChannel = computed(() => selectedDevice.value?.kind === 'acousticBox')
+
+/**
+ * 机型标签（页头那一枚徽标）：与设备表同一个来源 —— `domain.deviceKind.*`，
+ * `pushDevice` 走 `devicesUi.kindPushDevice`（DevicesView 的 `kindLabel` 同款分支）。
+ */
+const deviceKindLabel = computed(() => {
+  const device = selectedDevice.value
+  if (!device) return ''
+  return device.kind === 'pushDevice'
+    ? t('devicesUi.kindPushDevice')
+    : t(`domain.deviceKind.${device.kind}`)
+})
+
 /** 历史查询用的通道项：带上状态，未启用/未知都要在文字里标出来。 */
 interface ChannelOption {
   index: number
@@ -172,6 +245,13 @@ interface ChannelOption {
 }
 
 const channelOptions = computed<ChannelOption[]>(() => {
+  /*
+   * 单线形态（相机 / 声呐 / 推送设备）：这一页没有"通道"这个概念，**故意**返回空表 ——
+   * store 的 `channelIds` 随之清空，查询退回"全部通道聚合"的单序列路径，图上就是
+   * 那条 fallback 单线。相机的"通道"是它自己的视频路、声呐的通道表是本地编的一行，
+   * 都不是能叠加的声学通道（与 `channelRenameAvailable` 不放开它们是同一条理由）。
+   */
+  if (!isMultiChannel.value) return []
   const list = devices.channelsOf(selectedDeviceId.value)
   if (list.length > 0) {
     return [...list]
@@ -203,17 +283,16 @@ watch(
 )
 
 /**
- * 右侧那一列：**一条通道一行**（业主 2026-09-19 第 13 批第 4 条）。
+ * 通道那一排：**一条通道一颗 chip**（业主 2026-09-19 第 13 批第 4 条；20260921 删读数）。
  *
- * 业主原话：「声纹场景选设备后右侧列出 8 或 2 个通道 CH1…支持重命名、无数据灰显、
- * 有数据可勾选」。
- *
- * 这一列同时承担三件事，因此每一行的判据都必须来自**已经取回来的数据**，不能另查一次：
+ * 每一行的判据都必须来自**已经取回来的数据**，不能另查一次：
  *   · `hasData` —— 这一段范围里这一路**有没有任何非空时间桶**（选了多个量时，只要有一个量
  *     有数据就算有）。它是"无数据灰显"与"有数据可勾选"的**同一个**判据：两处各算一次，
  *     迟早会出现"灰着但能勾"这种自相矛盾的行；
- *   · `visible` —— 这一路的线画不画（点勾选框切换，与图上那条线同一个颜色来源）；
- *   · `value` —— 主量最后一个非空桶，给一个数比只给名字有用（"哪条通道现在高"）。
+ *   · `visible` —— 这一路的线画不画（点勾选框切换，与图上那条线同一个颜色来源）。
+ *
+ * chip 上**只有颜色点 + 通道名**（业主 20260921：删掉每颗 chip 的最后一个读数与
+ * 自定义名括号）——"现在哪一路高"在图上直接看得见，数字挤在 chip 上反而把名字截断。
  *
  * `hasData === false` 的行**不许被勾选**：一段范围里没有这一路的读数，勾上它只会得到一条空线，
  * 而空线看起来像"这一路这些值是 0"。
@@ -222,30 +301,20 @@ interface TrendChannelRow extends ChannelOption {
   color: string
   visible: boolean
   hasData: boolean
-  value: number | null
 }
 
 const channelRows = computed<TrendChannelRow[]>(() =>
-  channelOptions.value.map((channel) => {
+  channelOptions.value.map((channel) => ({
+    ...channel,
+    color: trendChannelColor(channel.index),
+    visible: trends.isChannelVisible(channel.index),
     // 有数据 = 任一**已选中的量**在这一路有至少一个有限值。
-    const hasData = trends.metrics.some((targetMetric) =>
+    hasData: trends.metrics.some((targetMetric) =>
       (trends.seriesFor(targetMetric, channel.index)?.points ?? []).some((point) =>
         Number.isFinite(point.value)
       )
     )
-    const series = trends.seriesFor(trends.metrics[0] ?? trends.metric, channel.index)
-    let latest: number | null = null
-    for (const point of series?.points ?? []) {
-      if (Number.isFinite(point.value)) latest = point.value
-    }
-    return {
-      ...channel,
-      color: trendChannelColor(channel.index),
-      visible: trends.isChannelVisible(channel.index),
-      hasData,
-      value: latest
-    }
-  })
+  }))
 )
 
 /** 有数据的那几路（面板上一句"几路有数据"，也是"全部显示"的作用范围）。 */
@@ -498,9 +567,13 @@ function buildBundle(targetMetric: TrendMetric): TrendChartBundle {
   }
 }
 
-/** 每个选中的量一张图（业主追加要求：多个量同时显示）。 */
+/**
+ * 每个选中的量一张图（业主追加要求：多个量同时显示），**按 `metricOrder` 排**
+ * （chips 拖出来的顺序就是图自上而下的顺序）。模板里 `:key="bundle.metric"`，
+ * 换位只是移动 DOM，图实例与缩放窗口都跟着各自的量走。
+ */
 const chartBundles = computed<TrendChartBundle[]>(() =>
-  trends.metrics.map((item) => buildBundle(item))
+  orderedSelectedMetrics.value.map((item) => buildBundle(item))
 )
 
 /**
@@ -1000,12 +1073,13 @@ function buildExportRows(from: number, to: number): TrendExportRow[] {
     }
   }
   // 按时间、再按量、再按通道排序：一份给人看的文件不该是"按查询顺序"拼出来的。
-  // 量的顺序用 `TREND_METRIC_OPTIONS`（与界面上那一排按钮同一个顺序）。
-  const metricOrder = TREND_METRIC_OPTIONS.map((option) => option.key)
+  // 量的顺序固定用 `TREND_METRIC` 目录顺序（与文件怎么排无关，与页面上那排 chips 当前的
+  // 拖拽顺序也无关 —— CSV 是一份证据，顺序要稳定、可复现）。
+  const exportMetricOrder = TREND_METRIC_OPTIONS.map((option) => option.key)
   return rows.sort(
     (left, right) =>
       left.timestamp - right.timestamp ||
-      metricOrder.indexOf(left.metric) - metricOrder.indexOf(right.metric) ||
+      exportMetricOrder.indexOf(left.metric) - exportMetricOrder.indexOf(right.metric) ||
       left.channel - right.channel
   )
 }
@@ -1048,26 +1122,6 @@ async function refresh(): Promise<void> {
   trends.query({ immediate: true })
 }
 
-/** Force a batch write; used before closing the app or after a long session. */
-async function flushNow(): Promise<void> {
-  flushing.value = true
-  const written = await trends.flush()
-  flushing.value = false
-  if (!written) {
-    notice.value = ''
-    return
-  }
-  notice.value =
-    written.rows > 0
-      ? t('trendsUi.flushedNotice', { rows: written.rows, files: written.files })
-      : t('trendsUi.emptyBufferNotice')
-  if (written.rows > 0) {
-    // The newly written rows are queryable now.
-    await trends.loadCoverage()
-    trends.query({ immediate: true })
-  }
-}
-
 /** Jump to the range the stored data actually covers (the empty-state action). */
 function useCoverageRange(): void {
   const bounds = trends.coverageBounds
@@ -1082,6 +1136,70 @@ function applyCustomRange(): void {
   // Debounced: a date picker emits one input event per keystroke, and every one
   // of them would otherwise become a DuckDB scan.
   trends.query()
+}
+
+// ---------------------------------------------------------------------------
+// 时间段告警（业主 20260921：图表下方列出当前筛选范围内的告警）
+// ---------------------------------------------------------------------------
+
+/**
+ * 「图上这一段」里报过的告警，最多 50 条，紧凑列表（时间 / 等级 / 一行标题 / 确认状态）。
+ * 只挂在**这个页面自己的状态**上：不动 alarms store —— 那边的 `query` 状态属于告警中心
+ * 那张表，从这里改它，两边会在同一组字段上互相覆盖。
+ */
+const rangeAlarms = ref<AlarmEvent[]>([])
+const rangeAlarmsLoading = ref(false)
+/** 查询失败时的那句原文；空串 = 没有失败（家规：失败不留哑）。 */
+const rangeAlarmsError = ref('')
+/** 单调递增令牌：设备 / 范围变得快时，旧响应不许覆盖新列表。 */
+let rangeAlarmsSeq = 0
+
+/**
+ * 按**当前选中设备 + 上一次趋势查询真正发出去的边界**重查告警。
+ *
+ * from/to 用 `trends.queriedFrom/queriedTo` 而不是筛选框的当前值：告警卡要回答的是
+ * "图上这一段里发生了什么"，图与告警必须是**同一段**，否则两行话说的是两个范围。
+ * `alarms.query` 的 from/to 是 epoch ms、含端点（inclusive，与趋势查询同一把尺子）。
+ */
+async function loadRangeAlarms(): Promise<void> {
+  const seq = (rangeAlarmsSeq += 1)
+  const deviceId = selectedDeviceId.value
+  const from = trends.queriedFrom
+  const to = trends.queriedTo
+  if (!deviceId || from === null || to === null) {
+    rangeAlarms.value = []
+    rangeAlarmsError.value = ''
+    return
+  }
+  rangeAlarmsLoading.value = true
+  const result = await callApi(() =>
+    window.api.alarms.query({ deviceId, from, to, limit: 50 })
+  )
+  // 这次查询已经过时（设备或范围又变了）：丢弃，不许写回。
+  if (seq !== rangeAlarmsSeq) return
+  rangeAlarmsLoading.value = false
+  if (!result.success) {
+    rangeAlarms.value = []
+    rangeAlarmsError.value = resultMessage(result)
+    return
+  }
+  rangeAlarmsError.value = ''
+  rangeAlarms.value = unwrap(result)?.items ?? []
+}
+
+/**
+ * 随设备 / 时间范围自动重查：`queriedFrom/To` 是趋势查询**落地之后**才更新的，
+ * 所以趋势每次查完（预设切换、颗粒度切换、自定义范围提交、换设备）这一张卡跟着补一次；
+ * 自定义范围没填完时不触发趋势查询，`queried*` 不变，这里也不会动。
+ */
+watch([selectedDeviceId, () => trends.queriedFrom, () => trends.queriedTo], () => {
+  void loadRangeAlarms()
+})
+
+/** 一行告警的标题：设备自己给的原因文本优先，其次解码故障位图（与告警中心同一套翻译）。 */
+function rangeAlarmTitle(alarm: AlarmEvent): string {
+  const reason = alarm.deviceReason?.trim()
+  return reason !== undefined && reason !== '' ? reason : describeAlarmMask(alarm.alarmMask)
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,9 +1273,9 @@ watch(
 <template>
   <div class="page">
     <!--
-      这一页**没有页头**：外层框架的标题栏已经写了「历史趋势」，而「刷新 / 立即落盘」两个
-      动作按产品要求搬进了下面那张卡片 —— 它们是与**这一组筛选条件**绑在一起的动作
-      （刷新重查当前筛选、落盘把当前缓冲写进库），贴在筛选栏同一张卡片里比飘在页头更近。
+      这一页**没有页头**：外层框架的标题栏已经写了「历史趋势」。设备下拉按业主 20260921
+      的要求搬进顶栏那一格（照 MonitorView 的 `Teleport` 先例，含 `.topbar-device` 样式）；
+      「立即落盘」那一颗按钮同一批删掉（store 的 `flush()` 与 IPC 保留，设置页仍在用）。
     -->
 
     <p v-if="notice" class="alert alert--success" role="status">{{ notice }}</p>
@@ -1171,35 +1289,41 @@ watch(
     </EmptyState>
 
     <template v-else>
+      <!--
+        设备下拉**不在筛选栏里**：它被投到顶栏那一格（`#topbar-page-slot`），
+        写法与样式照 MonitorView（业主 20260921：设备选择搬进标题栏）。
+        `scoped` 样式对 Teleport 出去的内容仍然生效（Vue 给它们带上同一个 scope 属性）。
+      -->
+      <Teleport to="#topbar-page-slot">
+        <label class="field topbar-device">
+          <select
+            v-model="selectedDeviceId"
+            class="select"
+            :aria-label="t('trendsUi.filterDevice')"
+            :title="t('trendsUi.filterDevice')"
+          >
+            <option v-for="device in devices.devices" :key="device.id" :value="device.id">
+              {{ device.name }}（{{ device.ip || t('trendsUi.noAddress') }}）
+            </option>
+          </select>
+        </label>
+      </Teleport>
+
       <section class="card">
         <div class="filter-bar">
           <!--
-            `field--wide` 是**必须**的（第 32 轮补回来）：那一条 CSS 把下拉钉在 200px
-            （见下面 `.field--wide .select`），第 30 轮重排筛选栏时这个类名被漏掉了，
-            于是下拉按"最宽的那个选项"自己撑到 **265px**，把右边的空间吃掉一大块 ——
-            通道那一排因此被挤到**下一行**（第 32 轮探针量到的正是这一条：
-            `panelTop=168` vs `deviceTop=120`，`panelRight` 几乎等于整行宽）。
-          -->
-          <label class="field field--wide">
-            <span class="field-label">{{ t('trendsUi.filterDevice') }}</span>
-            <select v-model="selectedDeviceId" class="select">
-              <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-                {{ device.name }}（{{ device.ip || t('trendsUi.noAddress') }}）
-              </option>
-            </select>
-          </label>
-
-          <!--
-            通道选择：**紧挨着设备的右侧**（业主 2026-09-19 最新一条：
-            「如果是声纹设备，通道的选择应该放在设备的右侧的位置，趋势图还是占右侧区域的 100%」）。
+            通道选择：**筛选栏的第一项**（业主 2026-09-19：通道贴着设备；20260921 设备
+            搬去顶栏之后它就是这一行的开头）。
 
             这一块原来在图右侧占掉一列（第 13 批第 4 条「右侧列出 8 或 2 个通道」），
-            于是图只能拿到剩下的宽度；业主现在要的是**图占满**，所以通道回到筛选栏这一行、
-            贴在设备后面。第 4 条那几件事一件没少：
-              · 一行一条通道（CH1…CH8，设备几个就是几个）；
+            于是图只能拿到剩下的宽度；业主现在要的是**图占满**，所以通道回到筛选栏这一行。
+            只有声纹设备（`isMultiChannel`）渲染这一块：相机 / 声呐走单线趋势页，没有通道。
+            第 4 条那几件事一件没少：
+              · 一颗 chip 一条通道（CH1…CH8，设备几个就是几个）；
               · **无数据灰显**、**有数据可勾选**（判据都是 `hasData`，见 `channelCheckboxDisabled`）；
               · 可**重命名**（写设备，`/set_passageway` 的 `dchName`）；
-              · 每一条带着它在这段范围里的最后一个读数与色点（色点与图上那条线同源）。
+              · 每颗 chip 只带颜色点 + 通道名（色点与图上那条线同源；读数与自定义名括号
+                按 20260921 删掉）。
           -->
           <div v-if="channelRows.length > 0" class="field field--channels" data-trend-channels>
             <span class="field-label">{{ t('trendsUi.channelPanelTitle') }}</span>
@@ -1227,11 +1351,7 @@ watch(
                   />
                   <span class="channel-chip__dot" :style="{ background: row.color }" aria-hidden="true"></span>
                   <span class="channel-chip__name">
-                    {{ channelLabel(row.index) }}
-                    <template v-if="row.name">（{{ row.name }}）</template>
-                  </span>
-                  <span class="muted channel-chip__value">
-                    {{ row.value === null ? '—' : trendValueText(trends.metric, row.value) }}
+                    {{ row.name ? row.name : channelLabel(row.index) }}
                   </span>
                 </label>
                 <button
@@ -1292,31 +1412,43 @@ watch(
             量可以**多选**：选中的量各画一张图（见 `chartBundles` 与文件头）。
             最后一个量点不掉，满 4 个之后其余的会置灰 —— 两个上限都在 store 里判，
             这里只把它画出来（第二处判断迟早与第一处不一致）。
+
+            chips 的**视觉顺序 = `metricOrder`**，拖动一颗 chip 重排的是图自上而下的顺序
+            （业主 20260921）。拖拽只是增强：它们仍然是普通按钮，Tab 聚焦、空格/回车
+            切换选中都不受影响；顺序只活在本次会话（不持久化，见 `metricOrder` 的注释）。
           -->
           <div class="field field--metrics">
             <span class="field-label">{{ t('trendsUi.filterMetric') }}</span>
             <div class="chip-row" data-metric-picker>
               <button
-                v-for="option in TREND_METRIC_OPTIONS"
-                :key="option.key"
+                v-for="key in metricOrder"
+                :key="key"
                 type="button"
-                class="chip chip--selectable"
-                :class="{ 'chip--accent': trends.isMetricSelected(option.key) }"
-                :data-metric-toggle="option.key"
-                :aria-pressed="trends.isMetricSelected(option.key)"
+                class="chip chip--selectable metric-chip"
+                :class="{
+                  'chip--accent': trends.isMetricSelected(key),
+                  'metric-chip--dragging': draggingMetric === key
+                }"
+                :data-metric-toggle="key"
+                :aria-pressed="trends.isMetricSelected(key)"
+                draggable="true"
                 :disabled="
-                  !trends.isMetricSelected(option.key) &&
+                  !trends.isMetricSelected(key) &&
                   trends.metrics.length >= TREND_METRIC_MAX_SELECTED
                 "
                 :title="
-                  !trends.isMetricSelected(option.key) &&
+                  !trends.isMetricSelected(key) &&
                   trends.metrics.length >= TREND_METRIC_MAX_SELECTED
                     ? t('trendsUi.metricLimit', { count: TREND_METRIC_MAX_SELECTED })
-                    : undefined
+                    : t('trendsUi.metricDragHint')
                 "
-                @click="toggleMetric(option.key)"
+                @click="toggleMetric(key)"
+                @dragstart="onMetricDragStart(key, $event)"
+                @dragover.prevent
+                @drop="onMetricDrop(key)"
+                @dragend="onMetricDragEnd"
               >
-                {{ trendMetricLabel(option.key) }}
+                {{ trendMetricLabel(key) }}
               </button>
             </div>
             <span v-if="trends.metrics.length > 1" class="field-hint">
@@ -1358,16 +1490,6 @@ watch(
             </div>
           </div>
 
-          <!--
-            立即落盘：作用于整组筛选条件，所以留在筛选栏这一张卡片里、推到右端
-            （`.trend-actions`）。「刷新」那一颗已经删掉（业主 2026-09-19 更正第 4 条），
-            重查当前筛选走顶栏那颗唯一的刷新（见 `stores/uiRefresh.ts` 与下面的 watch）。
-          -->
-          <div class="btn-row trend-actions">
-            <button type="button" class="btn" :disabled="flushing" @click="flushNow">
-              {{ flushing ? t('settingsUi.trendFlushing') : t('settingsUi.trendFlushNow') }}
-            </button>
-          </div>
         </div>
       </section>
 
@@ -1380,9 +1502,16 @@ watch(
         <div class="section-header">
           <h3 class="section-title">{{ t('trendsUi.chartTitle') }}</h3>
           <!--
+            机型徽标（业主 20260921：页头显示机型标签）：同一台设备切过去，多通道 / 单线
+            两种形态靠它一眼区分。标签复用设备表那一套键（`domain.deviceKind.*`）。
+          -->
+          <span v-if="deviceKindLabel" class="badge kind-badge" data-trend-kind-badge>
+            {{ deviceKindLabel }}
+          </span>
+          <!--
             「设备IP · 通道 · 时间」那一行**删掉了**（业主 2026-09-19 最新一条：
             「把现在的趋势框中设备IP，通道，时间这个内容移除」）。
-            这三样东西现在分别在：设备下拉（顶栏那一格）、通道选择（筛选栏里贴着设备）、
+            这三样东西现在分别在：设备下拉（顶栏那一格）、通道选择（筛选栏里那一排）、
             时间范围预设（下面那一排 + 缩放的提示行）—— 同一个信息只在**能改它的那个控件**上说一次。
           -->
           <div class="btn-row chart-actions">
@@ -1576,43 +1705,94 @@ watch(
           「点一下之后图上的点数/刻度不变」来保证 —— 见 `tests/trend-channels.test.ts`。
         -->
       </section>
+
+      <!--
+        时间段告警（业主 20260921）：**图上这一段**里报过的告警，最多 50 条。
+        点一行跳到告警中心、设备筛选已经带好（AlarmsView 认地址栏的 `?device=`）。
+        范围与设备随趋势查询走（`queriedFrom/To` 变了就重查，见 `loadRangeAlarms`），
+        不另设筛选；查询失败把那句原文写在卡里，不静默。
+      -->
+      <section class="card range-alarms" data-trend-range-alarms>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('trendsUi.rangeAlarmsTitle') }}</h3>
+          <span v-if="rangeAlarms.length > 0" class="muted chart-hint" data-trend-range-alarms-count>
+            {{ t('trendsUi.rangeAlarmsCount', { count: rangeAlarms.length }) }}
+          </span>
+        </div>
+
+        <p
+          v-if="rangeAlarmsError"
+          class="alert alert--danger"
+          role="alert"
+          data-trend-range-alarms-error
+        >
+          {{ rangeAlarmsError }}
+        </p>
+        <p
+          v-else-if="rangeAlarmsLoading"
+          class="muted"
+          data-trend-range-alarms-loading
+        >
+          {{ t('alarmsUi.loading') }}
+        </p>
+        <!-- 空态复用告警中心那一句：这一段里没有告警，就是「没有符合条件的告警记录」。 -->
+        <p
+          v-else-if="rangeAlarms.length === 0"
+          class="muted"
+          data-trend-range-alarms-empty
+        >
+          {{ t('alarmsUi.empty') }}
+        </p>
+
+        <ul v-else class="range-alarm-list">
+          <li v-for="alarm in rangeAlarms" :key="alarm.id">
+            <RouterLink
+              class="range-alarm-row"
+              :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
+              :data-trend-range-alarm="alarm.id"
+            >
+              <span class="nowrap range-alarm-row__time">{{ formatDateTime(alarm.timestamp) }}</span>
+              <span class="badge" :class="`badge--severity-${alarm.severity}`">
+                {{ eventSeverityLabel(alarm.severity) }}
+              </span>
+              <!-- 标题一行截断，悬停看全文（`title`）。 -->
+              <span class="range-alarm-row__title" :title="rangeAlarmTitle(alarm)">
+                {{ rangeAlarmTitle(alarm) }}
+              </span>
+              <span
+                class="badge"
+                :class="alarm.acknowledged ? 'badge--success' : 'badge--warning'"
+              >
+                {{ alarm.acknowledged ? t('alarmsUi.ackAcknowledged') : t('alarmsUi.ackUnacknowledged') }}
+              </span>
+            </RouterLink>
+          </li>
+        </ul>
+      </section>
     </template>
   </div>
 </template>
 
 <style scoped>
 /*
- * 设备下拉按产品要求**收窄**。
+ * 顶栏那一格里的设备下拉（被 `Teleport` 投进 `#topbar-page-slot`）。
  *
- * 只写 `min-width` 是不够的（第一次就是这么写的，实测仍然是 375px）：`<select>` 默认按
- * **最宽的选项**决定自己的宽度，而这里的选项是「设备名（IP 地址）」，于是它一个人占掉
- * 筛选栏接近一半。所以宽度要直接钉在 select 上。
- *
- * 200px：够放一个常见长度的设备名，IP 会被截断 —— 但那没关系，**展开的选项列表不受
- * 控件宽度限制**，选的时候看得全。
+ * 与 `MonitorView.vue` 的 `.topbar-device` **同值**：那一格本身是顶栏的 50% 宽，
+ * 下拉占这一格的 50% 并 `margin-left: auto` 推到右端（那一格右边挨着的就是设备数量
+ * 指示器）；`min-width: 0` 让长设备名在下拉内部截断。scoped 样式对 Teleport 出去的
+ * 内容仍然生效，所以这一条写在本页的 `<style scoped>` 里（第 32 轮给旧下拉钉 200px 的
+ * `.field--wide` 随筛选栏里那个控件一起删掉了 —— 留着指向不存在元素的规则，会让下一个
+ * 人以为那东西还在）。
  */
-.field--wide {
+.topbar-device {
+  width: 50%;
   min-width: 0;
-  flex: 0 0 auto;
-}
-
-.field--wide .select {
-  width: 200px;
-  max-width: 200px;
-}
-
-/*
- * 刷新 / 立即落盘（产品要求与设备选择同一张卡片）。
- * `margin-left: auto` 把它们推到筛选栏右端：它们作用于**整组**筛选条件，不属于某一个
- * 下拉框，所以不跟着某个 field 走。
- */
-.trend-actions {
   margin-left: auto;
-  align-self: flex-end;
 }
 
-.aggregation-hint {
-  margin-top: 6px;
+.topbar-device .select {
+  width: 100%;
+  min-width: 0;
 }
 
 /*
@@ -1640,7 +1820,7 @@ watch(
   row-gap: 6px;
 }
 
-/* 一条通道 = 一个 chip（勾选框 + 色点 + 名字 + 最后一个读数）+ 一个改名按钮。 */
+/* 一条通道 = 一个 chip（勾选框 + 色点 + 通道名）+ 一个改名按钮。 */
 .channel-chip-wrap {
   display: inline-flex;
   align-items: center;
@@ -1676,11 +1856,6 @@ watch(
 
 .channel-chip__name {
   white-space: nowrap;
-}
-
-.channel-chip__value {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
 }
 
 .channel-chip__rename {
@@ -1798,16 +1973,6 @@ watch(
   margin-bottom: var(--space-3);
 }
 
-.range-bar {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
-}
-
 .custom-range {
   display: flex;
   align-items: flex-end;
@@ -1834,13 +1999,87 @@ watch(
   font-size: 11.5px;
 }
 
-.diagnostics {
-  margin-top: var(--space-2);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
+/*
+ * 指标 chips 的拖拽手势（业主 20260921）。`grab` 只是"可以拖"的提示，
+ * 点击切换选中照旧；`--dragging` 给被拖的那颗一点透明，落点看得更清楚。
+ * 键盘路径完全不受影响（drag 只是增强，按钮还是那颗按钮）。
+ */
+.metric-chip {
+  cursor: grab;
 }
 
-.diagnostics-note {
-  font-size: 11.5px;
+.metric-chip--dragging {
+  opacity: 0.6;
+}
+
+/* 页头那枚机型徽标（`domain.deviceKind.*` 的标签），跟在「趋势曲线」标题后面。 */
+.kind-badge {
+  flex: none;
+}
+
+/*
+ * 时间段告警卡（业主 20260921）：紧凑列表，一行一条 =
+ * 时间 | 等级徽标 | 标题（一行截断） | 确认状态。
+ */
+.range-alarm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.range-alarm-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.range-alarm-row:hover {
+  background: var(--color-bg-hover);
+}
+
+.range-alarm-row__time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* `minmax(0, 1fr)` 那列吃剩余宽度；这一格只许一行，超出省略（全文在 `title` 上）。 */
+.range-alarm-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+/*
+ * 等级配色：与 `AlarmsView.vue` 那一套**同值**。那边的规则是 scoped 的、过不来；
+ * `main.css` 里也写明旧页面各自带一份，重做时再统一 —— 所以这里按同款再写一份，
+ * `unknown` 用中性灰而不是"最轻一档"的理由与那边相同（它不是"我们判了最轻"，
+ * 而是"设备没给等级"）。
+ */
+.badge--severity-critical {
+  background: color-mix(in srgb, var(--color-danger, #d64545) 22%, transparent);
+  color: var(--color-danger, #d64545);
+}
+
+.badge--severity-warning {
+  background: color-mix(in srgb, var(--color-warning, #d99a2b) 22%, transparent);
+  color: var(--color-warning, #d99a2b);
+}
+
+.badge--severity-info {
+  background: color-mix(in srgb, var(--color-accent, #4a8fd6) 18%, transparent);
+  color: var(--color-accent, #4a8fd6);
+}
+
+.badge--severity-unknown {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  opacity: 0.75;
 }
 </style>

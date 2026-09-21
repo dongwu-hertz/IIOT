@@ -104,6 +104,7 @@ import {
 } from '@renderer/lib/listPaging'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSettingsStore } from '@renderer/stores/settings'
+import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
@@ -118,6 +119,7 @@ const router = useRouter()
 const devices = useDevicesStore()
 const settings = useSettingsStore()
 const realtime = useRealtimeMonitorStore()
+const detailDialog = useDeviceDetailDialogStore()
 
 /**
  * 画布的逻辑尺寸：SVG 用 `viewBox` 缩放到容器宽度，所以这是一套"逻辑坐标"。
@@ -605,7 +607,8 @@ function onRealtimeAction(action: RealtimeActionId): void {
       return
     case 'ptz':
     case 'configuration':
-      void router.push({ path: `/devices/${device.id}` })
+      // 详情自业主 20260921 起是弹窗：PTZ（空气声呐）与「配置」都进同一个详情弹窗。
+      detailDialog.show(device.id, device.name)
       return
   }
 }
@@ -618,9 +621,9 @@ function onRealtimeReturnToLive(): void {
   realtime.returnToLive()
 }
 
-/** 双击一行设备 = 进这一台的详情页（业主第 16 条；声纹设备与相机都走这一条）。 */
+/** 双击一行设备 / 点设备名 = 打开这一台的详情**弹窗**（业主 20260921；声纹设备与相机都走这一条）。 */
 function openDeviceDetail(deviceId: string): void {
-  void router.push({ path: `/devices/${deviceId}` })
+  detailDialog.show(deviceId, devices.byId(deviceId)?.name ?? '')
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,9 +1256,14 @@ onUnmounted(() => {
             <span class="muted">{{ t('mapUi.point') }}：<span class="mono">{{ pointText }}</span></span>
             <span class="muted">{{ t('installUi.azimuth') }}：{{ liveAzimuth(selectedDevice) }}</span>
             <div class="btn-row">
-              <RouterLink class="btn btn--sm" :to="`/devices/${selectedDevice.id}`">
+              <!-- 「配置」= 打开设备详情弹窗（业主 20260921 起详情是弹窗；原来是去整页路由）。 -->
+              <button
+                type="button"
+                class="btn btn--sm"
+                @click="detailDialog.show(selectedDevice.id, selectedDevice.name)"
+              >
                 {{ t('devicesUi.configure') }}
-              </RouterLink>
+              </button>
               <RouterLink class="btn btn--sm" :to="`/monitor?device=${selectedDevice.id}`">
                 {{ t('devicesUi.viewColumn') }}
               </RouterLink>

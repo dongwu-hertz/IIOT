@@ -1664,9 +1664,9 @@ async function confirmRestore(): Promise<void> {
           larger, and `object-fit: contain` keeps the aspect ratio honest.
         -->
         <div class="about-brand">
-          <img class="about-brand__logo" :src="logoUrl" alt="HERTZINNO" />
+          <img class="about-brand__logo" :src="logoUrl" alt="HAIS" />
           <div class="about-brand__meta">
-            <div class="about-brand__name">HERTZINNO Acoustic Box Manager</div>
+            <div class="about-brand__name">HAIS</div>
             <div class="about-brand__version">
               {{ versionText }}
               <template v-if="releaseText">

@@ -123,7 +123,7 @@ export const zhCN = {
    * and its label cannot drift apart.
    */
   app: {
-    title: 'HERTZINNO Acoustic Box Manager',
+    title: 'HAIS',
     tagline: '设备管理软件',
     /** 侧栏折叠按钮（事件中心规格 §3.2）。 */
     collapseSidebar: '收起侧栏',
@@ -874,6 +874,11 @@ export const zhCN = {
     noDeviceTitle: '请先添加设备',
     goToDevices: '前往设备管理',
     filterDevice: '设备',
+    /** 趋势页下方「所选时间段的告警」卡（业主 20260921）。 */
+    rangeAlarmsTitle: '时间段告警',
+    rangeAlarmsCount: '范围内 {count} 条',
+    /** 指标拖拽排序的气泡提示。 */
+    metricDragHint: '拖动调整图表顺序（点击切换显示）',
     /*
      * 这里原来还有 `filterChannel: '通道'`（筛选栏里那一排通道名前面的标签）。
      * 第 13 批第 4 条把通道搬到**图右侧那一列**（那一列自己有标题 `channelPanelTitle`），
@@ -991,7 +996,13 @@ export const zhCN = {
     breadcrumbDevices: '设备管理',
     notFoundTitle: '设备不存在',
     backToList: '返回设备列表',
-    deviceIdLabel: '设备 ID {id}',
+    /** 弹窗标题行（业主 20260921）：设备名 + ID + MAC 同一行。 */
+    headerId: 'ID {id}',
+    headerMac: 'MAC {mac}',
+    /** 未保存修改确认弹窗（页签切换/弹窗关闭时拦截）。 */
+    unsavedBody: '当前页签有未保存的修改，继续将丢失这些修改。',
+    unsavedDiscard: '放弃修改',
+    unsavedKeepEditing: '继续编辑',
     refreshing: '刷新中…',
     openWebUi: '打开设备页面',
     monitor: '监测',
@@ -2326,7 +2337,7 @@ export const zhCN = {
   domain: {
     sensorType: {
       microphone: '麦克风',
-      conduction: '传导'
+      conduction: '骨传导'
     },
     detectionMode: {
       characteristic: '特征检测',

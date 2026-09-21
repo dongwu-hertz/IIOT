@@ -250,7 +250,8 @@ async function main() {
   check('打包目录存在', true, dir)
 
   // ---- The executables ----------------------------------------------------
-  const exe = findFile(dir, 'HERTZINNO Acoustic Box Manager.exe')
+  // productName 已改为 HAIS（业主 20260921）：exe 名随 electron-builder 的 productName。
+  const exe = findFile(dir, 'HAIS.exe') ?? findFile(dir, 'HERTZINNO Acoustic Box Manager.exe')
   check('主程序存在', Boolean(exe), exe ? path.basename(exe) : '未找到 .exe')
 
   // ---- asar must be present (files are packed, not loose) -----------------

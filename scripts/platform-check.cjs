@@ -442,7 +442,7 @@ function checkApplicationBoots() {
       const loaded = output.includes('[smoke] renderer-loaded')
       const bridge = extractJsonAfter(output, '[smoke] bridge ')
 
-      check('主进程启动', output.includes('Starting HERTZINNO Acoustic Box Manager'))
+      check('主进程启动', output.includes('Starting HAIS'))
       check('IPC 处理器注册', output.includes('IPC handlers registered'))
       check('渲染层加载完成', loaded)
       check('preload 桥接可用', bridge?.api === true && bridge?.events === true, bridge ? `api=${bridge.api} events=${bridge.events}` : '')

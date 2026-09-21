@@ -113,6 +113,7 @@ import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSessionStore } from '@renderer/stores/session'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
+import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -122,6 +123,7 @@ const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
 const session = useSessionStore()
 const linkage = useAlarmLinkageStore()
+const detailDialog = useDeviceDetailDialogStore()
 
 // ---------------------------------------------------------------------------
 // 筛选状态（规格 §9）：URL > localStorage > 默认
@@ -930,8 +932,9 @@ async function onStatusAction(payload: {
 // 跳转与展示
 // ---------------------------------------------------------------------------
 
+/** 详情抽屉里「设备名」= 打开设备详情**弹窗**（业主 20260921；原来是整页跳转）。 */
 function openDevice(deviceId: string): void {
-  void router.push(`/devices/${deviceId}`)
+  detailDialog.show(deviceId, devices.byId(deviceId)?.name ?? '')
 }
 
 function actionLabel(action: string): string {

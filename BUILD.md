@@ -176,7 +176,7 @@ node scripts/patch-native-deps.cjs --revert    # 还原备份
 | `@duckdb/node-api` | ✅ 预编译，真实 Parquet + `time_bucket()` 查询通过 |
 | DPAPI 凭据加密 | ✅ 加解密往返一致 |
 | 未打包目录（`pack:dir`） | ✅ **已产出并验证**：`npm run verify:packaged` 20 项 |
-| NSIS 安装包（`dist:win` / `dist:win:signed`） | ✅ **已产出**：`HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe · 120.9 MB`（`npm run dist:win`，**未签名**——按产品决定先不签，见第 8 节）。**2026-09-19 起文件名带发布日期**：`…-<版本>-<发布日期>-x64-setup.exe`（见第 4 节与 §第 5 节） |
+| NSIS 安装包（`dist:win` / `dist:win:signed`） | ✅ **已产出**：`HAIS-1.0.0-x64-setup.exe · 120.9 MB`（`npm run dist:win`，**未签名**——按产品决定先不签，见第 8 节）。**2026-09-19 起文件名带发布日期**：`…-<版本>-<发布日期>-x64-setup.exe`（见第 4 节与 §第 5 节） |
 | 静默安装 → 运行 → 卸载 | ✅ 已实测：安装后应用 25 项验证全通过；卸载后安装目录与注册表项清除，**用户数据保留** |
 | 代码签名 | ⏸ **本轮按产品要求不签**：`npm run dist:win` 产出 NotSigned 安装包。签名链路（CA 云端签名 / SimplySign + RFC3161 时间戳）已在早前版本验通，`npm run dist:win:signed` 与 `scripts/sign-preflight.cjs` 保持可用。见第 8 节 |
 
@@ -234,7 +234,7 @@ node scripts/patch-native-deps.cjs --revert    # 还原备份
    **必须用 `Get-AuthenticodeSignature` 实际检查**，不能看日志：
 
    ```powershell
-   Get-AuthenticodeSignature "release\HERTZINNO Acoustic Box Manager-1.0.0-x64-setup.exe" | Select Status
+   Get-AuthenticodeSignature "release\HAIS-1.0.0-x64-setup.exe" | Select Status
    # Status: NotSigned  -> 客户首次安装会遇 SmartScreen 告警
    ```
 
@@ -317,7 +317,7 @@ node scripts/camera-load.cjs --streams 1,2,4 --seconds 10
 `electron-builder.yml` 的 `productName`，保证与安装向导里的产品名是同一个字符串）：
 
 ```
-HERTZINNO Acoustic Box Manager-1.0.2-2026-09-19-x64-setup.exe
+HAIS-1.0.2-2026-09-19-x64-setup.exe
 ```
 
 | 谁用这个名字 | 怎么拿到 |

@@ -264,7 +264,7 @@ export const DEFAULT_ALARM_LINKAGE_CONFIG: AlarmLinkageConfig = {
 
 /** 邮件模板的默认值；界面用它们填占位，而不是展示空框。 */
 export const LINKAGE_EMAIL_TEMPLATE_DEFAULTS = {
-  subject: '[HERTZINNO] {device} 告警 ({count})',
+  subject: '[HAIS] {device} 告警 ({count})',
   body: '{device} 在 {time} 触发告警。\n事件标识：{identity}\n本邮件由本地联动引擎自动发送。'
 } as const
 

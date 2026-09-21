@@ -21,6 +21,7 @@ import {
 import { callApi, unwrap } from '@renderer/lib/result'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSessionStore } from '@renderer/stores/session'
+import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 import { channelState } from '@renderer/lib/channelState'
 import AddDeviceDialog from '@renderer/components/AddDeviceDialog.vue'
 import AppModal from '@renderer/components/AppModal.vue'
@@ -31,6 +32,7 @@ import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 const { t } = useI18n()
 const router = useRouter()
 const devices = useDevicesStore()
+const detailDialog = useDeviceDetailDialogStore()
 
 /**
  * Adding, editing and removing devices are administrator actions (see
@@ -250,8 +252,13 @@ function enabledChannelSummary(deviceId: string): string {
   return t('channelState.enabledSummary', { enabled, total: list.length })
 }
 
-function go(path: string): void {
-  void router.push(path)
+/**
+ * 「设备名」= 进设备详情的入口（业主 20260921 起是**弹窗**，不再是整页跳转）：
+ * 状态经 `stores/deviceDetailDialog` 交给 `AppShell` 里那个全局宿主。
+ * 深链 `/devices/:id` 路由保留，但只有书签/手敲地址才走得到。
+ */
+function openDetail(device: Device): void {
+  detailDialog.show(device.id, device.name)
 }
 
 /**
@@ -520,7 +527,7 @@ function onAdded(deviceId: string): void {
                 class="devices-table__name devices-table__name--action"
                 :title="t('devicesUi.openDetail')"
                 data-action="device-detail"
-                @click.stop="go(`/devices/${device.id}`)"
+                @click.stop="openDetail(device)"
               >
                 {{ device.name }}
               </button>

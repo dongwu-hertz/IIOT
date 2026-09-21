@@ -13,15 +13,17 @@
  *   2. 保存 sends only the fields the user actually changed, so an untouched
  *      `portRight` is passed through by the service exactly as it read it.
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import type { Rs485ConfigView } from '@renderer/types/device-config'
 import { useI18n } from 'vue-i18n'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
+import { useDeviceDetailDirtyStore } from '@renderer/stores/deviceDetailDirty'
 
 const props = defineProps<{ deviceId: string }>()
 
 const { t } = useI18n()
 const config = useDeviceConfigStore()
+const dirtyRegistry = useDeviceDetailDirtyStore()
 
 const BAUD_RATES: readonly number[] = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200]
 const DATA_BITS: readonly number[] = [5, 6, 7, 8]
@@ -100,6 +102,14 @@ function buildPatch(): Partial<Rs485ConfigView> {
 }
 
 const dirty = computed(() => Object.keys(buildPatch()).length > 0)
+
+/*
+ * 脏标记同步给详情页的未保存确认（切页签 / 关弹窗时拦人）。本地 `dirty` 仍是
+ * 徽标与按钮 disabled 的来源 —— 登记处只是它的回声。卸载（切走 serial 页签 /
+ * 关弹窗）时置回 false：草稿随组件销毁，脏标记不能比草稿活得长。
+ */
+watch(dirty, (value) => dirtyRegistry.mark('rs485', value), { immediate: true })
+onUnmounted(() => dirtyRegistry.mark('rs485', false))
 
 function resetDraft(): void {
   const before = original.value

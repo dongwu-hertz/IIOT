@@ -21,7 +21,7 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import type { AlarmEvent, AlarmQuery } from '@shared/domain/models'
 import { ALARM_NOTE_MAX_LENGTH } from '@shared/domain/models'
 import type { EventSeverity } from '@shared/domain/event-center'
@@ -37,17 +37,18 @@ import { ALARM_PAGE_SIZE, useAlarmsStore } from '@renderer/stores/alarms'
 import { useSamplesStore } from '@renderer/stores/samples'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
+import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { channelLabel, formatDateTime, formatNumber, fromDateTimeLocalValue } from '@renderer/lib/format'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 import DateRangePicker from '@renderer/components/DateRangePicker.vue'
 
 const { t } = useI18n()
-const router = useRouter()
 const route = useRoute()
 const alarms = useAlarmsStore()
 const uiRefresh = useUiRefreshStore()
 const devices = useDevicesStore()
+const detailDialog = useDeviceDetailDialogStore()
 
 /**
  * 筛选（业主重构 2026：只留「标题 + 内容 + 时间范围」，同一行；更多筛选整个删掉）。
@@ -531,8 +532,9 @@ async function goToPage(offset: number): Promise<void> {
   await alarms.goToPage(offset)
 }
 
+/** 点设备名 = 打开设备详情**弹窗**（业主 20260921；原来是整页跳转）。 */
 function openDevice(deviceId: string): void {
-  void router.push(`/devices/${deviceId}`)
+  detailDialog.show(deviceId, devices.byId(deviceId)?.name ?? '')
 }
 </script>
 

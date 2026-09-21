@@ -174,7 +174,8 @@ export const useMonitorStore = defineStore('monitor', () => {
    *
    * 数据源口径（业主 2026-09-21 第二批第 24 条）：设备一次只开一路流，所以每次只有
    * **当前订阅**那一路的帧进来，在该通道的序列里追加一个点 —— 通道内连续，跨通道不同步。
-   * 检测卡上那句说明（`monitorUi.detectDataNote`）就是这句话。
+   * 这句口径的字面文本是 `monitorUi.detectDataNote`：原来整句写在检测卡网格下方，
+   * 业主 20260921 起收进实时趋势卡卡头那颗 ⓘ 的悬停提示里（见 `MonitorView`）。
    */
   const channelFeatureHistory = ref<ChannelFeatureHistoryMap>({})
   /**

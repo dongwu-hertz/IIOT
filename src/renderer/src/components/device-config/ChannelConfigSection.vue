@@ -12,9 +12,10 @@
  * Drafts are local: typing must not mutate store state, or a background refresh
  * would silently commit half-typed values into the object that gets written.
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import type { ChannelConfigView } from '@renderer/types/device-config'
 import { SAMPLE_RATE_OPTIONS, useDeviceConfigStore } from '@renderer/stores/deviceConfig'
+import { useDeviceDetailDirtyStore } from '@renderer/stores/deviceDetailDirty'
 import { useI18n } from 'vue-i18n'
 import {
   channelState,
@@ -31,6 +32,7 @@ const props = defineProps<{ deviceId: string }>()
 
 const { t } = useI18n()
 const config = useDeviceConfigStore()
+const dirtyRegistry = useDeviceDetailDirtyStore()
 
 /**
  * Sensor types: 0 = microphone, 1 = conduction (`ChannelConfigView.sensorType`).
@@ -126,6 +128,14 @@ function isDirty(row: Row): boolean {
     row.draft.alarmProfileId !== row.channel.alarmProfileId
   )
 }
+
+/**
+ * 整表视角的脏 = 任意一行草稿与设备值不同。行内保存按钮仍然逐行看 `isDirty(row)`，
+ * 这一份聚合并同步给详情页的未保存确认（切页签 / 关弹窗时拦人）。
+ */
+const anyRowDirty = computed(() => rows.value.some((row) => isDirty(row)))
+watch(anyRowDirty, (value) => dirtyRegistry.mark('channels', value), { immediate: true })
+onUnmounted(() => dirtyRegistry.mark('channels', false))
 
 async function saveRow(row: Row): Promise<void> {
   const index = row.channel.channelIndex

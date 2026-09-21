@@ -36,7 +36,7 @@ function createWindow(): BrowserWindow {
     show: false,
     // Matches the UI background (spec 8.2) so there is no white flash on load.
     backgroundColor: '#FFFFFF',
-    title: 'HERTZINNO Acoustic Box Manager',
+    title: 'HAIS',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -614,6 +614,21 @@ for (const stream of [process.stdout, process.stderr]) {
  * 「弹窗不出现」这种最难查的症状。放在模块顶层，与其它一次性注册同处一地。
  */
 registerLinkagePopupScheme()
+
+/**
+ * 用户数据目录钉住旧路径 `hertzinno-acoustic-box-manager`。
+ *
+ * Electron 的 `userData` 默认派生自应用名（`%APPDATA%\<应用名>`）。显示名改成
+ * HAIS 之后，派生目录会跟着变成 `%APPDATA%\HAIS`，老用户升级后
+ * `hertzinno-manager.db`（登录账号、设备凭据引用、设置）会被"留在旧目录、看不见"，
+ * 等于一次静默的数据抛弃。显式钉回旧目录，升级链才不断。
+ *
+ * 唯一的例外：显式传了 `--user-data-dir` 的调用方（smoke / 平台检查 / 真机验证等
+ * 脚本的一次性 profile）是有意隔离，必须尊重，所以只在没传该开关时钉住。
+ */
+if (!app.commandLine.hasSwitch('user-data-dir')) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'hertzinno-acoustic-box-manager'))
+}
 
 /** Single-instance lock: a second launch focuses the existing window instead. */
 const gotTheLock = app.requestSingleInstanceLock()

@@ -318,7 +318,7 @@ async function copyInstallId(): Promise<void> {
   <div class="login">
     <section class="login__card">
       <header class="login__brand">
-        <img class="login__logo" :src="logoUrl" alt="HERTZINNO" width="110" height="59" />
+        <img class="login__logo" :src="logoUrl" alt="HAIS" width="110" height="59" />
         <span class="login__brand-text">
           <span class="login__brand-name">{{ t('app.title') }}</span>
           <span class="login__brand-sub">{{ t('app.tagline') }}</span>

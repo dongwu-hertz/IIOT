@@ -183,7 +183,7 @@ function findStartupEvidence(problems) {
   const combined = `${stdout}\n${stderr}`
   const evidence = []
 
-  if (combined.includes('Starting HERTZINNO Acoustic Box Manager')) {
+  if (combined.includes('Starting HAIS')) {
     evidence.push('main process logged startup')
   }
   if (combined.includes('IPC handlers registered')) {

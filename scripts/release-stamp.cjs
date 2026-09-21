@@ -62,7 +62,7 @@ const RELEASE_DATE = String(pkg.releaseDate || '').trim()
 const PRODUCT_NAME = productNameFromBuilderConfig()
 
 /**
- * 形如 `HERTZINNO Acoustic Box Manager-1.0.1-2026-09-19-${arch}-setup.${ext}`。
+ * 形如 `HAIS-1.0.1-2026-09-19-${arch}-setup.${ext}`。
  *
  * 顺序是 产品名 → 版本 → 发布日期 → 架构 → setup：安装包在资源管理器里按名字排序时，
  * 同一个产品的多次发布就会**按版本与日期聚在一起**（这也是"后缀发布日期"这句话的用处）。
