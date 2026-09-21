@@ -45,6 +45,14 @@ export interface TelemetryIntakeDeps {
   insertAlarm: (input: AlarmInsert) => { id: string; created: boolean }
   /** 设备当前的通道数（用来判断通道号合不合法）；缺席表示不判断。 */
   channelCountFor?: (deviceId: string) => number | undefined
+  /**
+   * 收到了这一台的**合法遥测**（业主 20260921 第 12 条"收到遥测即上线"）。
+   *
+   * 推送设备（`pushDevice`）没有轮询，"它在线"这件事只能由遥测触发 —— 注入的回调把
+   * 设备 id 交给 `DeviceService.markOnlineFromTelemetry()`。一次 `ingest()` 调用最多
+   * 触发一次（markOnline 本来就会刷新 lastSeen，按行触发只会白写库）。
+   */
+  onTelemetry?: (deviceId: string) => void
 }
 
 export interface IntakeOutcome {
@@ -79,6 +87,9 @@ export class TelemetryIntake {
       rowsWithoutKnownKeys: 0,
       unrecognised: []
     }
+    // 只要这一批里有一条合法行，设备就是"活着的"（哪怕键全不认识 —— 那说明格式不对，
+    // 不是设备没了）。一次调用只报一次：上线/刷新 lastSeen 本身就够了。
+    if (rows.length > 0) this.deps.onTelemetry?.(device.id)
     const unknownKeys = new Set<string>()
     const declaredChannelCount = this.deps.channelCountFor?.(device.id)
 

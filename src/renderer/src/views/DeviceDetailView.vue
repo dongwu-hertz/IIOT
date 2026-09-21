@@ -40,6 +40,7 @@ import MaintenanceSection from '@renderer/components/device-config/MaintenanceSe
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import CameraControlPanel from '@renderer/components/CameraControlPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
+import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 import AirSonarPtzPanel from '@renderer/components/AirSonarPtzPanel.vue'
 import { callApi } from '@renderer/lib/result'
 
@@ -129,6 +130,16 @@ const CAMERA_TABS: ReadonlyArray<TabId> = [
   'cameraMaintenance'
 ]
 
+/**
+ * 纯推送第三方设备（pushDevice，业主 20260921 第 12 条）只保留这两个页签。
+ *
+ * 它没有我们主动去连的协议 —— 通道 / 告警参数 / 网络 / 时间 / 串口 / 维护那些页签
+ * 全部对应 FA8 或相机端点，在推送设备上**不存在**；「概览」装基础信息 + GIS
+ * （`DeviceInstallationCard` 本来就在概览里），「push」装推流秘钥与地址
+ * （复用 `DevicePushEndpoint`，与添加/编辑对话框里是同一组件）。
+ */
+const PUSH_DEVICE_TABS: ReadonlyArray<TabId> = ['overview', 'push']
+
 const activeTab = ref<TabId>('overview')
 
 const loading = ref(false)
@@ -167,6 +178,9 @@ const visibleTabs = computed(() => {
     return TABS.filter((tab) => AUSCULTATION_TABS.includes(tab.id))
   }
   if (kind === 'acousticCamera') return TABS.filter((tab) => CAMERA_TABS.includes(tab.id))
+  // 推送设备：最小页签集（概览 + push），**必须显式分支** —— 默认分支会把 FA8 的六个
+  // 设备协议页签也分给它，而它在那些端点上全部不存在（点开就是 404 → 被读成离线）。
+  if (kind === 'pushDevice') return TABS.filter((tab) => PUSH_DEVICE_TABS.includes(tab.id))
   return TABS.filter((tab) => !AUSCULTATION_TABS.includes(tab.id) && !CAMERA_TABS.includes(tab.id))
 })
 
@@ -552,9 +566,10 @@ const webUiAddress = computed(() => {
         <ModbusConfigSection :device-id="props.id" />
       </template>
 
-      <!-- Push 上报 -->
+      <!-- Push 上报：推送设备复用「push」页签装本机推流端点（秘钥 + 地址），其余机型是设备侧 Push 配置 -->
       <template v-else-if="activeTab === 'push'">
-        <PushConfigSection :device-id="props.id" />
+        <DevicePushEndpoint v-if="device.kind === 'pushDevice'" :device-id="props.id" />
+        <PushConfigSection v-else :device-id="props.id" />
       </template>
 
       <!-- 听诊盒子族：工作模式 / 阈值参数 / 告警同步 -->

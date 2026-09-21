@@ -73,9 +73,16 @@ export interface DeviceStatusEvent {
  * possible symptom.
  *
  * The union members ARE the `domain.deviceKind.*` catalogue keys, so the renderer
- * needs no lookup table to display them.
+ * needs no lookup table to display them — **except `pushDevice`**, whose label
+ * lives under `devicesUi.kindPushDevice` / `addDeviceUi.kindPushDevice`
+ * (业主 20260921 第 12 条：界面文案键由那一批统一给，不进 `domain.deviceKind.*`)。
+ *
+ * `pushDevice`（纯推送第三方设备）：它**没有**我们主动去连的协议 —— 数据由设备侧经
+ * HTTP/MQTT 推到本机（`ingest_plan.protocol` 为 `http`/`mqtt`），所以没有 IP 地址、
+ * 没有设备凭据、健康检查不做 HTTP 轮询（"收不到遥测超过时限"判离线，见
+ * `shared/domain/device-status.ts`）。
  */
-export type DeviceKind = 'acousticBox' | 'acousticCamera' | 'auscultationBox'
+export type DeviceKind = 'acousticBox' | 'acousticCamera' | 'auscultationBox' | 'pushDevice'
 
 /**
  * Runtime list of every kind, for validating a value that arrived over IPC (or
@@ -84,7 +91,8 @@ export type DeviceKind = 'acousticBox' | 'acousticCamera' | 'auscultationBox'
 export const DEVICE_KINDS: readonly DeviceKind[] = [
   'acousticBox',
   'acousticCamera',
-  'auscultationBox'
+  'auscultationBox',
+  'pushDevice'
 ]
 
 /** Narrowing guard for values crossing the IPC or database boundary. */
@@ -194,6 +202,11 @@ export interface DeviceInfo {
 
 /** Values the user supplies when adding a device (spec section 6.2). */
 export interface AddDeviceInput {
+  /**
+   * 连接地址。**推送设备（`pushDevice`）没有地址**：HTTP/MQTT 模式由设备主动推上来，
+   * 界面传空串、主进程落 `NULL`（业主 20260921 第 12 条）。判据是接入方案 —
+   * 见 `AddDeviceInput.ingest`。
+   */
   ip: string
   httpPort: number
   username: string
@@ -214,11 +227,15 @@ export interface AddDeviceInput {
    */
   installation?: DeviceInstallation
   /**
-   * 接入方案（业主 2026-09-19 第 13 批第 3、4 条）。
+   * 接入方案（业主 2026-09-19 第 13 批第 3、4 条；20260921 第 12 条改语义）。
    *
    * 添加设备时一起定下来（选 HTTP / MQTT + 声明这台设备会推哪些遥测值）。
    * **省略 = 不动这一项**（与 `installation` 同一条规矩）：重新添加一台已知设备只是刷新地址，
    * 不该把已配好的协议与键抹回出厂值。
+   *
+   * **协议为 `http` / `mqtt` ⇒ 这台设备按纯推送第三方设备（`pushDevice`）登记**（业主
+   * 20260921 第 12 条）：跳过 IP 探测与凭据存储，`ip_address` 落 `NULL`，名称必填。
+   * 只有 `none`（IP 地址模式）才走"探测 → 按地址/身份登记"的老路。
    */
   ingest?: DeviceIngestPlan
 }

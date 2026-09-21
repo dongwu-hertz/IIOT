@@ -47,3 +47,37 @@ export function shouldMarkOffline(input: OfflineVerdictInput): boolean {
   const threshold = Math.max(1, Math.floor(input.threshold))
   return input.consecutiveFailures >= threshold
 }
+
+/**
+ * 推送设备（`pushDevice`）的离线判据（业主 20260921 第 12 条）。
+ *
+ * 与上面那条是**两种设备、两种证据**：
+ *
+ *   - 主动连的设备（声纹/相机/听诊）：证据是"我们问、它答"，离线 = 连续探测失败够多次；
+ *   - 推送设备：我们**从不问它**（没有地址、没有凭据），证据只剩"它上次推数据是什么时候" ——
+ *     所以离线 = `last_seen` 距今超过 `offlineFailureThreshold × healthCheckIntervalMs` 没有遥测。
+ *
+ * 这样一台停推的推送设备会在"阈值 × 轮询间隔"之后如实显示离线，而健康检查对推送设备
+ * 不发任何 HTTP 请求（`DeviceService.checkOne()` 里的轻分支）。
+ *
+ * `lastSeen` 缺席（从未推过 —— 例如刚添加）按**离线**处理：与"本进程从未见它在线的设备
+ * 第一次失败就报离线"是同一条产品口径（「离线的设备直接显示离线」），而一次成功的遥测
+ * 会立刻把它翻回在线。间隔与阈值都按至少 1 处理：配成 0 或负数不会出现"永不离线"。
+ */
+export interface PushOfflineVerdictInput {
+  /** 最近一次收到遥测的时间（`devices.last_seen`）；缺席 = 从未收到过。 */
+  lastSeen: number | undefined
+  /** 当前时间（epoch ms）。 */
+  now: number
+  /** 健康检查轮询间隔（`healthCheckIntervalMs`）。 */
+  healthCheckIntervalMs: number
+  /** 失败次数阈值（`offlineFailureThreshold`，出厂 3）。 */
+  offlineFailureThreshold: number
+}
+
+export function shouldMarkPushDeviceOffline(input: PushOfflineVerdictInput): boolean {
+  if (input.lastSeen === undefined) return true
+  const intervalMs = Math.max(1, Math.floor(input.healthCheckIntervalMs))
+  const threshold = Math.max(1, Math.floor(input.offlineFailureThreshold))
+  return input.now - input.lastSeen > intervalMs * threshold
+}

@@ -36,8 +36,15 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
-import type { AlarmEvent, Channel, Device, RealtimeFeature } from '@shared/domain/models'
+import type { AlarmEvent, Channel, RealtimeFeature } from '@shared/domain/models'
 import { CHANNEL_COUNT } from '@shared/domain/models'
+import {
+  trendChannelColor,
+  trendDataZoom,
+  trendZoomBurstExceeded,
+  trendZoomIsIdentity,
+  trendZoomShouldRecord
+} from '@shared/domain/trend'
 import {
   alarmSeverityBadgeClass,
   channelAlarmOf,
@@ -74,6 +81,7 @@ import {
   channelFeatureStateLabelKey,
   type ChannelFeatureState
 } from '@renderer/lib/channelFeatures'
+import { clampListPage, listPageCount, listPageSlice } from '@renderer/lib/listPaging'
 import { DEFAULT_VOLUME_PERCENT } from '@renderer/lib/audioPreview'
 import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
 import {
@@ -94,7 +102,6 @@ import {
 } from '@renderer/lib/cameraLivePrefs'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import AppModal from '@renderer/components/AppModal.vue'
-import MetricCard from '@renderer/components/MetricCard.vue'
 import EChart from '@renderer/components/EChart.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
 import SpectrogramViewer from '@renderer/components/SpectrogramViewer.vue'
@@ -108,7 +115,6 @@ import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloa
 import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
-import ManualRtspSources from '@renderer/components/ManualRtspSources.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -126,14 +132,6 @@ const sampleRate = ref<number | null>(null)
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
 
 /**
- * 当前选中的那台在不在线（业主 2026-09-18 第 19 条：选设备时用绿点/灰点说这件事）。
- *
- * `UNKNOWN` 归到**灰**点：我们只知道"没读到"，而绿点会被读成"它在工作" ——
- * 那是界面在说一件没被证实的事（与 `channelState()` 拒绝把"没读到"当"已启用"同一条规矩）。
- */
-const selectedDeviceOnline = computed(() => selectedDevice.value?.status === 'ONLINE')
-
-/**
  * 把"选中那台设备在不在线"告诉监测 store（业主第 18 条：没有活数据时要说得清是哪一台 IP）。
  *
  * store 不持有设备列表（与画面墙同一条做法：谁有列表谁传进来），所以这条同步必须显式做。
@@ -144,11 +142,6 @@ watch(
   (device) => monitor.setDeviceStatus(device?.status),
   { immediate: true }
 )
-
-/** 下拉里每一项前面的那个字符（原生 `<option>` 画不出颜色，颜色由旁边的点负责）。 */
-function deviceStatusDot(status: Device['status']): string {
-  return status === 'ONLINE' ? '●' : '○'
-}
 
 /** Channels reported by the device; falls back to the fixed 0-7 index range. */
 const channels = computed<Channel[]>(() => devices.channelsOf(selectedDeviceId.value))
@@ -316,17 +309,41 @@ const channelFeatureRows = computed<ChannelFeatureRow[]>(() =>
   })
 )
 
-/** 读数状态的样式类：实时=绿、最后一次读数=黄（提醒它不是实时值）、未读取=无色。 */
-function featureStateClass(state: ChannelFeatureState): string {
-  if (state === 'live') return 'badge--success'
-  if (state === 'stored') return 'badge--warning'
-  return ''
-}
-
 /** 读数的时间（本地时间，秒级就够：帧率是 10 Hz 量级，不是毫秒级的判断依据）。 */
 function featureTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString()
 }
+
+/**
+ * 特性表翻页（业主 2026-09-21 第二批第 22 条）：每页 4 行，8 通道 = 2 页。
+ *
+ * 页码是坏值的常态（通道数从 8 掉到 3 时页码可能还停在 2），所以渲染层**一律先夹一遍**
+ * 再读 —— 纯函数在 `lib/listPaging.ts`（与设备地图同一套），这里不存"夹过的页"，
+ * 存操作员按的那一页（`channelFeaturePage`）。
+ */
+const CHANNEL_FEATURE_PAGE_SIZE = 4
+
+const channelFeaturePage = ref(1)
+
+const channelFeaturePageCount = computed(() =>
+  listPageCount(channelFeatureRows.value.length, CHANNEL_FEATURE_PAGE_SIZE)
+)
+
+/** 夹进 1..pageCount 之后的当前页（越界页码显示为末页，而不是一张空表）。 */
+const clampedChannelFeaturePage = computed(() =>
+  clampListPage(channelFeaturePage.value, channelFeatureRows.value.length, CHANNEL_FEATURE_PAGE_SIZE)
+)
+
+const pagedChannelFeatureRows = computed<ChannelFeatureRow[]>(() =>
+  listPageSlice(channelFeatureRows.value, channelFeaturePage.value, CHANNEL_FEATURE_PAGE_SIZE)
+)
+
+/** 翻页条的范围文案（1-based；末页不满 4 行时 end 按实际行数算，不写 4 的倍数）。 */
+const channelFeatureRange = computed(() => {
+  const start = (clampedChannelFeaturePage.value - 1) * CHANNEL_FEATURE_PAGE_SIZE + 1
+  const end = start + pagedChannelFeatureRows.value.length - 1
+  return { start, end, total: channelFeatureRows.value.length }
+})
 
 // ---------------------------------------------------------------------------
 // ③ 「点击告警则显示详细的告警状态」（业主 2026-09-19 第 13 批第 3 条）
@@ -378,11 +395,12 @@ function alarmTypesText(alarm: AlarmEvent): string {
 }
 
 /**
- * 声学预览回放（② 的「音频播放按钮 + 音量」）。
+ * 声学预览回放（② 的「音频播放按钮 + 音量」，第 21 条起收进声学波形卡的头部按钮）。
  *
  * 播放的是**包络预览**而不是原声：跨 IPC 过来的是 100 ms 一帧的降采样波形
- * （`AudioFrameEvent.waveform`），详见 `lib/audioPreview.ts` 的文件头。页面上那句话
- * （`monitorUi.audioPreviewHint`）就是照这个说的。
+ * （`AudioFrameEvent.waveform`），详见 `lib/audioPreview.ts` 的文件头。页面上那句
+ * 说明（`monitorUi.audioPreviewHint`）按业主 2026-09-21 第二批第 21 条删掉了 ——
+ * 「播放的是什么」由波形图本身与波形卡头部那颗按钮的 tooltip 回答。
  *
  * 播放器按组件创建（不是模块级）：离开页面时 `close()` 会真的释放 AudioContext，
  * 模块级实例会让它活到窗口关闭为止。
@@ -403,6 +421,30 @@ function onVolumeInput(event: Event): void {
   volumePercent.value = next
   audioPlayer.setVolume(next)
 }
+
+/**
+ * 音量浮层（第 21 条）：点音量图标在按钮下方弹出迷你滑杆，点浮层与按钮**以外**收起。
+ *
+ * 交互照画面墙那一颗的简化版（没有"唯一出声格"的概念，这里只有一个播放器）：
+ * `mousedown` 捕获阶段挂在 document 上，触发按钮与浮层本身不算「外面」——
+ * 算的话"再点一次收起"会变成"先关再开"。
+ */
+const volumePopoverOpen = ref(false)
+
+function onVolumePopoverDocMouseDown(event: MouseEvent): void {
+  const target = event.target
+  if (target instanceof Element && target.closest('[data-waveform-volume-trigger]')) return
+  if (target instanceof Element && target.closest('[data-waveform-volume-pop]')) return
+  volumePopoverOpen.value = false
+}
+
+watch(volumePopoverOpen, (open) => {
+  if (!open) {
+    document.removeEventListener('mousedown', onVolumePopoverDocMouseDown, true)
+    return
+  }
+  document.addEventListener('mousedown', onVolumePopoverDocMouseDown, true)
+})
 
 async function toggleAudio(): Promise<void> {
   audioError.value = ''
@@ -494,12 +536,75 @@ function timeLabel(epochMs: number): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+// ---------------------------------------------------------------------------
+// Item 16（业主 2026-09-21 第二批）：趋势图 X 轴缩放/平移
+// ---------------------------------------------------------------------------
+
+/**
+ * 趋势图的缩放窗口（百分比，`null` = 整段）。
+ *
+ * 回声防护**照抄** TrendsView 那一套（教训钉在 `tests/trend-zoom-export.test.ts` 第 36 轮）：
+ * 我们写进选项的窗口，ECharts 应用之后会**再发一次** `dataZoom`（形状与用户缩放一模一样），
+ * 于是"事件 → 改状态 → 重算选项 → `setOption(option, true)` → 事件"会一直转，一个核占满、
+ * 定时器饿死、`executeJavaScript` 再不 settle。真正的判据是**来源**：`EChart.vue` 在图上
+ * 捕获滚轮/按下，一次手势只让**一条**事件带 `userDriven: true` —— 所以
+ * `onTrendZoom()` 的第一道闸门就是 `userDriven !== true` 一律丢。
+ *
+ * 下面三个**必须是普通变量**（不是 `ref`）：它们在 `setOption` 引起的回声事件里被写，
+ * 放进 `ref` 会自己触发重渲染，反而多一条环（同一文件头注释里记过的第二条环）。
+ */
+let trendZoomWrittenAt = 0
+let trendZoomWriteTarget: { start: number; end: number } | null = null
+const trendZoomAcceptedAt: number[] = []
+const trendZoom = ref<{ start: number; end: number } | null>(null)
+
+function onTrendZoom(window: {
+  start: number
+  end: number
+  startValue: number | null
+  endValue: number | null
+  userDriven?: boolean
+}): void {
+  // 第一道闸门：只有**用户手势**引起的缩放才记状态（回声永远不可能是用户驱动的）。
+  if (window.userDriven !== true) return
+  const msSinceWrite = Date.now() - trendZoomWrittenAt
+  // 第二道：与最后写进选项的窗口相同、或"刚写过选项"的抑制窗口之内 → 都是回声。
+  if (!trendZoomShouldRecord(trendZoom.value, window, msSinceWrite, trendZoomWriteTarget)) return
+  // 安全阀：2 秒内接受太多次就不再接受 —— 任何残余的反馈环最多转这么多圈。
+  if (trendZoomBurstExceeded(trendZoomAcceptedAt, Date.now())) {
+    // 开发/诊断用的一句（**不是界面文案**，所以不走四语言目录：i18n 扫描器只允许英文）。
+    console.warn('[monitor] dataZoom events too dense; ignoring further ones (feedback loop?)')
+    return
+  }
+  const next = trendZoomIsIdentity(window.start, window.end)
+    ? null
+    : { start: window.start, end: window.end }
+  trendZoom.value = next
+  // 记下"刚刚写过选项"的时刻与目标窗口：接下来那些 `dataZoom` 都是回声。
+  trendZoomWrittenAt = Date.now()
+  trendZoomWriteTarget = next
+  // 安全阀用的是"最近 2 秒内的接受时刻"：先丢掉窗口外的旧记录再记下这一次。
+  for (let index = trendZoomAcceptedAt.length - 1; index >= 0; index -= 1) {
+    if (Date.now() - (trendZoomAcceptedAt[index] as number) >= 2_000) {
+      trendZoomAcceptedAt.splice(index, 1)
+    }
+  }
+  trendZoomAcceptedAt.push(Date.now())
+}
+
 const trendOption = computed<EChartsCoreOption>(() => {
   const frames = monitor.content.features
   const metric = activeTrendMetric.value
   return {
     animation: false,
-    grid: { left: 46, right: 16, top: 24, bottom: 28 },
+    // 底边给 dataZoom 的 slider 留位置（`trendDataZoom()` 里那条高 18、贴底 4）。
+    grid: { left: 46, right: 16, top: 24, bottom: 52 },
+    /*
+     * X 轴缩放/平移（Item 16：滚轮缩放 + 拖拽平移 + 底部范围条）。窗口**写进选项** ——
+     * `setOption(option, true)` 会丢掉 ECharts 自己记的缩放，不写进去每次重画都回整段。
+     * 只开 X：配置里不配 `yAxisIndex`（默认只控类目轴），不设 `zoomLock`。
+     */
+    dataZoom: trendDataZoom(trendZoom.value ?? undefined),
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
@@ -531,6 +636,143 @@ const trendOption = computed<EChartsCoreOption>(() => {
     ]
   }
 })
+
+// ---------------------------------------------------------------------------
+// Item 20（业主 2026-09-21 第二批）：趋势卡右侧"当前值"四行
+// ---------------------------------------------------------------------------
+
+/**
+ * 右侧纵列的四个主行：声压级 / 主频 / 频带能量比 / 平稳度（业主点名的顺序）。
+ *
+ * 值取 `monitor.latest`（features 的最后一帧，即当前订阅那一路此刻的最新读数）；
+ * 没有数据渲染 `—`（模板里判 `undefined`），不写 0 —— 空格会被读成 0。
+ * 原先底下那四张 MetricCard 已按 Item 20 删除：同一个事实不画两遍。
+ */
+const trendStatRows = computed(() => {
+  const frame = latest.value
+  return [
+    { key: 'spl', labelKey: 'metrics.spl' as const, unit: 'dB', value: frame?.spl, precision: 2 },
+    {
+      key: 'mainFrequency',
+      labelKey: 'metrics.mainFrequency' as const,
+      unit: 'Hz',
+      value: frame?.mainFrequency,
+      precision: 2
+    },
+    {
+      key: 'bandEnergyRatio',
+      labelKey: 'metrics.bandEnergyRatio' as const,
+      unit: '',
+      value: frame?.bandEnergyRatio,
+      precision: 3
+    },
+    {
+      key: 'smoothness',
+      labelKey: 'metrics.smoothness' as const,
+      unit: '',
+      value: frame?.smoothness,
+      precision: 3
+    }
+  ]
+})
+
+// ---------------------------------------------------------------------------
+// Item 24（业主 2026-09-21 第二批）：检测模式 —— 四张图卡 × 8 通道同坐标
+// ---------------------------------------------------------------------------
+
+/**
+ * 检测模式的视图选择：单通道（默认，原有四张图谱卡）/ 检测（2×2 四张指标卡）。
+ *
+ * 只记在组件 `ref`（业主明确要求**不持久化**）：这是一块"怎么看"的开关，
+ * 不是"设备是什么"的状态，离开页面回到默认正是预期行为。
+ */
+const viewMode = ref<'single' | 'detect'>('single')
+
+/**
+ * 检测模式的四张卡（业主点名的四行与顺序）：声压级 / 平稳度 / 能量比 / 主频。
+ *
+ * 与 `TREND_METRICS` 是两张表：那张带单通道趋势图的**配色**（每张卡一条线），
+ * 这张是检测卡的标题与 Y 轴单位 —— 卡内每条通道一色，颜色走 `trendChannelColor()`
+ * （与历史趋势页"多通道同坐标"同一套 8 色调色板，按通道号取色，8 色之外循环）。
+ */
+const DETECT_METRICS = [
+  { key: 'spl', labelKey: 'monitorUi.detectSpl', unit: 'dB' },
+  { key: 'smoothness', labelKey: 'monitorUi.detectSmoothness', unit: '' },
+  { key: 'bandEnergyRatio', labelKey: 'monitorUi.detectEnergyRatio', unit: '' },
+  { key: 'mainFrequency', labelKey: 'monitorUi.detectDominantFreq', unit: 'Hz' }
+] as const
+
+type DetectMetricKey = (typeof DETECT_METRICS)[number]['key']
+
+/**
+ * 检测卡的数据源口径（与 store 的 `channelFeatureHistory` 同一句话）：
+ * 设备一次只开一路流（PROTOCOL-FINDINGS 4.3），所以**当前订阅**那一路的帧实时进来，
+ * 其余通道只有上次切到它时读到的尾巴。于是每张卡画的是"每通道各自的时间线" —
+ * 通道内部连续，跨通道并不同步。界面上那句 `monitorUi.detectDataNote` 就是这句实话；
+ * 谁把这张图画成"8 路同步实时流"，谁就是在编造设备做不到的事。
+ */
+const detectOptions = computed<Record<DetectMetricKey, EChartsCoreOption>>(() => {
+  const history = monitor.channelFeatureHistory
+  const result = {} as Record<DetectMetricKey, EChartsCoreOption>
+  for (const metric of DETECT_METRICS) {
+    // 只画**有读数**的通道：没有点的序列在图例里只占一个名字，那条"线"并不存在。
+    const series = channelTabs.value.flatMap((tab) => {
+      const frames = history[tab.index]
+      if (frames === undefined || frames.length === 0) return []
+      return [
+        {
+          name: t('monitorUi.detectLegendChannel', { channel: tab.label }),
+          type: 'line' as const,
+          showSymbol: false,
+          // 每通道的点随自己收到的帧来（1 Hz 量级、每路封顶 600），lttb 抽样与频谱卡同一本账。
+          sampling: 'lttb',
+          // 数据点带各自的时间戳，时间轴上"没数据的时段"占它该占的宽度 —— 跨通道不同步
+          // 这件事由轴本身说真话，不用额外标注。
+          data: frames.map((frame) => [frame.timestamp, frame[metric.key]]),
+          lineStyle: { width: 1.2, color: trendChannelColor(tab.index) },
+          itemStyle: { color: trendChannelColor(tab.index) }
+        }
+      ]
+    })
+    result[metric.key] = {
+      animation: false,
+      // 右侧留给通道图例（竖排、可滚），所以 grid 右边留宽。
+      grid: { left: 52, right: 92, top: 20, bottom: 24 },
+      legend: {
+        type: 'scroll',
+        orient: 'vertical',
+        right: 2,
+        top: 'middle',
+        icon: 'roundRect',
+        itemWidth: 10,
+        itemHeight: 3,
+        textStyle: { color: TEXT_SECONDARY, fontSize: 10 }
+      },
+      tooltip: { trigger: 'axis' },
+      xAxis: {
+        type: 'time',
+        axisLine: { lineStyle: { color: AXIS_LINE } },
+        axisLabel: { color: TEXT_SECONDARY, fontSize: 10, hideOverlap: true }
+      },
+      yAxis: {
+        type: 'value',
+        name: metric.unit,
+        scale: true,
+        nameTextStyle: { color: TEXT_SECONDARY, fontSize: 10 },
+        axisLine: { show: false },
+        axisLabel: { color: TEXT_SECONDARY, fontSize: 10 },
+        splitLine: { lineStyle: { color: SPLIT_LINE } }
+      },
+      series
+    }
+  }
+  return result
+})
+
+/** 检测模式有没有任何一路的可画数据（四张卡共用的空态判据）。 */
+const detectHasData = computed(() =>
+  channelTabs.value.some((tab) => (monitor.channelFeatureHistory[tab.index]?.length ?? 0) > 0)
+)
 
 /**
  * Frequency axis from `binHz`.
@@ -793,7 +1035,7 @@ const isCamera = computed(() => selectedDevice.value?.kind === 'acousticCamera')
  *
  * | 机型 | 这一屏的内容 | 数据从哪来 |
  * |---|---|---|
- * | 声纹设备（AE08 / FA8） | 通道页签 + 趋势 + 四张图谱 + 每通道声纹特性 + 音频条 | 主进程的四条 WebSocket（`monitor` store） |
+ * | 声纹设备（AE08 / FA8） | 通道页签 + 趋势 + 四张图谱（波形卡内含播放/录音/音量） + 每通道声纹特性 | 主进程的四条 WebSocket（`monitor` store） |
  * | 声学相机（FA371） | 单路直播 + 五张声学图 + 检测启停 | 主进程回环 HTTP（`cameraLive`）+ 相机 REST |
  * | SN-16 空气声呐（`auscultationBox`） | 参数与告警同步（`AuscultationPanel`）+ 本机录音回放 | 设备的「拉」通道（HTTP），**没有**实时流 |
  *
@@ -1599,6 +1841,8 @@ watch(selectedDeviceId, async (id) => {
  */
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  // 音量浮层的 click-outside 监听同理：组件没了，监听必须跟着掉。
+  document.removeEventListener('mousedown', onVolumePopoverDocMouseDown, true)
   // 菜单是 Teleport 到 body 的浮层，卸载时它不会跟着组件消失，必须显式关闭。
   menuOpen.value = false
   void monitor.stop()
@@ -1656,8 +1900,8 @@ const sessionLabel = computed(() => {
 
         括号里那两句就是这条提示条在**离线且从来没收到过数据**时的正文（`offlineBanner` +
         `offlineNoContent`）。所以这里是**按他的原话撤掉整条**，不是换一句话 ——
-        设备在不在线由设备下拉旁边那个绿/灰点回答（第 10 批第 19 条），
-        而"数据停在哪一刻"由图上那个「上次内容」角标回答。
+        设备在不在线由页头设备名旁的 `StatusBadge` 回答（下拉旁那颗绿/灰点已于
+        2026-09-21 第二批第 15 条删掉），而"数据停在哪一刻"由图上那个「上次内容」角标回答。
 
         **没有动的两件事**（他点名的是"这个内容"，不是这一整套行为）：
           · 六档状态机（`@shared/domain/monitor-offline.ts`）仍在，`stale` / `stopped`
@@ -1668,7 +1912,7 @@ const sessionLabel = computed(() => {
         一起从四本目录里删掉了 —— 留着就是死键。冲突与取舍见 §15.78。
       -->
 
-      <div class="camera-board">
+      <div class="camera-board" :class="{ 'camera-board--voiceprint': isVoiceprint }">
       <!--
         相机页的排布
         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1703,13 +1947,6 @@ const sessionLabel = computed(() => {
             与顶栏的设备总数/在线数/告警是同一件事，放在页头卡片里会让它和"状态"混成一块。
           -->
           <Teleport to="#topbar-page-slot">
-            <!--
-              设备下拉 + **在线状态点**（业主 2026-09-18 第 19 条：「设备是否在线直接在选择设备时，
-              通过绿点和灰点表示」）。
-              原生 `<option>` 里画不出颜色，所以在**下拉旁边**给当前选中的那台一个真正的圆点：
-              名字后面跟一个 `●`/`○` 让"哪几台在线"在下拉展开时也能一眼看出来，
-              颜色由旁边那个点负责说清楚（绿=在线、灰=离线/未知）。
-            -->
             <label class="field topbar-device">
               <select
                 v-model="selectedDeviceId"
@@ -1718,16 +1955,9 @@ const sessionLabel = computed(() => {
                 :title="t('monitorUi.deviceLabel')"
               >
                 <option v-for="device in devices.devices" :key="device.id" :value="device.id">
-                  {{ deviceStatusDot(device.status) }} {{ device.name }}（{{ device.ip || t('monitorUi.noAddress') }}）
+                  {{ device.name }}（{{ device.ip || t('monitorUi.noAddress') }}）
                 </option>
               </select>
-              <span
-                class="dot topbar-device__dot"
-                :class="selectedDeviceOnline ? 'dot--online' : 'dot--offline'"
-                data-device-status-dot
-                :title="selectedDeviceOnline ? t('devices.status.online') : t('devices.status.offline')"
-                :aria-hidden="true"
-              ></span>
             </label>
           </Teleport>
 
@@ -1783,7 +2013,8 @@ const sessionLabel = computed(() => {
               <!--
                 这里原来把那一长句（"实时音频/时频流尚未接入…"）挂在 `title` 上，同时页面顶上
                 还有同一条横幅。业主 2026-09-18 第 19 条要求删掉那句话 —— 提示不再解释
-                "这一屏为什么没有实时图"，在线与否由设备下拉旁边的绿点/灰点回答。
+                "这一屏为什么没有实时图"，在线与否由页头的状态徽标回答（下拉旁那颗
+                绿点/灰点已于 2026-09-21 第二批第 15 条删掉）。
               -->
               <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
             </template>
@@ -2229,28 +2460,110 @@ const sessionLabel = computed(() => {
         为什么它在最上面：这一支页面上最该一直盯着的东西就是趋势曲线（当前通道的哪个指标
         在怎么变），而改造前它被统计卡与音频条压在下面 —— 一进页面要滚动才看得到。
         原来占这个位置的是多路视频墙，它按 ⑦ 删掉了。
+
+        2026-09-21 第二批：这张卡现在是**三块合一** —
+          · 左侧 70% 趋势图 + 右侧 30% 当前值四行（Item 20，原先底下四张 MetricCard 已删）；
+          · 图下挂着时间轴回放（Item 19：业主「时间轴回放应该是合并到实时趋势里面的」）；
+          · 卡头是「单通道 / 检测」的视图切换（Item 24）与单通道趋势的指标 chips。
       -->
       <section class="chart-panel card trend-panel">
         <div class="section-header">
           <h3 class="section-title">{{ t('monitorUi.trendSection') }}</h3>
-          <div class="chip-row">
-            <button
-              v-for="metric in TREND_METRICS"
-              :key="metric.key"
-              type="button"
-              class="chip chip--selectable"
-              :class="{ 'chip--accent': trendMetric === metric.key }"
-              @click="trendMetric = metric.key"
-            >
-              {{ t(metric.labelKey) }}
-            </button>
+          <div class="trend-panel__header-actions">
+            <!--
+              Item 24：单通道 / 检测 的 segmented 视图切换（选择只记组件 ref，不持久化）。
+              检测 = 四张指标卡（声压级/平稳度/能量比/主频）× 每通道一色，最多 8 条；
+              数据随原订阅来，不额外开设备连接。
+            -->
+            <div class="view-mode" role="group" :aria-label="t('monitorUi.viewMode')">
+              <button
+                type="button"
+                class="view-mode__button"
+                :class="{ 'view-mode__button--active': viewMode === 'single' }"
+                :aria-pressed="viewMode === 'single'"
+                data-view-mode="single"
+                @click="viewMode = 'single'"
+              >
+                {{ t('monitorUi.modeSingle') }}
+              </button>
+              <button
+                type="button"
+                class="view-mode__button"
+                :class="{ 'view-mode__button--active': viewMode === 'detect' }"
+                :aria-pressed="viewMode === 'detect'"
+                data-view-mode="detect"
+                @click="viewMode = 'detect'"
+              >
+                {{ t('monitorUi.modeDetect') }}
+              </button>
+            </div>
+            <div class="chip-row">
+              <button
+                v-for="metric in TREND_METRICS"
+                :key="metric.key"
+                type="button"
+                class="chip chip--selectable"
+                :class="{ 'chip--accent': trendMetric === metric.key }"
+                @click="trendMetric = metric.key"
+              >
+                {{ t(metric.labelKey) }}
+              </button>
+            </div>
           </div>
         </div>
-        <EChart
-          :option="trendOption"
-          height="240px"
-          :placeholder="monitor.content.features.length === 0 ? t('monitorUi.waitingFeatures') : ''"
-        />
+
+        <!--
+          Item 20：横向排 —— 左 70% 趋势图，右 30% 当前值纵列。
+          窄屏（<900px）回落上下排列（样式里的媒体查询）。
+        -->
+        <div class="trend-panel__body">
+          <div class="trend-panel__chart">
+            <EChart
+              :option="trendOption"
+              height="240px"
+              :placeholder="monitor.content.features.length === 0 ? t('monitorUi.waitingFeatures') : ''"
+              @datazoom="onTrendZoom"
+            />
+          </div>
+          <!--
+            右侧纵列：声压级 / 主频 / 频带能量比 / 平稳度四行（业主点名），
+            值取 monitor.latest（features 最后一帧 = 当前订阅那一路的最新读数），
+            没有数据显示 —（不是 0）。扩展指标（奇偶谐波比/频谱复杂度/指纹变化度，
+            设备没上报就不画）以小号排在四行之后。
+          -->
+          <div class="trend-panel__stats">
+            <p class="trend-panel__stats-title">
+              {{ t('monitorUi.currentValue', { channel: channelLabel(activeChannelIndex) }) }}
+            </p>
+            <dl class="trend-stats">
+              <div v-for="row in trendStatRows" :key="row.key" class="trend-stats__row">
+                <dt class="trend-stats__label">{{ t(row.labelKey) }}</dt>
+                <dd class="trend-stats__value" :data-trend-stat="row.key">
+                  <template v-if="row.value !== undefined">
+                    {{ formatNumber(row.value, row.precision) }}<span v-if="row.unit" class="trend-stats__unit">{{ row.unit }}</span>
+                  </template>
+                  <template v-else>—</template>
+                </dd>
+              </div>
+              <div v-for="metric in extendedMetrics" :key="metric.key" class="trend-stats__row trend-stats__row--extended">
+                <dt class="trend-stats__label">{{ metric.label }}</dt>
+                <dd class="trend-stats__value trend-stats__value--extended" :data-trend-stat="metric.key">
+                  {{ metric.value !== undefined ? formatNumber(metric.value, 3) : '—' }}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+
+        <!--
+          Item 19：时间轴回放**并入趋势卡**（业主 2026-09-21 第二批：「时间轴回放应该是
+          合并到实时趋势里面的」—— 原话后半句未发完，这里按"移进趋势卡、成为它的回放
+          区块"实现；声呐分支没有趋势卡，那一支的时间轴保留原位）。
+          组件自己的标题（monitorUi.playbackSection）就是这块的标题，选中/回放逻辑原样。
+        -->
+        <div class="trend-panel__playback">
+          <MonitorRecordingTimeline :device-id="selectedDeviceId" />
+        </div>
       </section>
 
       <!--
@@ -2262,8 +2575,11 @@ const sessionLabel = computed(() => {
 
         列数由这一块自己的宽度决定（auto-fit + 最小 420px），与 §15.31 的图谱排同一套理由：
         媒体查询问的是窗口，不是这一块。
+
+        Item 24：检测模式下这一块整体隐藏（`v-show`，流与组件都留着，只是不显示），
+        换成下面那四张 2×2 检测卡。
       -->
-      <div class="graph-grid">
+      <div v-show="viewMode === 'single'" class="graph-grid">
         <!--
           ② 每通道声纹特性（业主 2026-09-17 要求的卡片；2026-09-19 第 13 批第 3 条改成表）。
 
@@ -2273,17 +2589,14 @@ const sessionLabel = computed(() => {
           而"左边"取决于窗口宽度下这一排到底并了几列，只有让同一行的卡片互相撑齐才能
           在任何宽度下都成立（写死一个高度只会在某个宽度上刚好）。
 
-          内容：8 行 × （通道序号 / 声压级 / 主频 / 平稳度 / 频带能量比 / 是否告警）。
-          四列读数仍然只来自**本机订阅过的那一路**（设备一次只开一路流，见 4.3），
-          所以第一格里那枚徽标和读数时间必须留着：`stored` 的数字是上一次读到的，
-          没有时间它就与"实时"在视觉上没有区别。
+          内容：8 行 × （通道序号 / 声压级 / 主频 / 平稳度 / 频带能量比 / 是否告警），
+          每页 4 行翻页（第 22 条）。四列读数仍然只来自**本机订阅过的那一路**
+          （设备一次只开一路流，见 4.3），所以第一格里那枚读数状态圆点和读数时间
+          必须留着：`stored` 的数字是上一次读到的，没有时间它就与"实时"在视觉上没有区别。
         -->
         <section class="card chart-panel channel-features">
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.channelFeaturesSection') }}</h3>
-            <span class="muted channel-features__hint">
-              {{ t('monitorUi.channelFeaturesHint', { count: channelFeatureRows.length }) }}
-            </span>
           </div>
 
           <div class="channel-features__body">
@@ -2307,7 +2620,7 @@ const sessionLabel = computed(() => {
                   （未启用的通道不参与实时监测，那一行整块灰掉且点不动）。
                 -->
                 <tr
-                  v-for="row in channelFeatureRows"
+                  v-for="row in pagedChannelFeatureRows"
                   :key="row.index"
                   class="channel-table__row"
                   :class="[
@@ -2329,14 +2642,22 @@ const sessionLabel = computed(() => {
                     >
                       <span class="channel-table__label">{{ row.label }}</span>
                       <span v-if="row.name" class="channel-table__name">{{ row.name }}</span>
-                      <span class="channel-table__state">
-                        <span :class="channelStateClass(row.state)">
-                          {{ t(channelStateLabelKey(row.state)) }}
-                        </span>
-                        <span class="badge" :class="featureStateClass(row.featureState)">
-                          {{ t(channelFeatureStateLabelKey(row.featureState)) }}
-                        </span>
-                      </span>
+                      <!--
+                        读数状态（业主 2026-09-21 第二批第 17 条）：只画一枚 8px 圆点 ——
+                        绿=有读数（实时或最后一次读数）、红=未读取。文字徽标删掉了，
+                        状态文字进 title / aria-label（键复用 channelFeatureStateLabelKey）。
+                      -->
+                      <span
+                        class="channel-table__feature-dot"
+                        :class="
+                          row.featureState === 'unread'
+                            ? 'channel-table__feature-dot--miss'
+                            : 'channel-table__feature-dot--ok'
+                        "
+                        role="img"
+                        :title="t(channelFeatureStateLabelKey(row.featureState))"
+                        :aria-label="t(channelFeatureStateLabelKey(row.featureState))"
+                      ></span>
                       <!--
                         读数的时间**必须**画出来（原来在卡片底部，现在缩到第一格里）：
                         `stored` 那一行的数字是上一次读到的，没有时间它和"实时"没有区别。
@@ -2404,6 +2725,41 @@ const sessionLabel = computed(() => {
           <p class="muted channel-features__sample">
             {{ t('monitorUi.channelAlarmSampleHint', { count: DEVICE_ALARM_SAMPLE }) }}
           </p>
+
+          <!--
+            翻页条（第 22 条）：上一页 / 下一页 + 范围文案，样式参考告警记录页的 .pager。
+            页数超过 1 才画（通道 ≤4 的机器不需要翻页）；按钮在头尾灰掉，不藏 ——
+            藏了会让"有没有下一页"变成一个要试才知道的事。
+          -->
+          <div v-if="channelFeaturePageCount > 1" class="channel-features__pager">
+            <span class="muted">
+              {{
+                t('monitorUi.channelPager', {
+                  start: channelFeatureRange.start,
+                  end: channelFeatureRange.end,
+                  total: channelFeatureRange.total
+                })
+              }}
+            </span>
+            <div class="btn-row">
+              <button
+                type="button"
+                class="btn btn--sm"
+                :disabled="clampedChannelFeaturePage <= 1"
+                @click="channelFeaturePage = clampedChannelFeaturePage - 1"
+              >
+                {{ t('alarmsUi.prevPage') }}
+              </button>
+              <button
+                type="button"
+                class="btn btn--sm"
+                :disabled="clampedChannelFeaturePage >= channelFeaturePageCount"
+                @click="channelFeaturePage = clampedChannelFeaturePage + 1"
+              >
+                {{ t('alarmsUi.nextPage') }}
+              </button>
+            </div>
+          </div>
         </section>
 
         <section class="chart-panel card">
@@ -2426,111 +2782,148 @@ const sessionLabel = computed(() => {
           <SpectrogramViewer :frames="monitor.content.spectrogramFrames" height="240px" />
         </section>
 
-        <section class="chart-panel card">
+        <!--
+          声学波形卡（第 21 条：实时音频**并入**这张卡）。
+
+          卡头右侧是三颗图标按钮（播放/停止 / 录音 / 音量）——原来独立音频条
+          （`.audio-bar`）的三个动作原样搬进来，禁用逻辑不变（播放看 `canPlayAudio`，
+          录音看 `monitor.isRunning`）。音量收成一颗按钮：点击在下方弹出迷你滑杆浮层
+          （`data-waveform-volume-pop`），点浮层与按钮以外的地方收起
+          （与画面墙音量交互同一条做法）。电平表（`AudioLevelMeter`，含录音计时）
+          留在卡内、图的下方 —— 说明文字 `monitorUi.audioPreviewHint` 按第 21 条删掉。
+        -->
+        <section class="chart-panel card waveform-card">
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.waveformSection') }}</h3>
-            <span class="muted chart-hint">{{ t('monitorUi.waveformHint') }}</span>
+            <div class="waveform-card__actions" role="group" :aria-label="t('monitorUi.audioSection')">
+              <span class="muted chart-hint">{{ t('monitorUi.waveformHint') }}</span>
+              <button
+                type="button"
+                class="btn btn--sm btn--icon"
+                :class="{ 'btn--danger': audioEnabled }"
+                :disabled="!canPlayAudio"
+                :aria-pressed="audioEnabled"
+                :aria-label="audioEnabled ? t('monitorUi.audioStop') : t('monitorUi.audioPlay')"
+                :title="audioEnabled ? t('monitorUi.audioStop') : t('monitorUi.audioPlay')"
+                data-waveform-play
+                @click="toggleAudio"
+              >
+                <svg v-if="!audioEnabled" class="waveform-card__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M5 4.2 11.4 8 5 11.8Z" fill="currentColor" />
+                </svg>
+                <svg v-else class="waveform-card__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <rect x="4.6" y="4.6" width="6.8" height="6.8" fill="currentColor" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="btn btn--sm btn--icon"
+                :class="{ 'btn--danger': monitor.recording.active }"
+                :disabled="!monitor.isRunning"
+                :aria-pressed="monitor.recording.active"
+                :aria-label="monitor.recording.active ? t('monitorUi.stopRecording') : t('monitorUi.startRecording')"
+                :title="monitor.recording.active ? t('monitorUi.stopRecording') : t('monitorUi.startRecording')"
+                data-waveform-record
+                @click="toggleRecording"
+              >
+                <svg class="waveform-card__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <circle
+                    cx="8"
+                    cy="8"
+                    r="4.2"
+                    :fill="monitor.recording.active ? 'currentColor' : 'none'"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  />
+                </svg>
+              </button>
+              <span class="waveform-card__volume">
+                <button
+                  type="button"
+                  class="btn btn--sm btn--icon"
+                  :aria-expanded="volumePopoverOpen"
+                  :aria-label="t('monitorUi.audioVolume')"
+                  :title="t('monitorUi.audioVolume')"
+                  data-waveform-volume-trigger
+                  @click="volumePopoverOpen = !volumePopoverOpen"
+                >
+                  <svg class="waveform-card__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
+                    <path
+                      d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.3"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+                <!--
+                  迷你音量浮层：一条水平滑杆（与画面墙那一颗同一套交互，简化掉静音开关 ——
+                  播放/停止按钮已经说清了"有没有声音"）。滑杆的值仍然推给 EnvelopePlayer。
+                -->
+                <div v-if="volumePopoverOpen" class="waveform-card__volume-pop" data-waveform-volume-pop>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    :value="volumePercent"
+                    :aria-label="t('monitorUi.volumeLabel')"
+                    @input="onVolumeInput"
+                  />
+                </div>
+              </span>
+            </div>
           </div>
           <EChart
             :option="waveformOption"
             height="240px"
             :placeholder="monitor.content.audio === null ? t('monitorUi.waitingAudio') : ''"
           />
+          <AudioLevelMeter
+            :peak="monitor.content.audio?.peak"
+            :rms="monitor.content.audio?.rms"
+            :recording="monitor.recording.active"
+            :elapsed-ms="monitor.recording.elapsedMs"
+            :disabled="monitor.content.audio === null"
+            :sample-rate="monitor.content.audio?.sampleRate ?? sampleRate ?? undefined"
+            :frame-ms="monitor.content.audio?.frameMs"
+          />
+          <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
         </section>
       </div>
 
       <!--
-        ③b 时间轴回放：这台设备**本机**录了些什么。
-        本机录像（手动录的 + 从设备下载的检测录像）登记在同一张录像表里，时间轴把它们
-        按类型画成不同颜色的段，点一段就用共享的 RecordingPlayer 播它。
+        Item 24：检测模式 —— 四张指标卡（声压级 / 平稳度 / 能量比 / 主频）的 2×2 网格，
+        每张卡同一坐标系里最多 8 条通道曲线（每通道一色，图例在卡内右侧标通道号）。
+        数据来自 store 的 `channelFeatureHistory`：每通道各自的时间线（当前订阅那一路
+        实时进来，其余通道是上次切到它时的读数），**跨通道不同步** —— 那句口径写在
+        下面的 note 里，图本身用时间轴说真话（没数据的时段不占宽度）。不额外开连接。
       -->
-      <MonitorRecordingTimeline :device-id="selectedDeviceId" />
-
-      <section class="card-grid card-grid--stats">
-        <div class="card">
-          <MetricCard
-            :label="t('metrics.spl')"
-            :value="latest?.spl"
-            unit="dB"
-            :hint="t('monitorUi.currentValue', { channel: channelLabel(activeChannelIndex) })"
-            :precision="2"
-          />
-        </div>
-        <div class="card">
-          <MetricCard :label="t('metrics.mainFrequency')" :value="latest?.mainFrequency" unit="Hz" :precision="2" />
-        </div>
-        <div class="card">
-          <MetricCard :label="t('metrics.smoothness')" :value="latest?.smoothness" :precision="3" />
-        </div>
-        <div class="card">
-          <MetricCard :label="t('metrics.bandEnergyRatio')" :value="latest?.bandEnergyRatio" :precision="3" />
-        </div>
-        <div v-for="metric in extendedMetrics" :key="metric.key" class="card">
-          <MetricCard :label="metric.label" :value="metric.value" :precision="3" />
-        </div>
-      </section>
-
-      <section class="card audio-bar">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('monitorUi.audioSection') }}</h3>
-          <div class="btn-row">
-            <!--
-              ② 的「音频播放按钮」：播放的是**包络预览**（100 ms 一帧的降采样波形），
-              不是原声 —— 下面那行说明与 `lib/audioPreview.ts` 的文件头是同一句话。
-              `audio-bar__play` 是**给探针用的**标记类（不带任何样式）。
-            -->
-            <button
-              type="button"
-              class="btn btn--sm audio-bar__play"
-              :class="{ 'btn--danger': audioEnabled }"
-              :disabled="!canPlayAudio"
-              @click="toggleAudio"
-            >
-              {{ audioEnabled ? t('monitorUi.audioStop') : t('monitorUi.audioPlay') }}
-            </button>
-            <label class="audio-bar__volume">
-              <span class="audio-bar__volume-label">{{ t('monitorUi.audioVolume') }}</span>
-              <input
-                class="audio-bar__slider"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                :value="volumePercent"
-                :aria-label="t('monitorUi.audioVolume')"
-                @input="onVolumeInput"
-              />
-              <span class="muted audio-bar__volume-value">{{ volumePercent }}%</span>
-            </label>
-            <button
-              type="button"
-              class="btn btn--sm"
-              :class="{ 'btn--danger': monitor.recording.active }"
-              :disabled="!monitor.isRunning"
-              @click="toggleRecording"
-            >
-              {{ monitor.recording.active ? t('monitorUi.stopRecording') : t('monitorUi.startRecording') }}
-            </button>
+      <div v-show="viewMode === 'detect'" class="detect-grid">
+        <section v-for="metric in DETECT_METRICS" :key="metric.key" class="card chart-panel detect-card">
+          <div class="section-header">
+            <h3 class="section-title">{{ t(metric.labelKey) }}</h3>
           </div>
-        </div>
-        <AudioLevelMeter
-          :peak="monitor.content.audio?.peak"
-          :rms="monitor.content.audio?.rms"
-          :recording="monitor.recording.active"
-          :elapsed-ms="monitor.recording.elapsedMs"
-          :disabled="monitor.content.audio === null"
-          :sample-rate="monitor.content.audio?.sampleRate ?? sampleRate ?? undefined"
-          :frame-ms="monitor.content.audio?.frameMs"
-        />
-        <p class="muted audio-bar__hint">{{ t('monitorUi.audioPreviewHint') }}</p>
-        <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
-      </section>
+          <EChart
+            :option="detectOptions[metric.key]"
+            height="220px"
+            :placeholder="detectHasData ? '' : t('monitorUi.waitingFeatures')"
+          />
+        </section>
+        <p class="muted detect-grid__note">{{ t('monitorUi.detectDataNote') }}</p>
+      </div>
 
       <!--
         「当前帧」那张卡片（`monitorUi.currentFrameSection`）同样按 ③ 删掉了。
-        它显示的四项里，采样率与当前通道**已经在页头的通道页签与音频条上**，
+        它显示的四项里，采样率与当前通道**已经在页头的通道页签与波形卡的电平表上**
+        （第 21 条起采样率/帧长随 `AudioLevelMeter` 住在声学波形卡里），
         数据来源与谱图缓存是排查用的内部状态 —— 需要时由协议实验室回答，
         不该占实时监测页的一整张卡片。
+
+        Item 20：原先在这张卡下面的那四张统计卡（.card-grid--stats）也删了 ——
+        趋势卡右侧的"当前值"四行取代它们，同一个事实不画两遍。
       -->
 
       <!--
@@ -2642,8 +3035,9 @@ const sessionLabel = computed(() => {
              与声纹设备那一支用的是同一条时间轴。
 
         **那一长句说明按业主 2026-09-18 第 19 条删掉了**（原来在页面顶上，也在机型号徽标的
-        悬停提示里）：设备在不在线由设备下拉旁边的绿点/灰点回答，不再用一句话解释这一屏
-        为什么没有实时图。口径记在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
+        悬停提示里）：设备在不在线由页头的状态徽标回答，不再用一句话解释这一屏
+        为什么没有实时图（下拉旁那颗绿点/灰点已于 2026-09-21 第二批第 15 条删掉）。
+        口径记在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
       -->
       <template v-else-if="isSonar">
         <DeviceInstallationCard :installation="selectedDevice?.installation" :device-id="selectedDevice?.id" />
@@ -2653,15 +3047,6 @@ const sessionLabel = computed(() => {
         <MonitorRecordingTimeline :device-id="selectedDeviceId" />
       </template>
     </template>
-
-    <!--
-      第三方相机（手填 RTSP 地址）—— 业主 2026-09-19 第 11 批第 2 条：入口从画面墙挪到这一页。
-
-      **放在 `v-else` 之外**（所以一台设备都没有时它也在）：手填的源与设备表毫无关系 ——
-      一台设备都没注册的机器照样可以接一路第三方相机。放进 `v-else` 会让那一屏只剩「去添加设备」，
-      而"这台机器还没有任何设备"与"能不能看一个第三方地址"是两件事。
-    -->
-    <ManualRtspSources />
   </div>
 </template>
 
@@ -2694,6 +3079,15 @@ const sessionLabel = computed(() => {
    * 的那一截是空卡片）。这里只说"各自按自己的内容高"，不改任何控件。
    */
   align-items: start;
+}
+
+/*
+ * 声纹分支的卡片间隙（业主 2026-09-21 第二批第 16 条）：留白收到 10%。
+ * 只挂在声纹分支上（`:class` 由 `isVoiceprint` 决定）——相机 / 声呐两支的板子间隙
+ * 维持 --space-5 不动。
+ */
+.camera-board--voiceprint {
+  gap: calc(var(--space-5) * 0.1);
 }
 
 /* 无论并排成几列都必须占满整幅宽的三块：设备头 / 单路直播画面 / 相机五路图谱。 */
@@ -2739,24 +3133,11 @@ const sessionLabel = computed(() => {
   width: 50%;
   min-width: 0;
   margin-left: auto;
-  /* 下拉 + 状态点同一行（点贴在下拉的右边）。 */
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
 }
 
 .topbar-device .select {
   width: 100%;
   min-width: 0;
-}
-
-/*
- * 当前设备的在线状态点（绿=在线、灰=离线/未知）。它是**文字旁边**的一个真实元素，
- * 因为原生 `<option>` 里没有办法给一行上色（见模板里的注释）。
- * `.dot` / `.dot--online` / `.dot--offline` 是全局已有的那一对。
- */
-.topbar-device__dot {
-  flex: none;
 }
 
 .monitor-head__status {
@@ -2891,13 +3272,21 @@ const sessionLabel = computed(() => {
   gap: var(--space-3);
 }
 
-.channel-features__hint {
-  font-size: 11.5px;
-}
-
 .channel-features__sample {
   margin: 0;
   font-size: 11px;
+}
+
+/*
+ * 翻页条（第 22 条）：与告警记录页的 .pager 同一套（flex 两端对齐 + 小按钮），
+ * 钉在卡片底部 —— 表体是 `flex: 1; min-height: 0`，卡片被同行撑高时它仍然落底。
+ */
+.channel-features__pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 12px;
 }
 
 /*
@@ -3005,11 +3394,24 @@ const sessionLabel = computed(() => {
   text-overflow: ellipsis;
 }
 
-.channel-table__state {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
+/* 未启用：通道名变灰（业主 2026-09-21 第二批第 17 条：不再写"已启用/未启用"文字，用颜色表达）。 */
+.channel-table__row.channel-state--disabled .channel-table__label {
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 读数状态点（第 17 条）：绿=有读数（实时或最后一次读数）、红=未读取。
+ * 8px 圆点代替原来的文字徽标；状态文字在 title / aria-label 里。
+ */
+.channel-table__feature-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.channel-table__feature-dot--miss {
+  background: var(--color-danger);
 }
 
 .channel-table__time {
@@ -3100,32 +3502,56 @@ const sessionLabel = computed(() => {
   font-size: 12px;
 }
 
-/* --- audio panel -------------------------------------------------------- */
-
-.audio-bar {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.audio-bar__hint {
-  font-size: 11.5px;
-}
-
-.audio-bar__volume {
+/*
+ * 声学波形卡的头部按钮组（业主 2026-09-21 第二批第 21 条：实时音频并入了这张卡）。
+ * 三颗 28px 图标按钮 + 说明文字；文字窄了截断，不许把按钮顶出卡片。
+ */
+.waveform-card__actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-.audio-bar__slider {
+.chart-hint {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.waveform-card__icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+/* 音量浮层的定位锚点：包住触发按钮，浮层挂在按钮正下方、右缘对齐。 */
+.waveform-card__volume {
+  position: relative;
+  display: inline-flex;
+}
+
+/*
+ * 迷你音量浮层（画面墙那一颗的简化版）：白底细边 + 轻阴影，一条 140px 水平滑杆。
+ * 浮层**悬在卡头下方**（absolute），不参与文档流，不会把图往下挤。
+ */
+.waveform-card__volume-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+}
+
+.waveform-card__volume-pop input[type='range'] {
   width: 140px;
-}
-
-.audio-bar__volume-value {
-  font-variant-numeric: tabular-nums;
-  min-width: 36px;
+  margin: 0;
 }
 
 .chart-panel {
@@ -3153,17 +3579,189 @@ const sessionLabel = computed(() => {
  */
 .graph-grid {
   display: grid;
-  gap: var(--space-4);
+  /* 声纹分支卡片间隙收到 10%（业主 2026-09-21 第二批第 16 条）。 */
+  gap: calc(var(--space-4) * 0.1);
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 
-/* ③b 置顶的趋势卡片：整幅宽，图标区比另外四张高一点（它是这一页的主图）。 */
+/*
+ * ③b 置顶的趋势卡片：整幅宽（业主 2026-09-21 第二批第 20 条改了它的内部排布）——
+ * 卡内是横向的「图 70% + 当前值纵列 30%」，窄屏（<900px）回落上下排列。
+ */
 .trend-panel {
   grid-column: 1 / -1;
 }
 
-.chart-hint {
+/* 卡头右侧那一组：「单通道 / 检测」切换 + 单通道趋势的指标 chips。 */
+.trend-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/*
+ * Item 24 的 segmented 视图切换（单通道 / 检测）。
+ * 一组**互斥**的按钮：选中态用底色块表达（与 channel-tab 的选中语言同一套），
+ * `aria-pressed` 把状态交给读屏器。
+ */
+.view-mode {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.view-mode__button {
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+}
+
+.view-mode__button:hover {
+  color: var(--color-text);
+}
+
+.view-mode__button--active {
+  background: var(--color-bg);
+  color: var(--color-accent-hover);
+  font-weight: 600;
+}
+
+/* Item 20：横向排 —— 左趋势图 70%，右当前值纵列 30%（剩下的宽度归它，含间隙）。 */
+.trend-panel__body {
+  display: flex;
+  gap: calc(var(--space-4) * 0.4);
+  align-items: stretch;
+}
+
+.trend-panel__chart {
+  flex: 0 0 70%;
+  min-width: 0;
+}
+
+/*
+ * 右侧纵列：声压级 / 主频 / 频带能量比 / 平稳度四行（大号数字），
+ * 扩展指标以小号排在后面。一条左边线把它与图分开（不用卡片再包一层 ——
+ * 它已经是这张卡的一部分）。
+ */
+.trend-panel__stats {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-left: calc(var(--space-4) * 0.4);
+  border-left: 1px solid var(--color-border);
+}
+
+.trend-panel__stats-title {
+  margin: 0;
   font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.trend-stats {
+  margin: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  gap: var(--space-1);
+}
+
+.trend-stats__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.trend-stats__label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.trend-stats__value {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 扩展指标：存在才画（设备没上报就没有这一行），字号收小与四个主行拉开层级。 */
+.trend-stats__row--extended {
+  border-top: 1px dashed var(--color-border);
+  padding-top: var(--space-1);
+}
+
+.trend-stats__value--extended {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.trend-stats__unit {
+  margin-left: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+
+/* Item 19：时间轴回放住在趋势卡里（回放区块的标题由组件自己的 monitorUi.playbackSection 回答）。 */
+.trend-panel__playback {
+  margin-top: var(--space-2);
+}
+
+/*
+ * 窄屏（业主点名的 <900px）：图与当前值纵列回落**上下**排列，
+ * 纵列的左边线换成上边线。
+ */
+@media (max-width: 900px) {
+  .trend-panel__body {
+    flex-direction: column;
+  }
+
+  .trend-panel__chart {
+    flex: none;
+    width: 100%;
+  }
+
+  .trend-panel__stats {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-2);
+  }
+}
+
+/*
+ * Item 24：检测模式的四张指标卡（声压级 / 平稳度 / 能量比 / 主频）——
+ * 每行**最多 2 张**（业主点名的 2×2），窄屏回落一列。
+ * 与 `.graph-grid` 并列的另一块（auto-fit 会在超宽屏上并出 4 列，那不符合"最多 2 张"）。
+ */
+.detect-grid {
+  display: grid;
+  gap: calc(var(--space-4) * 0.1);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detect-grid__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11.5px;
+}
+
+@media (max-width: 900px) {
+  .detect-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .chip--selectable {

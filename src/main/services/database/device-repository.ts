@@ -167,6 +167,7 @@ function serialiseIngestPlan(plan: unknown): string {
 function defaultNameFor(kind: DeviceKind, ip: string): string {
   if (kind === 'acousticCamera') return `Acoustic Camera ${ip}`
   if (kind === 'auscultationBox') return `Auscultation Box ${ip}`
+  if (kind === 'pushDevice') return 'Push Device'
   return `Acoustic Box ${ip}`
 }
 
@@ -300,6 +301,60 @@ export class DeviceRepository {
       webVersion: identity.webVersion,
       channelCount
     })
+  }
+
+  /**
+   * 登记一台**纯推送第三方设备**（业主 20260921 第 12 条：`kind = 'pushDevice'`）。
+   *
+   * 与另外三族的分歧点（为什么不复用 `writeDevice`）：
+   *   - **没有地址**：`ip_address` / `http_port` 落 `NULL`（不是空串 —— 空串会看起来像一个
+   *     没填完的地址），也不建任何客户端；
+   *   - **没有设备身份**：设备不会来"报到"，所以没有可去重的 `device_uid` —— 每次添加
+   *     都 mint 一条 `push:` 前缀的新 uid（前缀写明这条身份是我们编的，与相机的 `camera-:`
+   *     同一惯例）；
+   *   - **没有通道表**：推送设备推哪些通道由遥测里的 `channel_id` 决定（0..15 动态），
+   *     本地不种子任何通道行；
+   *   - **状态从 UNKNOWN 起**：添加的那一刻没有"它活着"的证据（另外三族刚探活过，所以有
+   *     资格直接写 ONLINE）—— 第一次收到遥测才上线（`DeviceService.markOnlineFromTelemetry`），
+   *     超时无遥测由健康检查判离线。
+   *
+   * 名称是**必填**的（调用方在 `DeviceService.addPushDevice()` 里校验）：推送设备没有
+   * 设备侧名字可读，界面上显示什么完全由操作员这一次输入决定。
+   */
+  insertPushDevice(input: AddDeviceInput): { device: Device; created: true } {
+    const timestamp = now()
+    const id = newDeviceId()
+    const installation = input.installation ?? {}
+    const run = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO devices (
+             id, device_uid, kind, name, ip_address, http_port, mac_address,
+             connection_type, status, created_at, updated_at,
+             gis_latitude, gis_longitude, azimuth_deg, sound_level_db, ingest_plan
+           ) VALUES (?, ?, 'pushDevice', ?, NULL, NULL, NULL,
+                     'LAN', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          id,
+          `push:${newDeviceId()}`,
+          input.name?.trim() || defaultNameFor('pushDevice', ''),
+          // 只有 created_at / updated_at 两个时间戳 —— 推送设备没有"刚联系过"的证据，
+          // last_seen 留 NULL（第一次遥测才写它）。
+          timestamp,
+          timestamp,
+          installation.gisLatitude ?? null,
+          installation.gisLongitude ?? null,
+          installation.azimuthDeg ?? null,
+          installation.soundLevelDb ?? null,
+          serialiseIngestPlan(input.ingest)
+        )
+    })
+    run()
+
+    const device = this.findById(id)
+    if (!device) throw new Error('Push device insert failed')
+    return { device, created: true }
   }
 
   /**

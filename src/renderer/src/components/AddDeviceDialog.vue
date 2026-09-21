@@ -50,6 +50,12 @@ const ingest = useIngestStore()
 const settings = useSettingsStore()
 
 interface FormState {
+  /**
+   * 设备名称 —— **只有 HTTP/MQTT 推送模式必填**（业主 20260921 第 12 条）：IP 地址模式的
+   * 名字来自设备自己（探活的 `info.name`），而推送设备没有"问设备叫什么"这一步，
+   * 界面上显示什么完全由这一次输入决定。
+   */
+  name: string
   ip: string
   httpPort: number
   username: string
@@ -82,6 +88,7 @@ interface FormState {
  */
 function emptyForm(): FormState {
   return {
+    name: '',
     ip: '',
     httpPort: 80,
     username: 'admin',
@@ -119,16 +126,37 @@ const installationSummary = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
-// 协议接入方式（第 13 批第 3、4 条）
+// 接入方式（业主 20260921 第 12 条：添加设备**先选接入方式**，三选一）
 // ---------------------------------------------------------------------------
 
-const PROTOCOL_OPTIONS: readonly IngestProtocol[] = ['none', 'http', 'mqtt']
+/**
+ * 三选一：**IP 地址** = 我们主动去连的设备（原有流程：地址 + 凭据 + 探活自动识别机型）；
+ * **HTTP / MQTT** = 纯推送第三方设备（设备把数据推到本机，没有地址与凭据，名称必填，
+ * 登记为 `pushDevice`）。
+ *
+ * 原来的"协议接入方式"单选（不接入 / HTTP / MQTT）被这一组**取代**：'不接入'这个选项
+ * 消失 —— IP 地址就是"不接入推流"，不再作为单独一档出现。
+ */
+const ACCESS_METHODS = ['ip', 'http', 'mqtt'] as const
 
-const PROTOCOL_LABEL_KEYS: Record<IngestProtocol, string> = {
-  none: 'addDeviceUi.protocolNone',
-  http: 'addDeviceUi.protocolHttp',
-  mqtt: 'addDeviceUi.protocolMqtt'
+type AccessMethod = (typeof ACCESS_METHODS)[number]
+
+const ACCESS_METHOD_LABEL_KEYS: Record<AccessMethod, string> = {
+  ip: 'addDeviceUi.accessMethodIp',
+  http: 'addDeviceUi.accessMethodHttp',
+  mqtt: 'addDeviceUi.accessMethodMqtt'
 }
+
+/** 接入方式（默认 IP 地址）。 */
+const accessMethod = ref<AccessMethod>('ip')
+
+/** 所选接入方式对应的推流协议（IP 地址模式即"不接入推流"）。 */
+const ingestProtocol = computed<IngestProtocol>(() =>
+  accessMethod.value === 'ip' ? 'none' : accessMethod.value
+)
+
+/** 现在是 HTTP/MQTT 推送模式吗（界面按它切换字段集与校验）。 */
+const pushMode = computed(() => accessMethod.value !== 'ip')
 
 /** 四个可显示指标的**名字**复用目录里那四个既有词条（趋势页与实时监测页用的是同一批）。 */
 const METRIC_LABEL_KEYS: Record<IngestDisplayMetric, string> = {
@@ -138,8 +166,6 @@ const METRIC_LABEL_KEYS: Record<IngestDisplayMetric, string> = {
   bandEnergyRatio: 'metrics.bandEnergyRatio'
 }
 
-/** 接入方式（默认不接入）。 */
-const ingestProtocol = ref<IngestProtocol>('none')
 /**
  * 数据流接口那四行。
  *
@@ -326,7 +352,7 @@ const open = computed({
   set: (value: boolean) => emit('update:modelValue', value)
 })
 
-/** Simple IPv4 / hostname validation; the main process validates again. */
+/** Simple IPv4 / hostname validation; the main process validates again.（IP 地址模式专用） */
 function validate(): string {
   const ip = form.ip.trim()
   if (!ip) return t('addDeviceUi.errIpRequired')
@@ -361,12 +387,28 @@ function resetForm(): void {
   addedDevice.value = null
   // 收起状态也回到出厂默认（业主第 13 批第 2 条：默认收起）。
   installationOpen.value = false
-  // 接入方式与接口清单同样回到出厂默认（不接入 + 四个规范键 + video_url）。
-  ingestProtocol.value = 'none'
+  // 接入方式回到出厂默认：IP 地址（不接入推流）。
+  accessMethod.value = 'ip'
+  // 接入方式与接口清单同样回到出厂默认（四个规范键 + video_url）。
   metricKeys.value = defaultIngestMetricKeys()
   videoKey.value = DEFAULT_INGEST_VIDEO_KEY
   resetProbe()
 }
+
+/**
+ * 切到 HTTP/MQTT：GIS 信息**默认展开**（业主 20260921 第 12 条 —— 对一台推送设备来说
+ * "装在哪"是主信息，不该藏进默认收起的折叠块里），并作废可能存在的探活结果
+ * （探活说的是 IP 那一档的事，不能把两份模式的预览混在一起）。
+ */
+watch(
+  () => accessMethod.value,
+  (method) => {
+    if (method !== 'ip') {
+      installationOpen.value = true
+      resetProbe()
+    }
+  }
+)
 
 /**
  * Any edit after a probe invalidates the preview: otherwise the panel could
@@ -423,10 +465,22 @@ async function testConnection(): Promise<void> {
 }
 
 async function submit(): Promise<void> {
-  const validation = validate()
-  if (validation) {
-    formError.value = validation
-    return
+  /*
+   * 校验按接入方式分两套（业主 20260921 第 12 条）：
+   *   - IP 地址模式：地址 + 端口 + 凭据（原流程）；
+   *   - HTTP/MQTT 模式：**名称必填**（推送设备没有设备侧名字可读），地址与凭据不存在。
+   */
+  if (pushMode.value) {
+    if (!form.name.trim()) {
+      formError.value = t('addDeviceUi.deviceNameRequired')
+      return
+    }
+  } else {
+    const validation = validate()
+    if (validation) {
+      formError.value = validation
+      return
+    }
   }
   const installationProblem = installationValidation()
   if (installationProblem) {
@@ -445,16 +499,20 @@ async function submit(): Promise<void> {
   adding.value = true
   const parsed = parseInstallation(form.installation)
   const device = await devices.add({
-    ip: form.ip.trim(),
-    httpPort: Number(form.httpPort),
-    username: form.username.trim(),
-    password: form.password,
+    // HTTP/MQTT 模式没有这四个输入框 —— 推送设备地址落 NULL、凭据不存（主进程口径）。
+    ip: pushMode.value ? '' : form.ip.trim(),
+    httpPort: pushMode.value ? 80 : Number(form.httpPort),
+    username: pushMode.value ? '' : form.username.trim(),
+    password: pushMode.value ? '' : form.password,
+    // 名称只有推送模式才发（IP 模式的名字来自设备自己）。
+    ...(pushMode.value ? { name: form.name.trim() } : {}),
     // 只有**真的填了东西**才带上这一组：四项全空时不写 installation，
     // 免得库里出现一个"录过安装信息但四项都空"的假象。
     ...(hasInstallation(parsed.installation) ? { installation: parsed.installation } : {}),
     /*
      * 接入方案只在不接入之外才发：`none` 是"这台设备不走推流接入"，
      * 而库里那一列的出厂值本来就是它 —— 发一份 `none` 与不发是同一件事。
+     * 发了 http/mqtt ⇒ 主进程按纯推送设备（pushDevice）登记，不做 IP 探测。
      */
     ...(ingestProtocol.value === 'none'
       ? {}
@@ -552,18 +610,47 @@ watch(
       -->
       <template v-if="addedDevice">
         <p class="alert alert--success" role="status" data-add-device-done>
-          {{ t('devicesUi.noticeAdded') }}
+          {{
+            addedDevice.kind === 'pushDevice'
+              ? t('addDeviceUi.pushDeviceAdded')
+              : t('devicesUi.noticeAdded')
+          }}
         </p>
         <DevicePushEndpoint :device-id="addedDevice.id" />
       </template>
 
       <template v-else>
       <!--
+        **接入方式**（业主 20260921 第 12 条：添加设备先选接入方式，三选一）。
+        IP 地址 = 我们主动去连的设备（地址 + 凭据 + 探活自动识别机型）；HTTP / MQTT =
+        纯推送第三方设备（名称必填 + GIS + 推流键，登记为 pushDevice，没有地址与凭据）。
+        原来的"协议接入方式"单选（不接入 / HTTP / MQTT）被这一组取代：'不接入'消失，
+        IP 地址就是"不接入推流"。
+      -->
+      <section class="protocol" data-add-access-method>
+        <span class="field-label">{{ t('addDeviceUi.accessMethod') }}</span>
+        <div class="protocol__choices" role="radiogroup" :aria-label="t('addDeviceUi.accessMethod')">
+          <label v-for="option in ACCESS_METHODS" :key="option" class="protocol__choice">
+            <input
+              v-model="accessMethod"
+              type="radio"
+              name="access-method"
+              :value="option"
+              :data-access-method="option"
+            />
+            <span>{{ t(ACCESS_METHOD_LABEL_KEYS[option]) }}</span>
+          </label>
+        </div>
+      </section>
+
+      <!--
         **不让人选机型**（业主 2026-09-17 第 2 条）：协议由主进程按地址自动匹配。
         为什么这比"选一张机型卡"更好：选错家系的表现是"设备没响应"，而那是**网络故障的样子** ——
         操作员会去查网线，而不是回头看自己选错了哪张卡。自动识别把这件事从"用户的判断题"
         变成"软件的判断题"，并且识别结果**当面说出来**（下面那行提示）。
+        这一段（连同四个地址/凭据输入）只属于 IP 地址模式；HTTP/MQTT 模式没有"问设备"这一步。
       -->
+      <template v-if="accessMethod === 'ip'">
       <p class="add__lead">{{ t('addDeviceUi.autoDetectLead') }}</p>
 
       <div class="form-grid">
@@ -596,6 +683,29 @@ watch(
           <input v-model="form.password" class="input" type="password" autocomplete="off" />
         </label>
       </div>
+      </template>
+
+      <!--
+        HTTP/MQTT 模式（业主 20260921 第 12 条）：**名称必填** —— 推送设备没有设备侧名字可读，
+        也没有地址/凭据输入框（那两栏对一台"我们够不到、它推上来"的设备没有意义）。
+      -->
+      <template v-else>
+        <p class="add__lead">{{ t('addDeviceUi.ingestModeHint') }}</p>
+
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">{{ t('devices.name') }}</span>
+            <input
+              v-model="form.name"
+              data-autofocus
+              class="input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+        </div>
+      </template>
 
       <!--
         **地址信息**（业主 2026-09-18 第 7 / 10 条）：原「安装信息」，去掉基准声压级。
@@ -603,9 +713,9 @@ watch(
         完全录不进地址信息。经纬度与方位角都可空；声源定位设备（Air Sonar / SN-16）才需要填。
 
         **默认收起**（业主 2026-09-19 第 13 批第 2 条：「添加设备里面， 地址信息这个按钮
-        默认是收起来的」）：它是一件**可选**的事（只有声源定位设备才需要点位），
-        摊开会把"添加设备"这条主路径（地址 + 凭据）挤下去。收起时那一行仍然说得清
-        "这是什么、现在填没填"，展开靠那颗按钮（`aria-expanded` / `aria-controls`）。
+        默认是收起来的」）—— **IP 地址模式**如此：它是一件可选的事，摊开会把主路径挤下去。
+        HTTP/MQTT 模式相反（业主 20260921 第 12 条）：GIS 是这台设备的主信息，**默认展开**。
+        收起时那一行仍然说得清"这是什么、现在填没填"，展开靠那颗按钮（`aria-expanded`）。
       -->
       <section class="collapse" data-add-installation>
         <button
@@ -617,7 +727,14 @@ watch(
           @click="installationOpen = !installationOpen"
         >
           <span class="collapse__caret" aria-hidden="true">{{ installationOpen ? '▾' : '▸' }}</span>
-          <span class="field-label">{{ t('installUi.section') }}</span>
+          <!--
+            折叠头文案按接入方式分两种（业主 20260921 第 12 条）：IP 地址模式它叫
+            「更多（GIS）信息」（addDeviceUi.moreGis）—— 是主路径之外的可选信息；
+            HTTP/MQTT 模式 GIS 是主信息，沿用「地址信息」（installUi.section）。
+          -->
+          <span class="field-label">
+            {{ accessMethod === 'ip' ? t('addDeviceUi.moreGis') : t('installUi.section') }}
+          </span>
           <span class="muted collapse__summary">
             {{ installationSummary }}
           </span>
@@ -667,74 +784,59 @@ watch(
       </section>
 
       <!--
-        **协议接入方式**（业主 2026-09-19 第 13 批第 3 条：「在地址信息按钮的下方，增加协议接入方式」）。
-        三档：不接入（默认）/ HTTP / MQTT。选了 HTTP 或 MQTT 之后：
+        **推流接入**（业主 20260921 第 12 条：这一块只在 HTTP/MQTT 模式出现；IP 地址模式
+        "不含任何推流/协议块"）。协议档位本身由上面的「接入方式」单选决定（HTTP 或 MQTT），
+        这里配的是这台设备会推哪些遥测值：
 
           · **数据流接口**：四个可显示的指标（声压级 / 主频 / 平稳度 / 频带能量比）各由**哪个键**
             送来 —— 默认就是别名表里那几个规范名（现场设备用别的写法时才需要改）；
           · **视频流接口**：哪一个键装的是视频地址（默认 `video_url`，留空 = 这台设备不推视频）；
-          · 本机的监听状态**如实显示**（监听中 / 未监听 + 原因），但**这里改不了端口** ——
-            端口仍是系统设置里的那一项（下一轮把端口也搬过来，见 §15.77 的落地顺序）。
+          · 本机的监听状态**如实显示**（监听中 / 未监听 + 原因），端口在下面的「本机接入」里改。
 
-        **秘钥与遥测地址在添加成功之后显示**（下面那一块 `DevicePushEndpoint`）：秘钥是**这台设备的**、
+        **秘钥与遥测地址在添加成功之后显示**（上面那一块 `DevicePushEndpoint`）：秘钥是**这台设备的**、
         由主进程生成并读回核对，所以在设备进库之前没有它可以显示的东西 —— 提前"预生成"一个
         只会给出一串还没生效的字符。
       -->
-      <section class="protocol" data-add-protocol>
-        <span class="field-label">{{ t('addDeviceUi.protocolSection') }}</span>
+      <section v-if="pushMode" class="protocol" data-add-protocol>
+        <span class="field-label">{{ t(ACCESS_METHOD_LABEL_KEYS[accessMethod]) }}</span>
         <p class="field-hint">{{ t('addDeviceUi.protocolHint') }}</p>
 
-        <div class="protocol__choices" role="radiogroup" :aria-label="t('addDeviceUi.protocolSection')">
-          <label v-for="option in PROTOCOL_OPTIONS" :key="option" class="protocol__choice">
+        <p class="field-hint" data-iot-listen-status>
+          {{ listenStatusText }}
+        </p>
+
+        <div class="protocol__keys">
+          <span class="field-label">{{ t('addDeviceUi.metricKeysTitle') }}</span>
+          <p class="field-hint">{{ t('addDeviceUi.metricKeysHint') }}</p>
+          <label v-for="row in metricKeys" :key="row.metric" class="field protocol__row">
+            <span class="field-label">{{ t(METRIC_LABEL_KEYS[row.metric]) }}</span>
             <input
-              v-model="ingestProtocol"
-              type="radio"
-              name="ingest-protocol"
-              :value="option"
-              :data-iot-protocol="option"
-            />
-            <span>{{ t(PROTOCOL_LABEL_KEYS[option]) }}</span>
-          </label>
-        </div>
-
-        <template v-if="ingestProtocol !== 'none'">
-          <p class="field-hint" data-iot-listen-status>
-            {{ listenStatusText }}
-          </p>
-
-          <div class="protocol__keys">
-            <span class="field-label">{{ t('addDeviceUi.metricKeysTitle') }}</span>
-            <p class="field-hint">{{ t('addDeviceUi.metricKeysHint') }}</p>
-            <label v-for="row in metricKeys" :key="row.metric" class="field protocol__row">
-              <span class="field-label">{{ t(METRIC_LABEL_KEYS[row.metric]) }}</span>
-              <input
-                v-model="row.key"
-                class="input mono"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                :data-iot-metric-key="row.metric"
-              />
-            </label>
-          </div>
-
-          <label class="field protocol__row">
-            <span class="field-label">{{ t('addDeviceUi.videoKeyTitle') }}</span>
-            <input
-              v-model="videoKey"
+              v-model="row.key"
               class="input mono"
               type="text"
               spellcheck="false"
               autocomplete="off"
-              data-iot-video-key
+              :data-iot-metric-key="row.metric"
             />
-            <span class="field-hint">{{ t('addDeviceUi.videoKeyHint') }}</span>
           </label>
+        </div>
 
-          <p v-if="planProblems.length > 0" class="alert alert--warning" role="alert" data-iot-plan-problem>
-            {{ t('addDeviceUi.protocolPlanInvalid') }}
-          </p>
-        </template>
+        <label class="field protocol__row">
+          <span class="field-label">{{ t('addDeviceUi.videoKeyTitle') }}</span>
+          <input
+            v-model="videoKey"
+            class="input mono"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            data-iot-video-key
+          />
+          <span class="field-hint">{{ t('addDeviceUi.videoKeyHint') }}</span>
+        </label>
+
+        <p v-if="planProblems.length > 0" class="alert alert--warning" role="alert" data-iot-plan-problem>
+          {{ t('addDeviceUi.protocolPlanInvalid') }}
+        </p>
 
         <!--
           本机接入（业主 2026-09-19 第 13 批第 1 条：「系统设置里面的数据接入，应该是在设备管理的
@@ -999,7 +1101,14 @@ watch(
         {{ t('common.close') }}
       </button>
       <template v-else>
-        <button type="button" class="btn" :disabled="probing || adding" @click="testConnection">
+        <!-- 「测试连接」只对 IP 地址模式有意义（探活要地址与凭据）；推送设备没有可探的地址。 -->
+        <button
+          v-if="accessMethod === 'ip'"
+          type="button"
+          class="btn"
+          :disabled="probing || adding"
+          @click="testConnection"
+        >
           {{ probing ? t('addDeviceUi.testing') : t('devices.testConnection') }}
         </button>
         <button type="button" class="btn btn--primary" :disabled="adding || probing" @click="submit">

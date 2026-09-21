@@ -510,11 +510,13 @@ export async function initServices(): Promise<AppServices> {
    * 所有者 —— 自己 new 一个趋势写入器或告警仓储，就会出现"推上来的历史与流出来的历史在
    * 两个文件里"这种事，而现场看到的只是"趋势图少了一段"。
    *
-   * 三个依赖都写成薄薄的适配器，服务本身不认识 SQLite / Parquet：
+   * 依赖都写成薄薄的适配器，服务本身不认识 SQLite / Parquet：
    *   - `appendFeature` 与实时流走**同一个** `trends.append(deviceUid, feature)`；
    *   - `insertAlarm` 就是 `alarmRepo.insert`（它自带去重，设备重发不会产生第二条）；
    *   - `channelCountFor` 用来拒绝越界通道号（写到一个不存在的通道上会让趋势图凭空
-   *     多出一条没人认识的曲线）。
+   *     多出一条没人认识的曲线）；
+   *   - `onTelemetry` 把"收到合法遥测"递给设备服务（业主 20260921 第 12 条：推送设备
+   *     靠遥测上线/续命 lastSeen，健康检查对它们不做 HTTP 轮询）。
    */
   const iotIngest = new IotIngestService({
     getConfig: () => settings.get().iotIngest,
@@ -525,7 +527,8 @@ export async function initServices(): Promise<AppServices> {
     intake: new TelemetryIntake({
       appendFeature: (deviceUid, feature) => trends.append(deviceUid, feature),
       insertAlarm: (input) => alarmRepo.insert(input),
-      channelCountFor: (deviceId) => channelRepo.listByDevice(deviceId).length
+      channelCountFor: (deviceId) => channelRepo.listByDevice(deviceId).length,
+      onTelemetry: (deviceId) => deviceService.markOnlineFromTelemetry(deviceId)
     }),
     log: {
       info: (message, meta) => appLog().info(message, meta),

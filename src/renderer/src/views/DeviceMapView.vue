@@ -634,6 +634,17 @@ const hoveredDevice = computed<Device | undefined>(() =>
 )
 
 /**
+ * 悬停浮层里"设备类型"那一格：三种主动连接机型走 `domain.deviceKind.*`；
+ * `pushDevice`（业主 20260921 第 12 条）的标签在 `devicesUi.kindPushDevice`
+ * （与设备管理页同一条分支，见 `DevicesView.kindLabel`）。
+ */
+function hoverKindLabel(device: Device): string {
+  return device.kind === 'pushDevice'
+    ? t('devicesUi.kindPushDevice')
+    : t(`domain.deviceKind.${device.kind}`)
+}
+
+/**
  * 悬停那一台**当前的视频流状态**（只有相机有）。
  *
  * 为什么悬停要去问一次主进程：视频流的状态是主进程的事实（会话在不在、是不是
@@ -1052,7 +1063,7 @@ onUnmounted(() => {
             <dl class="map-hover__kv">
               <div class="map-hover__item">
                 <dt>{{ t('addDeviceUi.kindLabel') }}</dt>
-                <dd>{{ t(`domain.deviceKind.${hoveredDevice.kind}`) }}</dd>
+                <dd>{{ hoveredDevice ? hoverKindLabel(hoveredDevice) : '' }}</dd>
               </div>
               <div class="map-hover__item">
                 <dt>{{ t('devicesUi.onlineColumn') }}</dt>

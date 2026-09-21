@@ -309,7 +309,9 @@ describe('B2. 实时监测页：相机块并排，声学箱分支不动', () => 
   })
 
   it('相机页的四块都在板子里，且文档顺序没变（⑦ 之后：视频墙已删；⑧：五路图谱回来了）', () => {
-    const boardOpen = monitor.indexOf('<div class="camera-board">')
+    // 2026-09-21 第二批第 16 条给这块板子绑了 `:class`（声纹分支收紧间隙的修饰类），
+    // 所以这里认的是开标签前缀，不是"恰好这一个属性串"。
+    const boardOpen = monitor.indexOf('<div class="camera-board"')
     const boardClose = monitor.indexOf('</div>\n\n      <!-- ---- acoustic box', boardOpen)
     assert.ok(boardOpen >= 0, '找不到 .camera-board')
     assert.ok(boardClose > boardOpen, '找不到 .camera-board 的结束位置')

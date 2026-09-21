@@ -418,18 +418,17 @@ function goToAlarms(): void {
 }
 
 /*
- * 这一颗是**顶栏的图标按钮**（与设备数/在线数那两颗同一形状），不是带文字的药丸：
- * 它现在只是告警图标 + 角标，与旁边两颗指示器对齐。
+ * 这一颗是**顶栏的纯图标按钮**（业主 2026-09-21 第二批第 15 条）：只要铃铛 + 红点数角标。
+ * 白底、边框、固定高度全部去掉（底色/边框会把它画成一颗药丸，而它在这里只是一枚图标）；
+ * 悬停只变色、不给底框；有待处理告警时整颗变危险色。
  */
 .alarm-badge__button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg);
+  padding: 2px;
+  border: none;
+  background: transparent;
   color: var(--color-text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -440,8 +439,6 @@ function goToAlarms(): void {
 }
 
 .alarm-badge__button--active {
-  border-color: var(--color-danger-border);
-  background: var(--color-danger-soft);
   color: var(--color-danger);
 }
 

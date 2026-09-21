@@ -288,9 +288,18 @@ describe('domain enum coverage', () => {
   })
 
   it('names every device kind', () => {
-    // The Add Device dialog offers both families, so a kind without a name would
-    // render as a raw `domain.deviceKind.*` key in four languages at once.
-    for (const kind of DEVICE_KINDS) assertAllLocalesHave(`domain.deviceKind.${kind}`)
+    // 三种主动连接机型的标签是 `domain.deviceKind.*`（union 成员就是目录键）；
+    // `pushDevice`（业主 20260921 第 12 条）是**刻意的例外**：它的标签由那一批统一给在
+    // `devicesUi.kindPushDevice` / `addDeviceUi.kindPushDevice`，界面在 `DevicesView.kindLabel`
+    // 等处显式分支（见 `tests/push-device-round.test.ts`）。
+    for (const kind of DEVICE_KINDS) {
+      if (kind === 'pushDevice') {
+        assertAllLocalesHave('devicesUi.kindPushDevice')
+        assertAllLocalesHave('addDeviceUi.kindPushDevice')
+      } else {
+        assertAllLocalesHave(`domain.deviceKind.${kind}`)
+      }
+    }
   })
 
   it('names every user role', () => {

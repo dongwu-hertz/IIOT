@@ -28,7 +28,7 @@ import type {
   UpdateDeviceInput
 } from '@shared/domain/models'
 import type { MonitorState, ProbeResult } from '@shared/ipc/contract'
-import { shouldMarkOffline } from '@shared/domain/device-status'
+import { shouldMarkOffline, shouldMarkPushDeviceOffline } from '@shared/domain/device-status'
 import type { StreamKind } from '@shared/domain/monitoring'
 import { ConfigService } from './config-service'
 import { normaliseBaseUrl } from './device-api-client'
@@ -65,6 +65,7 @@ import {
   deviceIngestPlanProblems,
   normaliseDeviceIngestPlan,
   pushSecretFromBytes,
+  usesIngest,
   type DeviceIngestEndpoint,
   type DeviceIngestPlan,
   type IotIngestConfig,
@@ -98,6 +99,7 @@ function matchesFamily(kind: DeviceKind, result: ProbeResult): boolean {
 function kindLabelForLog(kind: DeviceKind): string {
   if (kind === 'acousticCamera') return '声学相机'
   if (kind === 'auscultationBox') return '听诊盒子/空气声呐'
+  if (kind === 'pushDevice') return '推送设备'
   return '声纹设备'
 }
 
@@ -796,13 +798,24 @@ export class DeviceService extends EventEmitter {
    * the device uid and not the IP.
    */
   async add(input: AddDeviceInput): Promise<Device> {
-    validateAddInput(input)
     /*
      * 接入方案（第 13 批第 3、4 条）：**写库之前**过一遍共享层的判据。
      * 规范化之后的结果才是写进去的那一份（库里永远只有一种写法）。
      */
     const ingest = this.validateIngestPlan(input.ingest)
     const withPlan: AddDeviceInput = ingest === undefined ? input : { ...input, ingest }
+
+    /*
+     * 纯推送第三方设备（业主 20260921 第 12 条）：接入方式选了 HTTP/MQTT ⇒ 这台设备
+     * 没有地址、没有凭据，**跳过 IP 探测**（它不在我们任何一种主动协议里，探了只会
+     * 得到一个误导性的"自动识别失败"），直接按 `pushDevice` 登记。
+     * IP 地址模式（协议 `none` / 不给方案）流程不变。
+     */
+    if (ingest !== undefined && usesIngest(ingest.protocol)) {
+      return this.addPushDevice(withPlan)
+    }
+
+    validateAddInput(input)
 
     /*
      * 没给机型就**自动识别**（业主 2026-09-17 第 2 条）。识别走的就是 `probe()`，
@@ -866,6 +879,38 @@ export class DeviceService extends EventEmitter {
       deviceUid: probe.info.deviceUid,
       ip: input.ip,
       authStrategy: probe.authStrategy
+    })
+
+    return this.get(device.id)
+  }
+
+  /**
+   * 登记一台纯推送第三方设备（`pushDevice`，业主 20260921 第 12 条）。
+   *
+   * 与另外三族的 `add` 流程的分歧点：
+   *   - **不探测**：没有地址可探，"它推得上来了吗"由第一次遥测回答；
+   *   - **不存凭据**：推送设备没有"设备登录凭据"这个概念 —— 它的"凭据"是推流秘钥
+   *     （`push_secret`，读取时懒生成，见 `ingestEndpoint()`）；
+   *   - **名称必填**：没有设备侧名字可读（探活拿不到 `info.name`），界面上叫什么
+   *     完全由操作员这次输入决定；
+   *   - 地址栏传进来的空串（界面在 HTTP/MQTT 模式没有那几个输入框）一律**忽略**，
+   *     库里落 `NULL`（`DeviceRepository.insertPushDevice`）。
+   */
+  private async addPushDevice(input: AddDeviceInput): Promise<Device> {
+    const name = input.name?.trim() ?? ''
+    if (name === '') {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '推送设备必须填写名称')
+    }
+
+    const { device } = this.devices.insertPushDevice(input)
+
+    this.emit('changed')
+    // 设备集变了 → 本机要不要开监听跟着变（有设备声明 http/mqtt 就听）。
+    this.syncIngest()
+    deviceLog().info('Push device added (HTTP/MQTT ingest)', {
+      deviceId: device.id,
+      name: device.name,
+      protocol: device.ingest?.protocol
     })
 
     return this.get(device.id)
@@ -1497,6 +1542,16 @@ export class DeviceService extends EventEmitter {
   private async checkOne(device: Device): Promise<void> {
     const runtime = this.runtimeFor(device.id, device.status)
 
+    /*
+     * 推送设备：健康检查**跳过 HTTP 轮询**（业主 20260921 第 12 条）。它没有地址、没有
+     * 凭据，`clientFor()` 只会抛"未找到凭据"，然后被一个根本不是它犯的错记成失败。
+     * 这类设备"还活着"的唯一证据是遥测：超时无遥测由 `checkPushDevice()` 判离线。
+     */
+    if (device.kind === 'pushDevice') {
+      this.checkPushDevice(device, runtime)
+      return
+    }
+
     try {
       if (device.kind === 'acousticCamera') {
         // `GET /system/detect_status` is the camera's cheapest authenticated read
@@ -1628,6 +1683,49 @@ export class DeviceService extends EventEmitter {
     return this.devices.updateE2Variant(deviceId, variant)
   }
 
+  /**
+   * 推送设备的"健康检查"：**不发任何请求**，只对照"多久没收到遥测了"。
+   *
+   * 判据是纯函数 `shouldMarkPushDeviceOffline()`（可测）：`last_seen` 距今超过
+   * `offlineFailureThreshold × healthCheckIntervalMs` ⇒ 判离线。刚添加、还一条遥测都没
+   * 收到的设备（`last_seen` 为空）按离线显示 —— 与主动连的设备"没见过在线就直说离线"
+   * 是同一条产品口径；它一推数据就立刻被 `markOnlineFromTelemetry()` 翻回在线。
+   */
+  private checkPushDevice(device: Device, runtime: DeviceRuntime): void {
+    const settings = this.getSettings()
+    if (
+      !shouldMarkPushDeviceOffline({
+        lastSeen: device.lastSeen,
+        now: now(),
+        healthCheckIntervalMs: settings.healthCheckIntervalMs,
+        offlineFailureThreshold: settings.offlineFailureThreshold
+      })
+    ) {
+      return
+    }
+    this.markOffline(device, runtime, {
+      reason: 'no-telemetry',
+      lastSeen: device.lastSeen
+    })
+  }
+
+  /**
+   * 收到这台设备的合法遥测（接入服务经 `TelemetryIntake` 的 `onTelemetry` 调到这儿）。
+   *
+   * 业主 20260921 第 12 条"收到遥测即上线"：推送设备没有轮询，上线这件事只能由遥测
+   * 触发。复用 `markOnline()` 的完整机制（状态翻转 + lastSeen 刷新 + 事件 + 留存）——
+   * 于是"遥测上线"与"轮询上线"在界面与事件中心看来是同一件事。
+   *
+   * 设备可能恰好在收到遥测前被删了：那时无事发生（找不回设备就返回），
+   * 而不是让一次推送给 `ingest()` 的调用方炸出 500。
+   */
+  markOnlineFromTelemetry(deviceId: string): void {
+    const device = this.devices.findById(deviceId)
+    if (!device) return
+    const runtime = this.runtimeFor(device.id, device.status)
+    this.markOnline(device, runtime)
+  }
+
   private markOnline(device: Device, runtime: DeviceRuntime): void {    runtime.consecutiveFailures = 0
     // 本进程**亲眼**见过它在线了。从现在起"离线判定"才可以走那条防抖动的延迟规则。
     runtime.observedOnline = true
@@ -1696,16 +1794,24 @@ export class DeviceService extends EventEmitter {
       return
     }
 
+    this.markOffline(device, runtime, {
+      reason: 'consecutive-failures',
+      consecutiveFailures: runtime.consecutiveFailures,
+      threshold
+    })
+  }
+
+  /**
+   * 翻成 OFFLINE（含事件与留存）——`markFailed()`（轮询失败够次数）与
+   * `checkPushDevice()`（超时无遥测）共用的那一小步。已经是 OFFLINE 就不再重复翻转。
+   */
+  private markOffline(device: Device, runtime: DeviceRuntime, logMeta: Record<string, unknown>): void {
     if (runtime.lastStatus !== 'OFFLINE') {
       this.devices.setStatus(device.id, 'OFFLINE')
       runtime.lastStatus = 'OFFLINE'
       this.emitStatus({ deviceId: device.id, status: 'OFFLINE' })
       this.recordStatusEvent(device, 'OFFLINE', now())
-      deviceLog().warn('Device marked OFFLINE', {
-        deviceId: device.id,
-        consecutiveFailures: runtime.consecutiveFailures,
-        threshold
-      })
+      deviceLog().warn('Device marked OFFLINE', { deviceId: device.id, ...logMeta })
     }
   }
 

@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 export interface Migration {
   version: number
@@ -967,6 +967,82 @@ export const MIGRATIONS: readonly Migration[] = [
           ON device_status_events (at DESC);
         CREATE INDEX IF NOT EXISTS idx_device_status_events_device
           ON device_status_events (device_id, at DESC);
+      `)
+    }
+  },
+  {
+    version: 18,
+    name: 'device-kind-push-device',
+    foreignKeysOff: true,
+    up: (db) => {
+      /**
+       * 第四种机型：**纯推送第三方设备**（业主 20260921 第 12 条：添加设备先选接入方式，
+       * HTTP / MQTT 接入的设备没有 IP 地址与设备凭据，数据由设备主动推到本机）。
+       *
+       * 与 v10 同一个坑、同一套做法：`devices.kind` 是**列级 CHECK**，SQLite 改不了 CHECK，
+       * 只能重建表；而 `devices` 是 channels / alarms / recordings / samples 四张表的父表，
+       * 外键打开时 `DROP TABLE` 会先隐式 DELETE 把子行级联删光 —— 所以标 `foreignKeysOff`，
+       * 由迁移器在事务外面切 PRAGMA，跑完再 `foreign_key_check`。
+       *
+       * 列定义**逐字照抄** v10 重建版 + v11/v12/v15/v16 的增量（CHECK、默认值、可空性全不动），
+       * 只把 kind 的 CHECK 放宽成四值。三条索引都要重建，而且** UNIQUE 不能写松**：
+       * `idx_devices_uid`（身份去重）与 `idx_devices_push_secret`（秘钥 → 设备）都是唯一的。
+       */
+      db.exec(`
+        CREATE TABLE devices_v18 (
+          id               TEXT PRIMARY KEY,
+          device_uid       TEXT NOT NULL,
+          name             TEXT NOT NULL,
+          ip_address       TEXT,
+          http_port        INTEGER,
+          mac_address      TEXT,
+          connection_type  TEXT NOT NULL DEFAULT 'LAN'
+                             CHECK (connection_type IN ('LAN', 'REMOTE')),
+          firmware_version TEXT,
+          fpga_version     TEXT,
+          web_version      TEXT,
+          status           TEXT NOT NULL DEFAULT 'UNKNOWN'
+                             CHECK (status IN ('ONLINE', 'OFFLINE', 'UNKNOWN')),
+          last_seen        INTEGER,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL,
+          auth_strategy    TEXT,
+          kind             TEXT NOT NULL DEFAULT 'acousticBox'
+                             CHECK (kind IN (
+                               'acousticBox', 'acousticCamera', 'auscultationBox', 'pushDevice'
+                             )),
+          gis_latitude     REAL,
+          gis_longitude    REAL,
+          azimuth_deg      REAL,
+          sound_level_db   REAL,
+          e2_variant       TEXT,
+          push_secret      TEXT,
+          ingest_plan      TEXT NOT NULL DEFAULT ''
+        );
+
+        INSERT INTO devices_v18 (
+          id, device_uid, name, ip_address, http_port, mac_address, connection_type,
+          firmware_version, fpga_version, web_version, status, last_seen,
+          created_at, updated_at, auth_strategy, kind,
+          gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+          e2_variant, push_secret, ingest_plan
+        )
+        SELECT
+          id, device_uid, name, ip_address, http_port, mac_address, connection_type,
+          firmware_version, fpga_version, web_version, status, last_seen,
+          created_at, updated_at, auth_strategy, kind,
+          gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+          e2_variant, push_secret, ingest_plan
+        FROM devices;
+
+        DROP TABLE devices;
+        ALTER TABLE devices_v18 RENAME TO devices;
+
+        -- **UNIQUE** 不能少：v1 的身份索引与 v15 的秘钥索引都是唯一的，
+        -- 重建时写松一格会静默放宽两条约束，而没有任何报错。
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_uid ON devices (device_uid);
+        CREATE INDEX IF NOT EXISTS idx_devices_status ON devices (status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_push_secret ON devices (push_secret);
       `)
     }
   }

@@ -45,8 +45,8 @@ describe('schema v16 —— 设备的接入方案', () => {
   it('版本常量与迁移表的最高版本一致', () => {
     const highest = Math.max(...MIGRATIONS.map((migration) => migration.version))
     assert.equal(SCHEMA_VERSION, highest)
-    // v17（device_status_events）之后这里跟着涨；它断的是"加了迁移忘了抬版本号"的那种错。
-    assert.equal(SCHEMA_VERSION, 17)
+    // v18（device-kind-push-device）之后这里跟着涨；它断的是"加了迁移忘了抬版本号"的那种错。
+    assert.equal(SCHEMA_VERSION, 18)
   })
 
   it('这一列有默认值：旧行读出来就是**出厂方案**（none + 四个规范键 + video_url）', () => {

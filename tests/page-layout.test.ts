@@ -542,8 +542,10 @@ describe('⑨ 相机配置搬家：同实现分块渲染 + 页签按机型', () 
  * 三条守卫，每一条都对着一个**不报错但会骗人**的失效方式：
  *   1. 一行一通道，且数据来自"每通道最后一次读数"，不是当前那一路的读数
  *      （否则八行会显示同一路的数字）；
- *   2. 旧读数必须带时间和"最后一次读数"标记 —— 不带的话它看起来就是实时值；
- *   3. 播放按钮必须有说明它播的是什么（包络预览，不是原声），也必须真的接上音量。
+ *   2. 旧读数必须带时间和读数状态标记 —— 不带的话它看起来就是实时值
+ *      （2026-09-21 第二批第 17 条起状态是一枚圆点 + title，文字徽标删掉了）；
+ *   3. 播放/录音/音量三个动作收在声学波形卡头部（第 21 条），音量真的接上播放器，
+ *      说明文字 audioPreviewHint 按第 21 条删除、不许回潮。
  *
  * 2026-09-19 第 13 批第 3 条把这张卡片改成了**一张表**（八行 × 通道/四指标/告警），
  * 所以第 1、2 条断言的标记跟着换名（`channelFeatureRows` / `row.*`），判据本身没变。
@@ -554,8 +556,8 @@ describe('② 每通道声纹特性表 + 音频回放', () => {
 
   it('一行一通道，取自每通道读数，点击即切到那一路', () => {
     assert.ok(
-      /v-for="row in channelFeatureRows"/.test(monitor),
-      '每通道表没有按 channelFeatureRows 渲染（会变成当前那一路的重复）'
+      /v-for="row in pagedChannelFeatureRows"/.test(monitor),
+      '每通道表没有按 pagedChannelFeatureRows 渲染（会变成当前那一路的重复）'
     )
     assert.ok(
       monitor.includes('monitor.channelFeatureOf(tab.index)'),
@@ -563,15 +565,19 @@ describe('② 每通道声纹特性表 + 音频回放', () => {
     )
     // 点击必须复用同一个通道切换入口，不许另写一套。
     assert.ok(
-      /v-for="row in channelFeatureRows"[\s\S]{0,3000}?@click="selectChannel\(row.index\)"/.test(
+      /v-for="row in pagedChannelFeatureRows"[\s\S]{0,3000}?@click="selectChannel\(row.index\)"/.test(
         monitor
       ),
       '通道行没有走 selectChannel()'
     )
-    // 八路各自一行：行数由设备返回的通道表决定，不是写死 8 行。
+    // 八路各自一行：行数由设备返回的通道表决定，不是写死 8 行；每页 4 行翻页（第 22 条）。
     assert.ok(
       monitor.includes(':data-channel-feature-row="row.index"'),
       '行上缺少通道号的探针标记'
+    )
+    assert.ok(
+      monitor.includes('listPageSlice(channelFeatureRows.value, channelFeaturePage.value, CHANNEL_FEATURE_PAGE_SIZE)'),
+      '翻页没有走 listPaging 纯函数（页码夹取会漂移）'
     )
   })
 
@@ -584,20 +590,38 @@ describe('② 每通道声纹特性表 + 音频回放', () => {
       monitor.includes("t('monitorUi.channelFeatureUpdated', { time: featureTime(row.feature.timestamp) })"),
       '旧读数没有带更新时间'
     )
-    // 三种状态必须是三种不同的视觉：stored 不许与 unread 一样是"无色"。
-    const css = between(monitor, 'function featureStateClass', '}', '读数状态样式映射')
-    assert.ok(css.includes("state === 'live'"), 'live 状态没有独立样式')
-    assert.ok(css.includes("state === 'stored'"), 'stored 状态没有独立样式')
+    // 三种状态必须是三种不同的视觉（第 17 条起是一枚 8px 圆点，绿=有读数、红=未读取），
+    // 且状态文字必须留在 title / aria-label 里（圆点本身读不出来）。
+    assert.ok(monitor.includes('channel-table__feature-dot--ok'), '有读数状态没有独立的圆点样式')
+    assert.ok(monitor.includes('channel-table__feature-dot--miss'), '未读取状态没有独立的圆点样式')
+    assert.ok(
+      /:title="t\(channelFeatureStateLabelKey\(row\.featureState\)\)"/.test(monitor),
+      '读数状态圆点没有带状态文字的提示（可访问性）'
+    )
+    // 第 17 条：标题右侧那句解释与"已启用/未启用"文字徽标都已删掉，不许回潮。
+    assert.ok(!monitor.includes("t('monitorUi.channelFeaturesHint'"), 'channelFeaturesHint 还在引用（第 17 条要求删掉）')
+    assert.ok(!monitor.includes('channelStateLabelKey(row.state)'), '通道行还在渲染"已启用/未启用"文字（第 17 条要求用颜色表达）')
+    assert.ok(!monitor.includes('function featureStateClass'), '读数状态的文字徽标样式映射回来了（第 17 条要求删徽标）')
   })
 
-  it('音频回放：按钮有说明、音量真的接上播放器、离开页面会收声', () => {
-    assert.ok(monitor.includes("t('monitorUi.audioPreviewHint')"), '播放按钮旁边没有"播的是什么"的说明')
+  it('音频回放：说明文字已按第 21 条删除，播放/录音/音量收进波形卡头部', () => {
+    // 第 21 条：`monitorUi.audioPreviewHint` 说明文字与独立 `.audio-bar` 卡一起删掉了。
+    assert.ok(!monitor.includes("t('monitorUi.audioPreviewHint')"), 'audioPreviewHint 的引用还在（第 21 条要求清掉）')
+    assert.ok(!stripComments(monitor).includes('class="card audio-bar"'), '独立的 .audio-bar 卡片还在（第 21 条要求并入波形卡）')
+    assert.ok(!monitor.includes('audio-bar__'), '.audio-bar 的死样式还在')
+    // 三个动作搬进了声学波形卡的头部：播放（canPlayAudio 禁用）、录音（isRunning 禁用）、
+    // 音量（点击弹迷你滑杆浮层，点外面收起 —— 与画面墙同一套做法）。
     assert.ok(monitor.includes('@click="toggleAudio"'), '找不到播放按钮')
     assert.ok(
       monitor.includes('audioPlayer.setVolume(volumePercent.value)'),
       '音量没有推给播放器（滑杆会是个装饰）'
     )
     assert.ok(monitor.includes('@input="onVolumeInput"'), '音量滑杆没有接处理器')
+    assert.ok(monitor.includes('data-waveform-volume-pop'), '音量浮层不见了')
+    assert.ok(
+      monitor.includes("document.addEventListener('mousedown', onVolumePopoverDocMouseDown, true)"),
+      '音量浮层没有 click-outside 收起逻辑'
+    )
     assert.ok(monitor.includes('audioPlayer.close()'), '离开页面没有释放 AudioContext')
     // 切到相机分支时必须收声：那一支的画面与这一支的音频不该同时在响。
     assert.ok(monitor.includes('await stopBoxAudio()'), '切到相机时没有停止声学预览')
@@ -631,12 +655,13 @@ describe('② 每通道声纹特性表 + 音频回放', () => {
 })
 
 /**
- * ③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放（业主 2026-09-17）。
+ * ③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放（业主 2026-09-17；
+ * 2026-09-21 第二批第 19 条把时间轴**并入趋势卡**，第 20 条把统计卡并进趋势卡右栏）。
  *
  * 这一条改动**只有版式**，所以它最容易悄悄退化：顺序一被改回去，页面照样能看，
  * 只是"一进页面要先滚动才看得到趋势"。因此这里钉的是**文档顺序**，不是"有没有这些卡片"。
  */
-describe('③b 实时趋势置顶 + 四张图谱卡片 + 时间轴回放', () => {
+describe('③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放', () => {
   const monitor = stripComments(read('src/renderer/src/views/MonitorView.vue'))
 
   /**
@@ -648,13 +673,35 @@ describe('③b 实时趋势置顶 + 四张图谱卡片 + 时间轴回放', () =>
   const titleIndex = (key: string): number =>
     monitor.indexOf(`<h3 class="section-title">{{ t('${key}') }}</h3>`)
 
-  it('趋势在四张卡片与时间轴**之前**，四张卡片又都在时间轴之前', () => {
+  it('趋势卡在四张图谱卡**之前**；时间轴回放**并入趋势卡**（第 19 条），声呐支路保留原位', () => {
     const trend = titleIndex('monitorUi.trendSection')
-    const grid = monitor.indexOf('<div class="graph-grid">')
-    const timeline = monitor.indexOf('<MonitorRecordingTimeline')
     assert.ok(trend >= 0, '找不到实时趋势卡片')
-    assert.ok(grid > trend, '四张图谱卡片不在趋势下面（③b 要求"其下"）')
-    assert.ok(timeline > grid, '时间轴回放不在四张图谱卡片下面')
+    // 第 19 条：业主「时间轴回放应该是合并到实时趋势里面的」—— 声纹分支的时间轴住在
+    // 趋势卡内部（趋势图下方的回放区块），不再独立于趋势卡之外。
+    const trendCard = between(
+      monitor,
+      '<section class="chart-panel card trend-panel">',
+      '\n      </section>',
+      '趋势卡'
+    )
+    assert.ok(trendCard.includes('<MonitorRecordingTimeline'), '时间轴回放不在趋势卡里面（第 19 条）')
+    // 四张图谱卡仍在趋势卡之下（grid 现在带视图切换的 v-show）。
+    const grid = monitor.indexOf('class="graph-grid"')
+    const trendEnd = monitor.indexOf('\n      </section>', trend)
+    assert.ok(grid > trendEnd, '四张图谱卡片不在趋势下面（③b 要求"其下"）')
+    // 声呐分支没有趋势卡，那一支的时间轴保持在原位（DeviceInstallationCard /
+    // AuscultationPanel 之后）。声纹页头里也有一枚 `v-else-if="isSonar"` 的机型徽标模板，
+    // 所以取**最后一处**（页面分支那一块）。
+    const sonarStart = monitor.lastIndexOf('<template v-else-if="isSonar">')
+    assert.ok(sonarStart > 0, '找不到声呐分支')
+    const sonar = monitor.slice(sonarStart, monitor.indexOf('</template>', sonarStart))
+    assert.ok(sonar.includes('<MonitorRecordingTimeline'), '声呐分支的本机录音时间轴不在原位')
+    // 全页恰好两处时间轴：声纹（趋势卡内）+ 声呐（原位）。
+    assert.equal(
+      (monitor.match(/<MonitorRecordingTimeline/g) ?? []).length,
+      2,
+      '时间轴应当是"声纹趋势卡内 + 声呐原位"恰好两处'
+    )
   })
 
   it('趋势卡片在最上面：页头之后、其余卡片之前', () => {
@@ -664,17 +711,24 @@ describe('③b 实时趋势置顶 + 四张图谱卡片 + 时间轴回放', () =>
       'monitorUi.channelFeaturesSection',
       'monitorUi.spectrumSection',
       'monitorUi.spectrogramSection',
-      'monitorUi.audioSection',
+      // 2026-09-21 第二批第 21 条：实时音频并入声学波形卡，audioSection 不再是卡片标题
+      // （它是波形卡头部按钮组的 aria-label）；排序钉 waveformSection 就够。
       'monitorUi.waveformSection'
     ]) {
       const index = titleIndex(after)
       assert.ok(index > 0, `找不到 ${after} 的卡片标题`)
       assert.ok(trend < index, `${after} 排在了趋势卡片前面（趋势要求置顶）`)
     }
+    // 音频并入波形卡之后，"实时音频"只能是按钮组的无障碍名字，不许再是一张卡片的标题。
+    assert.equal(
+      titleIndex('monitorUi.audioSection'),
+      -1,
+      'monitorUi.audioSection 又变成了卡片标题（第 21 条：实时音频并入声学波形卡）'
+    )
   })
 
   it('四张图谱卡片就是业主确认的那四张（频谱 / 时频图 / 声学波形 / 每通道声纹特性）', () => {
-    const grid = between(monitor, '<div class="graph-grid">', '\n      </div>', '四张图谱卡片')
+    const grid = between(monitor, 'class="graph-grid">', '\n      </div>', '四张图谱卡片')
     for (const key of [
       'monitorUi.spectrumSection',
       'monitorUi.spectrogramSection',

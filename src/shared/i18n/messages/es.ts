@@ -405,6 +405,7 @@ export const es: MessageSchema = {
   devicesUi: {
     addButton: 'Añadir equipo',
     noticeAdded: 'Equipo añadido',
+    kindPushDevice: 'Equipo de envío',
     noticeUpdated: 'Equipo «{name}» actualizado',
     noticeRemoved: 'Equipo «{name}» eliminado',
     deviceId: 'ID del equipo',
@@ -629,8 +630,22 @@ export const es: MessageSchema = {
      * `unread` significa que nunca llegó ninguna trama.
      */
     channelFeaturesSection: 'Características de voz por canal',
-    channelFeaturesHint:
-      '{count} canales; la sesión se suscribe a uno cada vez, así que cada tarjeta muestra la última lectura de ese canal',
+    /** Texto del rango del paginador de canales (4 canales por página). */
+    channelPager: '{start}-{end} / {total}',
+    /** Nombre accesible de la capa flotante de volumen en la tarjeta de forma de onda. */
+    volumeLabel: 'Volumen',
+    /** Cambio de vista de la tarjeta de tendencia (lote del propietario 20260921, punto 24: un canal / detección). */
+    viewMode: 'Cambio de vista',
+    modeSingle: 'Un canal',
+    modeDetect: 'Detección',
+    detectSpl: 'Nivel de presión sonora',
+    detectSmoothness: 'Estabilidad',
+    detectEnergyRatio: 'Relación de energía de banda',
+    detectDominantFreq: 'Frecuencia dominante',
+    /** Leyenda de la tarjeta de detección: {channel} recibe CH1..CH8. */
+    detectLegendChannel: 'Canal {channel}',
+    /** Nota sobre el origen de los datos en modo detección (el equipo abre un flujo cada vez; las curvas por canal no están alineadas en el tiempo). */
+    detectDataNote: 'El equipo abre un flujo cada vez: cada curva muestra las lecturas recibidas de ese canal durante esta suscripción — continua dentro de un canal, no alineada entre canales.',
     channelFeature_live: 'En vivo',
     channelFeature_stored: 'Última lectura',
     channelFeature_unread: 'Sin leer',
@@ -652,8 +667,6 @@ export const es: MessageSchema = {
     audioStop: 'Detener reproducción',
     audioVolume: 'Volumen',
     /** La reproducción es la envolvente decimada, no el sonido original. */
-    audioPreviewHint:
-      'Lo que suena es la vista previa de envolvente a 10 tramas/s (una forma de onda decimada), no el audio original.',
     startRecording: 'Iniciar grabación',
     stopRecording: 'Detener grabación',
     trendSection: 'Tendencia en vivo',
@@ -1112,7 +1125,6 @@ export const es: MessageSchema = {
     spectrogramAlt: 'Espectrograma de {time}',
     backToLatest: 'Volver al más reciente',
     spectrogramWaiting: 'Esperando datos de espectrograma…',
-    spectrogramFrames: '{count} tramas (el equipo conserva las 5 más recientes)',
     lastRefresh: 'Última actualización {time}',
     offlineUnknownSummary: '{offline} desconectados, {unknown} desconocidos',
     indicatorDevices: 'Dispositivos totales',
@@ -1159,11 +1171,17 @@ export const es: MessageSchema = {
     installationPoint: 'Punto {latitude}, {longitude}',
     installationPartial: 'Rellenado solo en parte',
     // Método de acceso por protocolo (lote 13, puntos 3 y 4).
-    protocolSection: 'Acceso por protocolo',
+    /** Método de acceso (lote del propietario 20260921, punto 11): primero IP / HTTP / MQTT, luego los campos de ese modo. */
+    accessMethod: 'Método de acceso',
+    accessMethodIp: 'Dirección IP',
+    accessMethodHttp: 'HTTP',
+    accessMethodMqtt: 'MQTT',
+    moreGis: 'Más información (GIS)',
+    deviceNameRequired: 'Se requiere el nombre del equipo',
+    ingestModeHint: 'Este equipo envía los datos a esta máquina por HTTP/MQTT: indique su nombre e información GIS y configure las claves del flujo de datos.',
+    pushDeviceAdded: 'Equipo de envío añadido',
+    kindPushDevice: 'Equipo de envío',
     protocolHint: 'Cómo envía los datos este equipo a esta máquina. «Sin acceso» significa que el software se conecta a él (valor por defecto).',
-    protocolNone: 'Sin acceso',
-    protocolHttp: 'Acceso HTTP',
-    protocolMqtt: 'Acceso MQTT',
     protocolListening: 'Esta máquina está escuchando en el puerto {port}.',
     protocolNotListening: 'Esta máquina aún no está escuchando (el puerto se abre al añadir el equipo).',
     protocolNotListeningReason: 'Esta máquina no está escuchando: {reason}',

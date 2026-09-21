@@ -18,7 +18,7 @@
 import { useI18n } from 'vue-i18n'
 import { computed, ref, watch } from 'vue'
 import type { SpectrogramFrameEvent } from '@shared/domain/monitoring'
-import { EMPTY_VALUE, formatBytes } from '@renderer/lib/format'
+import { formatBytes } from '@renderer/lib/format'
 
 const props = withDefaults(
   defineProps<{
@@ -122,13 +122,6 @@ watch(newest, () => {
       >
         <img class="thumb__image" :src="dataUrl(frame)" alt="" />
       </button>
-      <span class="spectrogram__meta">
-        {{ t('widgetsUi.spectrogramFrames', { count: frames.length }) }}<br />
-        <template v-if="displayed">
-          {{ frameTime(displayed.timestamp) }} · {{ formatBytes(displayed.byteLength) }}
-        </template>
-        <template v-else>{{ EMPTY_VALUE }}</template>
-      </span>
     </div>
   </div>
 </template>
@@ -222,11 +215,5 @@ watch(newest, () => {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-.spectrogram__meta {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  line-height: 1.4;
 }
 </style>

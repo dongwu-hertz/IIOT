@@ -65,6 +65,57 @@ export function channelFeatureFor(
 }
 
 /**
+ * 每通道的**时间线**（通道号 -> 该路按时间排到的帧序列），检测模式 2×2 图的来源。
+ *
+ * 为什么需要它（业主 2026-09-21 第二批第 24 条的数据源结论）
+ * 设备一次只在一路通道上开流（PROTOCOL-FINDINGS 4.3），`features` 缓冲只装**当前订阅**
+ * 的那一路。所以"8 条通道叠在一根轴上"的真实口径只能是：**每次某通道有读数到达，就在
+ * 该通道的序列里追加一个点** —— 通道内部连续，跨通道并不同步（CH1 在 12:00 的点与
+ * CH3 在 12:05 的点之间没有任何"同时"的保证）。谁要是把这张图画成"8 路同步实时流"，
+ * 就是编造设备做不到的事。
+ *
+ * 与 `ChannelFeatureMap`（每路只留**最后一帧**）是两张表：那张回答"这一路现在多少"，
+ * 这张回答"这一路这段时间怎么变"。
+ */
+export type ChannelFeatureHistoryMap = Readonly<Record<number, readonly RealtimeFeature[]>>
+
+/**
+ * 把一帧追加进该通道的时间线，超出 `limit` 时丢掉最旧的。
+ *
+ * 边界与 `recordChannelFeature()` 同一套：
+ *   - 畸形的通道号（`'3'` / `-1` / `1e9`）不收，键域封顶在 `0..MAX_CHANNEL_INDEX`；
+ *   - 乱序的旧帧（重连、切通道的尾巴）不追加 —— 序列按时间单调，倒着排会让图**倒退**；
+ *   - 被拒的帧原样返回旧表（同一个引用），不触发无意义的响应式更新。
+ *
+ * 每次合法追加都产生新数组：帧是 1 Hz 量级，复制一个 ≤ limit 的数组是 O(limit)，
+ * 与 `pushCapped()` 同一本账。
+ */
+export function recordChannelFeatureHistory(
+  map: ChannelFeatureHistoryMap,
+  frame: RealtimeFeature,
+  limit: number
+): ChannelFeatureHistoryMap {
+  if (!isRecordableChannel(frame.channelId)) return map
+  const previous = map[frame.channelId]
+  if (previous && previous.length > 0) {
+    const last = previous[previous.length - 1] as RealtimeFeature
+    // 乱序的旧帧不追加（序列按时间单调，倒着排会让图倒退）。
+    if (last.timestamp > frame.timestamp) return map
+    // 时间戳相同：后来的那一帧**替换**最后一个点（与 `recordChannelFeature` 同一套口径）——
+    // 同一毫秒里的重发若是再追加一个点，时间轴上同一 x 会画出一条竖直的跳变。
+    if (last.timestamp === frame.timestamp) {
+      const next = [...previous]
+      next[next.length - 1] = frame
+      return { ...map, [frame.channelId]: next }
+    }
+  }
+  const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 1
+  const next = previous ? [...previous, frame] : [frame]
+  if (next.length > cap) next.splice(0, next.length - cap)
+  return { ...map, [frame.channelId]: next }
+}
+
+/**
  * 一张通道卡片处在哪种状态。
  *
  * 三种状态必须视觉可分：

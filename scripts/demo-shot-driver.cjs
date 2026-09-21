@@ -6548,17 +6548,10 @@ async function run() {
     '  selectRightGapToSlot: slotRect && selectRect ? Math.round(slotRect.right - selectRect.right) : null,' +
     '  selectToIndicatorsGap: indicatorsRect && selectRect ? Math.round(indicatorsRect.left - selectRect.right) : null,' +
     /*
-     * 业主 2026-09-18 第 19 条：设备在不在线**用绿点/灰点在选择设备时表示**，
-     * 并且删掉了那一句"实时流未接入"。两件都能量：
-     *   - `[data-device-status-dot]` 在、而且它的类是 online/offline 之一；
-     *   - 下拉里每一项前面带 `●`/`○`（原生 option 画不出颜色，见 MonitorView 的注释）；
-     *   - 那句已删除说明的容器一个都不许再有。
+     * 20260921 批第 15 条：选择器旁的在线状态点与选项里的 ●/○ 状态字符**全部删掉**。
+     * 探针反转：量到任何一个都算问题。
      */
-    '  deviceStatusDot: (() => {' +
-    '    const dot = slot ? slot.querySelector("[data-device-status-dot]") : null;' +
-    '    if (!dot) return null;' +
-    '    return { online: dot.classList.contains("dot--online"), offline: dot.classList.contains("dot--offline") };' +
-    '  })(),' +
+    '  deviceStatusDotCount: slot ? slot.querySelectorAll(".topbar-device__dot, [data-device-status-dot]").length : null,' +
     '  deviceOptionMarks: select' +
     '    ? Array.prototype.slice.call(select.options).map((o) => (o.textContent || "").trim().charAt(0))' +
     '    : [],' +
@@ -6574,13 +6567,16 @@ async function run() {
      * 这里只留通道页签数：下面的版式断言用它确认"这一页确实是声纹那一支"。
      */
     '  channelTabs: document.querySelectorAll(".channel-tab").length,' +
-    '  playButton: document.querySelectorAll(".audio-bar__play").length,' +
-    '  playDisabled: (function(){ const b = document.querySelector(".audio-bar__play");' +
+    /*
+     * 20260921 批第 21 条：实时音频并入声学波形卡，控件是卡头三颗 ICON
+     * （data-waveform-play / data-waveform-record / data-waveform-volume-trigger）；
+     * 那句"播的是什么"的说明文字已删（.audio-bar 整个不存在了）。
+     */
+    '  playButton: document.querySelectorAll("[data-waveform-play]").length,' +
+    '  playDisabled: (function(){ const b = document.querySelector("[data-waveform-play]");' +
     '    return b ? b.disabled : null; })(),' +
-    '  volumeSlider: document.querySelectorAll(".audio-bar__slider").length,' +
-    '  volumeValue: (function(){ const s = document.querySelector(".audio-bar__slider");' +
-    '    return s ? s.value : null; })(),' +
-    '  previewHint: document.querySelectorAll(".audio-bar__hint").length,' +
+    '  recordButton: document.querySelectorAll("[data-waveform-record]").length,' +
+    '  volumeTrigger: document.querySelectorAll("[data-waveform-volume-trigger]").length,' +
     /*
      * ③b 版式：趋势置顶、其下四张图谱卡片、再下面时间轴回放。
      * 量的是**几何**（谁在谁上面），因为这一条改动只有版式：顺序一被改回去，
@@ -6647,22 +6643,18 @@ async function run() {
       )
     }
     /*
-     * 业主 2026-09-18 第 19 条：选设备时用绿点/灰点说在线与否，
-     * 并且那一段"实时流尚未接入"的说明已经删掉。
+     * 20260921 批第 15 条：状态点与选项里的 ●/○ 都已删除 —— 探针断言"一个都不剩"。
      */
-    const dot = monitorChrome.deviceStatusDot
-    if (!dot) {
-      problems.push('设备下拉旁边没有在线状态点（[data-device-status-dot]）—— 第 19 条')
-    } else if (!dot.online && !dot.offline) {
-      problems.push('在线状态点既不是绿点也不是灰点：' + JSON.stringify(dot))
+    if (monitorChrome.deviceStatusDotCount !== 0) {
+      problems.push('设备下拉旁边又加回了在线状态点：' + monitorChrome.deviceStatusDotCount + ' 个（第 15 条要求去掉）')
     }
     if ((monitorChrome.deviceOptionMarks || []).length === 0) {
       problems.push('设备下拉里一个选项都没有（这一条只能在有设备时量）')
     } else if (
-      !(monitorChrome.deviceOptionMarks || []).every((mark) => mark === '●' || mark === '○')
+      !(monitorChrome.deviceOptionMarks || []).every((mark) => mark !== '●' && mark !== '○')
     ) {
       problems.push(
-        '设备下拉的选项没有 ●/○ 标记：' + JSON.stringify(monitorChrome.deviceOptionMarks)
+        '设备下拉的选项里还有 ●/○ 状态字符：' + JSON.stringify(monitorChrome.deviceOptionMarks)
       )
     }
     if (monitorChrome.sonarLiveUnwired !== 0) {
@@ -6694,18 +6686,17 @@ async function run() {
      * 这里只留音频条那三件（与表无关，仍然是这一支的控件）。
      */
     if (monitorChrome.playButton !== 1) {
-      problems.push('实时监测页的音频播放按钮不是恰好一个：' + monitorChrome.playButton)
+      problems.push('声学波形卡里的播放按钮不是恰好一个：' + monitorChrome.playButton)
     }
-    if (monitorChrome.volumeSlider !== 1) {
-      problems.push('实时监测页的音量滑杆不是恰好一个：' + monitorChrome.volumeSlider)
+    if (monitorChrome.recordButton !== 1) {
+      problems.push('声学波形卡里的录音按钮不是恰好一个：' + monitorChrome.recordButton)
     }
-    if (monitorChrome.previewHint !== 1) {
-      problems.push('播放按钮旁边没有那句"播的是什么"的说明（.audio-bar__hint）：' +
-        monitorChrome.previewHint)
+    if (monitorChrome.volumeTrigger !== 1) {
+      problems.push('声学波形卡里的音量按钮不是恰好一个：' + monitorChrome.volumeTrigger)
     }
     log(
       'monitor chrome/②: 通道页签 ' + monitorChrome.channelTabs + ' 个，播放按钮 disabled=' +
-        monitorChrome.playDisabled + '（无预览帧时应当为 true），音量 ' + monitorChrome.volumeValue + '%'
+        monitorChrome.playDisabled + '（无预览帧时应当为 true）'
     )
   }
 
@@ -7895,7 +7886,7 @@ async function run() {
     '    installPoint: text(document.querySelector("[data-installation-point]")),' +
     '    channelTabs: document.querySelectorAll(".channel-tabs").length,' +
     '    trend: document.querySelectorAll(".trend-panel").length,' +
-    '    audioBar: document.querySelectorAll(".audio-bar").length' +
+    '    waveformControls: document.querySelectorAll("[data-waveform-play]").length' +
     '  };' +
     '  return JSON.stringify(Object.assign({ ok: true }, out));' +
     '} catch (error) {' +
@@ -8000,7 +7991,7 @@ async function run() {
     if (String(sonar.installPoint || '').indexOf('31.2304') < 0) {
       problems.push('声呐那一支的地址点位不是录入的那个：' + JSON.stringify(sonar.installPoint))
     }
-    if (sonar.channelTabs !== 0 || sonar.trend !== 0 || sonar.audioBar !== 0) {
+    if (sonar.channelTabs !== 0 || sonar.trend !== 0 || sonar.waveformControls !== 0) {
       problems.push(
         '声呐那一支里出现了声纹设备的东西（通道页签/趋势/音频条）：' + JSON.stringify(sonar)
       )

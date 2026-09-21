@@ -13,6 +13,11 @@ import { useRouter } from 'vue-router'
 import type { AlarmQuery } from '@shared/domain/models'
 import type { Device } from '@shared/domain/models'
 import { isPointComplete, parseInstallation } from '@shared/domain/device-installation'
+import {
+  deviceIngestPlanProblems,
+  usesIngest,
+  type IngestMetricKey
+} from '@shared/domain/iot-ingest'
 import { callApi, unwrap } from '@renderer/lib/result'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSessionStore } from '@renderer/stores/session'
@@ -80,6 +85,26 @@ const editError = ref('')
 const editSaving = ref(false)
 /** 密码框是否明文显示（第 10 条要的"支持显示密码"）。每次打开对话框都回到隐藏。 */
 const editPasswordShown = ref(false)
+
+/**
+ * 推送设备（pushDevice）的**推流键草稿**（业主 20260921 第 12 条：名称 / GIS / 推流键可改）。
+ * 协议本身（HTTP 还是 MQTT）在添加那一刻定下来，编辑不再换 —— 能改的是"哪几个键送哪几个量"。
+ */
+const editMetricKeys = ref<IngestMetricKey[]>([])
+const editVideoKey = ref('')
+
+/** 正在编辑的这台是不是推送设备（IP 区整块隐藏、改发推流键）。 */
+const editIsPushDevice = computed(() => editTarget.value?.kind === 'pushDevice')
+
+/**
+ * 编辑对话框里要不要显示「推流地址与秘钥」（业主 20260921 第 12 条）：
+ * **只有接入方案声明了 http/mqtt 的设备才显示** —— IP 地址添加的设备不再显示推流秘钥
+ * （那一块是给"设备往本机推"用的配置，不接入推流的设备没有它）。
+ */
+const editShowsPushEndpoint = computed(() => {
+  const plan = editTarget.value?.ingest
+  return plan !== undefined && usesIngest(plan.protocol)
+})
 
 /** 数值 → 输入框文字；没录过就是空串（不是 `0`，也不是 `'undefined'`）。 */
 function installationInput(value: number | undefined): string {
@@ -249,6 +274,19 @@ async function openWebUi(device: Device): Promise<void> {
   if (message) actionError.value = message
 }
 
+/**
+ * 设备类型那一列的文字。
+ *
+ * 三种主动连接机型的标签走 `domain.deviceKind.*`（union 成员就是目录键）；`pushDevice`
+ * 是业主 20260921 第 12 条新加的第四种机型，它的四语言标签**不进** `domain.deviceKind.*`，
+ * 而是由那一批统一给的 `devicesUi.kindPushDevice` —— 两种键并存是唯一一处需要分支的地方。
+ */
+function kindLabel(device: Device): string {
+  return device.kind === 'pushDevice'
+    ? t('devicesUi.kindPushDevice')
+    : t(`domain.deviceKind.${device.kind}`)
+}
+
 function startEdit(device: Device): void {
   editTarget.value = device
   const installation = device.installation
@@ -266,6 +304,9 @@ function startEdit(device: Device): void {
       azimuthDeg: installationInput(installation?.azimuthDeg)
     }
   }
+  // 推流键草稿从这份设备当前的方案灌进来（设备行上始终有一份规范化后的方案）。
+  editMetricKeys.value = (device.ingest?.metricKeys ?? []).map((row) => ({ ...row }))
+  editVideoKey.value = device.ingest?.videoKey ?? ''
   editPasswordShown.value = false
   editError.value = ''
   editOpen.value = true
@@ -278,9 +319,29 @@ async function submitEdit(): Promise<void> {
     editError.value = t('devicesUi.editNameRequired')
     return
   }
+  const pushDevice = target.kind === 'pushDevice'
   const port = Number(editForm.value.httpPort)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!pushDevice && !Number.isInteger(port)) {
     editError.value = t('devicesUi.editPortInvalid')
+    return
+  }
+  if (!pushDevice && (port < 1 || port > 65535)) {
+    editError.value = t('devicesUi.editPortInvalid')
+    return
+  }
+  /*
+   * 推送设备：推流键必须仍然是一份合法方案（判据与添加对话框同一份共享层纯函数）。
+   * 协议不换 —— 添加那一刻定的是 HTTP 还是 MQTT，编辑只改"哪几个键送哪几个量"。
+   */
+  const ingest = pushDevice
+    ? {
+        protocol: target.ingest?.protocol ?? ('http' as const),
+        metricKeys: editMetricKeys.value,
+        videoKey: editVideoKey.value
+      }
+    : undefined
+  if (ingest !== undefined && deviceIngestPlanProblems(ingest).length > 0) {
+    editError.value = t('addDeviceUi.protocolPlanInvalid')
     return
   }
   /*
@@ -304,6 +365,9 @@ async function submitEdit(): Promise<void> {
    * 就是另一台设备，而"编辑"这个词不包含"换一台"。端口照旧可以改（它只是同一个地址上的
    * 另一个端口）。
    *
+   * 推送设备（业主 20260921 第 12 条）：没有地址与凭据可改 —— IP 区整块不出现在
+   * 对话框里，提交也不发端口/凭据，只发名称、GIS 与推流键。
+   *
    * 凭据只在**填了**的时候发（空口令 = 不改，见 `UpdateDeviceInput.password`）。
    */
   const username = editForm.value.username.trim()
@@ -311,9 +375,16 @@ async function submitEdit(): Promise<void> {
   const updated = await devices.update({
     id: target.id,
     name: editForm.value.name.trim(),
-    httpPort: port,
-    ...(username === '' ? {} : { username }),
-    ...(password === '' ? {} : { password }),
+    ...(pushDevice
+      ? {
+          // `ingest` 在推送设备分支里一定已构造并过了校验（上面的早退保证了这一点）。
+          ingest: ingest as NonNullable<typeof ingest>
+        }
+      : {
+          httpPort: port,
+          ...(username === '' ? {} : { username }),
+          ...(password === '' ? {} : { password })
+        }),
     installation
   })
   editSaving.value = false
@@ -487,7 +558,7 @@ function onAdded(deviceId: string): void {
                 {{ device.ip || '—' }}<span v-if="device.httpPort">:{{ device.httpPort }}</span>
               </button>
             </td>
-            <td>{{ t(`domain.deviceKind.${device.kind}`) }}</td>
+            <td>{{ kindLabel(device) }}</td>
             <!--
               **不带 `connection-type`**（业主 2026-09-19 第 11 批第 6 条：「状态这一栏 把局域网
               或者外网这个内容删除」）。局域网/外网是"我们怎么够到它"，不是"它现在在不在"，
@@ -530,6 +601,8 @@ function onAdded(deviceId: string): void {
               「设置」= 编辑这一台设备（名称 / 端口 / 凭据 / 地址信息），业主第 10 条
               要的那个对话框。它原来是 `⋮` 菜单里的"编辑" —— 第 8 条的列清单把
               编辑与删除升成了两列，菜单因此删掉（一个入口胜过两个）。
+              图标是**齿轮**（业主 20260921 第 13 条：原来的太阳图标换成齿轮）：
+              24 viewBox 的 8 齿 cog，描边风格与相邻图标一致（currentColor、无填充）。
             -->
             <td class="devices-table__actions devices-table__center">
               <button
@@ -541,9 +614,9 @@ function onAdded(deviceId: string): void {
                 data-action="device-configure"
                 @click.stop="startEdit(device)"
               >
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
-                  <circle cx="8" cy="8" r="2.1" />
-                  <path d="M8 1.6v1.7M8 12.7v1.7M14.4 8h-1.7M3.3 8H1.6M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2M12.5 12.5l-1.2-1.2M4.7 4.7 3.5 3.5" />
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3.2" />
+                  <path d="M12 3.4v2.4M12 18.2v2.4M20.6 12h-2.4M5.8 12H3.4M17.5 6.5l-1.7 1.7M8.2 15.8l-1.7 1.7M17.5 17.5l-1.7-1.7M8.2 8.2 6.5 6.5" />
                 </svg>
               </button>
             </td>
@@ -585,6 +658,12 @@ function onAdded(deviceId: string): void {
           <input v-model="editForm.name" data-autofocus class="input" type="text" />
         </label>
 
+        <!--
+          地址与凭据（IP + 端口一行、用户名 + 密码一行）只对**有地址的设备**有意义。
+          推送设备（pushDevice）没有这两样（业主 20260921 第 12 条：名称 / GIS / 推流键可改，
+          IP 区整块隐藏）—— 显示它们只会让人以为"这台设备该有个地址"。
+        -->
+        <template v-if="!editIsPushDevice">
         <div class="form-grid">
           <label class="field">
             <span class="field-label">{{ t('devices.ip') }}</span>
@@ -644,6 +723,38 @@ function onAdded(deviceId: string): void {
             <span class="field-hint">{{ t('devicesUi.credentialsHint') }}</span>
           </label>
         </div>
+        </template>
+
+        <!--
+          推流键（仅推送设备，业主 20260921 第 12 条）：哪几个键送哪几个可显示指标、
+          哪个键装视频地址。协议本身（HTTP / MQTT）在添加那一刻定下来，这里不换。
+          四个指标的名字与添加对话框复用同一批目录词条（metrics.*）。
+        -->
+        <div v-if="editIsPushDevice" class="edit-push-keys">
+          <span class="field-label">{{ t('addDeviceUi.metricKeysTitle') }}</span>
+          <label v-for="row in editMetricKeys" :key="row.metric" class="field">
+            <span class="field-label">{{ t(`metrics.${row.metric}`) }}</span>
+            <input
+              v-model="row.key"
+              class="input mono"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              :data-iot-metric-key="row.metric"
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">{{ t('addDeviceUi.videoKeyTitle') }}</span>
+            <input
+              v-model="editVideoKey"
+              class="input mono"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              data-iot-video-key
+            />
+          </label>
+        </div>
       </div>
 
       <!--
@@ -697,10 +808,16 @@ function onAdded(deviceId: string): void {
 
       <!--
         推流地址与秘钥（业主 2026-09-18 第 10 批第 5 条「添加设备支持 HTTP 推流（秘钥 +
-        推流地址）」）。放在编辑对话框的最后一块：它是**配置给设备看的**信息，不是我们要填的
-        字段；`editTarget` 一定有 id，所以这一块只在真正打开编辑时挂载。
+        推流地址）」；20260921 第 12 条改显隐：**只有接入方案声明了 http/mqtt 的设备才显示** ——
+        IP 地址添加的设备不接入推流，没有要给它看的秘钥）。放在编辑对话框的最后一块：
+        它是**配置给设备看的**信息，不是我们要填的字段；`editTarget` 一定有 id，
+        所以这一块只在真正打开编辑时挂载。
       -->
-      <DevicePushEndpoint v-if="editTarget" :key="editTarget.id" :device-id="editTarget.id" />
+      <DevicePushEndpoint
+        v-if="editTarget && editShowsPushEndpoint"
+        :key="editTarget.id"
+        :device-id="editTarget.id"
+      />
 
       <template #footer>
         <button type="button" class="btn" :disabled="editSaving" @click="editOpen = false">
@@ -987,6 +1104,15 @@ function onAdded(deviceId: string): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* 推送设备的推流键（指标 ← 键 + 视频键）：与表单其余部分同一条节奏。 */
+.edit-push-keys {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
 }
 
 .confirm-text {

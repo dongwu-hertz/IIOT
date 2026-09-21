@@ -409,6 +409,7 @@ presets, the licence boundaries
   devicesUi: {
     addButton: 'Add device',
     noticeAdded: 'Device added',
+    kindPushDevice: 'Push device',
     noticeUpdated: 'Device “{name}” updated',
     noticeRemoved: 'Device “{name}” deleted',
     deviceId: 'Device ID',
@@ -648,8 +649,22 @@ presets, the licence boundaries
      * difference the operator needs to decide whether to trust the number.
      */
     channelFeaturesSection: 'Per-channel voiceprint characteristics',
-    channelFeaturesHint:
-      '{count} channels; the session subscribes to one at a time, so each card shows that channel’s last reading',
+    /** Channel-feature pager range text (4 channels per page). */
+    channelPager: '{start}-{end} / {total}',
+    /** Accessible name of the volume popover in the acoustic-waveform card. */
+    volumeLabel: 'Volume',
+    /** Trend-card view switch (owner batch 20260921 item 24: single channel / detection). */
+    viewMode: 'View switch',
+    modeSingle: 'Single channel',
+    modeDetect: 'Detection',
+    detectSpl: 'Sound pressure level',
+    detectSmoothness: 'Stability',
+    detectEnergyRatio: 'Band energy ratio',
+    detectDominantFreq: 'Dominant frequency',
+    /** Detection-card legend: {channel} receives CH1..CH8. */
+    detectLegendChannel: 'Channel {channel}',
+    /** Data-source note for detection mode (the device opens one stream at a time; per-channel curves are not time-aligned). */
+    detectDataNote: 'The device opens one stream at a time: each curve shows the readings received for that channel during this subscription — continuous within a channel, not time-aligned across channels.',
     channelFeature_live: 'Live',
     channelFeature_stored: 'Last reading',
     channelFeature_unread: 'Not read',
@@ -676,8 +691,6 @@ presets, the licence boundaries
     audioStop: 'Stop playback',
     audioVolume: 'Volume',
     /** Playback is the decimated envelope, not the original sound — say so. */
-    audioPreviewHint:
-      'What plays is the 10 frames/s envelope preview (a decimated waveform), not the original audio.',
     startRecording: 'Start recording',
     stopRecording: 'Stop recording',
     trendSection: 'Live trend',
@@ -1145,7 +1158,6 @@ presets, the licence boundaries
     spectrogramAlt: 'Spectrogram at {time}',
     backToLatest: 'Back to latest',
     spectrogramWaiting: 'Waiting for spectrogram data…',
-    spectrogramFrames: '{count} frames (the device keeps the latest 5)',
     lastRefresh: 'Last refreshed {time}',
     offlineUnknownSummary: '{offline} offline, {unknown} unknown',
     indicatorDevices: 'Total devices',
@@ -1192,11 +1204,17 @@ presets, the licence boundaries
     installationPoint: 'Point {latitude}, {longitude}',
     installationPartial: 'Only partly filled in',
     // Protocol access method (owner batch 13, items 3 and 4).
-    protocolSection: 'Protocol access',
+    /** Access method (owner batch 20260921 item 11): pick IP / HTTP / MQTT first, then fill that mode's fields. */
+    accessMethod: 'Access method',
+    accessMethodIp: 'IP address',
+    accessMethodHttp: 'HTTP',
+    accessMethodMqtt: 'MQTT',
+    moreGis: 'More (GIS) information',
+    deviceNameRequired: 'Device name is required',
+    ingestModeHint: 'This device pushes data to this machine over HTTP/MQTT: give it a name and GIS info, then configure the data-stream keys.',
+    pushDeviceAdded: 'Push device added',
+    kindPushDevice: 'Push device',
     protocolHint: 'How this device pushes data to this machine. "No access" means this software connects to it instead (the default).',
-    protocolNone: 'No access',
-    protocolHttp: 'HTTP access',
-    protocolMqtt: 'MQTT access',
     protocolListening: 'This machine is listening on port {port}.',
     protocolNotListening: 'This machine is not listening yet (the port opens once the device is added).',
     protocolNotListeningReason: 'This machine is not listening: {reason}',

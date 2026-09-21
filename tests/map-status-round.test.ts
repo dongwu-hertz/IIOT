@@ -119,6 +119,64 @@ describe('设备列表翻页：页码永远合法（第 11 批第 5 条）', () 
 })
 
 // ---------------------------------------------------------------------------
+// 1b. 同一套纯函数的 size-4 用法（20260921 第二批第 22 条：监测页特性表每页 4 行）
+// ---------------------------------------------------------------------------
+
+describe('listPaging 的 size-4 用法（监测页每通道特性表，第 22 条）', () => {
+  const CHANNEL_PAGE_SIZE = 4
+  const eight = Array.from({ length: 8 }, (_, index) => index + 1)
+
+  it('8 通道 = 2 页；页数向上取整，0 路也算 1 页', () => {
+    assert.equal(listPageCount(8, CHANNEL_PAGE_SIZE), 2)
+    assert.equal(listPageCount(4, CHANNEL_PAGE_SIZE), 1)
+    assert.equal(listPageCount(5, CHANNEL_PAGE_SIZE), 2)
+    assert.equal(listPageCount(0, CHANNEL_PAGE_SIZE), 1)
+    assert.equal(listPageCount(Number.NaN, CHANNEL_PAGE_SIZE), 1)
+  })
+
+  it('页码夹取：坏值 / 越界都归到合法页（通道表从 8 路变 3 路后不停在空页）', () => {
+    assert.equal(clampListPage(2, 8, CHANNEL_PAGE_SIZE), 2)
+    assert.equal(clampListPage(3, 8, CHANNEL_PAGE_SIZE), 2, '8 路只有 2 页，第 3 页必须夹回末页')
+    assert.equal(clampListPage(5, 3, CHANNEL_PAGE_SIZE), 1, '3 路只有 1 页，第 5 页必须落回第 1 页')
+    assert.equal(clampListPage(0, 8, CHANNEL_PAGE_SIZE), 1)
+    assert.equal(clampListPage(Number.NaN, 8, CHANNEL_PAGE_SIZE), 1)
+  })
+
+  it('切片：每页 4 行，第 2 页是后 4 行，越界页码先夹一遍', () => {
+    assert.deepEqual(listPageSlice(eight, 1, CHANNEL_PAGE_SIZE), [1, 2, 3, 4])
+    assert.deepEqual(listPageSlice(eight, 2, CHANNEL_PAGE_SIZE), [5, 6, 7, 8])
+    assert.deepEqual(listPageSlice(eight, 9, CHANNEL_PAGE_SIZE), [5, 6, 7, 8], '越界页码没有被夹回末页')
+    assert.deepEqual(listPageSlice(eight, 0, CHANNEL_PAGE_SIZE), [1, 2, 3, 4], '第 0 页应当是第 1 页')
+    // 不满一页的设备（如 3 路）：一页放下，不硬切 4。
+    assert.deepEqual(listPageSlice([1, 2, 3], 1, CHANNEL_PAGE_SIZE), [1, 2, 3])
+  })
+
+  it('监测页特性表用的是这一份实现（page size 4 + 三个纯函数入口）', () => {
+    const monitorCode = stripComments(read('src/renderer/src/views/MonitorView.vue'))
+    assert.match(monitorCode, /CHANNEL_FEATURE_PAGE_SIZE = 4/)
+    assert.match(
+      monitorCode,
+      /listPageSlice\(channelFeatureRows\.value, channelFeaturePage\.value, CHANNEL_FEATURE_PAGE_SIZE\)/
+    )
+    assert.match(
+      monitorCode,
+      /clampListPage\(channelFeaturePage\.value, channelFeatureRows\.value\.length, CHANNEL_FEATURE_PAGE_SIZE\)/
+    )
+    assert.match(
+      monitorCode,
+      /listPageCount\(channelFeatureRows\.value\.length, CHANNEL_FEATURE_PAGE_SIZE\)/
+    )
+    // 翻页条文案用新键 monitorUi.channelPager（{start}/{end}/{total}），上一页/下一页复用告警页键。
+    assert.match(monitorCode, /t\('monitorUi\.channelPager', \{/)
+    assert.match(monitorCode, /t\('alarmsUi\.prevPage'\)/)
+    assert.match(monitorCode, /t\('alarmsUi\.nextPage'\)/)
+    // 表体仍然"能长能缩"，翻页条落底（body flex:1 + min-height:0 的约定没有被翻页破坏）。
+    assert.match(monitorCode, /\.channel-features__body \{[\s\S]{0,120}flex: 1/)
+    assert.match(monitorCode, /\.channel-features__pager \{/)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 2. 地图右上角的状态栏（第 4 条）
 // ---------------------------------------------------------------------------
 

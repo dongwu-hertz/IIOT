@@ -466,19 +466,23 @@ describe('界面接线（源码守卫）', () => {
     )
   })
 
-  it('这一页真的挂在实时监测页上，而**画面墙那一侧没有入口了**', () => {
+  it('管理界面已从实时监测页撤掉（第 23 条），而**画面墙那一侧没有入口了**', () => {
+    /*
+     * 2026-09-21 第二批第 23 条：业主点名从实时监测页移除第三方相机，手填源的管理界面
+     * （`ManualRtspSources.vue`）随之**没有任何挂载点**。组件文件保留（数据模型与墙的
+     * 选择器仍在用），但监测页不许再 import / 挂载它 —— 那条"挂在 v-else 之外"的旧守卫
+     * 因此反转成"必须不在"。
+     */
     const monitor = read('src/renderer/src/views/MonitorView.vue')
-    assert.match(monitor, /import ManualRtspSources from '@renderer\/components\/ManualRtspSources\.vue'/, '实时监测页没有引入管理界面')
-    assert.match(monitor, /<ManualRtspSources \/>/, '实时监测页没有挂上管理界面')
-    // 挂在 `v-else` **之外**：一台设备都没有的机器照样能接一路第三方相机。
-    // 判据：它是 `.page` 的**最后一个子节点**（后面只剩 `.page` 的收尾与 SFC 根标签）——
-    // 也就是 `v-else` 那一块已经收完了。写 `lastIndexOf('</template>')` 会踩到根标签那个
-    // （它在组件**之后**），所以这里认的是"后面还剩什么"。
-    const tail = monitor.slice(monitor.indexOf('<ManualRtspSources />'))
-    assert.match(
-      tail,
-      /^<ManualRtspSources \/>\s*<\/div>\s*<\/template>/,
-      '管理界面不是 `.page` 的直接子节点（放进了"有设备才显示"的分支里）'
+    assert.equal(
+      /import ManualRtspSources/.test(monitor),
+      false,
+      '实时监测页又引入了手填源管理界面（第 23 条要求撤掉）'
+    )
+    assert.equal(
+      /<ManualRtspSources\s*\/>/.test(monitor),
+      false,
+      '实时监测页又挂上了手填源管理界面（第 23 条要求撤掉）'
     )
 
     const wall = read('src/renderer/src/components/CameraVideoWall.vue')

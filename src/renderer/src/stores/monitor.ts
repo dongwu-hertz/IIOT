@@ -35,6 +35,8 @@ import {
 import {
   channelFeatureFor,
   recordChannelFeature,
+  recordChannelFeatureHistory,
+  type ChannelFeatureHistoryMap,
   type ChannelFeatureMap
 } from '@renderer/lib/channelFeatures'
 import type {
@@ -163,6 +165,18 @@ export const useMonitorStore = defineStore('monitor', () => {
    * 清空它的时机是**换了设备**（`selectDevice`）—— 那时那些读数属于另一台设备。
    */
   const channelFeatures = ref<ChannelFeatureMap>({})
+  /**
+   * 每通道的**时间线**（通道号 -> 按时间排到的帧序列），检测模式那四张 2×2 图的来源。
+   *
+   * 与 `channelFeatures`（每路最后一帧）同一条生命周期：故意**不**在 `clearBuffers()` 里
+   * 清空（切通道 = 停会话 = 清缓冲，而时间线的全部意义就是跨通道切换把各路的曲线留住），
+   * 清空时机是**换了设备**（`selectDevice`）—— 那时这些帧属于另一台设备。
+   *
+   * 数据源口径（业主 2026-09-21 第二批第 24 条）：设备一次只开一路流，所以每次只有
+   * **当前订阅**那一路的帧进来，在该通道的序列里追加一个点 —— 通道内连续，跨通道不同步。
+   * 检测卡上那句说明（`monitorUi.detectDataNote`）就是这句话。
+   */
+  const channelFeatureHistory = ref<ChannelFeatureHistoryMap>({})
   /**
    * Frames actually received by this store, per kind.
    *
@@ -425,6 +439,12 @@ export const useMonitorStore = defineStore('monitor', () => {
     pushCapped<RealtimeFeature>(features, frame, FEATURE_HISTORY_LIMIT)
     // 顺手记进"每通道最后一次读数"：这一路现在就是活的那一路，读数是新的。
     channelFeatures.value = recordChannelFeature(channelFeatures.value, frame)
+    // 同一帧也追加进该通道的时间线（检测模式 2×2 图的数据源；纯函数见 lib/channelFeatures.ts）。
+    channelFeatureHistory.value = recordChannelFeatureHistory(
+      channelFeatureHistory.value,
+      frame,
+      FEATURE_HISTORY_LIMIT
+    )
     countFrame('features')
   }
 
@@ -557,6 +577,8 @@ export const useMonitorStore = defineStore('monitor', () => {
     channelId.value = 0
     // 每通道读数属于**上一台**设备：留着它们会让新设备的通道卡片显示旧设备的数字。
     channelFeatures.value = {}
+    // 每通道时间线同理：那些帧是另一台设备的信号。
+    channelFeatureHistory.value = {}
     // 上次内容同理：它是另一台设备的画面。
     lastContent.value = null
   }
@@ -722,6 +744,8 @@ export const useMonitorStore = defineStore('monitor', () => {
     frameCounts,
     recording,
     channelFeatures,
+    /** 每通道时间线（检测模式 2×2 图的来源；换设备清空，切通道保留）。 */
+    channelFeatureHistory,
     /** 「上次内容」的快照（业主第 18 条），界面上只用它的时刻。 */
     lastContent,
     deviceStatus,

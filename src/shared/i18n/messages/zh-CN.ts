@@ -472,6 +472,7 @@ export const zhCN = {
   devicesUi: {
     addButton: '添加设备',
     noticeAdded: '设备已添加',
+    kindPushDevice: '推送设备',
     noticeUpdated: '已更新设备「{name}」',
     noticeRemoved: '已删除设备「{name}」',
     deviceId: '设备 ID',
@@ -753,7 +754,22 @@ export const zhCN = {
      * "旧读数"和"没读到"混成同一件事 —— 而操作员正是靠这个区别决定要不要相信那个数字。
      */
     channelFeaturesSection: '每通道声纹特性',
-    channelFeaturesHint: '{count} 路通道；会话一次只订阅一路，卡片上是该路最后一次读数',
+    /** 通道特性翻页范围文案（每页 4 通道）。 */
+    channelPager: '{start}-{end} / {total}',
+    /** 声学波形卡音量浮层的无障碍名称。 */
+    volumeLabel: '音量',
+    /** 趋势卡视图切换（业主 20260921 批第 24 条：单通道 / 检测）。 */
+    viewMode: '视图切换',
+    modeSingle: '单通道',
+    modeDetect: '检测',
+    detectSpl: '声压级',
+    detectSmoothness: '平稳度',
+    detectEnergyRatio: '频带能量比',
+    detectDominantFreq: '主频',
+    /** 检测卡图例：{channel} 传入 CH1..CH8。 */
+    detectLegendChannel: '通道 {channel}',
+    /** 检测模式数据口径说明（设备一次只开一路流，各通道曲线不同步）。 */
+    detectDataNote: '设备一次只开一路流：每条曲线是该通道本次订阅期间收到的读数，通道内连续、跨通道时间不同步。',
     channelFeature_live: '实时',
     channelFeature_stored: '最后一次读数',
     channelFeature_unread: '未读取',
@@ -790,7 +806,6 @@ export const zhCN = {
      * 回放的是**包络预览**而不是原声：跨 IPC 过来的是 100 ms 一帧的降采样波形。
      * 这句话必须留着 —— 不说清楚就是在让操作员以为他听到的是设备里的原始声音。
      */
-    audioPreviewHint: '播放的是 10 帧/秒的包络预览（降采样波形），不是原始音频。',
     startRecording: '开始录音',
     stopRecording: '停止录音',
     trendSection: '实时趋势',
@@ -1299,7 +1314,6 @@ export const zhCN = {
     spectrogramAlt: '时频图 {time}',
     backToLatest: '回到最新',
     spectrogramWaiting: '等待时频图数据…',
-    spectrogramFrames: '共 {count} 帧（设备端保留最近 5 帧）',
     lastRefresh: '上次刷新 {time}',
     offlineUnknownSummary: '离线 {offline} 台，未知 {unknown} 台',
     indicatorDevices: '设备总数',
@@ -1354,11 +1368,18 @@ export const zhCN = {
      * 「数据流接口 / 视频流接口」这两个名字是业主给的说法（他点名参考 ThingsBoard 的那套）。
      * 监听状态那两句**必须带端口**：操作员要把它与设备上填的端口对一眼。
      */
-    protocolSection: '协议接入方式',
+    /** 接入方式（业主 20260921 批第 11 条）：先选 IP / HTTP / MQTT，再填该模式各自的字段。 */
+    accessMethod: '接入方式',
+    accessMethodIp: 'IP 地址',
+    accessMethodHttp: 'HTTP',
+    accessMethodMqtt: 'MQTT',
+    /** IP 模式的 GIS 折叠头。 */
+    moreGis: '更多（GIS）信息',
+    deviceNameRequired: '请填写设备名称',
+    ingestModeHint: '此设备通过 HTTP/MQTT 主动向本机推送数据：填写名称与 GIS 信息，并配置数据流接口键。',
+    pushDeviceAdded: '推送设备已添加',
+    kindPushDevice: '推送设备',
     protocolHint: '这台设备往本机推数据时走哪条路。不接入表示它由本软件主动去连（默认）。',
-    protocolNone: '不接入',
-    protocolHttp: 'HTTP 接入',
-    protocolMqtt: 'MQTT 接入',
     protocolListening: '本机正在 {port} 端口监听。',
     protocolNotListening: '本机此刻没有在监听（添加成功之后才会按这台设备的声明打开端口）。',
     protocolNotListeningReason: '本机没有在监听：{reason}',

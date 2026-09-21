@@ -412,6 +412,7 @@ export const tr: MessageSchema = {
   devicesUi: {
     addButton: 'Cihaz ekle',
     noticeAdded: 'Cihaz eklendi',
+    kindPushDevice: 'Gönderme cihazı',
     noticeUpdated: '«{name}» cihazı güncellendi',
     noticeRemoved: '«{name}» cihazı silindi',
     deviceId: 'Cihaz kimliği',
@@ -634,8 +635,22 @@ export const tr: MessageSchema = {
      * GEÇMİŞ bir okumadır ve kart saatini yazar; `unread` hiç çerçeve gelmedi demektir.
      */
     channelFeaturesSection: 'Kanal başına ses izi özellikleri',
-    channelFeaturesHint:
-      '{count} kanal; oturum her seferinde tek kanala abone olur, bu yüzden her kart o kanalın son okumasını gösterir',
+    /** Kanal özellikleri sayfalayıcı aralık metni (sayfa başına 4 kanal). */
+    channelPager: '{start}-{end} / {total}',
+    /** Akustik dalga kartındaki ses düzeyi açılır penceresinin erişilebilir adı. */
+    volumeLabel: 'Ses düzeyi',
+    /** Eğilim kartı görünüm değiştirme (sahip 20260921 partisi, madde 24: tek kanal / algılama). */
+    viewMode: 'Görünüm değiştirme',
+    modeSingle: 'Tek kanal',
+    modeDetect: 'Algılama',
+    detectSpl: 'Ses basıncı düzeyi',
+    detectSmoothness: 'Kararlılık',
+    detectEnergyRatio: 'Bant enerji oranı',
+    detectDominantFreq: 'Baskın frekans',
+    /** Algılama kartı ekranı: {channel} CH1..CH8 alır. */
+    detectLegendChannel: 'Kanal {channel}',
+    /** Algılama kipi veri kaynağı notu (cihaz her seferinde tek akış açar; kanal eğrileri zamanda hizalı değildir). */
+    detectDataNote: 'Cihaz her seferinde tek akış açar: her eğri, bu abonelik sırasında o kanaldan alınan okumaları gösterir — kanal içinde sürekli, kanallar arasında zamanda hizalı değil.',
     channelFeature_live: 'Canlı',
     channelFeature_stored: 'Son okuma',
     channelFeature_unread: 'Okunmadı',
@@ -657,8 +672,6 @@ export const tr: MessageSchema = {
     audioStop: 'Oynatmayı durdur',
     audioVolume: 'Ses düzeyi',
     /** Oynatılan ses, özgün ses değil, azaltılmış zarf önizlemesidir. */
-    audioPreviewHint:
-      'Çalan ses saniyede 10 çerçevelik zarf önizlemesidir (azaltılmış dalga biçimi), özgün ses değildir.',
     startRecording: 'Kaydı başlat',
     stopRecording: 'Kaydı durdur',
     trendSection: 'Canlı eğilim',
@@ -1117,7 +1130,6 @@ export const tr: MessageSchema = {
     spectrogramAlt: '{time} spektrogramı',
     backToLatest: 'En sona dön',
     spectrogramWaiting: 'Spektrogram verisi bekleniyor…',
-    spectrogramFrames: '{count} çerçeve (cihaz en son 5 çerçeveyi saklar)',
     lastRefresh: 'Son yenileme {time}',
     offlineUnknownSummary: '{offline} çevrimdışı, {unknown} bilinmiyor',
     indicatorDevices: 'Toplam cihaz',
@@ -1164,11 +1176,17 @@ export const tr: MessageSchema = {
     installationPoint: 'Nokta {latitude}, {longitude}',
     installationPartial: 'Yalnızca bir kısmı dolduruldu',
     // Protokol erişim yöntemi (13. parti, 3. ve 4. madde).
-    protocolSection: 'Protokol erişimi',
+    /** Erişim yöntemi (sahip 20260921 partisi, madde 11): önce IP / HTTP / MQTT, ardından o kipin alanları. */
+    accessMethod: 'Erişim yöntemi',
+    accessMethodIp: 'IP adresi',
+    accessMethodHttp: 'HTTP',
+    accessMethodMqtt: 'MQTT',
+    moreGis: 'Daha fazla (GIS) bilgisi',
+    deviceNameRequired: 'Cihaz adı gerekli',
+    ingestModeHint: 'Bu cihaz verileri bu makineye HTTP/MQTT üzerinden gönderir: adını ve GIS bilgisini girin, veri akışı anahtarlarını yapılandırın.',
+    pushDeviceAdded: 'Gönderme cihazı eklendi',
+    kindPushDevice: 'Gönderme cihazı',
     protocolHint: 'Bu cihazın verileri bu makineye nasıl göndereceği. «Erişim yok» yazılımın cihaza bağlanacağı anlamına gelir (varsayılan).',
-    protocolNone: 'Erişim yok',
-    protocolHttp: 'HTTP erişimi',
-    protocolMqtt: 'MQTT erişimi',
     protocolListening: 'Bu makine {port} bağlantı noktasını dinliyor.',
     protocolNotListening: 'Bu makine henüz dinlemiyor (bağlantı noktası cihaz eklendikten sonra açılır).',
     protocolNotListeningReason: 'Bu makine dinlemiyor: {reason}',
