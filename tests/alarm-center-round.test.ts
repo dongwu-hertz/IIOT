@@ -139,21 +139,29 @@ describe('② 筛选卡在最上面', () => {
   })
 })
 
-describe('③ 筛选行（业主重构：标题 + 内容 + 一个日历；更多筛选删除）', () => {
-  it('筛选行只有 标题 / 内容 / 时间范围 三个字段，外加重置', () => {
-    // 切片右边界用表格开头：详情抽屉里复用了 filterDevice/filterChannel 做字段标签，
+describe('③ 筛选行（业主 20260921 第二批：字段式表单行，设备 / 类型下拉回来了）', () => {
+  it('筛选行是 设备 / 类型 / 时间范围 / 标题 / 内容 五个字段，外加重置', () => {
+    // 切片右边界用表格开头：详情抽屉里复用了 filterDevice/filterChannel/filterAck 做字段标签，
     // 切到文件尾会把它们误当成"筛选行残留"。
     const simple = view.slice(
       view.indexOf('data-alarm-simple-filters'),
       view.indexOf('<table class="table">')
     )
     assert.ok(simple.length > 0, '找不到筛选行（[data-alarm-simple-filters]）')
-    for (const key of ['filterTitle', 'filterContent', 'filterTimeRange']) {
+    // 业主第二批把设备 / 告警类型两个下拉**加回来了**（第一批曾删掉，是"删除钉桩"的那一格）。
+    for (const [key, hook] of [
+      ['filterDevice', 'data-filter-device'],
+      ['filterType', 'data-filter-alarm-type']
+    ] as const) {
+      assert.ok(simple.includes(`t('alarmsUi.${key}')`), `筛选行里少了 ${key}`)
+      assert.ok(simple.includes(hook), `筛选行里少了 ${hook} 钩子`)
+    }
+    for (const key of ['filterTimeRange', 'filterTitle', 'filterContent']) {
       assert.ok(simple.includes(`t('alarmsUi.${key}')`), `筛选行里少了 ${key}`)
     }
-    // 旧筛选（设备/等级/确认状态/通道/类型）与「更多筛选」整个删掉了：
-    // 它们要么回到关键字搜索，要么业主明确说不要。任何一项长回来都是漂移。
-    for (const gone of ['filterDevice', 'filterSeverity', 'filterAck', 'filterChannel', 'filterType', 'filterFrom', 'filterTo']) {
+    // 没回来的：等级 / 确认状态 / 通道 / 起止输入格（时间合并进了一个日历）与「更多筛选」。
+    // 任何一项长回来都是漂移。
+    for (const gone of ['filterSeverity', 'filterAck', 'filterChannel', 'filterFrom', 'filterTo']) {
       assert.equal(
         simple.includes(`t('alarmsUi.${gone}')`),
         false,
@@ -180,7 +188,7 @@ describe('③ 筛选行（业主重构：标题 + 内容 + 一个日历；更多
      */
     const build = view.slice(view.indexOf('function buildQuery'), view.indexOf('async function reload'))
     assert.ok(build.length > 0, '找不到 buildQuery()')
-    for (const key of ['title', 'content', 'from', 'to', 'deviceId']) {
+    for (const key of ['title', 'content', 'from', 'to', 'deviceId', 'alarmType']) {
       assert.match(
         build,
         new RegExp(`\\b${key}:`),

@@ -413,6 +413,19 @@ describe('账号管理（手册 §17.1）', () => {
     assert.deepEqual([...PERMISSION_WITHOUT_ENFORCEMENT], ['deleteRecordings'])
   })
 
+  it('manageSystemSettings 管的通道清单精确吻合（新增通道要在这里改一次）', () => {
+    // 这条清单是「勾了它到底能写什么」的落点：清单与实际拦截的逐条对齐由上面那条
+    // 防漂移断言负责，这里钉的是清单本身 —— 多一条少一条（例如 20260921 批的
+    // `map:cache-tiles`）都必须是改这里，而不是顺手加在表里。
+    assert.deepEqual([...PERMISSION_OPERATIONS.manageSystemSettings], [
+      'settings:update',
+      'settings:restore-defaults',
+      'settings:pick-alarm-sound',
+      'iot-ingest:status',
+      'map:cache-tiles'
+    ])
+  })
+
   it('requirePermission() 对操作员真的生效：勾了就通过，没勾就拒绝', () => {
     const { auth } = freshAuth()
     signInAsAdmin(auth)
@@ -461,6 +474,50 @@ describe('告警声音库（手册 §17.2.7）', () => {
     assert.equal(library.items.every((item) => item.filePath === ''), true)
     assert.equal(library.defaultSoundId, DEFAULT_ALARM_SOUND_ID)
     assert.ok(ALARM_SOUND_TYPE_KEYS.includes(DEFAULT_ALARM_SOUND_ID as never))
+  })
+
+  it('两个提示音绑定（联动弹窗 / 设备推送，业主 20260921 批）：逐字段回落，缺省 关 + 未选择', () => {
+    // 正常输入原样保留。
+    const { library, issues } = normaliseAlarmSoundLibrary({
+      items: [],
+      popup: { enabled: true, soundId: 'motionDetection' },
+      push: { enabled: false, soundId: '' }
+    })
+    assert.deepEqual(library.popup, { enabled: true, soundId: 'motionDetection' })
+    assert.deepEqual(library.push, { enabled: false, soundId: '' })
+    assert.deepEqual(issues, [])
+    // 只给了壳的输入回落成「关 + 未选择」（缺省形状）。
+    const empty = normaliseAlarmSoundLibrary({ items: [], popup: {}, push: {} })
+    assert.deepEqual(empty.library.popup, { enabled: false, soundId: '' })
+    assert.deepEqual(empty.library.push, { enabled: false, soundId: '' })
+    // 指向一条不存在的声音 = 没选：enabled 不能带着一个死 id 留在库里。
+    const dead = normaliseAlarmSoundLibrary({
+      items: [],
+      popup: { enabled: true, soundId: 'custom:nope' }
+    })
+    assert.deepEqual(dead.library.popup, { enabled: false, soundId: '' })
+    assert.ok(dead.issues.includes('binding.soundId(unknown)'), '死 id 没有交回 issues')
+    // 旧数据没有这两个字段：库仍然完整合法（可选字段，不作废整库）。
+    const legacy = normaliseAlarmSoundLibrary({ items: [] })
+    assert.equal(legacy.library.popup, undefined)
+    assert.equal(legacy.library.push, undefined)
+  })
+
+  it('声音绑定由 AlarmSoundBindingSection 承载（旧 AlarmSoundLibrarySection 已删）', () => {
+    const settingsView = readFileSync(
+      path.resolve(__dirname, '..', '..', 'src', 'renderer', 'src', 'views', 'SettingsView.vue'),
+      'utf8'
+    )
+    assert.ok(
+      settingsView.includes("import AlarmSoundBindingSection from '@renderer/components/AlarmSoundBindingSection.vue'"),
+      '设置页没有引入 AlarmSoundBindingSection'
+    )
+    assert.ok(settingsView.includes('<AlarmSoundBindingSection />'), '告警页签里没有渲染声音绑定')
+    assert.equal(
+      settingsView.includes('AlarmSoundLibrarySection'),
+      false,
+      '设置页里又出现了已删除的 AlarmSoundLibrarySection'
+    )
   })
 
   it('只接受 .wav，大小写不敏感', () => {

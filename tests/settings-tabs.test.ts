@@ -5,7 +5,8 @@
  * 这一条改动**只有版式**，所以它最容易悄悄退化：页签拿掉之后页面照样能看（只是又变回
  * 一条长列），"每张卡片都写名字"再长回来也没有任何报错。三类守卫：
  *
- *   1. **页签**：八个页签就是业主点名的七个加追加的「地图」，每一页都被 `activeTab` 门住；
+ *   1. **页签**：6 个页签（业主 20260921 批合并：常规 / 集成 / GIS 服务 / 告警 / 账号 / 关于），
+ *      每一页都被 `activeTab` 门住；
  *   2. **不重复标题**：`SettingsView` 里**不许**再出现 `section-title` ——
  *      页签已经写着这一页叫什么，卡片再写一遍就是业主说的"每张卡片都写名字"；
  *   3. **设备探测与缓冲合成一组**（业主 ④）：六个数在**同一组**里，而且旧的两张卡片
@@ -59,23 +60,23 @@ function messageAt(locale: string, key: string): unknown {
 const settings = stripComments(read('src/renderer/src/views/SettingsView.vue'))
 
 /**
- * 页签 id 与它的目录键（顺序就是业主给的那一串）。
+ * 页签 id 与它的目录键（顺序就是业主 20260921 批定的那一串）。
  *
  * 2026-09-19 第 13 批第 1 条把**第八个页签「数据接入」删掉了**（业主：
  * 「系统设置里面的数据接入，应该是在设备管理的添加设备功能里面」）：监听设置与收数统计
  * 搬进「添加设备 → 协议接入方式」下面那一块「本机接入」，`settingsUi.tabIot` 四语言一起删。
  *
- * 业主追加又加回一页：「AI 服务」（多命名 AI 服务 + 单选启用，管理不同厂家的大模型）。
+ * 业主 20260921 批又把它并成 **6 个页签**：语言/存储/视频/缓存合成「常规」（小卡排布），
+ * 邮箱/地图/AI 合成「集成」，地图页签里那套「GIS 服务」单列一页；原来的「地图」「AI 服务」
+ * 两个页签与 `tabMap`/`tabAi` 等键随这次合并删掉。
+ *
  * 守卫的价值不变：这张表**就是**我们商定的那一串，多一个少一个都要在这里改一次。
  */
 const TABS: ReadonlyArray<[string, string]> = [
-  ['language', 'tabLanguage'],
-  ['storage', 'tabStorage'],
-  ['video', 'tabVideo'],
+  ['general', 'tabGeneral'],
+  ['integration', 'tabIntegration'],
+  ['gis', 'tabGisServices'],
   ['alarm', 'tabAlarm'],
-  ['email', 'tabEmail'],
-  ['map', 'tabMap'],
-  ['ai', 'tabAi'],
   ['account', 'tabAccount'],
   ['about', 'tabAbout']
 ]
@@ -107,24 +108,24 @@ describe('③ 设置页的页签', () => {
    * 是**探针里那份清单没跟着改**，而它前面 4 轮都因为趋势页超时、从来没跑到打印汇总那一步，
    * 所以谁都没看见。一条断言换掉一次这样的来回。
    */
-  it('GUI 探针里那份页签期望与本文件一致（9 个，且不许再出现 iot）', () => {
+  it('GUI 探针里那份页签期望与本文件一致（6 个，且不许再出现 iot）', () => {
     const driver = read('scripts/demo-shot-driver.cjs')
     assert.ok(
       driver.includes(`settingsTabs.tabs !== ${TABS.length}`),
       `探针里的页签数期望不是 ${TABS.length}`
     )
     assert.equal(
-      /settingsTabs\.tabs !== [78]/.test(driver),
+      /settingsTabs\.tabs !== [789]/.test(driver),
       false,
-      '探针里还写着 7/8 个页签'
+      '探针里还写着 7/8/9 个页签'
     )
     assert.ok(
-      driver.includes(`['language', 'storage', 'video', 'alarm', 'email', 'map', 'ai', 'account', 'about']`),
+      driver.includes(`['general', 'integration', 'gis', 'alarm', 'account', 'about']`),
       '探针里那份页签 id 清单与这里不一致'
     )
   })
 
-  it('每一页都被 activeTab 门住（否则八个页签的内容会同时显示）', () => {
+  it('每一页都被 activeTab 门住（否则六个页签的内容会同时显示）', () => {
     const panelStart = settings.indexOf('class="settings-tabs"')
     const template = settings.slice(panelStart)
     for (const [id] of TABS) {
@@ -133,8 +134,8 @@ describe('③ 设置页的页签', () => {
         `没有一页被 activeTab === '${id}' 门住`
       )
     }
-    // 语言与关于这两页是独立的 `<section v-if>`；其余四页用 v-if / template 分组。
-    assert.match(template, /v-if="activeTab === 'language'"/, '语言页没有条件')
+    // 常规与关于这两页是独立的 `<section v-if>`；集成/告警/账号三页用 template 分组。
+    assert.match(template, /v-if="activeTab === 'general'"/, '常规页没有条件')
     assert.match(template, /v-if="activeTab === 'about'"/, '关于页没有条件')
   })
 
@@ -145,7 +146,7 @@ describe('③ 设置页的页签', () => {
     assert.match(settings, /role="tabpanel"/, '页内容没有 role="tabpanel"')
   })
 
-  it('八个页签名在四种语言里都存在且互不相同', () => {
+  it('六个页签名在四种语言里都存在且互不相同', () => {
     for (const locale of LOCALES) {
       const labels = TABS.map(([, key]) => messageAt(locale, `settingsUi.${key}`))
       for (const [index, label] of labels.entries()) {
@@ -166,21 +167,35 @@ describe('③ 页内不再写重复的卡片标题；版面更紧', () => {
     )
   })
 
-  it('页内的分组用小标题，而且是 settings-group 这一套', () => {
-    for (const key of ['storageGroupLocation', 'probeBufferGroup', 'accountSessionGroup']) {
+  it('页内的分组用小标题：常规页是小卡（mini-card），其余页是 settings-group 这一套', () => {
+    // 业主 20260921 批：常规页签改成紧凑小卡排布（语言/存储/视频/缓存各一张），
+    // 小卡的标题走 `mini-card__title`；集成 / GIS 服务 / 账号那几页仍是 settings-group。
+    for (const key of ['tabLanguage', 'tabStorage', 'tabVideo', 'cacheCardTitle']) {
+      assert.ok(
+        settings.includes(`<span class="mini-card__title">{{ t('settingsUi.${key}') }}</span>`),
+        `常规页的小卡标题里少了 ${key}`
+      )
+    }
+    for (const key of ['mapGroupService', 'mapGroupTemplate', 'mapCacheGroup', 'accountSessionGroup']) {
       assert.ok(settings.includes(`t('settingsUi.${key}')`), `没有用到分组小标题 ${key}`)
     }
     assert.ok(settings.includes('class="settings-group__title"'), '分组小标题的样式类不见了')
     assert.match(settings, /\.settings-group \+ \.settings-group \{/, '分组之间没有分隔规则')
   })
 
-  it('版面更紧：一页里的表单网格是三列起步（原来两块图并排留下的空档被收掉）', () => {
-    const rule = settings.slice(
-      settings.indexOf('.settings-group .form-grid {'),
-      settings.indexOf('}', settings.indexOf('.settings-group .form-grid {'))
+  it('版面更紧：常规页的小卡网格两列起步，卡内表单网格更窄', () => {
+    const miniGrid = settings.slice(
+      settings.indexOf('.mini-grid {'),
+      settings.indexOf('}', settings.indexOf('.mini-grid {'))
     )
-    assert.ok(rule.length > 0, '找不到分组内的表单网格规则')
-    assert.match(rule, /repeat\(auto-fit,\s*minmax\(180px,\s*1fr\)\)/, '分组内的网格不是三列起步')
+    assert.ok(miniGrid.length > 0, '找不到常规页的小卡网格规则')
+    assert.match(miniGrid, /repeat\(auto-fit,\s*minmax\(300px,\s*1fr\)\)/, '小卡网格不是两列起步')
+    const cardGrid = settings.slice(
+      settings.indexOf('.mini-card .form-grid {'),
+      settings.indexOf('}', settings.indexOf('.mini-card .form-grid {'))
+    )
+    assert.ok(cardGrid.length > 0, '找不到小卡内的表单网格规则')
+    assert.match(cardGrid, /repeat\(auto-fit,\s*minmax\(150px,\s*1fr\)\)/, '卡内网格不是窄三列起步')
     const panel = settings.slice(
       settings.indexOf('.settings-panel {'),
       settings.indexOf('}', settings.indexOf('.settings-panel {'))
@@ -189,12 +204,16 @@ describe('③ 页内不再写重复的卡片标题；版面更紧', () => {
   })
 })
 
-describe('③ 设备探测与缓冲合成一组（业主 ④）', () => {
+describe('③ 设备探测与缓冲合成一组（业主 ④；20260921 起在常规页的「缓存」小卡里）', () => {
   it('六个数在同一个分组里', () => {
+    // 页签合并之后，这一组落在常规页签的「缓存」小卡（data-mini-card="cache"）里，
+    // 右边界取常规页签那一节的 </section>（小卡内部还有 mini-card__sub 子 div，
+    // 不能用第一个 </div> 当边界）。
     const group = settings.slice(
-      settings.indexOf("t('settingsUi.probeBufferGroup')"),
-      settings.indexOf('</section>', settings.indexOf("t('settingsUi.probeBufferGroup')"))
+      settings.indexOf('data-mini-card="cache"'),
+      settings.indexOf('</section>', settings.indexOf('data-mini-card="cache"'))
     )
+    assert.ok(group.length > 0, '找不到「缓存」小卡（data-mini-card="cache"）')
     for (const key of [
       'healthCheckMs',
       'offlineThreshold',

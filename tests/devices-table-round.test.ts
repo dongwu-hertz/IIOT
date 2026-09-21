@@ -282,9 +282,25 @@ describe('设备表：查看 / 设置 / 删除是图标，IP 双击开设备页�
       /@click\.stop="startEdit\(device\)"/,
       '设置按钮不再打开编辑对话框'
     )
-    // 名字是去详情/配置页的入口（列清单里没有"详情"这一列，而那个页面装着通道配置等）。
+    // 名字是设备详情的入口（列清单里没有"详情"这一列，而那个页面装着通道配置等）。
+    // 业主 20260921 批起详情是**弹窗**：状态经 stores/deviceDetailDialog 交给 AppShell 的
+    // 全局宿主，不再是整页跳转（深链 /devices/:id 路由保留给书签/手敲地址）。
     const nameButton = buttonAround(devicesViewCode, 'data-action="device-detail"')
-    assert.ok(nameButton.includes('go(`/devices/${device.id}`)'), '点名字不再进设备详情页')
+    assert.ok(nameButton.includes('@click.stop="openDetail(device)"'), '点名字不再打开设备详情')
+    const openDetail = between(
+      stripComments(devicesView),
+      'function openDetail(',
+      '\n}',
+      'openDetail'
+    )
+    assert.ok(
+      openDetail.includes('detailDialog.show(device.id, device.name)'),
+      'openDetail 没有经弹窗 store 打开详情'
+    )
+    const dialogStore = read('src/renderer/src/stores/deviceDetailDialog.ts')
+    assert.ok(dialogStore.includes('function show('), '弹窗 store 没有 show()')
+    const shell = read('src/renderer/src/components/AppShell.vue')
+    assert.ok(shell.includes('<DeviceDetailDialog'), 'AppShell 没有挂全局详情弹窗宿主')
   })
 
   it('行点击只选中（不跳走），这样双击 IP 才落得到那一格上', () => {

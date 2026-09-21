@@ -189,31 +189,42 @@ describe('应用外壳：页脚的落点与顶栏指示器', () => {
   })
 
   /**
-   * 历史趋势：刷新 / 立即落盘搬进设备选择那张卡片，设备下拉收窄（业主 2026-09-16）。
+   * 历史趋势：页头不回来、设备下拉进顶栏、「立即落盘」已挪去设置页（业主 20260921 批）。
    *
    * 为什么要有源码守卫：GUI 探针用的一次性 profile 里**没有设备**，这一页会走
-   * 「尚未添加设备」分支，筛选卡片根本不渲染 —— 那三条 DOM 断言在那里**量不到**。
+   * 「尚未添加设备」分支，筛选卡片根本不渲染 —— 那几条 DOM 断言在那里**量不到**。
    * 探针会如实说"跳过"，而这条守卫保证"接线本身"仍然被钉住。
    * 卡片的边界用 `templateBlock` 取那段 `<section class="card">…</section>`。
    */
-  it('历史趋势：动作在筛选卡片里，页头不回来，设备下拉收窄了（「刷新」已按更正第 4 条删掉）', () => {
-    const source = stripCssComments(read('src/renderer/src/views/TrendsView.vue'))
+  it('历史趋势：页头不回来，设备下拉进顶栏，「立即落盘」挪去设置页（「刷新」已按更正第 4 条删掉）', () => {
+    const source = stripComments(read('src/renderer/src/views/TrendsView.vue'))
     assert.equal(
       /class="page-header"/.test(source),
       false,
-      '历史趋势页又出现了页头（动作已经搬进筛选卡片）'
+      '历史趋势页又出现了页头（标题由外层框架写）'
     )
-    // 卡片的边界用索引算，不引入新的辅助函数：`<section class="card">` 到它后面的第一个
-    // `</section>` 之间就是筛选卡片。动作必须落在这段里面 —— 放进卡片外面时源码看起来一样"有"。
-    const cardStart = source.indexOf('<section class="card">')
-    assert.ok(cardStart >= 0, '找不到筛选卡片')
-    const cardEnd = source.indexOf('</section>', cardStart)
-    assert.ok(cardEnd > cardStart, '筛选卡片没有闭合标签')
-    const card = source.slice(cardStart, cardEnd)
-    assert.ok(card.includes('trend-actions'), '筛选卡片里没有 trend-actions 那一块')
+    // 「立即落盘」按业主 20260921 批从这一页删掉了：store 的 flush() 与 IPC 保留，
+    // 按钮挪进设置页「常规 → 缓存」小卡。这一页不许再出现它（也不许留下空的动作块）。
+    assert.equal(
+      source.includes("t('settingsUi.trendFlushNow')"),
+      false,
+      '历史趋势页又出现了「立即落盘」按钮（业主：挪去设置页）'
+    )
+    assert.equal(source.includes('trend-actions'), false, 'trend-actions 动作块没有删干净')
+    const settingsView = stripComments(read('src/renderer/src/views/SettingsView.vue'))
     assert.ok(
-      card.includes("t('settingsUi.trendFlushNow')"),
-      '「立即落盘」必须画在筛选卡片**里面**'
+      settingsView.includes("t('settingsUi.trendFlushNow')"),
+      '设置页「常规 → 缓存」小卡里没有「立即落盘」按钮（它应该挪到了那里）'
+    )
+    // 设备下拉照 MonitorView 的先例投去顶栏那一格（筛选栏里那个 field--wide 控件已删）。
+    assert.ok(
+      /<Teleport to="#topbar-page-slot">[\s\S]{0,600}?t\('trendsUi\.filterDevice'\)/.test(source),
+      '设备下拉没有投进顶栏（#topbar-page-slot）'
+    )
+    assert.equal(
+      source.includes('.field--wide'),
+      false,
+      '.field--wide 规则又留了回来（筛选栏里那个控件已删）'
     )
     /*
      * 更正第 4 条（2026-09-19）：「每个子页面里面的单独刷新按钮都应该删除」——
@@ -228,11 +239,6 @@ describe('应用外壳：页脚的落点与顶栏指示器', () => {
     assert.ok(
       /watch\(\s*\(\) => uiRefresh\.tick/.test(source),
       '删掉刷新按钮之后没有接上顶栏那颗（否则就没有任何办法重查当前筛选了）'
-    )
-    assert.ok(
-      /\.field--wide\s*\{[^}]*flex:\s*0 0 auto/.test(source) &&
-        /\.field--wide \.select\s*\{[^}]*width:\s*200px/.test(source),
-      '设备下拉没有真正收窄（宽度必须钉在 select 上，只写 min-width 管不住按最宽选项撑开的 <select>）'
     )
   })
 })
@@ -695,18 +701,27 @@ describe('③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放',
   const titleIndex = (key: string): number =>
     monitor.indexOf(`<h3 class="section-title">{{ t('${key}') }}</h3>`)
 
-  it('趋势卡在四张图谱卡**之前**；时间轴回放**并入趋势卡**（第 19 条），声呐支路保留原位', () => {
+  it('趋势卡在四张图谱卡**之前**；声纹趋势卡内的时间轴已删（X 轴缩放覆盖），声呐支路保留原位', () => {
     const trend = titleIndex('monitorUi.trendSection')
     assert.ok(trend >= 0, '找不到实时趋势卡片')
-    // 第 19 条：业主「时间轴回放应该是合并到实时趋势里面的」—— 声纹分支的时间轴住在
-    // 趋势卡内部（趋势图下方的回放区块），不再独立于趋势卡之外。
+    /*
+     * 第 19 条曾经把声纹分支的时间轴并进趋势卡；业主 20260921 批又把它从趋势卡里**删掉**：
+     * 趋势图的 X 轴缩放已经覆盖回放定位，卡内时间轴成了重复入口（全页只剩声呐分支那一处，
+     * 那一族没有趋势卡）。这里钉的是"它没有在趋势卡里长回来"。
+     */
     const trendCard = between(
       monitor,
       '<section class="chart-panel card trend-panel">',
       '\n      </section>',
       '趋势卡'
     )
-    assert.ok(trendCard.includes('<MonitorRecordingTimeline'), '时间轴回放不在趋势卡里面（第 19 条）')
+    assert.equal(
+      trendCard.includes('<MonitorRecordingTimeline'),
+      false,
+      '趋势卡里又长出了时间轴回放（业主：X 轴缩放已覆盖，删掉）'
+    )
+    // 检测模式的数据源口径说明收在卡头那颗 ⓘ 的悬停提示里（业主 20260921 批）。
+    assert.ok(trendCard.includes('data-trend-info'), '趋势卡头没有 ⓘ 说明钩子（data-trend-info）')
     // 四张图谱卡仍在趋势卡之下（grid 现在带视图切换的 v-show）。
     const grid = monitor.indexOf('class="graph-grid"')
     const trendEnd = monitor.indexOf('\n      </section>', trend)
@@ -718,11 +733,11 @@ describe('③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放',
     assert.ok(sonarStart > 0, '找不到声呐分支')
     const sonar = monitor.slice(sonarStart, monitor.indexOf('</template>', sonarStart))
     assert.ok(sonar.includes('<MonitorRecordingTimeline'), '声呐分支的本机录音时间轴不在原位')
-    // 全页恰好两处时间轴：声纹（趋势卡内）+ 声呐（原位）。
+    // 全页恰好一处时间轴：声呐原位（声纹趋势卡内那一处已删）。
     assert.equal(
       (monitor.match(/<MonitorRecordingTimeline/g) ?? []).length,
-      2,
-      '时间轴应当是"声纹趋势卡内 + 声呐原位"恰好两处'
+      1,
+      '时间轴应当是"仅声呐分支一处"（声纹趋势卡内的已删）'
     )
   })
 

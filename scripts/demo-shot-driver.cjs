@@ -3891,16 +3891,15 @@ async function run() {
   log('settings tabs: ' + JSON.stringify(settingsTabs))
 
   /*
-   * 9 个页签：`iot`（设备接入）那一个**撤掉了**，加了业主追加第 1 条的「地图」页签，
-   * 又加了业主追加的「AI 服务」页签（多命名 AI 服务 + 单选启用）。 —— 业主第 13 批 A①要求「数据接入」
-   * 搬进「设备管理 → 添加设备」，于是「本机接入（监听设置与收数）」现在在
-   * `AddDeviceDialog.vue` 里，不再是设置页的一个页签（四语言的 `settingsUi.tabIot` 也删了）。
-   * 源码守卫在 `tests/settings-tabs.test.ts`（同样是 9 个：地图与 AI 服务页签是业主追加的）。
+   * 6 个页签（业主 20260921 批合并）：语言/存储/视频/缓存 → 「常规」，邮箱/地图/AI →
+   * 「集成」，地图页签里的 GIS 服务库单列「GIS 服务」页签。`iot`（设备接入）早已搬走
+   * （业主第 13 批 A①：「本机接入」在 `AddDeviceDialog.vue`），`tabMap`/`tabAi` 等键
+   * 随这次合并删掉。源码守卫在 `tests/settings-tabs.test.ts`（同样是 6 个）。
    */
-  if (settingsTabs.tabs !== 9) {
-    problems.push('设置页的页签不是 9 个：' + settingsTabs.tabs)
+  if (settingsTabs.tabs !== 6) {
+    problems.push('设置页的页签不是 6 个：' + settingsTabs.tabs)
   } else {
-    const expectedIds = ['language', 'storage', 'video', 'alarm', 'email', 'map', 'ai', 'account', 'about']
+    const expectedIds = ['general', 'integration', 'gis', 'alarm', 'account', 'about']
     if (JSON.stringify(settingsTabs.ids) !== JSON.stringify(expectedIds)) {
       problems.push('设置页页签的顺序/名字不对：' + JSON.stringify(settingsTabs.ids))
     }
@@ -3911,11 +3910,11 @@ async function run() {
       problems.push('设置页又出现了 `iot` 页签 —— 「本机接入」应在「添加设备」里')
     }
     /*
-     * 只有**内联**在这四个页签里的卡片不许有 `h3.section-title`（业主 ③：不要每张卡片都
-     * 写名字）。告警/邮箱/账号三页装的是独立组件，它们自己的卡片标题是各自子域的名字
+     * 只有**内联**在这三个页签里的卡片不许有 `h3.section-title`（业主 ③：不要每张卡片都
+     * 写名字）。告警/集成/账号三页装的是独立组件，它们自己的卡片标题是各自子域的名字
      * （例如"告警联动"），不是对页签名的重复。
      */
-    const inlineTabs = new Set(['language', 'storage', 'video', 'about'])
+    const inlineTabs = new Set(['general', 'gis', 'about'])
     for (const tab of settingsTabs.results) {
       if (tab.cards === 0) problems.push('页签 ' + tab.id + ' 点下去一张卡片都没有（是空的）')
       if (tab.controls === 0) problems.push('页签 ' + tab.id + ' 里一个可操作控件都没有')
@@ -3923,8 +3922,8 @@ async function run() {
       if (inlineTabs.has(tab.id) && tab.titles > 0) {
         problems.push('页签 ' + tab.id + ' 里又出现了卡片标题（' + tab.titles + ' 个）')
       }
-      if (tab.id === 'video' && tab.numbers !== 6) {
-        problems.push('「视频与缓冲」里的数字输入不是 6 个：' + tab.numbers +
+      if (tab.id === 'general' && tab.numbers !== 6) {
+        problems.push('「常规」缓存小卡里的数字输入不是 6 个：' + tab.numbers +
           '（设备探测 3 个 + 缓冲 3 个必须合成一组）')
       }
       if (tab.id === 'account') {

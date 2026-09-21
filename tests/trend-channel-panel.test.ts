@@ -152,14 +152,18 @@ describe('通道选择（贴着设备那一排）', () => {
     )
     // 行数来自设备返回的通道表（8 或 2 都由它决定），不是写死的 8。
     assert.match(viewCode, /const channelRows = computed<TrendChannelRow\[\]>/)
-    assert.match(viewCode, /channelOptions\.value\.map\(\(channel\) => \{/)
+    assert.match(viewCode, /channelOptions\.value\.map\(\(channel\) =>/)
+    // 业主 20260921 批：chip 只留 颜色点 + 通道名，每行的读数（channel-chip__value）
+    // 与自定义名括号一起删掉 —— "现在哪一路高"在图上直接看得见。
+    assert.equal(viewTemplate.includes('channel-chip__value'), false, 'chip 上又长出了读数')
+    assert.equal(viewCode.includes('.channel-chip__value'), false, '读数的样式块没有删干净')
   })
 
   it('「有数据」与「无数据灰显」是**同一个**判据（`hasData`）', () => {
     // 有数据 = 任一已选中的量在这一路有至少一个有限值。
     assert.match(
       viewCode,
-      /const hasData = trends\.metrics\.some\(\(targetMetric\) =>[\s\S]{0,200}?Number\.isFinite\(point\.value\)/,
+      /hasData: trends\.metrics\.some\(\(targetMetric\) =>[\s\S]{0,200}?Number\.isFinite\(point\.value\)/,
       'hasData 不是按"这一路有没有有限值"算的'
     )
     // 灰显读的是 hasData（不是通道配置状态 —— 那是另一件事）。
@@ -367,18 +371,21 @@ describe('四语言词条', () => {
  *      而 `flex-wrap` 判断"换不换行"看的正是 base：它永远放不进设备右边那一段，
  *      于是只能另起一行。业主那条「通道的选择应该放在设备的右侧」从来没成立过。
  */
-describe('筛选栏：设备与通道同一行（第 32 轮的真窗口读数）', () => {
-  it('设备下拉带 `field--wide`（宽度钉在 200px，不吃通道那一排的空间）', () => {
+describe('筛选栏：设备进顶栏、通道在筛选栏这一排（第 32 轮的真窗口读数 + 20260921 批搬迁）', () => {
+  it('设备下拉搬进顶栏那一格（Teleport），不再占筛选栏的一格', () => {
+    // 业主 20260921 批：设备选择器照 MonitorView 的先例投进 `#topbar-page-slot`，
+    // 筛选栏里那个 `field--wide` 控件连同它的样式一起删掉（留着指向不存在元素的规则，
+    // 会让下一个人以为那东西还在）。
+    const teleport = viewTemplate.slice(viewTemplate.indexOf('<Teleport to="#topbar-page-slot">'))
+    assert.ok(teleport.length > 0, '找不到投往顶栏的 Teleport')
     assert.match(
-      viewTemplate,
-      /<label class="field field--wide">\s*\n\s*<span class="field-label">\{\{ t\('trendsUi\.filterDevice'\) \}\}<\/span>/,
-      '设备那个 label 又丢了 `field--wide` —— 下拉会按最宽的选项撑到 ~265px'
+      teleport,
+      /<Teleport to="#topbar-page-slot">[\s\S]{0,600}?t\('trendsUi\.filterDevice'\)/,
+      '顶栏那一格里没有设备下拉'
     )
-    assert.match(
-      viewCode,
-      /\.field--wide \.select \{[\s\S]*?max-width: 200px/,
-      '`.field--wide .select` 不再把宽度钉在 200px'
-    )
+    const style = viewCode.slice(viewCode.indexOf('.topbar-device {'))
+    assert.match(style, /\.topbar-device \{[\s\S]*?width:\s*50%/, '顶栏下拉的 .topbar-device 样式块不见了')
+    assert.equal(viewCode.includes('.field--wide'), false, '.field--wide 规则又留了回来（控件已删）')
   })
 
   it('通道那一排的 flex base 压到 320px（大 base 一定会换行）', () => {

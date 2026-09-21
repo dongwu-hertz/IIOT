@@ -204,24 +204,29 @@ describe('Item 16：趋势图 dataZoom 与回声防护', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Item 19：时间轴回放并入趋势卡（声呐分支保留原位）
+// Item 19：时间轴回放 —— 声纹趋势卡内那一处已删（X 轴缩放覆盖），仅声呐分支保留一处
 // ---------------------------------------------------------------------------
 
-describe('Item 19：时间轴回放并入趋势卡', () => {
-  it('声纹分支的 MonitorRecordingTimeline 在趋势卡**内部**（回放区块）', () => {
+describe('Item 19：时间轴回放（仅声呐分支一处）', () => {
+  it('声纹趋势卡内**没有** MonitorRecordingTimeline（业主 20260921 批：X 轴缩放已覆盖）', () => {
     const trend = between(
       viewTemplate,
       '<section class="chart-panel card trend-panel">',
       '\n      </section>',
       '趋势卡'
     )
-    assert.ok(trend.includes('<MonitorRecordingTimeline'), '时间轴回放不在趋势卡里（业主：合并到实时趋势里面）')
-    assert.ok(trend.includes('trend-panel__playback'), '回放区块没有自己的版式钩子')
+    assert.equal(
+      trend.includes('<MonitorRecordingTimeline'),
+      false,
+      '声纹趋势卡里又长出了时间轴回放（业主：X 轴缩放已覆盖，卡内那一处删掉）'
+    )
+    // ⓘ info 钩子（检测模式的数据口径悬停说明）在趋势卡头。
+    assert.ok(trend.includes('data-trend-info'), '趋势卡头没有 ⓘ 说明钩子（data-trend-info）')
   })
 
-  it('全页恰好两处时间轴：声纹（趋势卡内）+ 声呐（原位）', () => {
+  it('全页恰好一处时间轴：声呐（原位）；声纹卡内那一处已删', () => {
     const occurrences = viewTemplate.match(/<MonitorRecordingTimeline/g) ?? []
-    assert.equal(occurrences.length, 2, '时间轴应当是"声纹卡内 + 声呐原位"恰好两处')
+    assert.equal(occurrences.length, 1, '时间轴应当是"仅声呐分支一处"')
     // 声纹页头里也有一枚 `v-else-if="isSonar"` 的机型徽标模板，声呐**页面分支**取最后一处。
     const sonarStart = viewTemplate.lastIndexOf('<template v-else-if="isSonar">')
     assert.ok(sonarStart > 0, '找不到声呐分支')

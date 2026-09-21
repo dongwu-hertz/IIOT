@@ -217,9 +217,10 @@ describe('量可以多选，但至少留一个、最多 4 个', () => {
     assert.match(toggle, /TREND_METRIC_ORDER\.filter/, '插入位置不是稳定顺序')
   })
 
-  it('每个量一张图：视图按 `trends.metrics` 渲染，而不是一个量', () => {
-    assert.match(viewCode, /trends\.metrics\.map\(/, 'chartBundles 没有按选中的量逐个建')
+  it('每个量一张图：视图按选中的量逐个建 bundle，而不是一个量', () => {
+    assert.match(viewCode, /orderedSelectedMetrics\.value\.map\(/, 'chartBundles 没有按选中的量逐个建')
     assert.match(viewTemplate, /data-metric-chart/, '模板里没有"每个量一张图"的钩子')
+    assert.match(viewTemplate, /v-for="bundle in chartBundles"/, '模板没有按 chartBundles 渲染')
   })
 
   it('每张图有自己的 Y 轴名与自己的 series（不共用一根轴）', () => {

@@ -342,16 +342,23 @@ describe('设备列表在左、告警列表在右、两张卡一样高（第 11 
     assert.match(block, /\{\{ devicePageStart \+ index \+ 1 \}\}/, '序号不是总表里的序号')
   })
 
-  it('点设备名称进设备详情（不是只选中那一行）', () => {
+  it('点设备名称打开设备详情弹窗（不是只选中那一行）', () => {
     assert.match(
       mapCode,
       /data-action="map-device-detail"[\s\S]{0,200}@click\.stop="openDeviceDetail\(device\.id\)"/,
-      '设备名称不是进入详情页的入口'
+      '设备名称不是进入详情的入口'
     )
+    // 业主 20260921 批：详情改为弹窗（stores/deviceDetailDialog → AppShell 全局宿主），
+    // 不再是 router.push 整页跳转。
     assert.match(
       mapSource,
-      /function openDeviceDetail\(deviceId: string\): void \{\s*void router\.push\(\{ path: `\/devices\/\$\{deviceId\}` \}\)/,
-      'openDeviceDetail 不再是"进这一台的详情页"'
+      /function openDeviceDetail\(deviceId: string\): void \{\s*detailDialog\.show\(deviceId,/,
+      'openDeviceDetail 不再是"打开这一台的详情弹窗"'
+    )
+    assert.equal(
+      /router\.push\(\{ path: `\/devices\/\$\{deviceId\}` \}\)/.test(mapSource),
+      false,
+      '地图页又在整页跳转 /devices/:id（弹窗模式下不该出现）'
     )
   })
 

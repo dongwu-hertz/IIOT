@@ -70,13 +70,13 @@ function config(overrides: Partial<MapTilesConfig> = {}): MapTilesConfig {
 }
 
 describe('在线底图：默认与 https XYZ 校验', () => {
-  it('出厂默认是关闭、custom、空模板（离线优先）', () => {
+  it('出厂默认是关闭、OSM 预置（离线优先，开 switch 即有合法底图）', () => {
     const defaults = defaultMapTilesConfig()
     assert.equal(defaults.enabled, false)
-    assert.equal(defaults.service, 'custom')
-    assert.equal(defaults.urlTemplate, '')
+    assert.equal(defaults.service, 'osm')
+    assert.equal(defaults.urlTemplate, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png')
     assert.equal(defaults.apiKey, '')
-    assert.equal(defaults.attribution, '')
+    assert.equal(defaults.attribution, '© OpenStreetMap contributors')
     assert.equal(DEFAULT_SETTINGS.mapTiles.enabled, false)
     assert.ok((RESTORABLE_SETTING_KEYS as readonly string[]).includes('mapTiles'))
   })
@@ -165,6 +165,69 @@ describe('在线底图：默认与 https XYZ 校验', () => {
     assert.ok(valid)
     assert.equal(valid?.urlTemplate, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png')
     assert.equal(valid?.attribution, '© OpenStreetMap contributors')
+  })
+
+  it('normalise：`cachePath` 只认合法值，坏值丢字段而不是整键拒绝', () => {
+    const base = {
+      enabled: false,
+      service: 'osm',
+      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      apiKey: '',
+      attribution: '© OpenStreetMap contributors'
+    }
+    // 合法值保留。
+    const withCache = normaliseMapTilesConfig({ ...base, cachePath: 'map-cache' })
+    assert.equal(withCache?.cachePath, 'map-cache')
+    // 坏值（路径是来源开关而不是随意路径）：丢掉这个字段，整份配置仍然成立。
+    for (const bad of ['../somewhere', 'map-cache/evil', '', 42, null]) {
+      const config = normaliseMapTilesConfig({ ...base, cachePath: bad })
+      assert.ok(config, `cachePath=${String(bad)} 把整份配置作废了`)
+      assert.equal(config?.cachePath, undefined, `坏 cachePath=${String(bad)} 没有被丢掉`)
+    }
+  })
+
+  it('normalise：`defaultCenter` 只在 {lat,lon,zoom} 全是有限数且越界检查通过时才保留', () => {
+    const base = {
+      enabled: false,
+      service: 'osm',
+      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      apiKey: '',
+      attribution: '© OpenStreetMap contributors'
+    }
+    const good = { lat: 31.23, lon: 121.47, zoom: 12 }
+    assert.deepEqual(normaliseMapTilesConfig({ ...base, defaultCenter: good })?.defaultCenter, good)
+    //  zoom 必须落在 2–18（与瓦片缩放同一区间）。
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { ...good, zoom: 19 } })?.defaultCenter,
+      undefined
+    )
+    // 纬度 ±90、经度 ±180 之外不要。
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { ...good, lat: 91 } })?.defaultCenter,
+      undefined
+    )
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { ...good, lon: -181 } })?.defaultCenter,
+      undefined
+    )
+    // 非有限数（NaN / Infinity）不要。
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { ...good, lat: Number.NaN } })?.defaultCenter,
+      undefined
+    )
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { ...good, lon: Number.POSITIVE_INFINITY } })?.defaultCenter,
+      undefined
+    )
+    // 形状不对（缺键、不是对象）不要。
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: { lat: 31.23, lon: 121.47 } })?.defaultCenter,
+      undefined
+    )
+    assert.equal(
+      normaliseMapTilesConfig({ ...base, defaultCenter: '31.23,121.47' })?.defaultCenter,
+      undefined
+    )
   })
 })
 
@@ -314,13 +377,14 @@ describe('地图设置落库：合法写入、坏值整键拒绝、恢复默认�
     assert.equal(settings.get().mapTiles.urlTemplate, OSM.urlTemplate, '坏值不应覆盖旧值')
   })
 
-  it('恢复默认把底图关掉（两项都在可恢复清单里）', () => {
+  it('恢复默认把底图关掉（默认值已是 OSM 预置，不再需要先填空模板）', () => {
     const settings = freshSettings()
-    settings.update({ mapTiles: OSM })
+    settings.update({ mapTiles: { ...OSM, service: 'carto', urlTemplate: MAP_TILE_PRESETS.carto.urlTemplate, attribution: MAP_TILE_PRESETS.carto.attribution } })
     const { settings: restored, rejected } = settings.restoreDefaults()
     assert.deepEqual(rejected, [])
     assert.equal(restored.mapTiles.enabled, false)
-    assert.equal(restored.mapTiles.urlTemplate, '')
+    assert.equal(restored.mapTiles.service, 'osm')
+    assert.equal(restored.mapTiles.urlTemplate, MAP_TILE_PRESETS.osm.urlTemplate)
     assert.ok((RESTORABLE_SETTING_KEYS as readonly string[]).includes('mapTiles'))
   })
 })
@@ -330,8 +394,14 @@ describe('界面与四语言守卫', () => {
   const mapView = read('src/renderer/src/views/DeviceMapView.vue')
   const shell = read('src/renderer/index.html')
 
-  it('设置页有「地图」页签、全球供应商预置、XYZ/可选 key/署名与授权边界', () => {
-    assert.match(settingsView, /id: 'map', labelKey: 'settingsUi\.tabMap'/)
+  it('设置页「集成」页签里有地图卡：全球供应商预置、XYZ/可选 key/署名与授权边界', () => {
+    // 业主 20260921 批：独立的「地图」页签并进了「集成」页签，地图卡带 data-tab-panel="map"。
+    assert.match(settingsView, /data-tab-panel="map"/, '集成页签里没有地图卡')
+    assert.equal(
+      settingsView.includes("id: 'map', labelKey:"),
+      false,
+      '「地图」又长回了独立页签（业主 20260921 批并进了「集成」）'
+    )
     for (const id of ['osm', 'opentopomap', 'carto', 'esri', 'maptiler', 'mapbox', 'tomtom', 'stadia', 'tianditu', 'custom']) {
       assert.ok(settingsView.includes("id: '" + id + "'"), id)
     }
@@ -350,11 +420,13 @@ describe('界面与四语言守卫', () => {
       'data-settings-map-enabled',
       'data-settings-map-url',
       'data-settings-map-key',
-      'data-settings-map-attribution',
-      'data-settings-map-timezone'
+      'data-settings-map-attribution'
     ]) {
       assert.ok(settingsView.includes(hook), hook)
     }
+    // 「本地缓存地图」来源（业主 20260921 批）：单选 + 缓存下载那一组。
+    assert.ok(settingsView.includes('data-map-source="local"'), '没有「本地缓存地图」来源')
+    assert.ok(settingsView.includes('data-map-cache-group'), '没有瓦片缓存下载那一组')
     assert.match(settingsView, /mapTiles: \{/, '补丁里没有 mapTiles')
     assert.match(settingsView, /mapTilesProblem\(/, '设置页没有用共享校验')
   })
@@ -388,7 +460,6 @@ describe('界面与四语言守卫', () => {
       tr: tr.settingsUi as unknown as Record<string, unknown>
     }
     const keys = [
-      'tabMap',
       'mapGroupService',
       'mapEnable',
       'mapEnableHint',
@@ -418,9 +489,6 @@ describe('界面与四语言守卫', () => {
       'mapKeyHint',
       'mapAttribution',
       'mapAttributionHint',
-      'mapTimezone',
-      'mapTimezoneValue',
-      'mapTimezoneHint',
       'mapErrTemplateRequired',
       'mapErrTemplateProtocol',
       'mapErrTemplateTokens',
@@ -488,5 +556,61 @@ describe('界面与四语言守卫', () => {
     assert.equal(MAP_TILE_PRESETS.stadia.keyRequired, true)
     assert.ok(MAP_TILE_PRESETS.opentopomap.urlTemplate.includes('{s}'))
     assert.ok(MAP_TILE_PRESETS.esri.urlTemplate.includes('{z}/{y}/{x}'))
+  })
+})
+describe('瓦片缓存下载（业主 20260921 批）：权限与入参校验', () => {
+  const handlers = read('src/main/ipc/handlers.ts')
+  const tileCache = read('src/main/services/map/tile-cache-service.ts')
+  const auth = read('src/shared/domain/auth.ts')
+
+  it('`map:cache-tiles` 归 manageSystemSettings，IPC 处理器要求管理员 + 该项权限', () => {
+    // 权限通道清单：这一项与 settings:update 同一档（写在设置「集成 → 地图」卡里、
+    // 改的是本机存储根）。清单里多一条少一条都要在这里改一次。
+    assert.ok(
+      auth.includes("'map:cache-tiles'"),
+      'manageSystemSettings 的通道清单里没有 map:cache-tiles'
+    )
+    const start = handlers.indexOf('IpcChannels.MAP_CACHE_TILES')
+    assert.ok(start > 0, 'handlers 里没有 MAP_CACHE_TILES')
+    const block = handlers.slice(start, start + 500)
+    assert.ok(block.includes('requireAdministrator()'), '缓存下载没有要求管理员')
+    assert.ok(block.includes("requirePermission('manageSystemSettings')"), '缓存下载没有登记权限')
+    assert.ok(block.includes('sanitiseTileCacheRequest('), '入参没有经过收窄')
+  })
+
+  it('入参收窄：类型不对的键给空串 / NaN，由服务层按共享判据拒绝整个任务', () => {
+    assert.match(
+      handlers,
+      /function sanitiseTileCacheRequest\(input: unknown\): MapTileCacheRequest \{[\s\S]{0,1200}?Number\.NaN/,
+      'sanitiseTileCacheRequest 没有把坏数字收窄成 NaN'
+    )
+    assert.match(
+      handlers,
+      /throw new AppError\(ErrorCodes\.VALIDATION_ERROR, '缓存下载参数不合法'\)/,
+      '非对象入参没有被拒绝'
+    )
+  })
+
+  it('服务层校验：缩放级别范围与经纬度区域不合法就拒绝', () => {
+    assert.match(
+      tileCache,
+      /!isTileZoom\(minZoom\) \|\| !isTileZoom\(maxZoom\) \|\| minZoom > maxZoom/,
+      '缩放级别范围（2–18 且 最小 ≤ 最大）没有被校验'
+    )
+    assert.match(
+      tileCache,
+      /bounds\.minLat >= bounds\.maxLat \|\|\s* bounds\.minLon >= bounds\.maxLon/,
+      '经纬度区域（南 < 北、西 < 东）没有被校验'
+    )
+    assert.match(
+      tileCache,
+      /Math\.abs\(bounds\.minLat\) > 90/,
+      '纬度越界（±90）没有被校验'
+    )
+    assert.match(
+      tileCache,
+      /Math\.abs\(bounds\.minLon\) > 180/,
+      '经度越界（±180）没有被校验'
+    )
   })
 })

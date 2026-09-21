@@ -75,9 +75,10 @@ describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）
       `文件名里没有发布日期：${stamp.artifactName}`
     )
     // 顺序：产品名 → 版本 → 日期 → 架构 → setup（同产品的多次发布因此按版本+日期聚在一起）。
+    // 产品名已按业主 20260921 批改为 HAIS：安装包文件名**不含公司名**（公司名留在 copyright）。
     assert.match(
       stamp.artifactName,
-      /^HERTZINNO Acoustic Box Manager-\d+\.\d+\.\d+-\d{4}-\d{2}-\d{2}-\$\{arch\}-setup\.\$\{ext\}$/,
+      /^HAIS-\d+\.\d+\.\d+-\d{4}-\d{2}-\d{2}-\$\{arch\}-setup\.\$\{ext\}$/,
       `文件名的形状不对：${stamp.artifactName}`
     )
     // 只留 electron-builder 自己的两个宏（它们由 electron-builder 展开）。
@@ -141,11 +142,13 @@ describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）
 
   it('产品名与 `electron-builder.yml` 里的 `productName` 是同一个字符串', () => {
     // 文件名与安装向导里的产品名不一致是最难发现的那种错：两个名字都对，只是不一样。
+    // 业主 20260921 批把产品名改成 HAIS（copyright 仍保留 HERTZINNO），文件名跟着它走。
     const yml = read('electron-builder.yml')
     const declared = /^\s*productName:\s*(.+?)\s*$/m.exec(yml)?.[1]
-    assert.equal(declared, 'HERTZINNO Acoustic Box Manager', 'yml 里的 productName 变了')
+    assert.equal(declared, 'HAIS', 'yml 里的 productName 变了')
     assert.equal(stamp.productName, declared, 'stamp 里的产品名与 yml 不一致')
     assert.ok(stamp.artifactName.startsWith(`${declared}-`), '文件名不是以产品名开头')
+    assert.ok(!stamp.artifactName.includes('HERTZINNO'), '安装包文件名里又出现了公司名')
   })
 
   it('打包校验验的是**这一版**的安装包（`release/` 里会同时躺着好几个版本）', () => {

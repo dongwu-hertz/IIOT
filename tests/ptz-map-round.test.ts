@@ -613,15 +613,22 @@ describe('地图上的设备悬停浮层（第 15、16 条）', () => {
     )
   })
 
-  it('双击标记也进详情（第 15、16 条都要求"双击进详情"）', () => {
+  it('双击标记也打开详情弹窗（第 15、16 条都要求"双击进详情"）', () => {
     assert.ok(
       mapTemplate.includes('@dblclick="openDeviceDetail(marker.id)"'),
       '标记上没有双击进详情'
     )
+    // 业主 20260921 批：详情改为弹窗（stores/deviceDetailDialog → AppShell 全局宿主），
+    // 不再是 router.push 整页跳转（/devices/:id 深链路由保留给书签/手敲地址）。
     assert.match(
       mapView,
-      /function openDeviceDetail\(deviceId: string\): void \{\s*void router\.push\(\{ path: `\/devices\/\$\{deviceId\}` \}\)/,
-      'openDeviceDetail 不再是"进这一台的详情页"'
+      /function openDeviceDetail\(deviceId: string\): void \{\s*detailDialog\.show\(deviceId,/,
+      'openDeviceDetail 不再是"打开这一台的详情弹窗"'
+    )
+    assert.equal(
+      /router\.push\(\{ path: `\/devices\/\$\{deviceId\}` \}\)/.test(mapView),
+      false,
+      '地图页又在整页跳转 /devices/:id（弹窗模式下不该出现）'
     )
   })
 

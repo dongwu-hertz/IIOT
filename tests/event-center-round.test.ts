@@ -262,12 +262,26 @@ describe('Phase 3 · 严重度五级与队列行（规格 §2.3 / §10）', () =
     assert.match(css, /\.alert-row:focus-visible \{[\s\S]*?box-shadow:\s*var\(--focus-ring\)/, '队列行没有焦点环')
   })
 
-  it('三档行高：标准 88 / 证据 104 来自规格，紧凑比标准矮', () => {
-    assert.match(eventViewDomain, /standard:\s*88/, '标准行高不是规格给的 88')
-    assert.match(eventViewDomain, /evidence:\s*104/, '证据行高不是规格给的 104')
-    const compact = /compact:\s*(\d+)/.exec(eventViewDomain)?.[1] ?? ''
-    assert.ok(Number(compact) > 0 && Number(compact) < 88, '紧凑行高没有比标准矮')
-    assert.ok(alertQueue.includes('--event-row-mode-height'), '队列没有把行高传给行')
+  it('队列行：表格语义（勾选/时间/级别/事件/状态/展开钮）+ 行内展开三卡', () => {
+    // 业主 20260921 批：队列从「button.alert-row 卡片行」改成 `<table>` 行 ——
+    // 三档行高（--event-row-mode-height）随那一版式一起删掉，不再传给行。
+    assert.equal(alertQueue.includes('--event-row-mode-height'), false, '队列又在传三档行高')
+    assert.match(alertQueue, /<table[\s\S]*?class="table alert-table"/, '队列不是表格语义')
+    assert.match(
+      alertQueue,
+      /<tr[\s\S]{0,200}?class="alert-table__row is-clickable"[\s\S]{0,200}?@click="emit\('select', alert\)"/,
+      '表格行没有把"点行其余区域 = 打开详情抽屉"接上'
+    )
+    // 时间是展开钮：点它（或最右的展开钮）行内展开三卡，caret + aria-expanded 说状态。
+    for (const hook of ['data-action="row-expand"', ':aria-expanded="expandedId === alert.id"']) {
+      assert.ok(alertQueue.includes(hook), `队列行缺 ${hook}`)
+    }
+    // 行内展开的三张卡：事件名称 / 对应设备 / 设备状态（看一眼就走的内容，不进抽屉）。
+    const detail = alertQueue.slice(alertQueue.indexOf('alert-table__detail'))
+    for (const key of ['eventsUi.detailKind', 'eventsUi.detailDevice', 'domain.eventSource.deviceStatus']) {
+      assert.ok(detail.includes(`t('${key}')`), `行内展开的三卡里少了 ${key}`)
+    }
+    assert.ok(detail.includes('deviceState(alert)'), '设备状态那一格没有按事件种类取状态')
   })
 
   it('新组件里没有写死的颜色（颜色只在 main.css 的 token 里）', () => {
@@ -294,15 +308,18 @@ describe('Phase 3 · 严重度五级与队列行（规格 §2.3 / §10）', () =
     assert.ok(alertQueue.includes('@keydown.down.prevent="move(1)"'), '没有 ↓ 移动')
     assert.ok(alertQueue.includes('@keydown.up.prevent="move(-1)"'), '没有 ↑ 移动')
     assert.ok(alertQueue.includes('.focus()'), '移动选中时没有把焦点带上')
-    // 整行是 button：可 Tab、Enter/空格可开（这是不用 div 的理由，注释里写了）。
-    assert.match(alertQueue, /<button[\s\S]{0,400}?class="alert-row"/, '队列行不是 button')
+    // 焦点落在"时间"那枚按钮上：它本身是 button（可 Tab、有 aria-expanded），
+    // 换条时视觉选中与键盘焦点不分手。
+    assert.ok(
+      alertQueue.includes("querySelectorAll<HTMLButtonElement>('.alert-table__time')"),
+      '移动后没有把焦点落到时间按钮上'
+    )
   })
 
-  it('等级文字每一档都印（紧凑模式也一样）：颜色不许是唯一的信息', () => {
-    // 左侧色条是颜色，规格 §15.3 要求不靠颜色单独表意 —— 所以正文里必须有那两个字。
-    const head = alertQueue.slice(alertQueue.indexOf('alert-row__head'), alertQueue.indexOf('alert-row__meta'))
-    assert.ok(head.includes('alert-row__severity'), '紧凑模式的正文里没有等级文字（只剩颜色）')
-    assert.ok(head.includes('severityLabel(alert)'), '正文里的等级不是走标签函数来的')
+  it('等级文字每一档都印：颜色不许是唯一的信息', () => {
+    // 左侧色条/软底是颜色，规格 §15.3 要求不靠颜色单独表意 —— 所以正文里必须有那两个字。
+    assert.ok(alertQueue.includes('alert-table__severity'), '正文里没有等级文字（只剩颜色）')
+    assert.ok(alertQueue.includes('severityLabel(alert)'), '正文里的等级不是走标签函数来的')
   })
 })
 
@@ -312,21 +329,44 @@ describe('Phase 3 · 筛选（规格 §9；KPI 条已按业主要求整段删除
   })
 
 
-  it('筛选面板四组都带计数，且"计数为 0 也能点"（它们是筛选，不是统计）', () => {
-    for (const group of [
-      'eventsUi.filterSeverity',
-      'eventsUi.filterSource',
-      'eventsUi.filterAck',
-      'eventsUi.filterDevice'
-    ]) {
-      assert.ok(filterPanel.includes(`t('${group}')`), `筛选面板没有「${group}」这一组`)
+  it('筛选行过滤已内联进页面：EventFilterPanel 不再被任何源码引用', () => {
+    // 业主 20260921 批：筛选卡改成表单行（四下拉 + 操作行），chips 面板 EventFilterPanel
+    // 成了孤儿 —— 组件文件保留，但**不许再被 import**（长回来 = 两套筛选同时存在）。
+    const rendererRoot = path.join(projectRoot, 'src/renderer/src')
+    const orphans: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (/\.(vue|ts)$/.test(entry.name) && fs.readFileSync(full, 'utf8').includes('EventFilterPanel')) {
+          orphans.push(path.relative(projectRoot, full))
+        }
+      }
     }
-    assert.equal(
-      (filterPanel.match(/panelCount/g) ?? []).length >= 4,
-      true,
-      '分组计数没有逐组给出'
-    )
-    assert.ok(eventView.includes('@patch="patchFilter"'), '筛选面板与页面没有接上')
+    walk(rendererRoot)
+    assert.deepEqual(orphans, [], `EventFilterPanel 又被引用了：${orphans.join(', ')}`)
+  })
+
+  it('筛选卡 = 表单行四下拉（时间/来源/类型/状态）+ 操作行（重置/确认所选）', () => {
+    const card = eventView.slice(eventView.indexOf('data-event-filters'))
+    assert.ok(card.length > 0, '找不到筛选卡（data-event-filters）')
+    // 时间范围（一个日历）+ 来源 / 事件类型（严重度）/ 状态 三个下拉，键与过滤逻辑
+    // 复用旧筛选面板那一套（filterSource/filterSeverity/filterAck），只换了控件。
+    assert.ok(card.includes('<DateRangePicker'), '筛选卡里没有日历范围选择器')
+    for (const hook of ['data-field="event-source"', 'data-field="event-severity"', 'data-field="event-ack"']) {
+      assert.ok(card.includes(hook), `筛选卡里少了 ${hook}`)
+    }
+    for (const key of ['eventsUi.filterTimeRange', 'eventsUi.filterSource', 'eventsUi.filterSeverity', 'eventsUi.filterAck']) {
+      assert.ok(card.includes(`t('${key}')`), `筛选卡里少了 ${key}`)
+    }
+    // 操作行：「确认所选」只在勾了行时出现；重置常设。
+    assert.ok(card.includes('data-action="ack-selected"'), '筛选卡里没有「确认所选」')
+    assert.ok(card.includes('data-action="reset-event-filters"'), '筛选卡里没有重置')
+    // 旧 chips 面板的接法不许回来（panelCount 在抽屉「相关性」段里复用，只看筛选卡这一段）。
+    const cardEnd = card.indexOf('data-event-filters')
+    const cardBlock = eventView.slice(cardEnd, eventView.indexOf('<div class="event-layout">'))
+    assert.equal(eventView.includes('@patch="patchFilter"'), false, '又在用旧筛选面板的 patch 接法')
+    assert.equal(/panelCount/.test(cardBlock), false, '筛选卡里又算起了逐组计数（chips 面板的那一套）')
   })
 
   it('筛选面板只列**真的会出现**的等级（medium / low 没有代码路径能产生）', () => {
@@ -375,23 +415,25 @@ describe('Phase 3 · 筛选（规格 §9；KPI 条已按业主要求整段删除
 })
 
 describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
-  it('筛选与视图模式各自一个 localStorage 键，读写都在 try/catch 里', () => {
+  it('筛选一个 localStorage 键，读写都在 try/catch 里', () => {
     assert.ok(
       eventView.includes("window.localStorage.getItem(EVENT_FILTER_STORAGE_KEY)"),
       '没有读回上次的筛选'
     )
     assert.ok(
-      eventView.includes('window.localStorage.setItem(EVENT_FILTER_STORAGE_KEY'),
+      eventView.includes('window.localStorage.setItem(EVENT_FILTER_STORAGE_KEY, serializeEventFilter(filters))'),
       '没有记住本次筛选'
-    )
-    assert.ok(
-      eventView.includes('window.localStorage.setItem(EVENT_VIEW_MODE_STORAGE_KEY, mode)'),
-      '没有记住视图模式'
     )
     assert.equal(
       (eventView.match(/try \{/g) ?? []).length >= 3,
       true,
       'localStorage 的读写没有各自的兜底'
+    )
+    // 三档视图模式（紧凑/标准/证据）随 20260921 批表格行删掉：存储键不许回来。
+    assert.equal(
+      eventView.includes('EVENT_VIEW_MODE_STORAGE_KEY'),
+      false,
+      '视图模式又长回来了（队列已是表格行，没有三档密度）'
     )
   })
 
@@ -430,22 +472,25 @@ describe('Phase 3 · 记忆与作用域（规格 §9.5 / §16.3）', () => {
     )
   })
 
-  it('关键字只在已加载的那一页里搜，而且把这件事印出来', () => {
+  it('关键字仍走纯函数过滤（只为 URL / localStorage 兼容保留，筛选卡不再提供输入框）', () => {
     assert.ok(
       eventView.includes('matchEventSearch(alert, filters.search, eventKindLabel(alert.kind))'),
       '关键字没有走纯函数（自己实现就会与用例分叉）'
     )
-    assert.ok(eventView.includes("t('eventsUi.searchScope'"), '没有说明搜索的作用域')
+    // 旧链接里的 `?search=` 仍生效：关键字留在筛选状态里，不改查询参数。
+    assert.ok(eventView.includes('filters.search'), '关键字不再留在筛选状态里（旧链接会失效）')
+    // 但这一版筛选卡没有搜索输入框 —— 输入框长回来而没有作用域说明，就是旧设计回来了。
+    const card = eventView.slice(eventView.indexOf('data-event-filters'))
+    assert.equal(/type="search"/.test(card), false, '筛选卡里又长出了关键字输入框（没有作用域说明）')
+    assert.equal(eventView.includes('eventsUi.searchScope'), false, 'searchScope 说明又回来了')
   })
 
-  it('内置视图是一组筛选，点一下写进同一份筛选状态', () => {
-    assert.ok(eventView.includes('applySavedView(view)'), '内置视图没有接上')
-    assert.ok(eventView.includes('savedViewFromMs(view, Date.now())'), '时间视图没有算窗口')
-    assert.equal(
-      /v-for="view in EVENT_SAVED_VIEWS"/.test(eventView),
-      true,
-      '内置视图没有按常量渲染'
-    )
+  it('内置视图已删：页面不再渲染 EVENT_SAVED_VIEWS 那一排', () => {
+    // 业主 20260921 批：筛选卡换成四下拉之后，「内置视图」那一排从页面删掉了
+    // （常量还留在领域层，但页面不许再渲染它）。
+    for (const gone of ['EVENT_SAVED_VIEWS', 'applySavedView', 'savedViewFromMs']) {
+      assert.equal(eventView.includes(gone), false, `页面里又出现了内置视图的相关代码：${gone}`)
+    }
   })
 
   it('来源读况只在**有话说**时出现（三路正常时它只是三行绿字，却占掉第一屏）', () => {
@@ -735,7 +780,7 @@ describe('Phase 6 · 重复触发聚合（规格 §14.1）', () => {
     )
   })
 
-  it('界面：聚合窗口是查询参数（改了要重查）、四档、跟着 URL 与本机记住', () => {
+  it('界面：聚合窗口仍是查询参数（改了要重查），但筛选卡不再提供档位下拉', () => {
     assert.ok(eventView.includes('query.groupWindowMs = groupWindowMsFor(filters.groupWindow)'), '查询没有带上聚合窗口')
     assert.ok(
       eventView.includes('filters.groupWindow'),
@@ -746,8 +791,19 @@ describe('Phase 6 · 重复触发聚合（规格 §14.1）', () => {
       /watch\(\s*\(\) => \[[\s\S]{0,400}?filters\.groupWindow[\s\S]{0,200}?void reload\(\)/,
       '聚合窗口不在"改了要重查"的那一组里'
     )
-    assert.ok(eventView.includes('data-field="group-window"'), '筛选栏里没有聚合窗口的下拉（探针要它）')
-    assert.ok(eventView.includes('GROUP_WINDOW_CHOICES'), '下拉没有按常量渲染（四档）')
+    // 业主 20260921 批：档位下拉从筛选卡删掉，恒用状态里的默认档（10 分钟）——
+    // 下拉长回来而查询参数没接上，就是"看着能改、改了不查"的假控件。
+    assert.equal(
+      eventView.includes('data-field="group-window"'),
+      false,
+      '筛选卡里又长出了聚合窗口下拉（业主已要求删掉）'
+    )
+    assert.equal(
+      eventView.includes('GROUP_WINDOW_CHOICES'),
+      false,
+      '页面里又在渲染聚合窗口档位（恒用默认档 10 分钟）'
+    )
+    // 四档常量留在领域层：它是筛选状态默认值的来源，也是"窗口有上限"的判据。
     assert.match(
       eventViewDomain,
       /id: 'off'[\s\S]{0,200}?id: '10m'[\s\S]{0,200}?id: '30m'[\s\S]{0,200}?id: '1h'/,
