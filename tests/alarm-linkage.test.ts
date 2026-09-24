@@ -143,12 +143,28 @@ class FakePopupSink implements LinkagePopupSink {
   readonly shown: LinkagePopupRequest[] = []
   failWith: string | undefined
   closed = false
+  /**
+   * 「操作员正在看告警中心」时主进程那个置顶窗口的替代开关。
+   *
+   * 真实实现（`ElectronPopupSink`）读的是 `suppressed: () => boolean` 这个钩子，
+   * 而钩子的值是 `AlarmLinkageService.alarmCenterOpen`（渲染层经 IPC 推过来）。
+   * 测试里用同一个语义：**先判再开窗**，被挡住时返回 skipped + 原因、`counted: false`。
+   */
+  suppressed = false
 
   openCount(): number {
     return this.shown.length
   }
 
   async show(request: LinkagePopupRequest): Promise<LinkageActionOutcome> {
+    if (this.suppressed) {
+      return {
+        action: 'popup',
+        status: 'skipped',
+        reason: '操作员正在查看告警中心，不再弹出提示窗口',
+        counted: false
+      }
+    }
     this.shown.push(request)
     if (this.failWith) {
       return { action: 'popup', status: 'failed', reason: this.failWith, counted: true }
@@ -248,7 +264,13 @@ async function makeEngine(
     pending,
     now: clock.now,
     dedupeCapacity: options.dedupeCapacity,
-    log: (message, payload) => logs.push({ message, payload })
+    log: (message, payload) => logs.push({ message, payload }),
+    /*
+     * 与生产同一条路：`AlarmLinkageService` 把「操作员正在看告警中心」接到**引擎的闸门**
+     * 上（不是在弹窗实现里判），所以这里也接同一个钩子 —— fake 的 `suppressed` 只是
+     * 让"窗口真的开了吗"这件事测得出来。
+     */
+    popupSuppressed: () => popup.suppressed
   })
 
   return { engine, recorder, popup, email, pending, logs, config, clock, dir }
@@ -308,6 +330,59 @@ describe('引擎：动作与开关', () => {
     assert.ok(record)
     assert.equal(record.actions.length, 4)
     assert.equal(record.recordingId, 'rec-1')
+  })
+
+  /**
+   * 业主 2026-09-26 第 5 条：「告警中心中应该支持非告警弹窗的问题」。
+   *
+   * 这一组测的是**主进程那一半**：操作员正在看告警中心时，那个置顶提示窗口不再弹。
+   * 但"不弹"不等于"这条告警消失"——它照样进待处理列表、动作结果里留下"为什么没弹"。
+   */
+  it('看告警中心时不弹窗，但告警照样进列表，并在动作结果里留下原因', async () => {
+    const fixture = await makeEngine()
+    fixture.popup.suppressed = true
+    const outcomes = await fixture.engine.observe(candidate(51, 5100))
+
+    assert.equal(fixture.popup.shown.length, 0, '看告警中心时还是弹了窗口')
+    const popupOutcome = outcomes.find((outcome) => outcome.action === 'popup')
+    assert.equal(popupOutcome?.status, 'skipped')
+    assert.match(String(popupOutcome?.reason), /告警中心/, 'skipped 没有写出原因')
+    assert.equal(popupOutcome?.counted, false, '被挡住的那次不该计入冷却')
+    // 告警本身**没有**被丢掉：列表里那一条还在，动作结果里也记着这次为什么没弹。
+    const record = fixture.pending.find('dev-1:51:5100')
+    assert.ok(record, '被挡住弹窗之后告警没有进待处理列表（那是"静音告警"，比多弹窗口危险）')
+    const recorded = record.actions.find((action) => action.action === 'popup')
+    assert.equal(recorded?.status, 'skipped')
+    assert.match(String(recorded?.reason), /告警中心/)
+  })
+
+  it('被挡住不消耗弹窗预算：离开告警中心之后下一条照样弹', async () => {
+    const fixture = await makeEngine()
+    // 冷却窗口设得比两次触发之间的间隔大得多，这样"预算有没有被吃掉"才看得出来。
+    fixture.config.actions = { record: false, popup: true, notice: true, email: false }
+    fixture.config.popup.cooldownSeconds = 600
+
+    fixture.popup.suppressed = true
+    await fixture.engine.observe(candidate(52, 5200))
+    assert.equal(fixture.popup.shown.length, 0)
+
+    // 离开告警中心（渲染层推 false）。
+    fixture.popup.suppressed = false
+    await fixture.engine.observe(candidate(53, 5201))
+
+    assert.equal(
+      fixture.popup.shown.length,
+      1,
+      '被挡住的那一次把冷却预算吃掉了 —— 离开告警中心之后第一条告警就再也弹不出来'
+    )
+    assert.equal(fixture.popup.shown[0]?.popupId, 'dev-1:53:5201')
+  })
+
+  it('没人看告警中心时行为与改之前完全一样（默认不挡）', async () => {
+    const fixture = await makeEngine()
+    assert.equal(fixture.popup.suppressed, false, '默认必须是"照常弹"')
+    await fixture.engine.observe(candidate(54, 5400))
+    assert.equal(fixture.popup.shown.length, 1)
   })
 
   it('关掉的动作完全不被调用，也不产生任何副作用', async () => {

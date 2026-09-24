@@ -359,6 +359,93 @@ describe('⑤ 点行看详情；告警中心里非告警提示不再打扰', () 
 })
 
 // ---------------------------------------------------------------------------
+// ⑤b 那个**置顶弹窗窗口**本身（主进程侧）
+//
+// 这一半是业主第 5 条里"弹窗"两个字的真正落点：窗口由主进程用 BrowserWindow 开，
+// 渲染层关不掉它，所以判据必须由渲染层推给主进程。前一轮只做了渲染层的声音与提示，
+// 窗口照弹 —— 这一段把那一半补齐。
+// ---------------------------------------------------------------------------
+
+describe('⑤b 告警中心里不再弹那个置顶提示窗口（主进程侧）', () => {
+  const actions = stripComments(read('src/main/services/linkage/linkage-actions.ts'))
+  const service = stripComments(read('src/main/services/linkage/alarm-linkage-service.ts'))
+  const handlers = stripComments(read('src/main/ipc/handlers.ts'))
+  const preload = stripComments(read('src/preload/index.ts'))
+  const contract = stripComments(read('src/shared/ipc/contract.ts'))
+
+  it('弹窗 sink 有一个"当前该不该弹"的开关，而且**在开窗之前**判', () => {
+    assert.ok(actions.includes('suppressed?: () => boolean'), 'sink 没有 suppressed 钩子')
+    const show = block(actions, 'async show(request: LinkagePopupRequest)', 'show()')
+    const guardAt = show.indexOf('this.options.suppressed?.()')
+    const windowAt = show.indexOf('new BrowserWindow')
+    assert.ok(guardAt > 0, 'show() 里没有读 suppressed')
+    assert.ok(windowAt > 0, 'show() 里找不到开窗那一句')
+    assert.ok(
+      guardAt < windowAt,
+      'suppressed 判在开窗之后了 —— 窗口已经开出来才判，等于没挡'
+    )
+  })
+
+  it('被挡住时返回 skipped + 原因（不是静默成功，也不是失败）', () => {
+    const show = block(actions, 'async show(request: LinkagePopupRequest)', 'show()')
+    const guard = show.slice(show.indexOf('this.options.suppressed?.()'), show.indexOf('try {'))
+    assert.match(guard, /status: 'skipped'/, '被挡住时不是 skipped')
+    assert.match(guard, /reason:/, '被挡住时没写原因（动作列表里会看不出为什么没弹）')
+    assert.match(guard, /counted: false/, '被挡住时不该计入冷却计数')
+  })
+
+  it('判据来自服务、服务由渲染层经 IPC 推过来，默认是"照常弹"', () => {
+    // 服务：一个布尔 + 两处读法（引擎闸门 + sink 兜底），弹窗构造时接上。
+    assert.match(service, /private alarmCenterOpen = false/, '服务没有这个状态（或默认不是 false）')
+    assert.match(service, /setAlarmCenterOpen\(open: boolean\): void \{/, '服务没有 setter')
+    assert.match(service, /suppressed: \(\) => this\.alarmCenterOpen/, 'sink 没有接上这个状态（兜底那一层）')
+    assert.match(
+      service,
+      /popupSuppressed: \(\) => this\.alarmCenterOpen/,
+      '引擎的闸门没有接上这个状态 —— 那样被跳过的那一次会白扣一次弹窗预算'
+    )
+    // 契约 + 处理器 + 桥接三层都在，而且**不需要管理员**（它不是写操作）。
+    assert.ok(contract.includes("LINKAGE_SET_ALARM_CENTER_OPEN: 'linkage:set-alarm-center-open'"), '契约里没有这个通道')
+    assert.ok(
+      contract.includes('setAlarmCenterOpen(open: boolean): Promise<DeviceResult<{ open: boolean }>>'),
+      '契约的 linkage 面上没有这个方法'
+    )
+    const handler = block(handlers, 'ipcMain.handle(IpcChannels.LINKAGE_SET_ALARM_CENTER_OPEN', '处理器')
+    assert.equal(/requireAdministrator\(/.test(handler), false, '这条通道不该要管理员（它不写任何东西）')
+    assert.match(handler, /const value = open === true/, '非 boolean 没有被收敛成 false（失败方向必须是"继续弹"）')
+    assert.ok(preload.includes('setAlarmCenterOpen: (open: boolean) =>'), '预载桥没有这个方法')
+  })
+
+  it('闸门在**扣预算之前**判，而且只挡弹窗这一个动作', () => {
+    const engine = stripComments(read('src/main/services/linkage/alarm-linkage-engine.ts'))
+    const gate = block(engine, 'private evaluateAction(', 'evaluateAction()')
+    const suppressAt = gate.indexOf("action === 'popup' && this.options.popupSuppressed?.()")
+    const budgetAt = gate.indexOf('this.takeGlobalSlot(config)')
+    assert.ok(suppressAt > 0, '闸门里没有这条判据')
+    assert.ok(budgetAt > 0, '闸门里找不到扣全局名额那一句')
+    assert.ok(
+      suppressAt < budgetAt,
+      '判据排在扣预算之后了 —— 被跳过的那一次会吃掉弹窗配额（实测过：离开告警中心后第一条弹不出来）'
+    )
+    assert.match(gate, /action === 'popup'/, '判据没有限定在 popup 上（那会把录像/提示/邮件一起挡掉）')
+    assert.ok(engine.includes('popupSuppressed?: () => boolean'), '引擎选项里没有这个钩子')
+  })
+
+  it('渲染层进入/离开时推状态，而且推送失败是**静默**的', () => {
+    assert.match(centerMode, /function push\(open: boolean\): void \{/, 'store 没有推送函数')
+    assert.match(centerMode, /window\.api\.linkage\.setAlarmCenterOpen\(open\)/, '没有调那条 IPC')
+    assert.match(centerMode, /onScreen\.value = true\s*\n\s*push\(true\)/, 'enter() 没有推 true')
+    assert.match(centerMode, /onScreen\.value = false\s*\n\s*push\(false\)/, 'leave() 没有推 false')
+    // 缺口保护：没有这条桥时直接返回，不抛 —— 失败方向是"继续弹"。
+    assert.match(
+      centerMode,
+      /typeof window\.api\?\.linkage\?\.setAlarmCenterOpen !== 'function'\) return/,
+      '没有"桥不存在就直接返回"的保护'
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 六种语言的文案
 // ---------------------------------------------------------------------------
 

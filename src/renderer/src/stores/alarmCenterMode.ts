@@ -28,13 +28,23 @@
  * ---------------------------------------------------------------------------
  *   · 它**不关掉铃铛角标** —— 数字一直都在（"有几条没看"与"要不要再响一次"是两件事）；
  *   · 它**不清空任何列表** —— 本文件一个字节的数据都不改，只表达"当前这一屏是哪一页"；
- *   · 它**不拦截主进程那个置顶弹窗窗口**。那个窗口由主进程的联动动作创建
- *     （`linkage-actions.ts` 的 `ElectronPopupSink`），渲染层没有关它的 IPC，
- *     硬加一条通道会连"弹窗自己关掉时确认那条告警"的行为一起改 —— 超出这一条要求。
- *     这一段的边界写在 `docs/UI-VERIFY.md` 对应那一轮里，不当作已实现。
+ *   · 它**不动告警的确认状态** —— 确认仍然只能人工点（弹窗那个"手动关 = 确认"的路径
+ *     在告警中心里被让路，但面板上的确认按钮就在同一屏，见下）。
+ *
+ * ---------------------------------------------------------------------------
+ * 主进程那一半（业主 2026-09-26 第 5 条的"弹窗"部分）
+ * ---------------------------------------------------------------------------
+ * 那个置顶提示窗口是**主进程**用 `BrowserWindow` 开的，渲染层没有关它的能力。所以这个
+ * store 进入/离开时把状态**推给主进程**（`linkage.setAlarmCenterOpen`），由
+ * `ElectronPopupSink` 在开窗之前读一个布尔值决定要不要弹。
+ *
+ * 推送是**尽力而为**的：失败不抛、不重试、不做任何补救。理由是失败的方向必须是
+ * "继续弹" —— 漏掉一条告警比多弹一个窗口危险得多，所以这条通道断了也只是回到
+ * 改之前的行为（会弹），而不是把告警静音。
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { callApi } from '@renderer/lib/result'
 
 /** 告警中心的路由路径（与 `router/index.ts` 里那一条必须一致）。 */
 export const ALARM_CENTER_PATH = '/alarms'
@@ -50,14 +60,25 @@ export const useAlarmCenterModeStore = defineStore('alarmCenterMode', () => {
    */
   const quietForNotifications = computed(() => onScreen.value)
 
+  /**
+   * 把状态推给主进程（那个置顶弹窗窗口归它管）。**失败静默**，见文件头最后一段。
+   */
+  function push(open: boolean): void {
+    if (typeof window === 'undefined') return
+    if (typeof window.api?.linkage?.setAlarmCenterOpen !== 'function') return
+    void callApi(() => window.api.linkage.setAlarmCenterOpen(open))
+  }
+
   /** 进入告警中心时调用（`AlarmsView` 挂载 / 路由确认落在这一页时）。 */
   function enter(): void {
     onScreen.value = true
+    push(true)
   }
 
   /** 离开时调用（`onUnmounted`）。视图卸载就是"这一屏不在了"的权威判据。 */
   function leave(): void {
     onScreen.value = false
+    push(false)
   }
 
   return { onScreen, quietForNotifications, enter, leave }

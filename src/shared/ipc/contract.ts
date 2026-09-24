@@ -513,12 +513,22 @@ otify_url / is_send_realtime_value。
    *   - `LINKAGE_GET_STATUS`  读引擎状态与触发源健康度（读，不加管理员校验）；
    *   - `LINKAGE_GET_PENDING` 读待处理告警（读）；
    *   - `LINKAGE_ACKNOWLEDGE` 确认/清除待处理告警（**写，要管理员**）；
-   *   - `LINKAGE_TEST_EMAIL`  发一封测试邮件（**要管理员**，它会外发邮件）。
+   *   - `LINKAGE_TEST_EMAIL`  发一封测试邮件（**要管理员**，它会外发邮件）；
+   *   - `LINKAGE_SET_ALARM_CENTER_OPEN` 告诉主进程「操作员正在看告警中心」（**读的镜像**，
+   *     不需要管理员：它不写任何配置、不改变任何记录，只影响"要不要再弹一个提示窗口"）。
    */
   LINKAGE_GET_STATUS: 'linkage:get-status',
   LINKAGE_GET_PENDING: 'linkage:get-pending',
   LINKAGE_ACKNOWLEDGE: 'linkage:acknowledge',
   LINKAGE_TEST_EMAIL: 'linkage:test-email',
+  /**
+   * 渲染层 → 主进程：告警中心这一屏现在开着（业主 2026-09-26 第 5 条）。
+   *
+   * 为什么必须是渲染层告诉主进程：那个置顶提示窗口是主进程用 `BrowserWindow` 开的，
+   * 渲染层没有关它的能力；而"哪一页在屏幕上"只有渲染层知道。
+   * 挡的是**非告警类**与"已经在看告警中心"时的重复打扰，告警本身照样进列表与角标。
+   */
+  LINKAGE_SET_ALARM_CENTER_OPEN: 'linkage:set-alarm-center-open',
   /**
    * 取一段**手动录像**的可播放地址（本机回环 HTTP，支持 Range）。
    *
@@ -2794,6 +2804,18 @@ export interface RendererApi {
      * 留空则用已保存的那个。ADMINISTRATOR REQUIRED：它会真的往外发信。
      */
     testEmail(input: LinkageTestEmailInput): Promise<DeviceResult<LinkageTestEmailResult>>
+    /**
+     * 告诉主进程「告警中心这一屏现在开着/已经离开」。
+     *
+     * 业主 2026-09-26 第 5 条：告警中心里不该再被非告警类的弹窗/提示打扰。
+     * 挡的是**提示窗口的再次弹出**（那个窗口是主进程开的，渲染层关不掉），
+     * 不改变任何记录：告警照样进列表、角标照样跳数字、确认照样要人工点。
+     *
+     * 不需要管理员：它不是写操作，只是把"哪一页在屏幕上"这件渲染层才知道的事
+     * 同步给主进程。失败也不抛（返回 `success: false`），调用方据此**不做**任何补救 ——
+     * 这条通道没接上时行为与改之前完全一样（会弹），比"因为一次 IPC 失败就再也不弹"安全。
+     */
+    setAlarmCenterOpen(open: boolean): Promise<DeviceResult<{ open: boolean }>>
   }
 
   /**

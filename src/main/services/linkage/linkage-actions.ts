@@ -448,6 +448,17 @@ export interface ElectronPopupSinkOptions {
    * 自动消失（到点/被上限挤掉/应用退出）不触发——那不算用户处理了这条告警。
    */
   onManualClose?: (popupId: string) => void
+  /**
+   * 「操作员正在看告警中心」时不要开新窗口（业主 2026-09-26 第 5 条：
+   * 「告警中心中应该支持非告警弹窗的问题」）。
+   *
+   * 为什么这条判据在**主进程**：那个置顶窗口是主进程开的，渲染层没有关它的能力；
+   * 状态由渲染层经 `linkage.setAlarmCenterOpen()` 推过来，主进程只读一个布尔值。
+   *
+   * 被挡住时 `show()` 返回 `skipped` 并带上原因（**不是**静默丢掉）：那条告警的动作结果里
+   * 会留下"为什么没弹"的记录，操作员在告警中心的动作列表里看得见。
+   */
+  suppressed?: () => boolean
 }
 
 /**
@@ -492,6 +503,21 @@ export class ElectronPopupSink implements LinkagePopupSink {
   }
 
   async show(request: LinkagePopupRequest): Promise<LinkageActionOutcome> {
+    /*
+     * 「操作员正在看告警中心」：不再开新窗口，也不再刷新已开的。
+     *
+     * 这一条要在**开窗之前**判，见 `ElectronPopupSinkOptions.suppressed` 的注释。
+     * 返回 `skipped` + 原因，而不是静默返回成功：那条告警的动作列表里会写下
+     * "为什么这次没有弹"，否则操作员会以为弹窗功能坏了。
+     */
+    if (this.options.suppressed?.() === true) {
+      return {
+        action: 'popup',
+        status: 'skipped',
+        reason: '操作员正在查看告警中心，不再弹出提示窗口',
+        counted: false
+      }
+    }
     try {
       const existing = this.windows.get(request.popupId)
       if (existing && !existing.isDestroyed()) {

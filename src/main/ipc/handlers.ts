@@ -2506,6 +2506,24 @@ export function registerIpcHandlers(): void {
     })
   )
 
+  /*
+   * 「操作员正在看告警中心」（业主 2026-09-26 第 5 条）。
+   *
+   * 不需要管理员、也不写任何记录：它只是把"哪一页在屏幕上"这件**只有渲染层知道**的事
+   * 同步给主进程 —— 那个置顶提示窗口是主进程开的，渲染层没有关它的能力。
+   * 挡住的是"再看一遍同一个告警"的重复打扰，告警本身照样进列表与角标。
+   *
+   * 形状校验在边界上做完（非 boolean 一律当 false = 照常弹），因为这条通道
+   * **失败的方向必须是"继续弹"**：漏弹一条告警比多弹一个窗口危险得多。
+   */
+  ipcMain.handle(IpcChannels.LINKAGE_SET_ALARM_CENTER_OPEN, (_event, open?: unknown) =>
+    toResult(async () => {
+      const value = open === true
+      getServices().linkage.setAlarmCenterOpen(value)
+      return { open: value }
+    })
+  )
+
   // -------------------------------------------------------------------------
   // Configuration (Phase 9)
   // -------------------------------------------------------------------------

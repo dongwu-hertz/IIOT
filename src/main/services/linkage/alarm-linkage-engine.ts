@@ -145,6 +145,20 @@ export interface AlarmLinkageEngineOptions {
   text?: (key: string, params: Record<string, string>) => string
   /** 审计日志出口；默认写应用日志，测试可以直接收集。 */
   log?: (message: string, payload: Record<string, unknown>) => void
+  /**
+   * 「操作员正在看告警中心」时，弹窗这个动作**直接跳过**（业主 2026-09-26 第 5 条）。
+   *
+   * 为什么判据放在**闸门**（`evaluateAction`）而不是放在弹窗实现里：
+   * 冷却与速率预算是在闸门通过之后、执行之前扣的（见 `runAction` 里那句
+   * "计数在**执行之前**"）。如果只在 `ElectronPopupSink.show()` 里返回 skipped，
+   * 这一次**会白扣一次弹窗预算** —— 操作员离开告警中心之后的第一条告警就弹不出来，
+   * 而屏幕上没有任何东西解释为什么。放在闸门里，被跳过的那一次不扣任何预算，
+   * 与"冷却中"「未启用」这些跳过是完全同一种语义。
+   *
+   * 缺省（没有注入）恒为 `false`：这条通道没接上时必须**继续弹** ——
+   * 漏掉一条告警比多弹一个窗口危险得多。
+   */
+  popupSuppressed?: () => boolean
   /** 去重表容量。默认 512。 */
   dedupeCapacity?: number
   /** 一次触发里动作的执行顺序（固定顺序让审计与测试都可预测）。 */
@@ -566,6 +580,19 @@ export class AlarmLinkageEngine {
   ): 'allow' | string {
     if (!config.enabled) return '总开关关闭'
     if (!config.actions[action]) return `动作「${action}」未启用`
+
+    /*
+     * 「操作员正在看告警中心」：弹窗这一路让路（业主 2026-09-26 第 5 条）。
+     *
+     * 位置在**冷却与速率之前**是刻意的：被让路的那一次不该扣任何预算，
+     * 否则离开告警中心后的第一条告警会莫名其妙弹不出来。理由详见
+     * `AlarmLinkageEngineOptions.popupSuppressed`。
+     *
+     * 只挡弹窗：录像 / 提示 / 邮件照跑 —— 告警本身一条都不能丢。
+     */
+    if (action === 'popup' && this.options.popupSuppressed?.() === true) {
+      return '操作员正在查看告警中心，不再弹出提示窗口'
+    }
 
     if (!this.takeGlobalSlot(config)) {
       return `已达到全局速率上限（${config.runtime.maxActionsPerMinute} 次/分钟）`

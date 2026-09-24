@@ -115,6 +115,27 @@ export class AlarmLinkageService extends EventEmitter {
     this.mainWindowProvider = provider
   }
 
+  /**
+   * 「操作员正在看告警中心」——由渲染层经 `linkage.setAlarmCenterOpen()` 推过来。
+   *
+   * 为什么需要它（业主 2026-09-26 第 5 条：「告警中心中应该支持非告警弹窗的问题」）：
+   * 那个置顶提示窗口是**主进程**开的（`ElectronPopupSink`），渲染层没有关它的能力；
+   * 而"告警中心这一屏开着"只有渲染层知道。所以状态单向推过来，弹窗那一侧只读一个布尔值。
+   *
+   * 默认 `false`（会弹）：这条通道没接上时行为与改之前完全一样，不会因为一次 IPC 失败
+   * 就让告警彻底不弹 —— 那比多弹几个窗口危险得多。
+   */
+  private alarmCenterOpen = false
+
+  setAlarmCenterOpen(open: boolean): void {
+    this.alarmCenterOpen = open === true
+  }
+
+  /** 弹窗那一侧读它（`suppressed` 钩子）。 */
+  isAlarmCenterOpen(): boolean {
+    return this.alarmCenterOpen
+  }
+
   constructor(options: AlarmLinkageServiceOptions) {
     super()
     this.options = options
@@ -146,7 +167,15 @@ export class AlarmLinkageService extends EventEmitter {
         // 或手动关闭告警弹窗」）；确认动作会顺带把提示音循环停掉。
         onManualClose: (popupId) => {
           this.acknowledge([popupId])
-        }
+        },
+        /*
+         * 操作员正在看告警中心时不开新窗口（第 5 条；见 setAlarmCenterOpen）。
+         *
+         * 这是**兜底**那一层：正常路径上引擎的闸门已经把这次动作判成 skipped 了，
+         * `show()` 根本不会被调到。留着它是为了"将来有别的调用方直接调 sink"时
+         * 不会绕过这条口径 —— 多一层判断比多一个窗口便宜。
+         */
+        suppressed: () => this.alarmCenterOpen
       })
 
     this.frameCapture =
@@ -175,6 +204,15 @@ export class AlarmLinkageService extends EventEmitter {
       popup: this.popup,
       email: this.email,
       pending: this.pending,
+      /*
+       * 「操作员正在看告警中心」时让弹窗这一路在**闸门**里跳过（业主 2026-09-26 第 5 条）。
+       *
+       * 放在闸门而不是 sink 里，是为了**不白扣冷却预算**：扣费发生在闸门通过之后
+       * （`runAction` 里那句"计数在执行之前"），在 sink 里返回 skipped 会让这一次
+       * 照样占掉一个名额 —— 操作员离开告警中心后的第一条告警就弹不出来，而屏幕上
+       * 没有任何解释。详见 `AlarmLinkageEngineOptions.popupSuppressed`。
+       */
+      popupSuppressed: () => this.alarmCenterOpen,
       captureFrame: async (trigger) => {
         if (!options.settings.get().alarmLinkage.actions.email) return undefined
         const outcome = await frameCapture.capture(

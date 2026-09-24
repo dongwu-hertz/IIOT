@@ -508,14 +508,18 @@ const api: RendererApi = {
    * 告警本地联动（录像 / 弹窗 / 提示 / 邮件）。
    *
    * 渲染层**没有**任何「触发一次联动」的能力：引擎完全由主进程拥有，
-   * 这里只有「读状态」「读待处理」「确认」「发测试邮件」四件事。
+   * 这里只有「读状态」「读待处理」「确认」「发测试邮件」四件事，
+   * 外加一条**单向的视图状态**：告诉主进程告警中心现在开着（第 5 条：
+   * 告警中心里不该再被非告警类的弹窗打扰 —— 那个窗口是主进程开的，只有这里能说）。
    */
   linkage: {
     status: () => ipcRenderer.invoke(IpcChannels.LINKAGE_GET_STATUS),
     pending: () => ipcRenderer.invoke(IpcChannels.LINKAGE_GET_PENDING),
     acknowledge: (ids?: string[]) => ipcRenderer.invoke(IpcChannels.LINKAGE_ACKNOWLEDGE, ids),
     testEmail: (input: LinkageTestEmailInput) =>
-      ipcRenderer.invoke(IpcChannels.LINKAGE_TEST_EMAIL, input)
+      ipcRenderer.invoke(IpcChannels.LINKAGE_TEST_EMAIL, input),
+    setAlarmCenterOpen: (open: boolean) =>
+      ipcRenderer.invoke(IpcChannels.LINKAGE_SET_ALARM_CENTER_OPEN, open)
   },
 
   /**
