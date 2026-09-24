@@ -67,6 +67,7 @@ import type {
   MapTileCacheResult
 } from '@shared/ipc/contract'
 import { isAiServicePreset } from '@shared/domain/sample-ai'
+import { MAX_FEATURE_CHANNELS } from '@shared/domain/monitoring'
 import { AppError, ErrorCodes, toResult, type DeviceResult } from '@shared/errors'
 import type {
   ChangePasswordInput,
@@ -1436,10 +1437,27 @@ export function registerIpcHandlers(): void {
           throw new AppError(ErrorCodes.VALIDATION_ERROR, '请至少选择一路要监测的数据')
         }
 
+        /*
+         * 多通道同时显示（业主 2026-09-24）：勾选的每一路额外通道 = 一条额外
+         * `/features_stream` 连接，所以这里必须**截断**而不是照单全收 —— 渲染层
+         * 用同一个上限（`MAX_FEATURE_CHANNELS`）画勾选框，两边不许各说各的。
+         * 畸形的值（字符串、负数、1e9）直接丢掉：它们只可能来自坏掉的调用方。
+         */
+        const featureChannelIds = (Array.isArray(subscription.featureChannelIds)
+          ? subscription.featureChannelIds
+          : []
+        )
+          .filter(
+            (channel): channel is number =>
+              typeof channel === 'number' && Number.isInteger(channel) && channel >= 0 && channel <= 63
+          )
+          .slice(0, MAX_FEATURE_CHANNELS)
+
         const state = await services.devices.startMonitoring(
           subscription.deviceId,
           kinds,
-          subscription.channelId ?? 0
+          subscription.channelId ?? 0,
+          featureChannelIds
         )
 
         // Attach forwarding to the window that asked, so frames go to the
@@ -1458,7 +1476,8 @@ export function registerIpcHandlers(): void {
         appLog().info('Monitoring started', {
           deviceId: subscription.deviceId,
           kinds,
-          channelId: subscription.channelId ?? 0
+          channelId: subscription.channelId ?? 0,
+          featureChannels: featureChannelIds
         })
         return state
       })

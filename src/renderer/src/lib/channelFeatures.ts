@@ -142,6 +142,61 @@ export function channelFeatureState(input: ChannelFeatureStateInput): ChannelFea
   return 'stored'
 }
 
+export interface ChannelFeatureLivenessInput {
+  /** 会话是否在跑。会话停了，缓冲里的帧就只能是历史。 */
+  sessionRunning: boolean
+  /** 这一路有没有读到过帧。 */
+  hasFeature: boolean
+  /** 这一路最后一帧距今多久（毫秒）；从未读到就是 null。 */
+  ageMs: number | null
+  /** 多久没新帧就不算实时；默认 5 秒（特征帧实测约 1 Hz）。 */
+  staleAfterMs?: number
+}
+
+/** 与 `CHANNEL_SERIES_STALE_AFTER_MS` 同一个数；这里不 import 那个模块是为了不让两个 lib 互相依赖。 */
+const DEFAULT_LIVENESS_STALE_MS = 5_000
+
+/**
+ * 时间戳"略微在未来"的容忍度（毫秒）。
+ *
+ * 实测出来的坑：`now` 是 1 秒一次的走时（store 的 `now`），而帧的时间戳是**精确的到达
+ * 时刻**，所以一帧完全可能比上一次 `now` 的更新晚几十到几百毫秒 —— 于是 `now - 到达`
+ * 是个小负数。第一版把"负数"一律当"算不出新鲜度"而判成旧读数，结果**当前那一路**
+ * （唯一一条被采样到的通道）在界面上显示成"更新于 …"而不是"实时"：一个 133 ms 的
+ * 抖动被写成了"数据停了"。
+ *
+ * 所以负数分两种：1 秒以内的负数是走时抖动的正常范围，照常按实时算；明显在未来
+ * （设备与主机时钟不同步）就仍然不许冒充实时。
+ */
+const FUTURE_TOLERANCE_MS = 1_500
+
+/**
+ * 多通道订阅下"这一路现在算不算实时"（业主 2026-09-24）。
+ *
+ * 与 `channelFeatureState()` 的差别只有一条，但很要紧：那一版的口径建立在
+ * "设备一次只开一路流"（PROTOCOL-FINDINGS 4.3）之上，所以**只有操作员点着的那一路**
+ * 才可能算实时；多通道订阅之后，勾选的每一路各有一条连接（见 4B.4），任何一路只要
+ * 帧在进来就是实时的 —— 判据因此从"是不是我点着的那一路"换成**新鲜度**。
+ *
+ * 这不是放宽标准：新鲜度是更强的一条证据。"我点着它"只说明我们请求了这一路，
+ * 不说明设备真的在推；"5 秒内到过帧"才是设备真的在推。
+ *
+ * 仍然只有三种结果，且不许混：
+ *   live   这一路 5 秒内到过帧，会话在跑
+ *   stored 有读数但已经停了（或会话已经结束）—— 界面必须写出**那一刻的时刻**
+ *   unread 从来没有读到过（与"读到了 0"是两件事）
+ */
+export function channelFeatureLiveness(input: ChannelFeatureLivenessInput): ChannelFeatureState {
+  if (!input.hasFeature) return 'unread'
+  if (!input.sessionRunning) return 'stored'
+  const age = input.ageMs
+  if (age === null || !Number.isFinite(age)) return 'stored'
+  const limit = input.staleAfterMs ?? DEFAULT_LIVENESS_STALE_MS
+  // 明显在未来（设备与主机时钟不同步）算不出新鲜度，按"旧读数"处理，不冒充实时。
+  if (age < -FUTURE_TOLERANCE_MS) return 'stored'
+  return age <= limit ? 'live' : 'stored'
+}
+
 export type ChannelFeatureStateLabelKey = `monitorUi.channelFeature_${ChannelFeatureState}`
 
 /** 状态标签的目录 key；本模块不持有任何语言的文本。 */

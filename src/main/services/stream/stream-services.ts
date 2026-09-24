@@ -44,6 +44,15 @@ export interface StreamServiceOptions {
   headers: Record<string, string>
   /** Channel to subscribe to. The device streams one channel per connection. */
   channelId: number
+  /**
+   * Put `channelId` into the subscription ping even for a profile that carries
+   * none — the `/features_stream` multi-channel experiment.
+   *
+   * Default (absent) = the measured protocol, unchanged. See
+   * `WebSocketStreamOptions.channelInPing` for why the flag exists and why it is
+   * only ever set for the EXTRA channels of a multi-channel view.
+   */
+  channelInPing?: boolean
   profile: StreamProfile
 }
 
@@ -78,6 +87,7 @@ export abstract class BaseStreamService extends EventEmitter {
       profile: options.profile,
       headers: options.headers,
       channel: options.channelId,
+      ...(options.channelInPing === true ? { channelInPing: true } : {}),
       onStatus: (status) => {
         const event: StreamStatusEvent = {
           deviceId: this.deviceId,

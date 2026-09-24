@@ -39,9 +39,11 @@ import {
   type ChannelFeatureHistoryMap,
   type ChannelFeatureMap
 } from '@renderer/lib/channelFeatures'
+import { normalizeWatchedChannels } from '@renderer/lib/channelSeries'
 import type {
   AudioFrameEvent,
   FeatureStreamEvent,
+  MonitorFeatureChannel,
   RecordingStateEvent,
   SpectrogramFrameEvent,
   SpectrumFrameEvent,
@@ -50,6 +52,7 @@ import type {
 } from '@shared/domain/monitoring'
 import { STREAM_KINDS } from '@shared/domain/monitoring'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
+import type { MonitorState } from '@shared/ipc/contract'
 import { i18n } from '@renderer/i18n'
 
 /** Session lifecycle as the UI cares about it. */
@@ -142,6 +145,22 @@ export const useMonitorStore = defineStore('monitor', () => {
   const error = ref('')
   /** Streams the current session was started with, for the header status text. */
   const runningKinds = ref<StreamKind[]>([])
+  /**
+   * 多通道同时显示：界面勾选的那几路（业主 2026-09-24）。
+   *
+   * 一条勾选 = 主进程一条 `/features_stream` 连接，所以这份清单**就是**开着几条
+   * socket 的账。它不是显示缓冲：显示用的曲线来自 `channelFeatureHistory`（每通道
+   * 时间线），这里只回答"订阅了哪几路"。
+   *
+   * `channelId` 始终在集合里（主 socket 一直在推它）；空数组 = 老行为（只看当前一路）。
+   */
+  const featureChannels = ref<number[]>([])
+  /**
+   * 主进程对每一路订阅的**如实汇报**（`MonitorState.featureChannels`）：
+   * 帧数 + 帧里自称的 `cur_ch`。设备若不按连接分通道，那几路就是 `frames: 0`，
+   * 界面据此写"未收到这一路"，而不是把上一路的值搬过来。
+   */
+  const featureChannelState = ref<MonitorFeatureChannel[]>([])
 
   // -------------------------------------------------------------------------
   // Display buffers (all bounded — see the cap constants above)
@@ -497,6 +516,29 @@ export const useMonitorStore = defineStore('monitor', () => {
     }
   }
 
+  /**
+   * 主进程会话状态（含多通道的如实汇报）。
+   *
+   * 只认当前设备的：切设备时上一台的状态推送可能还在路上，收下它会让新设备的
+   * 多通道卡片显示另一台设备的通道。
+   */
+  function handleMonitorState(event: MonitorState): void {
+    if (event.deviceId !== deviceId.value) return
+    applyFeatureChannelState(event.featureChannels)
+  }
+
+  /**
+   * 把"每一路到底有没有帧"记下来（`MonitorState.featureChannels`）。
+   *
+   * 勾选集合**不**由这里改写：它由界面勾选框决定（`setFeatureChannels`）。这里只更新
+   * 每一路的现实（帧数 / 帧里自称的 `cur_ch`），因为界面要据它区分"这一路在推"与
+   * "设备根本没推这一路"。
+   */
+  function applyFeatureChannelState(channels: MonitorFeatureChannel[] | undefined): void {
+    if (!Array.isArray(channels)) return
+    featureChannelState.value = channels
+  }
+
   // -------------------------------------------------------------------------
   // Subscribe / unsubscribe — the pairing that must never break
   // -------------------------------------------------------------------------
@@ -522,7 +564,9 @@ export const useMonitorStore = defineStore('monitor', () => {
       events.onMonitorSpectrum(handleSpectrum),
       events.onMonitorSpectrogram(handleSpectrogram),
       events.onMonitorStatus(handleStreamStatus),
-      events.onRecordingState(handleRecordingState)
+      events.onRecordingState(handleRecordingState),
+      // 多通道：`MONITOR_STATE` 的推送里带着每一路订阅的现实（帧数 / cur_ch）。
+      events.onMonitorState(handleMonitorState)
     )
   }
 
@@ -593,6 +637,10 @@ export const useMonitorStore = defineStore('monitor', () => {
     channelFeatureHistory.value = {}
     // 上次内容同理：它是另一台设备的画面。
     lastContent.value = null
+    // 勾选的多路也属于上一台设备：设备换了，通道号与启用情况都不同（多路订阅会由
+    // `useRealtimeMonitorFeed` 在会话启动时按新设备的通道表重新设置）。
+    featureChannels.value = []
+    featureChannelState.value = []
   }
 
   /** 某一路通道的最后读数；没有读到过就是 `null`。 */
@@ -653,8 +701,20 @@ export const useMonitorStore = defineStore('monitor', () => {
     // very first frame is already captured.
     subscribe()
 
+    /*
+     * 多通道：勾选集合随订阅一起发出去，并把**当前通道补进去**后写回本地状态 ——
+     * 界面上勾选框的状态 = 这份清单，两边不许各说各的。当前通道永远在里面：
+     * 主 socket 一直在推它，多通道卡片理应把它画出来。
+     */
+    const featureNext = normalizeWatchedChannels([...featureChannels.value, target])
+    featureChannels.value = featureNext
     const result = await callApi(() =>
-      window.api.monitor.start({ deviceId: deviceId.value, kinds: [...kinds], channelId: target })
+      window.api.monitor.start({
+        deviceId: deviceId.value,
+        kinds: [...kinds],
+        channelId: target,
+        featureChannelIds: featureNext
+      })
     )
     if (seq !== sessionSeq) return
 
@@ -670,6 +730,7 @@ export const useMonitorStore = defineStore('monitor', () => {
     if (snapshot) {
       channelId.value = snapshot.channelId
       runningKinds.value = [...snapshot.running]
+      applyFeatureChannelState(snapshot.featureChannels)
       if (snapshot.recording) {
         recording.value = {
           active: true,
@@ -689,6 +750,38 @@ export const useMonitorStore = defineStore('monitor', () => {
     const message = await stopSession()
     state.value = message ? 'error' : 'idle'
     if (message) error.value = message
+  }
+
+  /**
+   * 改勾选的多路通道（业主 2026-09-24 多通道同时显示）。
+   *
+   * **不重启会话**：主进程的 `start()` 是增量的（同通道只加/减变化的那几条连接），
+   * 所以勾第 3 路不会把正在跑的频谱/音频一起掐掉重开 —— 重开会让中间那张图空一下，
+   * 而用户只是勾了个框。会话没在跑时就只记住选择，等 `start()` 时一起发出去。
+   *
+   * @returns 失败时的原因文本（界面显示），成功为空串。
+   */
+  async function setFeatureChannels(channels: readonly number[]): Promise<string> {
+    const next = normalizeWatchedChannels([...channels, channelId.value])
+    featureChannels.value = next
+    if (state.value !== 'running' || !deviceId.value) return ''
+    if (!runningKinds.value.includes('features')) return ''
+
+    const result = await callApi(() =>
+      window.api.monitor.start({
+        deviceId: deviceId.value,
+        kinds: [...runningKinds.value],
+        channelId: channelId.value,
+        featureChannelIds: next
+      })
+    )
+    if (!result.success) {
+      const message = resultMessage(result)
+      error.value = message
+      return message
+    }
+    applyFeatureChannelState(unwrap(result)?.featureChannels)
+    return ''
   }
 
   /**
@@ -758,6 +851,10 @@ export const useMonitorStore = defineStore('monitor', () => {
     channelFeatures,
     /** 每通道时间线（检测模式 2×2 图的来源；换设备清空，切通道保留）。 */
     channelFeatureHistory,
+    /** 多通道同时显示：勾选订阅的那几路（含当前通道）。 */
+    featureChannels,
+    /** 主进程对每一路订阅的如实汇报（帧数 / 帧里自称的 cur_ch）。 */
+    featureChannelState,
     /** 「上次内容」的快照（业主第 18 条），界面上只用它的时刻。 */
     lastContent,
     deviceStatus,
@@ -784,6 +881,7 @@ export const useMonitorStore = defineStore('monitor', () => {
     setDeviceStatus,
     start,
     stop,
+    setFeatureChannels,
     startRecording,
     stopRecording,
     subscribe,

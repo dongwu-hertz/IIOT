@@ -20,6 +20,8 @@
 import { EventEmitter } from 'node:events'
 import type { RecordingType } from '@shared/domain/models'
 import type { StreamKind } from '@shared/domain/monitoring'
+import { MAX_FEATURE_CHANNELS } from '@shared/domain/monitoring'
+import type { FeatureStreamEvent, MonitorFeatureChannel } from '@shared/domain/monitoring'
 import { AppError, ErrorCodes } from '@shared/errors'
 import { deviceLog } from '../logging/logger'
 import { STREAM_PROFILES } from './websocket-stream'
@@ -127,6 +129,27 @@ const MAX_MANUAL_RECORDING_MS = 6 * 60 * 60 * 1000
  */
 const SLOW_STREAM_GRACE_MS = 2000
 
+/**
+ * 规范化界面勾选的特征通道：只留合法整数通道号、去重、升序、封顶。
+ *
+ * `channelId`（当前通道）永远在集合里：主 socket 一直在推它，界面把它当作
+ * "当前这一路"，若勾选集合里没有它，多通道卡片就少了一条本可以画的线。
+ *
+ * 封顶用 `MAX_FEATURE_CHANNELS`（shared）：一条勾选 = 一条连接，这个上限是
+ * 设备与 IPC 的代价上限，渲染层的勾选框用的是同一个数。
+ */
+function normalizeFeatureChannels(
+  channels: readonly number[] | undefined,
+  channelId: number
+): number[] {
+  const seen = new Set<number>([channelId])
+  for (const channel of channels ?? []) {
+    if (!Number.isInteger(channel) || channel < 0 || channel > 63) continue
+    seen.add(channel)
+  }
+  return [...seen].sort((left, right) => left - right).slice(0, MAX_FEATURE_CHANNELS)
+}
+
 export class StreamManager extends EventEmitter {
   private readonly options: StreamManagerOptions
   private readonly ringBuffer: PcmRingBuffer
@@ -135,6 +158,38 @@ export class StreamManager extends EventEmitter {
   private audio?: AudioStreamService
   private spectrum?: SpectrumStreamService
   private spectrogram?: SpectrogramStreamService
+
+  /**
+   * 多通道同时显示（业主 2026-09-24）：勾选的每一路额外通道 = 一条额外连接。
+   *
+   * 实测一条 `/features_stream` 连接只推一路（PROTOCOL-FINDINGS 4.3），而它的订阅
+   * ping 里**没有**通道参数（§4B）。所以"多路同时刷新"能不能成立，取决于固件是否把
+   * 通道绑在连接上 —— 未在真机验证。这一版按"能"建连，并按**帧里自带的 `cur_ch`**
+   * 如实汇报每一路到底有没有来；来不了就报 `frames: 0`，界面写"未收到这一路"。
+   * 详细取舍见 `docs/PROTOCOL-FINDINGS.md` §4B.4 与 `WebSocketStreamOptions.channelInPing`。
+   */
+  private extraFeatures = new Map<number, FeatureStreamService>()
+  /** 界面勾选的通道（含当前通道）；`start()` 每次都会整体替换。 */
+  private featureChannelIds: number[] = []
+  /** 每条额外连接的真实表现，用于 `state()` 的如实汇报。 */
+  private featureChannelReports = new Map<
+    number,
+    { observedChannelId?: number; frames: number; lastFrameAt?: number }
+  >()
+  /**
+   * 正在编排（切通道 → 建连）中的额外通道。
+   *
+   * 存在的唯一理由是**别对设备重复写**：勾选框点得比编排快时，两轮编排会同时跑，
+   * 没有这个集合就会对同一路发两次 `/channel_select`（真机上是一次无意义的设备写）。
+   */
+  private featureChannelPending = new Set<number>()
+  /**
+   * 额外连接的编排序号（切通道 / 改勾选都会 +1）。
+   *
+   * 编排是异步的（先 `/channel_select`，再建连），中途用户又改了一次勾选就会有两轮
+   * 同时在跑；序号让旧的一轮在下一个 await 之后自行退出，不至于把已经取消的通道又打开。
+   */
+  private featureSyncSeq = 0
 
   private recording?: ActiveRecording
   private disposed = false
@@ -212,8 +267,19 @@ export class StreamManager extends EventEmitter {
    * Idempotent: calling it again with the same kinds does nothing, and calling
    * it with a different set only adds or removes what changed. That matters
    * because the UI calls it on every channel switch and every page revisit.
+   *
+   * @param featureChannelIds channels the renderer wants FEATURE frames for
+   *   (业主 2026-09-24 multi-channel view). `channelId` is always one of them —
+   *   it is what the primary socket already streams — and every other entry gets
+   *   its own `/features_stream` connection. Absent/empty = exactly the previous
+   *   single-channel behaviour, so a caller that does not know about this option
+   *   (an older renderer, the mock, a test) is unaffected.
    */
-  start(kinds: readonly StreamKind[], channelId = 0): void {
+  start(
+    kinds: readonly StreamKind[],
+    channelId = 0,
+    featureChannelIds?: readonly number[]
+  ): void {
     if (this.disposed) throw new AppError(ErrorCodes.UNKNOWN, '流管理器已释放')
 
     // Channel changes require a full restart: the subscription channel is fixed
@@ -265,12 +331,220 @@ export class StreamManager extends EventEmitter {
     if (!wanted.has('spectrum')) this.stopSpectrum()
     if (!wanted.has('spectrogram')) this.stopSpectrogram()
 
+    /*
+     * 多通道：勾选集合整体替换（含当前通道，它由主 socket 负责）。没要 features
+     * 就一条额外连接都不留 —— 否则"关掉特征流"之后，多出来的那几条还在推。
+     */
+    this.featureChannelIds = normalizeFeatureChannels(featureChannelIds, channelId)
+    if (wanted.has('features')) this.syncExtraFeatureStreams()
+    else this.stopExtraFeatureStreams()
+
     this.requestedKinds = [...wanted]
     this.emitState()
     deviceLog().info('Monitor streams started', {
       deviceId: this.deviceId,
       kinds: this.requestedKinds,
-      channelId: this.channelId
+      channelId: this.channelId,
+      featureChannels: this.featureChannelIds
+    })
+  }
+
+  /**
+   * 让"额外通道连接"与勾选集合对齐：不想要的关掉，缺的补上（编排见下）。
+   *
+   * 与四个主流一样是增量的：勾第 3 路不该把已经跑着的第 2 路关掉重开。
+   */
+  private syncExtraFeatureStreams(): void {
+    const wanted = this.featureChannelIds.filter((id) => id !== this.channelId)
+
+    for (const [channelId, service] of [...this.extraFeatures]) {
+      if (wanted.includes(channelId)) continue
+      service.stop()
+      this.extraFeatures.delete(channelId)
+      this.featureChannelReports.delete(channelId)
+      this.featureChannelPending.delete(channelId)
+      deviceLog().info('Extra feature stream closed', { deviceId: this.deviceId, channelId })
+    }
+
+    /*
+     * 需要建的 = 勾选里**还没有连接**的通道，包括"上一轮正在编排、还没建好"的那些。
+     *
+     * 不能把正在编排的排除在外：编排是异步的（`PUT /channel_select` → 建连），
+     * 新一轮会把旧一轮的序号作废（旧一轮在下一个 await 就退出），所以旧一轮没建完的活
+     * 必须由新一轮接手 —— 排除它们就会**漏建一条连接**（实测：连点两个勾选框，
+     * 第二路永远没有帧）。
+     */
+    const alreadyPending = new Set(this.featureChannelPending)
+    const missing = wanted.filter((channelId) => !this.extraFeatures.has(channelId))
+    if (missing.length === 0) return
+
+    for (const channelId of missing) this.featureChannelPending.add(channelId)
+    // 取消上一轮还没走完的编排（用户在编排途中又改了勾选）。
+    const seq = (this.featureSyncSeq += 1)
+    void this.openExtraFeatureStreams(missing, seq, alreadyPending)
+  }
+
+  /**
+   * 打开额外通道的连接：**先在设备上切到这一路，再建连，最后把设备切回当前通道**。
+   *
+   * 为什么要有"切过去再建连"这一步：`/features_stream` 的订阅没有通道参数，
+   * 唯一的通道线索是设备的"当前通道"。若固件是在**握手时**把当前通道绑到这条连接上
+   * （`/audio_stream` 已证实可以按连接分通道），那么"切过去 → 建连"就能让这条连接
+   * 停在这一路上。若固件是"跟随设备当前通道"，那么复位之后所有连接都会回到当前通道，
+   * 其结果就是**只有当前那一路实时、其余几路 0 帧** —— 界面会照实写"未收到这一路"，
+   * 不会拿旧值冒充实时（业主 2026-09-24 选定的口径）。
+   *
+   * 复位是必须的：频谱 `/freq_domain` 跟随设备当前通道（§4B），不复位就会把频谱
+   * 留在最后勾选的那一路上，而操作员看的明明是另一路。
+   *
+   * @param skipSelect 已经由**上一轮**编排切过去的通道：那一轮已经把它切好了，这一轮
+   *   再切一次就是对设备的重复写（真机上会落 flash）。设备当前通道在两次调用之间
+   *   只会被这套编排自己改动，所以"别人刚切过"等于"现在还在那一路"。
+   */
+  private async openExtraFeatureStreams(
+    channels: readonly number[],
+    seq: number,
+    skipSelect: ReadonlySet<number> = new Set<number>()
+  ): Promise<void> {
+    const select = this.options.selectChannel
+
+    try {
+      for (const channelId of channels) {
+        if (seq !== this.featureSyncSeq || this.disposed) return
+        if (this.extraFeatures.has(channelId)) continue
+        if (select && !skipSelect.has(channelId)) {
+          try {
+            await select(channelId)
+          } catch (error) {
+            /*
+             * 切不过去（通道未启用、设备拒绝）仍然建连：这条连接的帧里带着 `cur_ch`，
+             * 界面会看到"没收到这一路"。直接放弃建连反而少了一条诊断线索。
+             */
+            deviceLog().warn('Could not select a channel before opening its feature stream', {
+              deviceId: this.deviceId,
+              channelId,
+              reason: error instanceof Error ? error.message : String(error)
+            })
+          }
+        }
+        if (seq !== this.featureSyncSeq || this.disposed) return
+        this.startExtraFeatureStream(channelId)
+      }
+
+      if (select && seq === this.featureSyncSeq && !this.disposed) {
+        try {
+          await select(this.channelId)
+        } catch (error) {
+          deviceLog().warn('Failed to restore the device channel after the multi-channel setup', {
+            deviceId: this.deviceId,
+            channelId: this.channelId,
+            reason: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+      this.emitState()
+    } finally {
+      /*
+       * 出队：这条通道**已经有连接**，或者**已经不再被勾选**，才叫"不在编排中"。
+       * 不能一律清掉 —— 旧的一轮被新的一轮取代时（seq 变了），它退出时如果无条件清空，
+       * 新一轮正在建的那条就会被看成"没人管"，第三轮又会为它再切一次设备通道。
+       */
+      for (const channelId of channels) {
+        if (this.extraFeatures.has(channelId) || !this.featureChannelIds.includes(channelId)) {
+          this.featureChannelPending.delete(channelId)
+        }
+      }
+    }
+  }
+
+  /** 一条额外通道的连接（实验性：ping 里带上 channel，见 `channelInPing`）。 */
+  private startExtraFeatureStream(channelId: number): void {
+    const service = new FeatureStreamService({
+      ...this.commonOptions(),
+      channelId,
+      channelInPing: true,
+      profile: STREAM_PROFILES.features as (typeof STREAM_PROFILES)['features']
+    })
+    const report: { observedChannelId?: number; frames: number; lastFrameAt?: number } = {
+      frames: 0
+    }
+    this.featureChannelReports.set(channelId, report)
+
+    service.on('feature', (payload: FeatureStreamEvent) => {
+      const observed = payload.feature.channelId
+      report.frames += 1
+      report.lastFrameAt = payload.feature.timestamp
+      if (report.observedChannelId !== observed) {
+        report.observedChannelId = observed
+        if (observed === channelId) {
+          deviceLog().info('Extra feature stream confirmed on its own channel', {
+            deviceId: this.deviceId,
+            channelId
+          })
+        } else {
+          deviceLog().warn(
+            'Extra feature stream reports ANOTHER channel: this firmware does not route /features_stream per connection',
+            { deviceId: this.deviceId, requested: channelId, observed }
+          )
+        }
+        /*
+         * 这一路"到底推的是哪一路"刚刚有了答案 —— 立刻把会话状态推一次。
+         *
+         * 不推的话界面只能等到下一次会话变化才知道（那几个状态推送很稀疏），于是
+         * 悬停说明会长时间停在"未收到这一路"的通用解释上，而设备其实已经明确告诉了
+         * 我们它推的是另一路 —— 那正好是排障最需要的一句话。
+         */
+        this.emitState()
+      }
+      // 只有帧里 `cur_ch` 就是这一路的帧才转发？不 —— 全部转发，让渲染层按 `cur_ch`
+      // 归类。丢掉"串台"的帧等于把设备的行为藏起来，而界面本就要照实显示。
+      this.emit('feature', payload)
+    })
+    // 额外连接的状态只进日志，不进 `stream-status`：那一栏是"四个流各自的健康"，
+    // 8 条 features 连接轮流改写它只会让状态灯乱闪，什么也说明不了。
+    service.on('status', (status: { state: string; retries: number }) => {
+      deviceLog().debug('Extra feature stream status', {
+        deviceId: this.deviceId,
+        channelId,
+        state: status.state,
+        retries: status.retries
+      })
+    })
+
+    this.extraFeatures.set(channelId, service)
+    service.start()
+    deviceLog().info('Extra feature stream opened', { deviceId: this.deviceId, channelId })
+  }
+
+  private stopExtraFeatureStreams(): void {
+    // 先让 in-flight 的编排失效，再关连接。
+    this.featureSyncSeq += 1
+    for (const service of this.extraFeatures.values()) service.stop()
+    this.extraFeatures.clear()
+    this.featureChannelReports.clear()
+    this.featureChannelPending.clear()
+  }
+
+  /** 每条额外连接的真实表现：界面据此说"这一路收到了 / 没收到"。 */
+  get featureChannels(): MonitorFeatureChannel[] {
+    return this.featureChannelState()
+  }
+
+  private featureChannelState(): MonitorFeatureChannel[] {
+    return this.featureChannelIds.map((channelId) => {
+      if (channelId === this.channelId) {
+        return { channelId, primary: true, frames: this.features?.frameCount ?? 0 }
+      }
+      const report = this.featureChannelReports.get(channelId)
+      return {
+        channelId,
+        primary: false,
+        frames: report?.frames ?? 0,
+        ...(report?.observedChannelId !== undefined
+          ? { observedChannelId: report.observedChannelId }
+          : {}),
+        ...(report?.lastFrameAt !== undefined ? { lastFrameAt: report.lastFrameAt } : {})
+      }
     })
   }
 
@@ -419,13 +693,18 @@ export class StreamManager extends EventEmitter {
       return kinds
     }
 
+    /*
+     * 这两个 `start()` 也必须带上当前的多通道勾选：否则一按录音就会把额外通道的
+     * 连接当成"不再需要"而关掉 —— 与上面那条"录音顺手关掉频谱"的历史 bug 是同一个
+     * 形状的坑（`start()` 的参数是**完整**的期望集合，不是增量）。
+     */
     if (channelId !== undefined && channelId !== this.channelId) {
       // A channel switch genuinely does require reopening the audio socket.
-      this.start(kindsWithAudio(), channelId)
+      this.start(kindsWithAudio(), channelId, this.featureChannelIds)
     }
     if (!this.audio) {
       // Start audio WITHOUT narrowing the existing set.
-      this.start(kindsWithAudio(), this.channelId)
+      this.start(kindsWithAudio(), this.channelId, this.featureChannelIds)
     }
     if (!this.audio) {
       throw new AppError(
@@ -583,6 +862,7 @@ export class StreamManager extends EventEmitter {
     this.stopAudio()
     this.stopSpectrum()
     this.stopSpectrogram()
+    this.stopExtraFeatureStreams()
   }
 
   /**
@@ -799,6 +1079,8 @@ export class StreamManager extends EventEmitter {
       channelId: this.channelId,
       running: this.runningKinds,
       recording: this.isRecording,
+      // 多通道：把"每一路到底有没有帧"随会话状态一起报给界面（业主 2026-09-24）。
+      featureChannels: this.featureChannelState(),
       ...(this.recording ? { recordingStartedAt: this.recording.startedAt } : {}),
       ...(this.recording ? { recordingId: this.recording.id } : {}),
       ...(elapsedMs !== undefined ? { elapsedMs } : {})

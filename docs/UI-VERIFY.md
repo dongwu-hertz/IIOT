@@ -4386,3 +4386,105 @@ preload 桥接与 Vue 挂载、**六种语言**在打包构建里渲染、应用
    `['electron', /^electron\/.+/, ...builtinModules.flatMap(m => [m, `node:${m}`])]`
    （**函数式 `external` 不够**：只判 `node:` 前缀时 Vite 仍然把内置模块当浏览器依赖，试过）。
    也就是说 `npm run build` 与 `npm run build:check` 现在**两条路都通**：前者出 `out/`，后者不动 `out/`。
+
+## LL. 声纹设备「多通道同时显示」（2026-09-24，业主当轮需求）
+
+业主原话：**「声纹设备的实时检测界面应该支持多个通道同时显示数据的功能」**，
+随后两条口径补充：勾选多个通道，**都在同一个卡片中**、趋势线用不同颜色区分；
+**每路：SPL / 主频 / 平稳度 / 频带能量比 四读数 + 一条迷你趋势**。
+放置位置由业主在 A/B/C 三个选项里选了 **A**：保留检测模式原有的四张指标卡，
+**另加一张「多通道读数」卡**。
+
+### LL.1 目标页面是哪一个（先说清，否则会做进死代码）
+
+`/monitor`（实时监测）页「检测」模式 —— 四张指标卡（声压级 / 平稳度 / 能量比 / 主频）
+本来就是"每通道一色"的多通道图，缺的只是**同时订阅**与**一次读出每路四个数**。
+
+⚠️ 顺带查清：`components/realtime/RealtimeMonitor.vue` 与它带的 `VoiceprintTemplate.vue`
+**当前没有任何页面挂载**（`DeviceMapView` 的注释写着"RealtimeMonitor 不再常驻页面"）。
+我最初把多通道做进了那里，发现后**整份回退**，改到真正在用的 `/monitor`。
+那两张卡要复活的话，多通道这套（store 的 `featureChannels` + `lib/channelSeries.ts`）
+可以直接复用。
+
+### LL.2 后端：每勾一路 = 一条 `/features_stream` 连接
+
+| 位置 | 改动 |
+|---|---|
+| `websocket-stream.ts` | 新增 `channelInPing`：给"profile 本来不带通道"的端点也把 `channel` 塞进订阅 ping（**实验**，只用于额外通道；当前通道那条连接的 ping 一个字节没改） |
+| `stream-manager.ts` | `start(kinds, channelId, featureChannelIds?)`；每条额外通道：`PUT /channel_select` → 建连 → 全部建完再把设备当前通道**复位**（频谱跟随设备当前通道，不复位就会把频谱留在最后勾选的那一路） |
+| `stream-manager.ts` | 每路如实记账 `MonitorFeatureChannel{channelId, primary, frames, observedChannelId, lastFrameAt}`，随 `MONITOR_STATE` 推给界面 |
+| `contract.ts` / `handlers.ts` | `featureChannelIds`（去重、只留 0..63 整数、封顶 `MAX_FEATURE_CHANNELS = 8`）、`MonitorState.featureChannels` |
+
+协议依据与**未验证**那一步写在 `docs/PROTOCOL-FINDINGS.md` §4B.4：`/features_stream` 的
+实测 ping 没有通道参数，所以"多路同时刷新"取决于固件是否按连接绑通道 —— 真机当天不可达。
+
+### LL.3 界面（`MonitorView.vue` 检测模式）
+
+- 新卡「多通道读数」横跨检测网格两列（`grid-column: 1 / -1`），所以四张指标卡仍是 2×2。
+- 卡头一排**勾选框**（`data-multi-channel-watch`）= 订阅；点行仍然是"切当前通道"。
+  当前通道的勾选框禁用且恒勾（主连接一直在推它）。
+- 每路一行：色块（与四张卡的线色同一个 `trendChannelColor`）+ CH 号 + **四个读数** +
+  **一条迷你趋势**（纯函数 `seriesSparkPath()`）+ 状态。
+- 三种状态分开写：**实时** / **更新于 hh:mm:ss** / **未收到这一路**，悬停给原因
+  （设备推到别处就说"这条连接推的是 CHx"，帧里自称的 `cur_ch`）。
+- 单通道视图那张每通道特性表的状态口径同步换成**新鲜度**
+  （`channelFeatureLiveness()`）：多通道订阅之后，"我点着这一路"不再是实时的判据，
+  "5 秒内到过帧"才是 —— 这一条比原来更严，不是更松。
+
+### LL.4 验证：两种固件行为各跑一遍真窗口
+
+`scripts/mock-device.cjs` 增加了 **WebSocket 实时流**（原来只有 HTTP chunked），
+并用 `--ws-binding` 扮演两种固件行为；`scripts/verify-multichannel.cjs` 起 mock + 一次性
+profile + 真应用，driver 在窗口里加设备、开流、勾 CH4/CH5、读界面。
+
+```
+node scripts/verify-multichannel.cjs --binding per-connection   # 假设固件按连接绑通道
+node scripts/verify-multichannel.cjs --binding follow-current   # 实测行为（只推设备当前通道）
+```
+
+| 模式 | 结果（真窗口量到） | 退出码 |
+|---|---|---|
+| `per-connection` | `live rows: CH1, CH4, CH5` / `unread rows: （空）` / **0 问题** | 0 |
+| `follow-current` | `live rows: CH1` / `unread rows: CH4, CH5` / **0 问题** | 0 |
+
+两种模式共同证明的一件事：**界面没有一次把别的通道的读数搬到勾选的那一路名下**。
+`follow-current` 那一遍里，额外两条连接**各收到 8–12 帧**（`observedChannelId = 0`，
+设备自己说推的是 CH1），界面据此把 CH4/CH5 写成"未收到这一路"，并在悬停里点出
+"这条连接推的是 CH1" —— 这正是这条功能最危险的失败模式（假图看起来完全正常）。
+
+设备侧的连接账（mock 记的，不是界面说的）：`/features_stream` **3 条**、
+`PUT /channel_select` **4 次 → CH1 CH4 CH5 CH1`（开一路 → 建连 → 复位，无重复写）。
+
+探针跑出来的两个真缺陷（都已修）：
+
+1. **当前那一路被写成"更新于 …"**：`now` 是 1 秒一次的走时，帧时间戳是精确到达时刻，
+   于是刚到的那一帧常常比 `now` 晚几十到几百毫秒（量到 **−133 ms**），
+   第一版把负数一律判成"算不出新鲜度"→ 唯一在推的那一路反而不显示"实时"。
+   现在 1.5 s 以内的负数按抖动处理，明显在未来（设备与主机时钟不同步）仍不冒充实时。
+2. **连点两个勾选框会漏建一条连接**：编排是异步的，第二轮把第一轮的序号作废，
+   而第一轮还没建完的那一路如果被"排除在待建之外"，那一路就永远没有帧
+   （实测 CH4 0 帧）。现在新一轮**接手**上一轮未完成的通道，并跳过已经切过的
+   `PUT /channel_select`（不重复写设备）。
+
+### LL.5 本轮验证数字
+
+| 项 | 结果 |
+|---|---|
+| `npm run typecheck`（node + web） | 通过 |
+| `npm run build` | 通过（`MonitorView` 364 kB） |
+| `npm run build:check` | 3 段真构建 + 模板编译 78 个 `.vue` 全过 |
+| `node scripts/run-tests-inproc.cjs` | **113 文件 · 2387 通过 / 75 失败** —— 75 条与 KK.8 同一批陈旧守卫，本轮未新增（新增 `tests/channel-series.test.ts` 共 17 条全过） |
+| `node scripts/i18n-orphans.cjs` | **缺失键 0 个** |
+| `node scripts/i18n-progress.cjs` | 用户可见硬编码中文 **0 行** |
+| `node scripts/verify-multichannel.cjs` ×2 | 两种固件行为各 **0 问题** |
+
+### LL.6 仍未验证（不能按已验证验收）
+
+1. **真机到底属于哪一种固件行为** —— 这是本功能唯一的核心未知。
+   AE08 @ 192.168.110.90 当天不可达；mock 的两种模式只能证明"两种情况界面都不撒谎"。
+   真机到手后跑一次 `--binding` 之前的那条路径（直接看日志里
+   `Extra feature stream confirmed on its own channel` 还是
+   `... reports ANOTHER channel`）即可定性。
+2. 真机并发 8 条 `/features_stream` 的稳定性（本机上限 8，未在真机压过）。
+3. 真机上 `PUT /channel_select` 复位带来的频谱瞬跳（勾选时频谱会短暂跟随被勾的那一路）。
+

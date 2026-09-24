@@ -88,10 +88,15 @@ import {
 } from '@renderer/lib/channelState'
 import { channelLabel, formatBytes, formatDateTime, formatDuration, formatNumber, EMPTY_VALUE } from '@renderer/lib/format'
 import {
-  channelFeatureState,
+  channelFeatureLiveness,
   channelFeatureStateLabelKey,
   type ChannelFeatureState
 } from '@renderer/lib/channelFeatures'
+import {
+  buildChannelSeries,
+  seriesSparkPath,
+  toggleWatchedChannel
+} from '@renderer/lib/channelSeries'
 import { clampListPage, listPageCount, listPageSlice } from '@renderer/lib/listPaging'
 import { DEFAULT_VOLUME_PERCENT } from '@renderer/lib/audioPreview'
 import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
@@ -639,13 +644,18 @@ const channelFeatureRows = computed<ChannelFeatureRow[]>(() =>
       name: tab.name,
       state: tab.state,
       feature,
-      featureState: channelFeatureState({
-        isActiveChannel: tab.index === activeChannelIndex.value,
+      /*
+       * 读数状态：口径是**新鲜度**（`channelFeatureLiveness`）。
+       *
+       * 2026-09-24 多通道订阅之前，只有操作员点着的那一路才可能实时，所以判据里带着
+       * "是不是当前通道"。现在勾选的每一路各有一条连接，任何一路只要帧在进来就是实时的
+       * —— 继续用"我点着它"当判据会把一路正在更新的通道写成"最后一次读数"。
+       * 反过来这一条也更严："我请求了它"不说明设备在推，"5 秒内到过帧"才说明。
+       */
+      featureState: channelFeatureLiveness({
         sessionRunning: monitor.state === 'running',
-        // 帧计数属于**当前订阅的那一路**：别的通道拿 0，否则切通道的一瞬间会把
-        // 上一路的帧数算成"这一路正在实时"。
-        frameCount: tab.index === monitor.channelId ? monitor.frameCountOf('features') : 0,
-        hasFeature: feature !== null
+        hasFeature: feature !== null,
+        ageMs: feature ? monitor.now - feature.timestamp : null
       }),
       alarm,
       alarming: channelIsAlarming(alarm)
@@ -1117,6 +1127,104 @@ const detectOptions = computed<Record<DetectMetricKey, EChartsCoreOption>>(() =>
 const detectHasData = computed(() =>
   channelTabs.value.some((tab) => (monitor.channelFeatureHistory[tab.index]?.length ?? 0) > 0)
 )
+
+// ---------------------------------------------------------------------------
+// 多通道同时显示（业主 2026-09-24）
+// ---------------------------------------------------------------------------
+
+/**
+ * 「多通道读数」卡：勾选的那几路，每路一行 —— 四个读数 + 一条迷你趋势 + 状态。
+ *
+ * 为什么要有这张卡：四张检测卡画的是"每路一条线"的对比，但**没有地方一次读出
+ * 每一路现在的四个数**（单通道视图那张特性表一次只翻 4 行，而且不带趋势）。
+ * 业主的原话是"每路：SPL / 主频 / 平稳度 / 频带能量比 四读数 + 一条迷你趋势"。
+ *
+ * 数据源与四张检测卡完全相同（`monitor.channelFeatureHistory`，每通道自己的时间线），
+ * 状态判定走纯函数 `lib/channelSeries.ts`（可单测）。**迷你趋势固定画声压级**：
+ * 四个读数各配一条线只会让人分不清哪条是哪条，而声压级是操作员扫一眼的那个量。
+ */
+const MULTI_CHANNEL_WINDOW_MS = 60_000
+
+const multiChannelSeries = computed(() =>
+  buildChannelSeries({
+    watchedChannels: monitor.featureChannels,
+    history: monitor.channelFeatureHistory,
+    metric: 'spl',
+    now: monitor.now,
+    windowMs: MULTI_CHANNEL_WINDOW_MS,
+    activeChannel: activeChannelIndex.value,
+    sessionRunning: monitor.state === 'running'
+  })
+)
+
+/** 勾选状态：当前通道永远在里面（主 socket 一直在推它）。 */
+function isChannelWatched(index: number): boolean {
+  return monitor.featureChannels.includes(index)
+}
+
+/**
+ * 勾选/取消一路 —— 只有点勾选框走这里，点行仍然是"切当前通道"。
+ *
+ * 增量订阅：`setFeatureChannels()` 不重启会话（主进程的 `start()` 是增量的），
+ * 所以勾第 3 路不会把正在跑的频谱/波形/时频图一起掐掉重开。
+ */
+function toggleChannelWatch(index: number): void {
+  if (index === activeChannelIndex.value) return
+  void monitor.setFeatureChannels(toggleWatchedChannel(monitor.featureChannels, index))
+}
+
+/** 勾选框的提示：禁用那一个要说清楚为什么。 */
+function watchTitle(index: number): string {
+  if (index === activeChannelIndex.value) return t('realtimeUi.watchChannelCurrent')
+  return isChannelWatched(index)
+    ? t('realtimeUi.watchChannelOff')
+    : t('realtimeUi.watchChannelOn')
+}
+
+/** 这一路主进程到底收到过帧没有（`MonitorState.featureChannels` 的如实汇报）。 */
+const channelRealityByChannel = computed(() => {
+  const map = new Map<number, { frames: number; observedChannelId?: number }>()
+  for (const entry of monitor.featureChannelState) map.set(entry.channelId, entry)
+  return map
+})
+
+/**
+ * 一行的状态文字：实时 / 更新于 <时刻> / 未收到这一路。
+ *
+ * 三种说法各有各的意思，不许合成一句"无数据"—— "没收到"与"收到了但停了"对排障是
+ * 两条完全不同的线索（前者要看设备，后者要看过一会儿会不会回来）。
+ */
+function multiChannelStateText(series: (typeof multiChannelSeries.value)[number]): string {
+  if (series.state === 'unread') return t('realtimeUi.multiChannelNotReceived')
+  if (series.state === 'live') return t('realtimeUi.status.live')
+  return t('realtimeUi.updatedAt', { time: featureTime(series.lastAt ?? monitor.now) })
+}
+
+/**
+ * 状态文字的悬停解释。
+ *
+ * 三种状态三种说法，**实时那一路不给解释**（它的状态本身就说明了一切，再挂一句
+ * "设备只推当前通道"只会让人以为这一路有问题）：
+ *   - 没收到 + 设备把这条连接推到了别的通道 -> "这条连接推的是 CHx"（帧里自称的 cur_ch，
+ *     设备的原话，不是我们的推断）；
+ *   - 没收到 + 其它情况 -> 说清 `PUT /channel_select` 之后这一路仍然没有帧的原因；
+ *   - 收到了但停了 -> 说清"超过 5 秒没有新帧"，并说明留在这里的是最后一次读数。
+ */
+function multiChannelStateHint(series: (typeof multiChannelSeries.value)[number]): string {
+  if (series.state === 'live') return ''
+  const observed = channelRealityByChannel.value.get(series.channelId)?.observedChannelId
+  if (observed !== undefined && observed !== series.channelId) {
+    return t('realtimeUi.multiChannelWrongChannel', { channel: channelLabel(observed) })
+  }
+  return series.state === 'stored'
+    ? t('realtimeUi.multiChannelStaleWhy')
+    : t('realtimeUi.multiChannelNotReceivedWhy')
+}
+
+/** 迷你趋势的 path（纯函数在 `lib/channelSeries.ts`，已单测）。 */
+function multiChannelSparkPath(points: Array<{ x: number; y: number }>): string {
+  return seriesSparkPath(points)
+}
 
 /**
  * Frequency axis from `binHz`.
@@ -3690,12 +3798,126 @@ const sessionLabel = computed(() => {
       <!--
         Item 24：检测模式 —— 四张指标卡（声压级 / 平稳度 / 能量比 / 主频）的 2×2 网格，
         每张卡同一坐标系里最多 8 条通道曲线（每通道一色，图例在卡内右侧标通道号）。
-        数据来自 store 的 `channelFeatureHistory`：每通道各自的时间线（当前订阅那一路
-        实时进来，其余通道是上次切到它时的读数），**跨通道不同步** —— 那句口径原来
-        写在网格下方的一句说明里，业主 20260921 要求撤掉文字块、只留趋势卡卡头那颗
-        ⓘ 的悬停提示。图本身用时间轴说真话（没数据的时段不占宽度）。不额外开连接。
+        数据来自 store 的 `channelFeatureHistory`：每通道各自的时间线，**跨通道不同步**
+        —— 那句口径原来写在网格下方的一句说明里，业主 20260921 要求撤掉文字块、
+        只留趋势卡卡头那颗 ⓘ 的悬停提示。图本身用时间轴说真话（没数据的时段不占宽度）。
+
+        2026-09-24 多通道同时显示：勾选多路时每一路各开一条 `/features_stream` 连接
+        （`monitor.featureChannels`），于是同一次会话里可以有几条线**同时在长**。
+        上面那张「多通道读数」卡就是这件事的入口与账目。
       -->
       <div v-show="viewMode === 'detect'" class="detect-grid">
+        <!--
+          多通道读数（业主 2026-09-24 原话：勾选多个通道，都在同一个卡片中，只是趋势线
+          用不同的颜色表示；每路 SPL / 主频 / 平稳度 / 频带能量比 四读数 + 一条迷你趋势）。
+
+          它是这个网格的第一项并横跨两列（`grid-column: 1 / -1`），所以四张检测卡仍然是
+          2×2 —— 多出来的这张卡不会把"每行最多 2 张"挤成 2+2+1 的散排。
+
+          勾选框 = **订阅**（一条勾选 = 一条连接），点行仍然是"切当前通道"——两者不共用
+          点击目标：点行会让音频/频谱/时频图跟着走，勾选框只影响这张卡与四张检测卡上有几条线。
+        -->
+        <section v-if="isVoiceprint" class="card multi-channel" data-multi-channel>
+          <div class="section-header">
+            <h3 class="section-title">{{ t('realtimeUi.multiChannelTitle') }}</h3>
+            <div
+              class="multi-channel__watch"
+              role="group"
+              :aria-label="t('realtimeUi.watchChannelsLabel')"
+              :title="t('realtimeUi.watchHint')"
+            >
+              <label
+                v-for="tab in channelTabs"
+                :key="tab.index"
+                class="multi-channel__watch-item"
+                :class="{ 'multi-channel__watch-item--off': isTabDisabled(tab) }"
+              >
+                <input
+                  type="checkbox"
+                  class="multi-channel__checkbox"
+                  :checked="isChannelWatched(tab.index)"
+                  :disabled="isTabDisabled(tab) || tab.index === activeChannelIndex"
+                  :title="watchTitle(tab.index)"
+                  :aria-label="watchTitle(tab.index)"
+                  :data-multi-channel-watch="tab.index"
+                  @change="toggleChannelWatch(tab.index)"
+                />
+                <span>{{ tab.label }}</span>
+              </label>
+            </div>
+          </div>
+
+          <table class="multi-channel__table" data-multi-channel-table>
+            <caption class="visually-hidden">{{ t('realtimeUi.multiChannelTitle') }}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{{ t('monitorUi.channelFeatureColumnChannel') }}</th>
+                <th scope="col">{{ t('metrics.spl') }}</th>
+                <th scope="col">{{ t('metrics.mainFrequency') }}</th>
+                <th scope="col">{{ t('metrics.smoothness') }}</th>
+                <th scope="col">{{ t('metrics.bandEnergyRatio') }}</th>
+                <th scope="col" class="multi-channel__spark-col">{{ t('realtimeUi.trendColumn') }}</th>
+                <th scope="col">{{ t('realtimeUi.statusColumn') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="series in multiChannelSeries"
+                :key="series.channelId"
+                :data-multi-channel-row="series.channelId"
+                :data-multi-channel-state="series.state"
+                :data-multi-channel-age="series.ageMs ?? ''"
+              >
+                <th scope="row" class="multi-channel__channel">
+                  <i class="multi-channel__swatch" :style="{ background: series.color }"></i>
+                  <span>{{ series.label }}</span>
+                  <!-- 「当前」是文字，不是只靠底色：色块已经在表示通道，不能用它兼任状态。 -->
+                  <span v-if="series.isActive" class="multi-channel__current">
+                    {{ t('realtimeUi.currentChannel') }}
+                  </span>
+                </th>
+                <template v-if="series.latest">
+                  <td class="multi-channel__value">{{ formatNumber(series.latest.spl, 2) }} dB</td>
+                  <td class="multi-channel__value">
+                    {{ formatNumber(series.latest.mainFrequency, 2) }} Hz
+                  </td>
+                  <td class="multi-channel__value">{{ formatNumber(series.latest.smoothness, 3) }}</td>
+                  <td class="multi-channel__value">
+                    {{ formatNumber(series.latest.bandEnergyRatio, 3) }}
+                  </td>
+                </template>
+                <!--
+                  没收到过的那几路：四格合成一句原因，不是四个空格、也不是四个 0。
+                  「没收到」与「收到了但停了」在状态列里另外分开写。
+                -->
+                <td v-else class="multi-channel__empty" colspan="4">
+                  {{ t('monitorUi.channelFeatureUnread') }}
+                </td>
+                <td class="multi-channel__spark-cell">
+                  <svg
+                    v-if="multiChannelSparkPath(series.points)"
+                    class="multi-channel__spark"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      :d="multiChannelSparkPath(series.points)"
+                      :style="{ stroke: series.color }"
+                      vector-effect="non-scaling-stroke"
+                    />
+                  </svg>
+                  <span v-else class="muted">—</span>
+                </td>
+                <td class="multi-channel__state" :title="multiChannelStateHint(series)">
+                  {{ multiChannelStateText(series) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="multi-channel__note">{{ t('realtimeUi.multiChannelNote') }}</p>
+        </section>
+
         <section v-for="metric in DETECT_METRICS" :key="metric.key" class="card chart-panel detect-card">
           <div class="section-header">
             <h3 class="section-title">{{ t(metric.labelKey) }}</h3>
@@ -4642,6 +4864,137 @@ const sessionLabel = computed(() => {
  * 每行**最多 2 张**（业主点名的 2×2），窄屏回落一列。
  * 与 `.graph-grid` 并列的另一块（auto-fit 会在超宽屏上并出 4 列，那不符合"最多 2 张"）。
  */
+/*
+  多通道读数（2026-09-24）。它横跨检测网格的两列（`grid-column: 1 / -1`），所以四张检测卡
+  仍然是 2×2；`margin-bottom` 补上网格那点细缝（网格 gap 是刻意压到很小的）。
+
+  列宽由内容定：四个读数格里最宽的是"93000.00 Hz"，状态列里最宽的是"更新于 12:03:44"，
+  通道列按色块 + CH 号 + 角标收窄。迷你趋势固定 96px 宽：它是"形状"而不是"读数"，
+  宽了会抢走读数列的空间。
+*/
+.multi-channel {
+  grid-column: 1 / -1;
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.multi-channel__watch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.multi-channel__watch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* 未启用的通道：整块变灰且点不动 —— 与页头通道页签同一套状态口径。 */
+.multi-channel__watch-item--off {
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+}
+
+.multi-channel__checkbox {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* 当前通道由主 socket 一直在推，取消勾选只会少画一行 —— 禁用它，不是藏起来。 */
+.multi-channel__checkbox:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.multi-channel__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+.multi-channel__table th,
+.multi-channel__table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.multi-channel__table thead th {
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+
+.multi-channel__channel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  font-weight: 500;
+}
+
+/* 色块 = 这一路在四张检测卡上的线色（同一个 trendChannelColor 取色）。 */
+.multi-channel__swatch {
+  width: 10px;
+  height: 3px;
+  border-radius: 1px;
+  flex: 0 0 auto;
+}
+
+.multi-channel__current {
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--color-accent-light);
+  color: var(--color-accent-strong);
+  font-size: 10px;
+}
+
+.multi-channel__empty {
+  color: var(--color-text-tertiary);
+  text-align: center !important;
+}
+
+.multi-channel__spark-col,
+.multi-channel__spark-cell {
+  width: 96px;
+}
+
+.multi-channel__spark {
+  display: block;
+  width: 96px;
+  height: 16px;
+}
+
+.multi-channel__spark path {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.multi-channel__state {
+  color: var(--color-text-secondary);
+}
+
+.multi-channel__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
 .detect-grid {
   display: grid;
   gap: calc(var(--space-4) * 0.1);

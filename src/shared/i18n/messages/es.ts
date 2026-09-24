@@ -695,7 +695,7 @@ export const es: MessageSchema = {
     /** Leyenda de la tarjeta de detección: {channel} recibe CH1..CH8. */
     detectLegendChannel: 'Canal {channel}',
     /** Nota sobre el origen de los datos en modo detección (el equipo abre un flujo cada vez; las curvas por canal no están alineadas en el tiempo). */
-    detectDataNote: 'El equipo abre un flujo cada vez: cada curva muestra las lecturas recibidas de ese canal durante esta suscripción — continua dentro de un canal, no alineada entre canales.',
+    detectDataNote: 'Con varios canales marcados cada uno abre su propia conexión (una marca = una conexión): cada curva muestra las lecturas de ese canal en esta sesión — continua dentro de un canal, no alineada en el tiempo entre canales.',
     channelFeature_live: 'En vivo',
     channelFeature_stored: 'Última lectura',
     channelFeature_unread: 'Sin leer',
@@ -1425,6 +1425,23 @@ export const es: MessageSchema = {
     signalTrend: 'TENDENCIA DE SEÑAL',
     channels: 'CANALES',
     channelsHint: 'Seleccione un canal para cambiar las columnas central y derecha; los canales sin lectura muestran —.',
+    watchHint:
+      'Marque canales adicionales para ver sus tendencias y las cuatro lecturas juntas (un color por canal); el audio, el espectro y la huella siguen solo el canal actual.',
+    watchChannelOn: 'MOSTRAR TAMBIÉN ESTE CANAL',
+    watchChannelsLabel: 'CANALES MOSTRADOS A LA VEZ',
+    watchChannelOff: 'DEJAR DE MOSTRAR ESTE CANAL',
+    watchChannelCurrent: 'EL CANAL ACTUAL SIEMPRE SE MUESTRA',
+    multiChannelTitle: 'LECTURAS MULTICANAL',
+    multiChannelNote:
+      'Cada canal se dibuja según su propia hora de llegada; no se garantiza que estén sincronizados.',
+    multiChannelNotReceived: 'SIN DATOS',
+    multiChannelNotReceivedWhy:
+      'La suscripción /features_stream no lleva canal y solo envía el canal actual del equipo; este canal se actualiza solo si el firmware enruta por conexión.',
+    multiChannelWrongChannel: 'ESTA CONEXIÓN ENVÍA {channel}',
+    multiChannelStaleWhy: 'Sin tramas nuevas durante más de 5 segundos: este canal puede haberse detenido; la tabla muestra su última lectura.',
+    trendColumn: 'TENDENCIA',
+    statusColumn: 'ESTADO',
+    currentChannel: 'ACTUAL',
     featuresTitle: 'CARACTERÍSTICAS DE {channel}',
     channelIssue: 'INCIDENCIA DEL CANAL',
     aboveLimit: 'Por encima del límite',

@@ -177,6 +177,28 @@ export interface WebSocketStreamOptions {
   headers: Record<string, string>
   /** Channel to subscribe to, for profiles that carry one. */
   channel?: number
+  /**
+   * Send `channel` in the subscription ping even though the profile says the
+   * endpoint carries none.
+   *
+   * WHY THIS EXISTS — an UNVERIFIED experiment, isolated behind one flag
+   * `/features_stream`'s measured ping is `{"type": "ping", }`: no channel. The
+   * frame it pushes is whatever channel the DEVICE has selected (PROTOCOL-FINDINGS
+   * 4B), so on the measured firmware N connections all report the same channel.
+   *
+   * `/audio_stream` and `/time_freq_domain` DO carry a per-connection `channel`,
+   * so the firmware demonstrably routes some streams per connection. Whether
+   * `/features_stream` also honours a `channel` field — as opposed to ignoring it
+   * — has never been tried, because the device's own UI never needs to.
+   *
+   * So: the flag is only set for the EXTRA channels of a multi-channel view, never
+   * for the channel the operator is actually watching. Worst case the field is
+   * ignored, the socket still opens and still pushes the device's current channel;
+   * the frame's own `cur_ch` is what labels the data, so a wrong guess produces a
+   * visible "未收到这一路" rather than a mislabelled reading. Best case the device
+   * routes per connection and multiple channels stream at once.
+   */
+  channelInPing?: boolean
   /** Reconnect backoff ceiling. */
   maxReconnectDelayMs?: number
   /**
@@ -502,10 +524,17 @@ export class WebSocketStream extends EventEmitter {
     this.candidateIndex += 1
   }
 
-  /** Rewrite the profile's ping body with the requested channel. */
+  /**
+   * Rewrite the profile's ping body with the requested channel.
+   *
+   * `channelInPing` can force the channel into a profile that normally carries
+   * none — see the option's comment: that is the `/features_stream`
+   * multi-channel experiment, and it is the ONLY caller of the flag.
+   */
   private pingBodyFor(channel: number | undefined): string {
-    const { profile } = this.options
-    if (!profile.carriesChannel || channel === undefined) return profile.pingBody
+    const { profile, channelInPing } = this.options
+    const carries = profile.carriesChannel || channelInPing === true
+    if (!carries || channel === undefined) return profile.pingBody
     // `channel` must be a STRING — that is what the device's own UI sends.
     return `{"type": "ping", "channel": "${channel}"}`
   }

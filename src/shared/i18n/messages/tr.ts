@@ -700,7 +700,7 @@ export const tr: MessageSchema = {
     /** Algılama kartı ekranı: {channel} CH1..CH8 alır. */
     detectLegendChannel: 'Kanal {channel}',
     /** Algılama kipi veri kaynağı notu (cihaz her seferinde tek akış açar; kanal eğrileri zamanda hizalı değildir). */
-    detectDataNote: 'Cihaz her seferinde tek akış açar: her eğri, bu abonelik sırasında o kanaldan alınan okumaları gösterir — kanal içinde sürekli, kanallar arasında zamanda hizalı değil.',
+    detectDataNote: 'Birden çok kanal işaretlendiğinde her biri kendi bağlantısını açar (bir işaret = bir bağlantı): her eğri o kanalın bu oturumdaki okumalarını gösterir — kanal içinde sürekli, kanallar arasında zamanda hizalı değil.',
     channelFeature_live: 'Canlı',
     channelFeature_stored: 'Son okuma',
     channelFeature_unread: 'Okunmadı',
@@ -1429,6 +1429,23 @@ export const tr: MessageSchema = {
     signalTrend: 'SİNYAL EĞİLİMİ',
     channels: 'KANALLAR',
     channelsHint: 'Orta ve sağ sütunu değiştirmek için bir kanal seçin; okuması olmayan kanallar — gösterir.',
+    watchHint:
+      'Ek kanalları işaretleyerek eğilimlerini ve dört okumayı birlikte görün (her kanal için bir renk); ses, spektrum ve ses izi yalnızca geçerli kanalı izler.',
+    watchChannelOn: 'BU KANALI DA GÖSTER',
+    watchChannelsLabel: 'BİRLİKTE GÖSTERİLEN KANALLAR',
+    watchChannelOff: 'BU KANALI GÖSTERMEYİ BIRAK',
+    watchChannelCurrent: 'GEÇERLİ KANAL HER ZAMAN GÖSTERİLİR',
+    multiChannelTitle: 'ÇOK KANALLI OKUMALAR',
+    multiChannelNote:
+      'Her kanal kendi varış zamanına göre çizilir; kanalların eşzamanlı olması garanti değildir.',
+    multiChannelNotReceived: 'VERİ YOK',
+    multiChannelNotReceivedWhy:
+      '/features_stream aboneliği kanal taşımaz ve yalnızca cihazın geçerli kanalını gönderir; bu kanal ancak ürün yazılımı bağlantı bazında yönlendirirse yenilenir.',
+    multiChannelWrongChannel: 'BU BAĞLANTI {channel} GÖNDERİYOR',
+    multiChannelStaleWhy: '5 saniyeden uzun süredir yeni çerçeve yok: bu kanal durmuş olabilir; tabloda son okuması duruyor.',
+    trendColumn: 'EĞİLİM',
+    statusColumn: 'DURUM',
+    currentChannel: 'GEÇERLİ',
     featuresTitle: '{channel} ÖZELLİKLERİ',
     channelIssue: 'KANAL ARIZASI',
     aboveLimit: 'Sınır üstü',

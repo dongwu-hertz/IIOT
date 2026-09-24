@@ -10,7 +10,7 @@
  */
 
 import type { DeviceResult } from '../errors'
-import type { StreamKind } from '../domain/monitoring'
+import type { MonitorFeatureChannel, StreamKind } from '../domain/monitoring'
 import type {
   AlarmProfileConfig,
   ChannelConfigView,
@@ -1116,6 +1116,16 @@ export interface MonitorSubscription {
    * monitoring N channels requires N connections. See PROTOCOL-FINDINGS 4.3.
    */
   channelId?: number
+  /**
+   * Channels the UI wants FEATURE frames for, for the multi-channel view
+   * (业主 2026-09-24).
+   *
+   * `channelId` is always included — it is what the primary socket already
+   * streams — and each other entry gets its own `/features_stream` connection.
+   * Capped at `MAX_FEATURE_CHANNELS`; omitted means "just the current channel",
+   * which is exactly the behaviour before this option existed.
+   */
+  featureChannelIds?: number[]
 }
 
 /** What the main process is currently streaming, for UI reconciliation. */
@@ -1134,6 +1144,14 @@ export interface MonitorState {
    * away from the duration the saved file actually reports.
    */
   elapsedMs?: number
+  /**
+   * Per-channel feature-feed reality for the multi-channel view.
+   *
+   * Absent on an older main process, and `[]` when no feature stream runs; the
+   * renderer treats a missing list as "the device only pushes the current
+   * channel" rather than inventing per-channel health.
+   */
+  featureChannels?: MonitorFeatureChannel[]
 }
 
 export interface StartRecordingInput {

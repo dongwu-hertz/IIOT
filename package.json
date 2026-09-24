@@ -39,6 +39,7 @@
     "verify:remember": "node scripts/remember-login-proof.cjs",
     "verify:pages": "node scripts/verify-page.cjs --all --with-data",
     "verify:round50": "node scripts/verify-round50.cjs --with-data",
+    "verify:multichannel": "node scripts/verify-multichannel.cjs --binding per-connection",
     "pack:dir": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "dist:win:offline": "npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs",

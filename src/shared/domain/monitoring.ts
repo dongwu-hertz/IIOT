@@ -167,6 +167,18 @@ export type StreamKind = 'features' | 'audio' | 'spectrum' | 'spectrogram'
  */
 export const STREAM_KINDS: readonly StreamKind[] = ['features', 'audio', 'spectrum', 'spectrogram']
 
+/**
+ * 同时订阅的**特征**通道数上限（业主 2026-09-24：多通道同时显示）。
+ *
+ * 一条通道 = 一条 `/features_stream` 连接（实测一条连接只推一路，PROTOCOL-FINDINGS 4.3），
+ * 所以这个数字直接是"设备上多开几条 socket"的代价上限。设备一共 8 路，界面上也不会
+ * 有人同时读超过 8 条线；超过就**截断**（渲染层同一个函数 `normalizeWatchedChannels`）。
+ *
+ * 放在 `shared/` 的理由与 `TREND_METRIC_MAX_SELECTED` 相同：主进程的 IPC 校验与渲染层
+ * 的勾选框必须用同一个数，否则界面允许勾 9 路而主进程静默丢掉第 9 路。
+ */
+export const MAX_FEATURE_CHANNELS = 8
+
 /** Per-stream connection state, pushed on every transition. */
 export interface StreamStatusEvent {
   deviceId: string
@@ -177,4 +189,39 @@ export interface StreamStatusEvent {
   lastError?: string
   /** Frames received since the stream started; drives a "receiving data" hint. */
   frameCount?: number
+}
+
+// ---------------------------------------------------------------------------
+// Multi-channel feature view (业主 2026-09-24)
+// ---------------------------------------------------------------------------
+
+/**
+ * What one watched channel's feature connection is actually doing.
+ *
+ * WHY THIS IS REPORTED RATHER THAN ASSUMED
+ * `/features_stream`'s subscription carries no channel, so the firmware decides
+ * what a given socket delivers. Two behaviours are possible and they have never
+ * been distinguished on real hardware (PROTOCOL-FINDINGS §4B.4):
+ *
+ *   - the channel is bound per CONNECTION at handshake time → every watched
+ *     channel gets its own live feed;
+ *   - the stream follows the DEVICE's current channel → every extra socket
+ *     delivers the same channel, and `frames` stays 0 for the rest.
+ *
+ * `frames`/`observedChannelId` are the measurement that tells the two apart, so
+ * the UI can say "这一路没有收到" instead of drawing a stale value as if it were
+ * live. `observedChannelId` is the `cur_ch` of the last frame on that socket —
+ * the device's own statement of what it sent, never our assumption.
+ */
+export interface MonitorFeatureChannel {
+  /** Channel the renderer asked for (0-based, as everywhere else). */
+  channelId: number
+  /** True for the operator's current channel, which the primary socket streams. */
+  primary: boolean
+  /** Feature frames received for this channel since the session started. */
+  frames: number
+  /** `cur_ch` of the last frame on this connection; absent when none arrived. */
+  observedChannelId?: number
+  /** Arrival time of the last frame on this connection. */
+  lastFrameAt?: number
 }

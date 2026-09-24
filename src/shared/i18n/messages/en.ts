@@ -714,7 +714,7 @@ presets, the licence boundaries
     /** Detection-card legend: {channel} receives CH1..CH8. */
     detectLegendChannel: 'Channel {channel}',
     /** Data-source note for detection mode (the device opens one stream at a time; per-channel curves are not time-aligned). */
-    detectDataNote: 'The device opens one stream at a time: each curve shows the readings received for that channel during this subscription — continuous within a channel, not time-aligned across channels.',
+    detectDataNote: 'With several channels ticked each one opens its own connection (one tick = one connection): every curve shows that channel readings within this session — continuous within a channel, not time-aligned across channels.',
     channelFeature_live: 'Live',
     channelFeature_stored: 'Last reading',
     channelFeature_unread: 'Not read',
@@ -1462,6 +1462,23 @@ presets, the licence boundaries
     signalTrend: 'SIGNAL TREND',
     channels: 'CHANNELS',
     channelsHint: 'Select a channel to switch the centre and right columns; channels with no reading show —.',
+    watchHint:
+      'Tick extra channels to see their trends and four readings together (one colour per channel); audio, spectrum and voiceprint still follow the current channel only.',
+    watchChannelOn: 'SHOW THIS CHANNEL TOO',
+    watchChannelsLabel: 'CHANNELS SHOWN TOGETHER',
+    watchChannelOff: 'STOP SHOWING THIS CHANNEL',
+    watchChannelCurrent: 'THE CURRENT CHANNEL IS ALWAYS SHOWN',
+    multiChannelTitle: 'MULTI-CHANNEL READINGS',
+    multiChannelNote:
+      'Each channel is plotted at its own arrival time; channels are not guaranteed to be in step.',
+    multiChannelNotReceived: 'NO DATA',
+    multiChannelNotReceivedWhy:
+      'The /features_stream subscription carries no channel and pushes only the current channel of the device; this channel refreshes only if the firmware routes per connection.',
+    multiChannelWrongChannel: 'THIS CONNECTION CARRIES {channel}',
+    multiChannelStaleWhy: 'No new frame for over 5 seconds: this channel may have stopped; the table shows its last reading.',
+    trendColumn: 'TREND',
+    statusColumn: 'STATUS',
+    currentChannel: 'CURRENT',
     featuresTitle: '{channel} FEATURES',
     channelIssue: 'CHANNEL ISSUE',
     aboveLimit: 'Above limit',

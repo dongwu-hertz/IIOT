@@ -1432,7 +1432,8 @@ export class DeviceService extends EventEmitter {
   async startMonitoring(
     deviceId: string,
     kinds: readonly StreamKind[],
-    channelId = 0
+    channelId = 0,
+    featureChannelIds?: readonly number[]
   ): Promise<MonitorState> {
     const device = this.get(deviceId)
     if (!this.createStreamManager) {
@@ -1500,7 +1501,7 @@ export class DeviceService extends EventEmitter {
       this.streamBridges.set(deviceId, this.bridgeManagerEvents(deviceId, manager))
     }
 
-    manager.start(kinds, channelId)
+    manager.start(kinds, channelId, featureChannelIds)
     return this.monitorStateFor(deviceId, manager)
   }
 
@@ -1582,7 +1583,9 @@ export class DeviceService extends EventEmitter {
       deviceId,
       channelId: manager.currentChannelId,
       running: manager.runningKinds,
-      recording: manager.isRecording
+      recording: manager.isRecording,
+      // 多通道：每一路到底有没有帧，随会话状态一起回给界面（业主 2026-09-24）。
+      featureChannels: manager.featureChannels
     }
     // Audio-anchored elapsed time, so a caller that polls `state()` agrees with
     // the pushed recording-state events rather than inventing a wall-clock value.
