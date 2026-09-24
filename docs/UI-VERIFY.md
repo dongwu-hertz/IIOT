@@ -4198,7 +4198,7 @@ ffmpeg 段）在测试内部 `spawnSync` 起子进程，被本机拒绝（`EPERM
 | `tsc --noEmit -p tsconfig.node.json` | **0 错** |
 | `vue-tsc --noEmit -p tsconfig.web.json` | **0 错** |
 | `node scripts/i18n-progress.cjs` | 用户可见硬编码中文 **0**（exit 0） |
-| `node scripts/build-check.cjs` | 模板编译 **78 个 `.vue` 全过**；renderer / preload 真构建 **✔**；main 那一段是本工具自己的已知差异（见 KK.9） |
+| `node scripts/build-check.cjs` | **3 段 · 通过 3 / 失败 0**（三段真构建 + 78 个 `.vue` 模板编译全过） |
 | 新增守卫 `tests/alarm-round50.test.ts` | **26 / 26 通过** |
 | `alarm-center-round` / `alarm-linkage` | **11 / 11**、**84 / 84** |
 | 全量（`npm run test:inproc`） | 112 个文件 · **2355 通过 / 73 红 / 0 崩溃** |
@@ -4247,10 +4247,10 @@ ffmpeg 段）在测试内部 `spawnSync` 起子进程，被本机拒绝（`EPERM
    模板是 `.vue` 的半条命，**一道闸门都没看它**。
    现在 `build-check.cjs` 多了一段 `checkTemplates()`：用 `@vue/compiler-sfc` 逐个编译
    `.vue` 的模板（进程内，约 1 秒，78 个文件），模板层面的错从此在构建之前就报出来。
-2. **`build-check.cjs` 的 `main` 段仍会报一条假失败**（本工具自己的已知差异，不是产品问题）：
-   `"randomUUID" is not exported by "__vite-browser-external"`。
-   原因是这个脚本为了绕开 esbuild 子进程**没有**用 `electron-vite`，而少掉的那一层里
-   包含它对主进程 `node:*` 内置模块的外部化；`npm run build` 同一份源码是 **exit 0**。
-   试过 `rollupOptions.external` 与 `ssr: true` 都没消掉，所以这里如实记着：
-   **看到 `main` 这一段红时，先跑一次 `npm run build` 再下结论。**
-   （本机现在 `npm run build` 可用，所以这条的优先级已经很低。）
+2. **`build-check.cjs` 现在是全绿的**（本轮修好）：三段**真构建** + 模板编译全过 → `3 段 · 通过 3 / 失败 0`。
+   之前 `main` 段那条假失败（`"randomUUID" is not exported by "__vite-browser-external"`）的根因找到了：
+   这个脚本为了绕开 esbuild 子进程没有用 `electron-vite`，而少掉的那一层里包含它对 Electron 侧的
+   外部化清单 —— 照抄 `electron-vite` 自己那两处 `external:` 之后就好了：
+   `['electron', /^electron\/.+/, ...builtinModules.flatMap(m => [m, `node:${m}`])]`
+   （**函数式 `external` 不够**：只判 `node:` 前缀时 Vite 仍然把内置模块当浏览器依赖，试过）。
+   也就是说 `npm run build` 与 `npm run build:check` 现在**两条路都通**：前者出 `out/`，后者不动 `out/`。

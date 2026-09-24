@@ -127,25 +127,28 @@ async function realBuild(name, section, options = {}) {
   fs.rmSync(outDir, { recursive: true, force: true })
   const started = Date.now()
   /*
-   * Node 内置模块在**非渲染层**那两段里必须外部化。
+   * Node 内置模块 + `electron` 在**非渲染层**那两段里必须外部化。
    *
-   * 为什么这里要显式写：正常情况下 `electron-vite` 会替我们做这件事（它按段设置 target /
-   * ssr / external），而本脚本为了绕开 esbuild 子进程**没有**用 electron-vite ——
-   * 少了这一层，Vite 会把 `node:crypto` 当成浏览器依赖，于是报
-   * `"randomUUID" is not exported by "__vite-browser-external"`，
-   * 而 `npm run build` 明明是过的（实测过）。这是**替代跑法自己的差异**，
-   * 不是我藏起来的失败：它的方向是"多报"，所以修掉它不会掩盖产品问题。
+   * 这正是 `electron-vite` 替我们做的那一层，本脚本为了绕开 esbuild 子进程没有用它，
+   * 于是少了这一条就会报 `"randomUUID" is not exported by "__vite-browser-external"`，
+   * 而 `npm run build` 明明是过的。清单照抄 electron-vite 自己那两处
+   * （`node_modules/electron-vite/dist/chunks/lib-*.js` 里的 `external:`）：
+   *   `['electron', /^electron\/.+/, ...builtinModules.flatMap(m => [m, `node:${m}`])]`
+   * 少抄一半都不行 —— 试过函数式 `external`（只判 `node:` 前缀），Vite 仍然把它当浏览器依赖。
    */
   const isMainLike = options.nodeTarget === true
   const externals = isMainLike
-    ? (id) => id.startsWith('node:') || require('node:module').builtinModules.includes(id)
+    ? [
+        'electron',
+        /^electron\/.+/,
+        ...require('node:module').builtinModules.flatMap((name) => [name, `node:${name}`])
+      ]
     : undefined
   await build({
     ...section,
     configFile: false, // 配置已由 loadSections() 载入
     root: section.root ? path.resolve(ROOT, section.root) : ROOT,
-    // 主进程 / preload 是 Electron 的 Node 端代码，按 SSR 构建才不会被当成浏览器包
-    // （这正是 electron-vite 替我们做的那一层，见上面那段注释）。
+    // 主进程 / preload 是 Electron 的 Node 端代码，按 SSR 构建才不会被当成浏览器包。
     ...(isMainLike ? { ssr: true } : {}),
     build: {
       ...(section.build ?? {}),
