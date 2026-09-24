@@ -63,9 +63,7 @@ import type {
   CameraUpgradeUploadResult
 } from '@shared/domain/camera-upgrade'
 import type {
-  CameraModePresetId,
   CameraModePresetRead,
-  CameraModePresetWriteResult,
   CameraModeRequestedValues
 } from '@shared/domain/camera-mode-preset'
 import { CAMERA_BAND_MAX_WIDTH_KHZ } from '@shared/domain/camera-mode-preset'
@@ -285,10 +283,6 @@ const modeOutcome = ref<CameraRunModeWriteResult | null>(null)
 const workModeInfo = ref<CameraWorkModeRead | null>(null)
 const workModeOutcome = ref<CameraWorkModeWriteResult | null>(null)
 const presetInfo = ref<CameraModePresetRead | null>(null)
-const presetOutcome = ref<CameraModePresetWriteResult | null>(null)
-const presetRestorable = ref<CameraModeRequestedValues | null>(null)
-/** 载入时设备命中的预设。用来判断「已经在这个场景」与「这一趟到底改过什么」。 */
-const initialPresetIds = ref<CameraModePresetId[]>([])
 const detect = ref<Fa371DetectStatus | null>(null)
 const detectActionResult = ref<CameraDetectActionResult | null>(null)
 const enabledStrategies = ref<CameraEnabledStrategyView | null>(null)
@@ -755,7 +749,6 @@ async function saveManualImagingSettings(): Promise<boolean> {
       return false
     }
     const write = unwrap(result)
-    presetOutcome.value = write ?? null
     outcome.value = write?.applied
       ? t('cameraControlUi.imagingSettingsApplied')
       : t('cameraControlUi.imagingSettingsRejected')
@@ -793,7 +786,6 @@ async function saveManualFrequencyBand(): Promise<boolean> {
       return false
     }
     const write = unwrap(result)
-    presetOutcome.value = write ?? null
     outcome.value = write?.applied
       ? t('cameraControlUi.imagingSettingsApplied')
       : t('cameraControlUi.imagingSettingsRejected')
@@ -1257,8 +1249,15 @@ async function load(): Promise<void> {
       const read = unwrap(presetResult)
       presetInfo.value = read ?? null
       if (read) {
-        initialPresetIds.value = read.matchedPresetIds
-        // 只有设备读数刷新后才覆盖输入框，避免用户正在键入时被异步状态刷新打断。
+        /*
+         * 只有设备读数刷新后才覆盖输入框，避免用户正在键入时被异步状态刷新打断。
+         *
+         * 这里曾经还记一份 `matchedPresetIds`（"载入时设备命中哪个场景"），用于旧界面上
+         * 那三个「应用场景」按钮判断"已经在这个场景"与"这一趟改过什么"。
+         * 那一排按钮按业主 2026-09-26 的决定**已经撤掉**（需求优化成手工输入频带与成像门限），
+         * 于是那份状态成了死代码，一并删掉；`readModePreset()` 的读数仍然要（下面要用它
+         * 填输入框）。
+         */
         if (!manualSettingsDirty.value) syncManualSettingsFromDevice()
       }
     }
@@ -1290,9 +1289,6 @@ watch(
     modeOutcome.value = null
     workModeOutcome.value = null
     detectActionResult.value = null
-    presetOutcome.value = null
-    presetRestorable.value = null
-    initialPresetIds.value = []
     manualLowerKhz.value = null
     manualUpperKhz.value = null
     manualThreshold.value = null
@@ -2059,13 +2055,6 @@ watch(
 .cctl__modes {
   display: inline-flex;
   gap: 6px;
-}
-
-.cctl__presets {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
 }
 
 .cctl__label {

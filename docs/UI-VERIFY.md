@@ -4324,6 +4324,41 @@ node scripts/verify-page.cjs --with-data --route /monitor --select "Acoustic Cam
 字符串断言本来就证明不了），然后再删掉这些锚在旧结构上的断言。
 这一件我记在这里，作为下一步 —— 不在没验证过的情况下把断言删掉。
 
+### KK.14 第 50 轮的发布（2026-09-24，v1.0.22）
+
+业主一句「现在就是改过我的最新要求 就可以打包一个新版本了」，于是把这一轮收口并出包。
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.22`（`package.json` version，`releaseDate` 仍是 2026-09-24） |
+| 安装包 | `HAIS-1.0.22-2026-09-24-x64-setup.exe` |
+| 大小 | **128,146,857 字节** |
+| sha256 | `39435E38480EC9C51746B4F4EA8386979FA1E1A4EEDA4CAA6EB47CD217D849B4` |
+| 输出目录 | `release-1.0.22/`（**不是** `release/`，原因见下） |
+| 打包产物验证 | `node scripts/verify-packaged.cjs --dir release-1.0.22/win-unpacked` → **26 通过 / 0 失败** |
+
+`verify-packaged` 26 项里包含**在打包进程内**跑的：better-sqlite3（ABI 139 / SQLite 3.53.4）、
+DuckDB（`SELECT 42`）、内置 ffmpeg（`-version`）、渲染层加载、出厂账户登录 + 首次改密、
+preload 桥接与 Vue 挂载、**六种语言**在打包构建里渲染、应用内版本号 `1.0.22`、无致命错误。
+这一条比探针更硬：**它验的是安装包里那个 `app.asar` 真的能跑起来**，而第 40–49 轮一直被
+"Chromium 沙箱不给缓存目录权限"挡着、只能报 12/13 或更差。本机拿到完整文件权限之后，
+这一条终于跑到 26/0 —— 也就是说**"打包产物没验证过"这条欠账关了**。
+
+> **为什么输出到 `release-1.0.22/` 而不是 `release/`**：`release/win-unpacked/resources/app.asar`
+> 被**另一个进程**占着（查出来是本机装的 **Kimi 桌面版** `C:\Users\wudon\AppData\Local\Programs\Kimi\Kimi.exe`，
+> 它也是 Electron 应用、持着这个文件的句柄），electron-builder 报
+> `EBUSY: resource busy or locked, unlink … app.asar`。
+> 没有去杀那个进程（它不是我们的进程），改成换一个输出目录出包 —— 内容完全一样。
+> `release/` 里那份 `app.asar` 是 2026-09-23 的旧产物，**不是**这一轮的。
+> 想把新包放到 `release/`：先关掉 Kimi，再 `npm run dist:win:offline`。
+
+**顺手修掉一个真缺陷**（这一轮撞上的）：`scripts/verify-packaged.cjs` 里
+"安装包不是当前版本"那条分支写的是 `problems.push(...)`，而 `problems` 只在
+`checkSignature()` 里声明过 —— **这条分支一走到就 `ReferenceError`**，
+脚本以"验证脚本自身失败"退出、把上面已经查出来的结果全部作废。
+它一直没被发现，是因为要走到那里需要"`release/` 里的安装包不是当前版本"，
+而出包与验证通常连着做。现在那条发现走 `check()`，与其它判据同一条口径（进报告、也进退出码）。
+
 ### KK.8 仍未验证（不能按已验证验收）
 
 1. 测试全量里其余 **73 条红**与本轮无关（第 47–49 轮"只改不测"留下的陈旧守卫，

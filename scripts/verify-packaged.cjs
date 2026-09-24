@@ -350,7 +350,26 @@ async function main() {
           : `（**不是**当前版本 ${installer.wanted} —— 可能还没打包，或者文件名变了）\n`)
     )
     if (!installer.exact) {
-      problems.push(`安装包不是当前版本：期望 ${installer.wanted}，实际 ${path.basename(setupExe)}`)
+      /*
+       * ⚠ 这里是**一个真缺陷的修复点**（2026-09-24）：原来写的是
+       * `problems.push(...)`，而 `problems` 只在 `checkSignature()` 里声明过 ——
+       * 也就是说**这条分支一走到就 ReferenceError**，脚本以"验证脚本自身失败"退出，
+       * 上面那些已经查出来的结果全部作废。
+       *
+       * 它一直没被发现，是因为要走到这里需要"`release/` 里的安装包不是当前版本" ——
+       * 而出包与验证通常是同一轮连着做的。这一轮我换了一个输出目录（旧目录被别的进程
+       * 占着），正好撞上：报告里其实已经说得清清楚楚，脚本却崩在最后一步。
+       *
+       * 修法：这类"该失败但只是提示"的发现一律进 `check()`，与其它判据同一条口径，
+       * 于是它既进报告、也进退出码。
+       */
+      check(
+        '安装包是当前版本',
+        false,
+        `期望 ${installer.wanted}，实际 ${path.basename(setupExe)}`
+      )
+    } else {
+      check('安装包是当前版本', true, path.basename(setupExe))
     }
     checkSignature('安装包', setupExe)
   }

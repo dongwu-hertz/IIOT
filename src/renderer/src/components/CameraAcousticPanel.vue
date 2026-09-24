@@ -839,7 +839,7 @@ onBeforeUnmount(() => {
     <!-- ---- 4. detection feedback -------------------------------------- -->
     <section v-if="wants('detect')" class="card acam__panel">
       <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.detectTitle') }}</h3>
+        <h3 class="section-title">{{ t('cameraControlUi.detectTitle') }}</h3>
         <span :class="phaseClass('detectFeedback')">{{ phaseLabel('detectFeedback') }}</span>
       </div>
       <span class="muted acam__meta">{{ phaseMeta('detectFeedback') }}</span>

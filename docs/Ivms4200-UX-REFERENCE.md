@@ -2477,7 +2477,7 @@ channels / alarms / recordings / samples 全是 `ON DELETE CASCADE` —— 现�
 
 | 页面 | 取哪几块 | 为什么 |
 |---|---|---|
-| 实时监测页 | `detect` + `preset` | 「检测启停」是**看的时候要按的东西**；「应用场景」是边看边切的预设 |
+| 实时监测页 | `detect` + `preset` | 「检测启停」是**看的时候要按的东西**；`preset` 这一段是**手工输入成像参数**（频带上/下限 kHz + 成像门限 dB，各自一个「保存」）—— ⚠ 它原来是一排「应用场景」预设按钮，业主 2026-09-26 明确「需求优化了」，那排按钮**撤掉**，见 §15.92 |
 | 设备管理 → 检测模式 | `mode` | ⑨ 要求搬走 |
 | 设备管理 → 告警策略 | `strategy` | ⑨ |
 | 设备管理 → 维护与升级 | `maintenance` + `upgrade` | ⑨ |
@@ -4923,6 +4923,8 @@ GUI 探针 `demo-shot --with-data` **0 problems**（树下架、表是 `.page` �
 其中「检测模式」与本批之前的 ⑨（**2026-09-17**）冲突：那一条把
 「检测模式 / 应用模式 / 告警策略 / 维护 / 升级」**搬去了设备管理的配置界面**
 （`DeviceDetailView` 的相机页签），实时监测页只留了「检测启停 + 应用场景」。
+（「应用场景」那一排在 **2026-09-26** 按业主的决定撤掉了，改成手工输入成像参数 ——
+见 §15.92；本条其余部分不受影响。）
 
 **第 24 条更晚，所以按它办**：`mode`（工作模式＝局放 / 气体泄漏 / 机械）回到了这一页。
 **但设备详情页那几个页签一个都没删** —— `CameraControlPanel` 本来就按 `sections` 取用，
@@ -6481,3 +6483,55 @@ node scripts/mock-air-sonar.cjs --port 0        # 假 SN-16，随机端口
 5. 拔网线或关设备回调，3.5 秒后这些值应变灰并显示 STALE / DATA DELAY，而不是变成 0；
 6. 点「停止接收」后设备 `is_send_realtime_value` 应回 0，监听是否保留取决于本机是否还有
    其它 HTTP 接入声明（这是现有接入对账逻辑，不是回调特例）。
+
+---
+
+## 15.92 「应用场景」预设按钮撤掉，改成手工输入成像参数（业主 2026-09-26）
+
+业主原话（就一句）：「**改掉，并清除掉以前的内容，因为需求优化了。**」
+
+### 15.92.1 撤掉的是什么
+
+实时监测页相机分支里那一排**「应用场景」预设按钮**（局部放电 / 气体泄漏 / 机械异响），
+以及配套的「还原」「重写一遍」「已在此场景」「设备不接受」这些状态与文案。
+它们原来是"一键把设备切到某个场景推荐频带"的入口。
+
+### 15.92.2 现在这一段是什么
+
+同一个 `preset` 分组（`CameraControlPanel` 的 `sections` 名称**没改**，仍然是数据源）现在是
+**手工输入**：
+
+| 控件 | 字段 | 说明 |
+|---|---|---|
+| 频率范围（实时页）/ 频率带（详情页） | `acoustic.lowerKhz` / `upperKhz` | 各自一个「保存」；设备侧校验宽度上限（`CAMERA_BAND_MAX_WIDTH_KHZ`）仍然生效 |
+| 成像门限 | `imaging.energyThreshold` | 单位 dB；面板上写明"它不是告警阈值" |
+
+写设备的通道**没有变**：仍然复用 `cameraControl.restoreModeValues(deviceId, values)`
+（"按给定字段写回并重读"那条通道），所以"写完按读回结果说话"这条规矩一个字都没动。
+读数也仍然是 `cameraControl.readModePreset()` —— 它现在只用来**填那两个输入框**
+（`syncManualSettingsFromDevice`），不再用来判断"当前命中哪个预设"。
+
+### 15.92.3 这一轮清掉的**以前的内容**（逐项，免得下次有人又去找）
+
+| 删掉的东西 | 位置 |
+|---|---|
+| `.cctl__presets` 那条样式 | `CameraControlPanel.vue`（模板里早已没有元素用它） |
+| `presetOutcome` / `presetRestorable` / `initialPresetIds` 三个只写不读的 ref，以及它们的赋值与复位 | `CameraControlPanel.vue`（`initialPresetIds` 记的"载入时命中哪个预设"就是旧按钮用的那份状态） |
+| `CameraModePresetId` / `CameraModePresetWriteResult` 两个已无人使用的类型 import | `CameraControlPanel.vue` |
+| `cameraControlUi.preset*` **25 个词条 × 6 本目录 = 150 条** | `src/shared/i18n/messages/*.ts`（zh-CN 词条总数 2586 → 2561，正好少 25） |
+
+**没动的**（刻意）：
+- `preset` 这个 `sections` 名称、`cameraControl.readModePreset` / `restoreModeValues` 两条 IPC、
+  `@shared/domain/camera-mode-preset` 这个模块 —— 手工输入那一段全都还在用它们；
+- 设备详情页相机页签里的同一批控件 —— 与实时监测页共享同一个组件与同一批 IPC。
+
+### 15.92.4 判据与验证
+
+- `tests/camera-ui-round.test.ts` 里那条「应用场景的三个预设按钮」改成断**现在成立的事实**：
+  `readModePreset(deviceId)` 的读数与 `matchedPresetIds` 的接线**都不再需要**，改为断
+  "这一段仍然是手工输入"（频率带 + 成像门限两个 field 与各自的保存按钮）。
+- `node scripts/i18n-orphans.cjs`：缺失键仍是那 3 个老问题（`cameraStreamUi.detectTitle` /
+  `linkage.enabledOn` / `linkage.enabledOff`），本段删掉的 25 个键**不在**其中任何一栏；
+  四本（今六本）目录键集仍然一致。
+- 真窗口：`node scripts/verify-page.cjs --with-data --route /monitor --select "Acoustic Camera"`
+  量到 `[data-camera-panel=mode]` 与 `.camera-board` 都在、正文里有「告警信息」。

@@ -360,22 +360,31 @@ describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少
 
     /*
      * ---------------------------------------------------------------------
-     * 「应用场景」那三个预设按钮**已经不在面板里了**（2026-09-26 核对）
+     * 「应用场景」那排预设按钮**按业主 2026-09-26 的决定撤掉了**（需求优化）
      * ---------------------------------------------------------------------
-     * 这一条原来断的是 `v-for="preset in CAMERA_MODE_PRESETS"` 与
-     * `@click="applyPreset(preset.id)"` / `restorePreset` / `reapplyPreset` —— 四个都恒为 false。
+     * 业主原话：「改掉，并清除掉以前的内容，因为需求优化了。」
      *
-     * 现在那一块（`wants('preset')`）换成了**手工输入**：频率带上/下限（kHz）与
-     * 成像门限（dB），并各自有一个「保存」。也就是说"一键套用某个场景"这个动作
-     * 从界面上**没有了**（预设的**读**还在：`cameraControl.readModePreset` 仍然在读
-     * `matchedPresetIds`，只是没有地方可以用它一键写回）。
+     * 所以这里不再问"三个预设按钮在不在"，而是断**现在这一段是什么**：
+     * `preset` 这个 `sections` 名称保留（它仍然是 `CameraControlPanel` 的数据源），
+     * 内容是**手工输入** —— 频带上/下限（kHz）+ 成像门限（dB），各自一个「保存」。
      *
-     * 所以这里**不能**静默改成"断言它不存在"当作完成 —— 那等于替产品拍板"这个功能不要了"。
-     * 记成跳过，并把事实与出路写清楚：要恢复就照 `applyPreset` 那条老路接回面板，
-     * 要正式废弃就把 `cameraControlUi.preset*` 那几个词条一起清掉。
+     * 被清掉的东西（死样式、三个只写不读的 ref、两个没人用的类型 import、
+     * 以及 `cameraControlUi.preset*` 25 键 × 6 语言 = 150 条词条）逐项列在
+     * `docs/Ivms4200-UX-REFERENCE.md` §15.92；那一段同时写明**刻意没动**的：
+     * `readModePreset` / `restoreModeValues` 两条 IPC 与 `camera-mode-preset` 模块
+     * 仍然被手工输入那一段用着。
      */
-    assert.match(control, /readModePreset\(deviceId\)/, '预设的读取（readModePreset）也不见了')
-    assert.match(control, /matchedPresetIds/, '预设匹配结果没有接回来（读到了也没人用）')
+    assert.match(control, /readModePreset\(deviceId\)/, '成像参数的读数（readModePreset）不见了')
+    assert.equal(
+      /applyPreset\(preset\.id\)|restorePreset|reapplyPreset/.test(control),
+      false,
+      '「应用场景」那排预设按钮又回来了（业主 2026-09-26 已撤掉，见 §15.92）'
+    )
+    assert.equal(
+      /cameraControlUi\.preset[A-Z]/.test(control),
+      false,
+      '旧的 cameraControlUi.preset* 词条又被引用了（那 25 个键已从六本目录里删掉）'
+    )
 
     /*
      * 信息表：版本与升级包两块在**板子**里（`.cctl__info` ×2），第三块（确认框）
@@ -748,32 +757,41 @@ describe('C. 切换应用模式：确认之后才写', () => {
     }
   })
 
-  it('应用场景预设（applyModePreset）**不写** work_mode，所以它不需要确认框', () => {
-    // 这一条是"读出来的"而不是"猜的"：`applyModePreset()` 只构造 acoustic + imaging
-    // 两份请求值，写路径只发 `/system/acoustic` 与 `/system/image`；前端这一侧也
-    // 只有 `selectWorkMode()` 一个调用点（上面已经断言）。
-    const preset = between(
-      control,
-      'async function applyPreset(id: CameraModePresetId): Promise<void> {',
-      '\n}\n',
-      'applyPreset()'
-    )
-    assert.match(preset, /window\.api\.cameraControl\.applyModePreset\(/, 'applyPreset 没有走预设通道')
-    assert.equal(/writeWorkMode/.test(preset), false, 'applyPreset() 里出现了 writeWorkMode')
+  it('工作模式与成像参数是两条互不调用的通道（旧的那条「应用场景」已经不在了）', () => {
+    /*
+     * 这一条原来断的是 `applyPreset()`（旧的应用场景按钮）—— 那个函数按业主 2026-09-26 的
+     * 决定撤掉了（§15.92）。它当时要证的**性质**今天仍然成立，而且更重要：
+     * **切换工作模式不写成像参数、保存成像参数不写工作模式**（两条通道刻意不互相调用）。
+     * 现在按手工输入那两个保存函数来断。
+     */
     assert.equal(
-      /pendingWorkMode/.test(preset),
+      /async function applyPreset\(/.test(control),
       false,
-      'applyPreset() 弹了应用模式的确认框：它并不写 work_mode'
+      'applyPreset() 又回来了（业主 2026-09-26 已撤掉，见 §15.92）'
     )
-    // 反过来，`selectWorkMode()` 只写 work_mode，不碰成像参数。
-    const select = between(
+
+    const select = block(
       control,
       'async function selectWorkMode(next: Fa371WorkModeValue): Promise<void> {',
-      '\n}\n',
       'selectWorkMode()'
     )
     assert.match(select, /window\.api\.cameraControl\.writeWorkMode\(/, 'selectWorkMode 没有写 work_mode')
-    assert.equal(/applyModePreset/.test(select), false, 'selectWorkMode() 里出现了 applyModePreset')
+    assert.equal(
+      /restoreModeValues/.test(select),
+      false,
+      'selectWorkMode() 里出现了 restoreModeValues —— 切工作模式会把成像参数一起写掉'
+    )
+
+    // 反向：两个手工保存函数只走 restoreModeValues，不碰 work_mode。
+    for (const [label, start] of [
+      ['saveManualImagingSettings', 'async function saveManualImagingSettings(): Promise<boolean> {'],
+      ['saveManualFrequencyBand', 'async function saveManualFrequencyBand(): Promise<boolean> {']
+    ] as const) {
+      const save = block(control, start, label + '()')
+      assert.match(save, /window\.api\.cameraControl\.restoreModeValues\(/, `${label} 没有走成像参数通道`)
+      assert.equal(/writeWorkMode/.test(save), false, `${label}() 里出现了 writeWorkMode`)
+      assert.equal(/pendingWorkMode/.test(save), false, `${label}() 弹了工作模式的确认框`)
+    }
   })
 })
 
