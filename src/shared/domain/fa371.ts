@@ -59,7 +59,7 @@ export const FA371_SCAN_AREA_COORDINATE_SPACES: readonly Fa371ScanAreaCoordinate
 // ---------------------------------------------------------------------------
 
 /**
- * 运行模式（规格 §5.1.8）：`1` 单次检测模式；`-1` 智能巡航模式。
+ * 运行方式（run_mode，规格 §5.1.8）：`1` 单次检测模式；`-1` 智能巡航模式。
  * 取值不连续，所以用 const 对象而非常规 enum，键映射保持 total。
  */
 export const Fa371RunMode = {
@@ -75,7 +75,7 @@ export const FA371_RUN_MODE_KEYS: Record<Fa371RunModeValue, string> = {
   [Fa371RunMode.IntelligentCruise]: 'intelligent_cruise'
 }
 
-/** 运行模式（规格 §5.1.8）的解读结果。 */
+/** 运行方式（run_mode，规格 §5.1.8）的解读结果。 */
 export interface Fa371RunModeConfig {
   /** 原始取值（`1` 或 `-1`）。 */
   raw?: number
@@ -86,11 +86,11 @@ export interface Fa371RunModeConfig {
 }
 
 /**
- * 应用模式（`GET` / `PUT /system`）—— **手册未收录、真机实测**。
+ * 检测模式（`work_mode`，`GET` / `PUT /system`）—— **手册未收录、真机实测**。
  *
- * ⚠ 与上面那个 `Fa371RunMode`（**检测模式**，手册 §5.1.8 的 `/run_mode`）是两件
+ * ⚠ 与上面那个 `Fa371RunMode`（**运行方式**，手册 §5.1.8 的 `/run_mode`）是两件
  * 完全不同的事，名字容易被混：
- *   - `Fa371RunMode` = 检测怎么跑（单次检测 / 智能巡航），手册里有；
+ *   - `Fa371RunMode` = 检测怎么运行（单次检测 / 智能巡航），手册里有；
  *   - `Fa371WorkMode` = 这台设备在做**哪种应用**（局部放电 / 气体泄漏 / 机械异响），
  *     手册里**没有**，端点是读设备自带前端的 bundle 找到的。
  *
@@ -136,7 +136,7 @@ export const FA371_WORK_MODES: readonly Fa371WorkModeValue[] = [
 ]
 
 /**
- * 应用模式（`GET /system`）的解读结果。
+ * 检测模式（`work_mode`，`GET /system`）的解读结果。
  *
  * 与 `Fa371RunModeConfig` 同一条规矩：**认不出的取值只留 `raw`**，
  * `mode` / `key` 保持缺省，界面据此如实显示"设备返回了 N"，而不是就近猜一个模式。
@@ -299,6 +299,36 @@ export const FA371_DISCHARGE_TYPE_KEYS: Record<0 | 1 | 2 | 4, string> = {
 }
 
 /**
+ * 局放分类的最终口径（2026-09-24 真机实测）。
+ *
+ * `discharge_type=4` 只是笼统的「放电」；真正的分类在四个概率字段里
+ * （`probability_corona/creepage/suspen/noise`）。取概率最大的一档；全 0 或字段
+ * 缺失时回落到 `discharge_type` 的稳定键。概率字段不存在的老固件不受影响。
+ */
+export function resolveDischargeTypeKey(
+  log: Pick<
+    Fa371DetectLog,
+    'probabilityCorona' | 'probabilityCreepage' | 'probabilitySuspen' | 'probabilityNoise' | 'dischargeTypeKey'
+  >
+): string | undefined {
+  const entries: Array<[string, number | undefined]> = [
+    ['corona', log.probabilityCorona],
+    ['surface', log.probabilityCreepage],
+    ['suspension', log.probabilitySuspen],
+    ['noise', log.probabilityNoise]
+  ]
+  let bestKey: string | undefined
+  let best = 0
+  for (const [key, value] of entries) {
+    if (value !== undefined && value > best) {
+      best = value
+      bestKey = key
+    }
+  }
+  return bestKey ?? log.dischargeTypeKey
+}
+
+/**
  * 告警等级（规格 §8.3 C21，P0）：字段表读侧写 `0,1,2,3`，写侧（§5.1.23/§5.1.25）
  * 写 `1,2,3,4`。两套取值集合冲突，**不做静默偏移**：这里只给出 1..4 的键，
  * 读到的 `0` 一律是 `unknown`，由协议实测决定真实语义。
@@ -445,6 +475,8 @@ export interface Fa371LeakageUnitView {
 }
 
 export interface Fa371LeakageConfig {
+  /** V2.0 新增：现场校正系数（`correction_rate`，手册 Table 42）。 */
+  correctionRate?: number
   costDisplay?: boolean
   distanceM?: number
   unit?: Fa371LeakageUnitView
@@ -525,6 +557,8 @@ export interface Fa371DetectLog {
   leakUnit?: number
   leakCostUnit?: number
   // -- 字段表声明但示例里从没出现过的告警字段（§8.3 C15） ------------------
+  // 2026-09-23 真机实测（V2.0.11）：is_alarm / alarm_level / detect_mode /
+  // discharge_type / last_alarm_db / last_alarm_df 都真实出现（§8.3 C15 可以部分划掉）。
   alarmStrategyId?: number
   alarmLevelRaw?: number
   alarmLevelKey?: string
@@ -533,8 +567,35 @@ export interface Fa371DetectLog {
   lastAlarmDf?: number
   lastAlarmNc?: number
   isAlarm?: boolean
+  /** 放电类型原始取值（0 电晕 / 1 悬浮 / 2 沿面 / 4 放电；枚举缺 3，见 §8.3 C27）。 */
+  dischargeType?: number
+  /** `FA371_DISCHARGE_TYPE_KEYS` 查得到的稳定键；查不到（未知取值）时只有原始值。 */
+  dischargeTypeKey?: string
+  /**
+   * 局放分类概率（2026-09-24 真机实测）：`probability_corona/creepage/suspen/noise`。
+   * `discharge_type=4`（笼统的"放电"）时，真正的分类在这里——取最大的那一档。
+   */
+  probabilityCorona?: number
+  probabilityCreepage?: number
+  probabilitySuspen?: number
+  probabilityNoise?: number
   ncFilePath?: string
   ncFileFftPhotoName?: string
+}
+
+/**
+ * `/push_config`：相机**主动 HTTP 推送**告警/检测事件的配置（2026-09-24 真机实测）。
+ *
+ * 手册正文（V7.0「Alarm push」节）写了这个功能——设备把告警记录以 JSON POST 到
+ * 配置的外部服务——但端点清单里没有它。端点与四个字段全部来自真机读回：
+ * `{"push_enable":0,"push_url":"","inter_push_enable":0,"inter_push_url":""}`。
+ * `inter_*` 一组的语义手册未说明（疑似内部/间隔推送），读写都原样保留、不猜。
+ */
+export interface Fa371PushConfig {
+  pushEnable: boolean
+  pushUrl: string
+  interPushEnable: boolean
+  interPushUrl: string
 }
 
 // ---------------------------------------------------------------------------

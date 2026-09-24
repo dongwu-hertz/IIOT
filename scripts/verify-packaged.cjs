@@ -574,15 +574,15 @@ async function main() {
     }
   }
 
-  const LOCALE_CODES = ['zh-CN', 'en', 'es', 'tr']
+  const LOCALE_CODES = ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru']
   if (!locales) {
-    check('四种语言在打包构建里渲染', false, '未取得语言探针输出（[smoke] locales）')
+    check('六种语言在打包构建里渲染', false, '未取得语言探针输出（[smoke] locales）')
   } else {
     const navs = LOCALE_CODES.map((code) => locales[code]?.nav)
     const problems = []
     if (navs.some((nav) => !nav)) problems.push('有语言没有渲染出导航文案: ' + JSON.stringify(navs))
     if (new Set(navs).size !== LOCALE_CODES.length) {
-      problems.push('四种语言渲染出相同文案: ' + JSON.stringify(navs))
+      problems.push('六种语言渲染出相同文案: ' + JSON.stringify(navs))
     }
     for (const code of LOCALE_CODES) {
       const state = locales[code] ?? {}
@@ -604,15 +604,22 @@ async function main() {
       else if (state.copyright.startsWith('app.')) {
         problems.push(`${code} 的版权行渲染了未翻译的键名: ${state.copyright}`)
       }
-      // The release date is locale DATA: the Chinese form (年/月/日) must not
-      // survive a switch to another language. Checked on the WHOLE footer, because
-      // the date moved out of the version span when the sidebar footer was replaced.
-      if (code !== 'zh-CN' && typeof state.footer === 'string' && /[\u5e74\u6708\u65e5]/.test(state.footer)) {
+      // The release date is locale DATA: the Simplified-Chinese form (年/月/日)
+      // must not survive a switch to another language. Checked on the WHOLE footer,
+      // because the date moved out of the version span when the sidebar footer was
+      // replaced. zh-TW is exempt: `Intl` formats a Traditional-Chinese date as
+      // `2026年9月21日` too — 年月日 IS the correct zh-TW rendering.
+      if (
+        code !== 'zh-CN' &&
+        code !== 'zh-TW' &&
+        typeof state.footer === 'string' &&
+        /[\u5e74\u6708\u65e5]/.test(state.footer)
+      ) {
         problems.push(`${code} 的页脚仍是中文日期: ${state.footer}`)
       }
     }
     check(
-      '四种语言在打包构建里渲染',
+      '六种语言在打包构建里渲染',
       problems.length === 0,
       problems.length ? problems.join(' | ') : LOCALE_CODES.map((c) => `${c}=${locales[c]?.nav}`).join(' · ')
     )

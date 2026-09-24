@@ -96,6 +96,7 @@ import {
   type Fa371HandshakeCertainty,
   type Fa371LayoutWarning,
   type Fa371PcmFrame,
+  type Fa371PrpdFrame,
   type Fa371StreamKind,
   type Fa371StreamStatus,
   type Fa371VoiceprintFrame
@@ -306,6 +307,33 @@ export const FA371_DECODE_CANDIDATES: Readonly<Record<Fa371StreamKind, readonly 
       voiceprintElement: 'int32'
     }
   ],
+  prpdData: [
+    {
+      id: 'jpeg-image-prpd',
+      description: 'JPEG 图像帧（实测 2026-09-23：局放检测开启后设备推送的是渲染好的 PRPD 图，约 21–25 kB/帧、约 2 帧/s，逐帧长度不同）',
+      specRef: '实测 2026-09-23：帧首 ff d8 ff e0 … JFIF（probe-prpd.cjs，192.168.110.235）；缺口 §8.4（手册只说 "integer binary"，实测是图像，与 /voiceprintData 同一情况）',
+      endianness: 'little',
+      elementBits: 8,
+      signed: false,
+      jpeg: true
+    },
+    {
+      id: 'int32-le-prpd',
+      description: 'PRPD integer binary，按 little-endian int32 解码（手册字面读法；真机 2026-09-23 实测为 JPEG，不符合）',
+      specRef: '手册 /prpdData = integer binary；元素位宽/相位-幅值排布未定义，UI 会保留推断口径',
+      endianness: 'little',
+      elementBits: 32,
+      signed: true
+    },
+    {
+      id: 'int16-le-prpd',
+      description: 'PRPD integer binary，little-endian int16 备选',
+      specRef: '手册未定义 integer 位宽；仅作为兼容候选',
+      endianness: 'little',
+      elementBits: 16,
+      signed: true
+    }
+  ],
   energyData: [
     {
       id: 'int32-le-groups5',
@@ -400,8 +428,9 @@ export const FA371_DECODE_CANDIDATES: Readonly<Record<Fa371StreamKind, readonly 
 export const FA371_DEFAULT_DECODE_IDS: Readonly<Record<Fa371StreamKind, string>> = {
   fftData: 'int16-le-1024-h4',
   voiceprintData: 'jpeg-image-600x400',
+  prpdData: 'jpeg-image-prpd',
   energyData: 'int32-le-groups5',
-  pcmData: 'float32-le-mono-4800',
+  pcmData: 'float32-le-unknown',
   detectFeedback: 'json-text-frame',
   infraredData: 'float32-le-4'
 }
@@ -410,6 +439,7 @@ export interface Fa371DecodeOptions {
   /** 每一路用哪条解码候选；给未知 id 时回落该路的默认候选。 */
   fftData?: string
   voiceprintData?: string
+  prpdData?: string
   energyData?: string
   pcmData?: string
   detectFeedback?: string
@@ -638,6 +668,41 @@ export function decodeVoiceprintFrame(
  * 方位角），所以字段名直接用手册用词；单位与标度未定义（D6），因此不做任何换算。
  * 尾部不足一组的元素被丢弃——半组数据画不出一个目标点。
  */
+/**
+ * 解码 `/prpdData`。
+ *
+ * **实测（2026-09-23，局放检测开启后）又一次把手册推翻了：设备推的是 JPEG 图像
+ * （帧首 ff d8 ff e0 … JFIF，约 21–25 kB/帧、约 2 帧/s）——与 /voiceprintData
+ * 同一情况：设备自己把 PRPD 图谱渲染成图推出来，而不是推数值矩阵。**
+ * 因此候选声明 `jpeg: true` 时不做数值解码，原字节以 base64 带出（`jpegBase64`），
+ * 渲染层丢给 `<img>`；数值候选（mock/测试）仍按 integer binary 解码。
+ */
+export function decodePrpdFrame(
+  bytes: Uint8Array,
+  candidate: Fa371DecodeCandidate,
+  meta: { receivedAt: number; sequence: number }
+): Fa371PrpdFrame {
+  const base = {
+    kind: 'prpdData' as const,
+    bytes,
+    profile: profileOf(candidate),
+    receivedAt: meta.receivedAt,
+    sequence: meta.sequence
+  }
+  if (candidate.jpeg) {
+    return {
+      ...base,
+      values: new Int32Array(0),
+      ...(looksLikeJpeg(bytes) ? { jpegBase64: bytesToBase64(bytes) } : {})
+    }
+  }
+  const body = bytes.subarray(candidate.headerBytes ?? 0)
+  const values = candidate.elementBits === 16
+    ? Int32Array.from(decodeInt16(body, candidate.endianness))
+    : decodeInt32(body, candidate.endianness)
+  return { ...base, values }
+}
+
 export function decodeEnergyFrame(
   bytes: Uint8Array,
   candidate: Fa371DecodeCandidate,
@@ -669,9 +734,9 @@ export function decodeEnergyFrame(
 /**
  * 解码 `/pcmData`（§5.2.5）。
  *
- * 48 kHz 是手册明确给出的；实测（2026-09-15）每帧 19200 B = **4800 个 float32**，
- * 10 帧/s → 48000 样本/s，与手册的 48 kHz 自洽。所以默认候选的
- * `pcmFrameSamples` 是 4800（100 ms/帧），不是 mock 假设的 48000。
+ * 当前项目按 V2.0 200 kHz 采样基线运行。旧版真机曾实测到 4800 点/帧的 48 kHz 传输，
+ * 因此默认候选使用 `float32-le-unknown`：每帧样本数由实际帧长决定，不再把 4800 点
+ * 当成新平台的固定几何。
  *
  * `samples.length` 仍然是这一帧实际解出的样本数：界面按 `sampleRate` 换算时长时
  * 才不会把 100 ms 说成 1 s。
@@ -1290,6 +1355,30 @@ export class Fa371WsClient extends EventEmitter {
     if (!candidate) return
     const meta = { receivedAt: frame.receivedAt, sequence: frame.sequence }
 
+    // 文本帧守卫（2026-09-22「每 30 s 刷新一次」修复）。
+    //
+    // 客户端每 30 s 发一条心跳（手册 §5.2 要求，见文件头第 4 节）。实测症状：PRPD 图
+    // 平时为空、每 ~30 秒"刷新"一次 —— 时间间隔与心跳周期完全吻合。最自洽的解释是
+    // 设备把心跳当作普通消息、回一条文本应答（如 {"ret":200,"msg":"SUCCESS"}），而
+    // 这一层以前不区分帧类型，把 JSON 文本按 int32/float32 解码成垃圾"数据帧"：
+    //   - /prpdData：应答字节解出的巨大整数被 indexed-amplitude 兜底映射成散点，
+    //     每 30 s 注入一次 —— 就是"PRPD 不断刷新/无图输出"（Y 轴被垃圾值顶到 1e9 量级，
+    //     真实点反而看不见）；
+    //   - /fftData / /pcmData：同样每 30 s 出一帧垃圾谱线/波形。
+    //
+    // 协议上这五路（手册 §5.2）是 integer binary / 图像 / float32，**只有 /detectFeedback
+    // 可能是文本**。因此二进制通道上的文本帧一律按"心跳应答"忽略：不计帧数、不进解码、
+    // 只留一条 debug 日志（含帧首字节，真机若真的开始在文本帧里推数据，日志立刻可见）。
+    if (!frame.binary && kind !== 'detectFeedback') {
+      deviceLog().debug('FA371 二进制通道收到文本帧，按心跳应答忽略', {
+        deviceId: this.deviceId,
+        channel: kind,
+        bytes: frame.bytes.length,
+        head: firstBytesHex(frame.bytes, 16)
+      })
+      return
+    }
+
     // 帧长校验先于解码：结论进状态（UI 可见）与日志（可追溯），
     // 但**不阻止解码**——只有在帧长对不上时才有必要让调用方知道结果可疑，
     // 而解码本身在短帧上是安全的（如实返回短数组）。
@@ -1307,6 +1396,12 @@ export class Fa371WsClient extends EventEmitter {
           const decoded = decodeVoiceprintFrame(frame.bytes, candidate, meta)
           this.recordFrame(kind, frame.bytes.length)
           this.emit('frame:voiceprintData', decoded)
+          break
+        }
+        case 'prpdData': {
+          const decoded = decodePrpdFrame(frame.bytes, candidate, meta)
+          this.recordFrame(kind, frame.bytes.length)
+          this.emit('frame:prpdData', decoded)
           break
         }
         case 'energyData': {

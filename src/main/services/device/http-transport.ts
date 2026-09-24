@@ -125,6 +125,18 @@ export class FetchHttpTransport implements HttpTransport {
     options.signal?.addEventListener('abort', onAbort, { once: true })
 
     const headers: Record<string, string> = { ...(options.headers ?? {}) }
+    /**
+     * 默认 `Connection: close`（2026-09-23，相机「登录超时风暴」修复）。
+     *
+     * undici 的全局 fetch 默认**长连接池**：每台设备的 socket 用完不还，留在池里
+     * 复用。这两类设备的嵌入式 HTTP 服务能同时挂着的连接屈指可数，而且不会主动
+     * 回收池里那些"挂着但没说话"的 socket —— 池满之后新的 `/login` 连 TCP 都排
+     * 不上，表现就是"设备 ping 得通、curl 单发能答、应用里却认证超时"（当天日志：
+     * 数千次）。逐请求关连接让 socket 随响应结束立刻释放：这些 API 调用都是低频的
+     * 配置/状态读写，真正的流量（视频、WS 数据流）本来也不走这条路。
+     * 调用方显式给了 `Connection` 的（探测脚本语义）尊重原值。
+     */
+    headers['Connection'] = headers['Connection'] ?? 'close'
     let body: RequestBody | undefined
 
     if (options.rawBody !== undefined) {
@@ -255,9 +267,11 @@ export class FetchHttpTransport implements HttpTransport {
     try {
       const response = await fetch(options.url, {
         method: options.method,
-        headers: options.headers,
+        // 与 `request()` 同一条理由（2026-09-23）：前缀读完就放弃的响应更不能留在
+        // 长连接池里——`Connection: close` 让设备在响应结束时主动收掉这个 socket。
+        headers: { 'Connection': 'close', ...options.headers, ...(options.json !== undefined ? { 'Content-Type': 'application/json' } : {}) },
         ...(options.json !== undefined
-          ? { body: JSON.stringify(options.json), headers: { ...options.headers, 'Content-Type': 'application/json' } }
+          ? { body: JSON.stringify(options.json) }
           : {}),
         redirect: 'manual',
         signal: controller.signal

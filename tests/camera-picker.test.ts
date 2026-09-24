@@ -29,7 +29,9 @@ import { zhCN } from '../src/shared/i18n/messages/zh-CN'
 const projectRoot = path.resolve(__dirname, '..', '..')
 
 function read(relative: string): string {
-  return fs.readFileSync(path.join(projectRoot, relative), 'utf8')
+  // 统一行尾（源码文件是 CRLF）：本文件的断言都是「有没有这段结构」，
+  // 与行尾无关；不统一的话 `between()` 的 `\n}\n` 终点在 CRLF 文件里永远找不到。
+  return fs.readFileSync(path.join(projectRoot, relative), 'utf8').replace(/\r\n/g, '\n')
 }
 
 /**
@@ -60,16 +62,15 @@ const PICKER = 'src/renderer/src/components/CameraCellPicker.vue'
 const wall = stripComments(read(WALL))
 const picker = stripComments(read(PICKER))
 
-describe('A. 浮层本身：挂在 body 上、位置由纯函数算、键盘与「点外面」都关得掉', () => {
-  it('是 Teleport 到 body 的固定定位浮层，落点来自 placeCameraPicker()', () => {
-    assert.match(picker, /<Teleport to="body">/)
-    // 位置必须是**算**出来的：`placeCameraPicker()` 有单测（`tests/camera-wall.test.ts`），
-    // 而它拿的是「被点那一格的矩形」+「浮层自己的尺寸」+「视口尺寸」三样东西。
-    assert.match(picker, /placeCameraPicker\(/)
-    assert.match(picker, /window\.innerWidth/)
-    assert.match(picker, /window\.innerHeight/)
+describe('A. 格内覆盖层：铺在被点的那一格里面、键盘与「点外面」都关得掉', () => {
+  it('inline 模式：不 Teleport、不算落点、铺满整格（业主 2026-09-24）', () => {
+    assert.match(picker, /<Teleport to="body" :disabled="inline">/)
+    assert.match(picker, /props\.inline/)
+    assert.match(picker, /picker--inline/)
     assert.match(picker, /data-camera-picker\b/)
-    assert.match(picker, /position: fixed/)
+    // 覆盖层铺整格：绝对定位 + inset: 0（相对 `position: relative` 的格子）。
+    assert.match(picker, /position: absolute/)
+    assert.match(picker, /inset: 0/)
   })
 
   it('不再依赖原生下拉：整个组件里没有 showPicker / <select> / <option>', () => {
@@ -104,7 +105,7 @@ describe('A. 浮层本身：挂在 body 上、位置由纯函数算、键盘与�
   })
 })
 
-describe('B. 墙上那两个入口：喂给浮层的锚点是「那一格」，不是鼠标', () => {
+describe('B. 墙上那两个入口：选择器铺在被点的那一格里面', () => {
   it('`+` 与设备名按钮都带 data-camera-picker-trigger，两处共用同一个 togglePicker()', () => {
     const triggers = wall.match(/data-camera-picker-trigger/g) ?? []
     assert.equal(triggers.length, 2, `触发按钮应当恰好两个（空白格的 + 与叠加条的设备名），实际 ${triggers.length}`)
@@ -112,12 +113,11 @@ describe('B. 墙上那两个入口：喂给浮层的锚点是「那一格」，�
     assert.equal(handlers.length, 2, '两个入口必须走同一个 togglePicker()')
   })
 
-  it('锚点是那一格的矩形（所以浮层贴在被点的那一格旁边）', () => {
+  it('选择器渲染在格子内部（inline 覆盖层），不再量锚点', () => {
+    assert.match(wall, /<CameraCellPicker[\s\S]{0,200}inline[\s\S]{0,200}:anchor="null"/)
+    // 格内覆盖层不需要锚点矩形：togglePicker 不再量格子尺寸。
     const toggle = between(wall, 'function togglePicker(', '\n}\n', 'togglePicker')
-    assert.match(toggle, /cellEls\.value\[cell\.index\]/)
-    assert.match(toggle, /getBoundingClientRect\(\)/)
-    assert.match(toggle, /pickerAnchor\.value = \{/)
-    // 「对着光标放」在格子很宽 / 窗口很窄时会把浮层推到奇怪的地方 —— 锚点里没有光标。
+    assert.equal(/getBoundingClientRect/.test(toggle), false, '又回去量格子矩形了')
     assert.equal(/clientX|clientY/.test(toggle), false, '锚点又变成鼠标位置了')
   })
 

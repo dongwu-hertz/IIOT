@@ -25,10 +25,11 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import CameraVideoWall from '@renderer/components/CameraVideoWall.vue'
 
 const devices = useDevicesStore()
+
 </script>
 
 <template>
-  <div class="page">
+  <div class="page overview-page">
     <!--
       实时视频：产品要求「总览里面应该有直接的视频播放窗口」，并要求它支持
       1 / 4 / 16 分屏（相机墙档位 1 / 4 / 9 / 16，一格 = 一台相机，
@@ -45,6 +46,27 @@ const devices = useDevicesStore()
       它是这一页的第一个区块：统计数字已经搬到顶栏（`AppTopbar.vue`），告警与设备
       两张卡这一轮被产品删掉，所以「打开软件第一眼就是画面」现在字面上成立。
     -->
-    <CameraVideoWall :active-device-id="devices.selectedDeviceId" auto-play />
+    <CameraVideoWall class="overview-video-wall" data-overview-version="v6-overview-charts" :active-device-id="devices.selectedDeviceId" auto-play />
+
   </div>
 </template>
+
+
+<style scoped>
+/* Overview keeps a single responsibility: the live video wall fills the available workspace. */
+.overview-page {
+  min-height: 0;
+  height: 100%;
+  gap: var(--space-2, 8px);
+  overflow: auto;
+}
+
+
+
+
+
+.overview-video-wall {
+  flex: 1 1 auto;
+  min-height: 360px;
+}
+</style>

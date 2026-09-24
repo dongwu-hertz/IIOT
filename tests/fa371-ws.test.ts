@@ -67,6 +67,7 @@ import type {
   Fa371DetectFeedbackPreview,
   Fa371FftPreview,
   Fa371PcmPreview,
+  Fa371PrpdFrame,
   Fa371StreamPreview
 } from '../src/shared/domain/fa371-stream'
 import type { Device } from '../src/shared/domain/models'
@@ -919,6 +920,102 @@ describe('Fa371WsClient 真实 socket（127.0.0.1 临时端口）', () => {
     }
   })
 
+  it('二进制通道（/prpdData 等）忽略文本帧：设备对 30 s 心跳的文本应答不会被误解码成数据', async () => {
+    const server = await startServer()
+    const client = startClient({
+      deviceId: 'cam-1',
+      baseWsUrl: server.url,
+      authHeaders: {},
+      channels: ['prpdData'],
+      heartbeatMs: 1_000
+    })
+
+    const frames: Fa371PrpdFrame[] = []
+    client.onFrame('prpdData', (frame) => frames.push(frame))
+    client.connect()
+
+    await waitFor(() => server.connections('/prpdData') === 1, '客户端连上 /prpdData')
+    // 设备对心跳的文本应答（如 {"ret":200,"msg":"SUCCESS"}）——以前会被按 int32
+    // 误解码成垃圾 PRPD 点，表现为"PRPD 每 30 s 刷新一次"（2026-09-22 真机症状）。
+    server.push('/prpdData', '{"ret":200,"msg":"SUCCESS"}', 0x1)
+
+    // 给它一点到达时间，然后断言：没有数据帧、帧数不增。
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    try {
+      assert.equal(frames.length, 0)
+      assert.equal(client.statusSnapshot()[0]?.frameCount, 0)
+    } finally {
+      client.dispose()
+    }
+  })
+
+  it('二进制通道忽略文本帧后，真正的二进制 PRPD 帧照常到达（数值候选）', async () => {
+    const server = await startServer()
+    const client = startClient({
+      deviceId: 'cam-1',
+      baseWsUrl: server.url,
+      authHeaders: {},
+      channels: ['prpdData'],
+      heartbeatMs: 1_000,
+      // 2026-09-23 起默认候选是 jpeg-image-prpd（真机实测推 JPEG）；数值解码路径
+      // 仍然保留给 mock/旧固件，这里显式指定它来测数值路径本身。
+      decode: { prpdData: 'int32-le-prpd' }
+    })
+
+    const frames: Fa371PrpdFrame[] = []
+    client.onFrame('prpdData', (frame) => frames.push(frame))
+    client.connect()
+
+    await waitFor(() => server.connections('/prpdData') === 1, '客户端连上 /prpdData')
+    server.push('/prpdData', '{"ret":200,"msg":"SUCCESS"}', 0x1)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const binary = new Uint8Array(16)
+    new DataView(binary.buffer).setInt32(0, 30, true)
+    new DataView(binary.buffer).setInt32(4, 100, true)
+    server.push('/prpdData', binary, 0x2)
+
+    await waitFor(() => frames.length === 1, '收到真正的 PRPD 二进制帧')
+    try {
+      assert.equal(frames[0]?.values.length, 4)
+      assert.equal(frames[0]?.values[0], 30)
+      assert.equal(frames[0]?.values[1], 100)
+      assert.equal(client.statusSnapshot()[0]?.frameCount, 1)
+    } finally {
+      client.dispose()
+    }
+  })
+
+  it('默认候选：PRPD JPEG 帧（实测 2026-09-23 的真机形态）原样带出 base64，不做数值解码', async () => {
+    const server = await startServer()
+    const client = startClient({
+      deviceId: 'cam-1',
+      baseWsUrl: server.url,
+      authHeaders: {},
+      channels: ['prpdData'],
+      heartbeatMs: 1_000
+    })
+
+    const frames: Fa371PrpdFrame[] = []
+    client.onFrame('prpdData', (frame) => frames.push(frame))
+    client.connect()
+
+    await waitFor(() => server.connections('/prpdData') === 1, '客户端连上 /prpdData')
+    // 最小 JPEG 形态：SOI + JFIF 头 + 若干字节 + EOI（与真机帧首 ff d8 ff e0 一致）。
+    const jpeg = new Uint8Array(64)
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46], 0)
+    jpeg.set([0xff, 0xd9], 62)
+    server.push('/prpdData', jpeg, 0x2)
+
+    await waitFor(() => frames.length === 1, '收到 PRPD JPEG 帧')
+    try {
+      assert.equal(frames[0]?.values.length, 0, 'jpeg 候选不该做数值解码')
+      assert.ok((frames[0]?.jpegBase64?.length ?? 0) > 0, 'jpegBase64 没有带出')
+      assert.equal(frames[0]?.profile.id, 'jpeg-image-prpd')
+    } finally {
+      client.dispose()
+    }
+  })
+
   it('五路通道同时建立，各自只收到自己路径的帧', async () => {
     const server = await startServer()
     const received: string[] = []
@@ -941,14 +1038,15 @@ describe('Fa371WsClient 真实 socket（127.0.0.1 临时端口）', () => {
     server.push('/fftData', fftFrameBuffer([1, 2]))
     server.push('/pcmData', float32Buffer([1, 2, 3, 4]))
     server.push('/energyData', int32Buffer([1, 2, 3, 4, 5]))
-    // 实测：/voiceprintData 推的是 JPEG，这里也推一帧真 JPEG。
+    // 实测：/voiceprintData 与 /prpdData（2026-09-23）推的都是 JPEG，这里也推真 JPEG。
     server.push('/voiceprintData', jpegFrameBuffer(32))
+    server.push('/prpdData', jpegFrameBuffer(64))
     server.push('/detectFeedback', detectFeedbackText(), 0x1)
 
-    await waitFor(() => received.length === 5, '五路各收到一帧')
+    await waitFor(() => received.length === 6, '六路各收到一帧')
     try {
       assert.deepEqual([...received].sort(), [...FA371_STREAM_KINDS].sort())
-      assert.equal(server.connections(), 5)
+      assert.equal(server.connections(), 6)
     } finally {
       client.dispose()
     }

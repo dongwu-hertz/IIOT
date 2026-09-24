@@ -4,8 +4,8 @@
  * ---------------------------------------------------------------------------
  * 职责
  * ---------------------------------------------------------------------------
- *   - 检测模式：`GET` / `PUT /run_mode`（手册里的字段名叫**检测模式**：`1` 单次检测、
- *     `-1` 智能巡航）；
+ *   - 运行方式：`GET` / `PUT /run_mode`（`1` 单次检测、`-1` 智能巡航）；
+ *   - 检测模式：`GET` / `PUT /system` 的 `work_mode`（`1` 局放、`2` 泄漏、`3` 机械）；
  *   - 检测启停：`POST /turn_on_detect`、`POST /turn_off_detect`，状态读
  *     `GET /system/detect_status`；
  *   - 启用中的告警策略：`GET` / `PUT /alarm_strategy_enable`
@@ -16,7 +16,7 @@
  * 为什么单独一个服务，而不是并进 `camera-alarm-service.ts`
  * ---------------------------------------------------------------------------
  * `CameraAlarmService` 拥有告警模型的**内容**（策略/条件的新建、修改、删除），
- * 本服务拥有「检测能不能跑起来」所需的**运行状态**：检测模式、检测启停、
+ * 本服务拥有「检测能不能跑起来」所需的**运行状态**：运行方式、检测模式、检测启停、
  * 当前启用的是哪条策略。两者的分界线是产品语义而不是文件大小 ——
  * 新手册明确「Before calling the start-detection interface, make sure that one alarm
  * strategy is enabled」，且设备**同时只允许一条策略启用**，所以「启用中的策略」
@@ -41,9 +41,14 @@ import {
   cameraMaintenanceFeatures,
   type CameraDetectActionResult,
   type CameraEnabledStrategyView,
+  type CameraAlarmRegionMetadata,
+  type CameraAlarmRegionMetadataInput,
   type CameraMaintenanceInfo,
   type CameraMaintenanceSourceId,
   type CameraRunModeWriteResult,
+  type CameraLeakageWriteResult,
+  type CameraLeakagePatch,
+  type CameraScanAreaWriteResult,
   type CameraStrategyEnableResult,
   type CameraWorkModeRead,
   type CameraWorkModeWriteResult
@@ -70,8 +75,10 @@ import {
   type Fa371AcousticConfig,
   type Fa371DetectStatus,
   type Fa371ImagingConfig,
+  type Fa371LeakageConfig,
   type Fa371RunModeConfig,
   type Fa371RunModeValue,
+  type Fa371ScanArea,
   type Fa371WorkModeValue
 } from '@shared/domain/fa371'
 import {
@@ -81,7 +88,9 @@ import {
   mapDetectionResult,
   mapEnabledStrategyView,
   mapImagingConfig,
+  mapLeakageConfig,
   mapRunMode,
+  mapScanArea,
   mapWorkMode
 } from './mappers'
 import type {
@@ -93,9 +102,13 @@ import type {
   Fa371BasicInfoDto,
   Fa371DetectStatusDto,
   Fa371ImagingDto,
+  Fa371LeakageDto,
   Fa371ImagingWriteDto,
+  Fa371LeakageWriteDto,
   Fa371RunModeDto,
   Fa371RunModeWriteDto,
+  Fa371ScanAreaDto,
+  Fa371ScanAreaWriteDto,
   Fa371SystemDto,
   Fa371TurnOnDetectDto,
   Fa371VersionInfoDto,
@@ -115,6 +128,11 @@ import type {
 export interface CameraControlOperations {
   getRunMode(): Promise<Fa371RunModeDto>
   setRunMode(body: Fa371RunModeWriteDto): Promise<Fa371AckDto>
+  /** `GET/PUT /system/leakage`（§5.1.10/§5.1.11）：泄漏估算参数。 */
+  getLeakageConfig(): Promise<Fa371LeakageDto>
+  setLeakageConfig(body: Fa371LeakageWriteDto): Promise<Fa371AckDto>
+  getScanArea(): Promise<Fa371ScanAreaDto>
+  setScanArea(body: Fa371ScanAreaWriteDto): Promise<Fa371AckDto>
   getDetectStatus(): Promise<Fa371DetectStatusDto>
   startDetection(): Promise<Fa371TurnOnDetectDto>
   stopDetection(): Promise<void>
@@ -157,7 +175,7 @@ export interface CameraControlOperations {
 }
 
 // ---------------------------------------------------------------------------
-// 应用模式（`GET` / `PUT /system`）—— ⚠ 端点未文档化，真机实测可读可写
+// 检测模式（`work_mode`，`GET` / `PUT /system`）—— ⚠ 端点未文档化，真机实测可读可写
 // ---------------------------------------------------------------------------
 //
 // 与「应用模式预设」（本文件最后一节，写 `/system/acoustic` + `/system/image`）
@@ -185,6 +203,10 @@ export type CameraControlAction =
   | 'readRunMode'
   | 'writeRunMode'
   | 'readDetectStatus'
+  | 'readScanArea'
+  | 'writeScanArea'
+  | 'readRegionMetadata'
+  | 'writeRegionMetadata'
   | 'turnOnDetect'
   | 'turnOffDetect'
   | 'readEnabledStrategy'
@@ -194,6 +216,8 @@ export type CameraControlAction =
   | 'applyModePreset'
   | 'readWorkMode'
   | 'writeWorkMode'
+  | 'readLeakage'
+  | 'writeLeakage'
 
 /**
  * 哪些动作需要管理员权限。
@@ -215,7 +239,7 @@ export type CameraControlAction =
  *     设备自报的机型状态，现场据此判断该用哪套参数、该不该照当前读数下结论。
  *     端点还**没有文档**（实测可写），所以更要由管理员来动。
  *
- * 六个读操作不校验：它们只是读设备状态。
+ * 所有只读操作不校验管理员权限：它们只读取设备状态或本机区域元数据。
  *
  * 这张表是这条规则的**单一出处**，由 `tests/camera-control.test.ts` 守护；
  * `handlers.ts` 里每个写通道仍显式写一行 `requireAdministrator()`（与相邻的
@@ -225,6 +249,10 @@ export const CAMERA_CONTROL_ADMIN_REQUIRED: Readonly<Record<CameraControlAction,
   readRunMode: false,
   writeRunMode: true,
   readDetectStatus: false,
+  readScanArea: false,
+  writeScanArea: true,
+  readRegionMetadata: false,
+  writeRegionMetadata: true,
   turnOnDetect: true,
   turnOffDetect: true,
   readEnabledStrategy: false,
@@ -233,7 +261,10 @@ export const CAMERA_CONTROL_ADMIN_REQUIRED: Readonly<Record<CameraControlAction,
   readModePreset: false,
   applyModePreset: true,
   readWorkMode: false,
-  writeWorkMode: true
+  writeWorkMode: true,
+  // 泄漏估算参数：读公开，写要管理员（它直接参与泄漏量/成本的计算口径）。
+  readLeakage: false,
+  writeLeakage: true
 }
 
 /** 供调用方（以及测试）查询某个动作是否需要管理员。 */
@@ -245,9 +276,19 @@ export function cameraControlRequiresAdministrator(action: CameraControlAction):
 // 服务
 // ---------------------------------------------------------------------------
 
+export interface CameraAlarmRegionMetadataStore {
+  list(deviceId: string): CameraAlarmRegionMetadata[]
+  replace(
+    deviceId: string,
+    regions: readonly CameraAlarmRegionMetadataInput[]
+  ): CameraAlarmRegionMetadata[]
+}
+
 export interface CameraControlServiceOptions {
   /** 取某台相机当前的 FA371 客户端（由 DeviceService 提供，含已解析的会话）。 */
   clientFor: (deviceId: string) => CameraControlOperations
+  /** 本机 SQLite 里的区域编号/名称；设备只保存矩形坐标。 */
+  regionMetadata?: CameraAlarmRegionMetadataStore
   /**
    * 设备是否在线（本地记录的状态，不额外探活）。
    *
@@ -260,20 +301,22 @@ export interface CameraControlServiceOptions {
 export class CameraControlService {
   private readonly clientFor: (deviceId: string) => CameraControlOperations
   private readonly isOnline: (deviceId: string) => boolean
+  private readonly regionMetadata?: CameraAlarmRegionMetadataStore
 
   constructor(options: CameraControlServiceOptions) {
     this.clientFor = options.clientFor
     this.isOnline = options.isOnline ?? (() => true)
+    this.regionMetadata = options.regionMetadata
   }
 
-  // -- 检测模式 -----------------------------------------------------------
+  // -- 运行方式（run_mode） ------------------------------------------------
 
   async readRunMode(deviceId: string): Promise<Fa371RunModeConfig> {
     return mapRunMode(await this.clientFor(deviceId).getRunMode())
   }
 
   /**
-   * 改检测模式：写 → **重读** → 返回设备事实。
+   * 改运行方式（run_mode）：写 → **重读** → 返回设备事实。
    *
    * 只接受手册定义的 `1` / `-1`：`run_mode` 的其它取值手册没有定义，
    * 发一个猜出来的数字比拒绝更糟。
@@ -282,7 +325,7 @@ export class CameraControlService {
     if (mode !== Fa371RunMode.SingleDetection && mode !== Fa371RunMode.IntelligentCruise) {
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
-        `检测模式只能是 ${Fa371RunMode.SingleDetection}（单次检测）或 ${Fa371RunMode.IntelligentCruise}（智能巡航），收到 ${String(mode)}`
+        `运行方式只能是 ${Fa371RunMode.SingleDetection}（单次检测）或 ${Fa371RunMode.IntelligentCruise}（智能巡航），收到 ${String(mode)}`
       )
     }
 
@@ -298,6 +341,99 @@ export class CameraControlService {
       // 读回值无法识别（既不是 1 也不是 -1）时同样是 false —— 不猜设备改成了什么。
       applied: after.mode === mode
     }
+  }
+
+  // -- 检测区域 -----------------------------------------------------------
+
+  async readScanArea(deviceId: string): Promise<Fa371ScanArea> {
+    return mapScanArea(await this.clientFor(deviceId).getScanArea())
+  }
+
+  /**
+   * 写检测区域：写入 -> 重读 -> 数值核对。
+   *
+   * 这里只验证“字段齐全且是有限数值”，不在服务层猜坐标单位。渲染层当前按视频帧
+   * 尺寸生成坐标；设备返回的坐标仍原样保留，后续若固件定义不同，只需要替换那一层
+   * 的换算，不需要改 IPC 与设备接口。
+   */
+  async writeScanArea(deviceId: string, requested: Fa371ScanArea): Promise<CameraScanAreaWriteResult> {
+    const areas = requested.areas.map((area, index) => {
+      const values = [area.height, area.width, area.leftTopX, area.leftTopY]
+      if (values.some((value) => value === undefined || !Number.isFinite(value))) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `检测区域 ${index + 1} 缺少有效坐标`)
+      }
+      return {
+        area_height: Math.max(0, Math.round(area.height!)),
+        area_width: Math.max(0, Math.round(area.width!)),
+        detect_area_status: area.drawStatus === 0 ? 0 : 1,
+        left_top_x: Math.max(0, Math.round(area.leftTopX!)),
+        left_top_y: Math.max(0, Math.round(area.leftTopY!))
+      }
+    })
+    const centerFocus = requested.centerFocusCode === 1 ? 1 : 2
+    const client = this.clientFor(deviceId)
+    const before = mapScanArea(await client.getScanArea())
+    await client.setScanArea({ areas, center_focus: centerFocus })
+    const after = mapScanArea(await client.getScanArea())
+
+    const canonical = (area: Fa371ScanArea) => ({
+      centerFocusCode: area.centerFocusCode ?? 2,
+      areas: area.areas.map((item) => ({
+        height: Math.round(item.height ?? -1),
+        width: Math.round(item.width ?? -1),
+        drawStatus: item.drawStatus === 0 ? 0 : 1,
+        leftTopX: Math.round(item.leftTopX ?? -1),
+        leftTopY: Math.round(item.leftTopY ?? -1)
+      }))
+    })
+    const applied = JSON.stringify(canonical(after)) === JSON.stringify(canonical({
+      ...requested,
+      centerFocusCode: centerFocus,
+      areas: requested.areas.map((item) => ({ ...item, drawStatus: item.drawStatus === 0 ? 0 : 1 }))
+    }))
+
+    return { requested, before, after, applied }
+  }
+
+  // -- 告警区域的本机元数据（稳定 id + 名称）-----------------------------
+
+  /**
+   * 读取软件侧的区域编号/名称。
+   *
+   * 设备 `/system/scan_area` 没有这些字段，所以它们不能从相机 GET 出来；
+   * 它们与相机几何在渲染层按矩形坐标匹配。测试未注入仓库时返回空数组。
+   */
+  readRegionMetadata(deviceId: string): CameraAlarmRegionMetadata[] {
+    return this.regionMetadata?.list(deviceId) ?? []
+  }
+
+  /**
+   * 用一次完整快照替换某台相机的区域元数据。
+   *
+   * 只允许在设备 `writeScanArea` 已经写后读回成功之后调用：这样本机名字永远对应
+   * 相机真正采用的矩形，而不是一次被设备拒绝的草稿。
+   */
+  writeRegionMetadata(
+    deviceId: string,
+    regions: readonly CameraAlarmRegionMetadataInput[]
+  ): CameraAlarmRegionMetadata[] {
+    if (!this.regionMetadata) {
+      throw new AppError(ErrorCodes.UNKNOWN, 'Camera alarm-region metadata store is unavailable')
+    }
+    for (const [index, region] of regions.entries()) {
+      if (!Number.isInteger(region.areaIndex) || region.areaIndex < 0) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `区域 ${index + 1} 的 areaIndex 无效`)
+      }
+      const name = region.name.trim()
+      if (name.length === 0 || name.length > 64) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `区域 ${index + 1} 的名称必须为 1~64 个字符`)
+      }
+      const geometry = [region.leftTopX, region.leftTopY, region.width, region.height]
+      if (geometry.some((value) => !Number.isFinite(value) || value < 0)) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, `区域 ${index + 1} 的坐标或宽高无效`)
+      }
+    }
+    return this.regionMetadata.replace(deviceId, regions)
   }
 
   // -- 检测启停 -----------------------------------------------------------
@@ -316,7 +452,21 @@ export class CameraControlService {
   async turnOnDetect(deviceId: string): Promise<CameraDetectActionResult> {
     const client = this.clientFor(deviceId)
     const result = mapDetectionResult(await client.startDetection())
-    const status = mapDetectStatus(await client.getDetectStatus())
+
+    /*
+     * The start command can return before `/system/detect_status` flips to 1.
+     * Reading it once immediately created a race where the UI reported “Not detecting”
+     * even though the camera had accepted the command. Poll briefly so the result reflects
+     * the device's real transition. This also makes short Single Detection cycles observable.
+     */
+    let status = mapDetectStatus(await client.getDetectStatus())
+    if (!status.detecting) {
+      for (let attempt = 0; attempt < 12 && !status.detecting; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100))
+        status = mapDetectStatus(await client.getDetectStatus())
+      }
+    }
+
     return {
       action: 'turn_on',
       status,
@@ -400,7 +550,7 @@ export class CameraControlService {
   // -- 应用模式（`GET` / `PUT /system`，⚠ 端点未文档化）-------------------
 
   /**
-   * 读应用模式（`GET /system`）。
+   * 读检测模式（`work_mode`，`GET /system`）。
    *
    * 与 `readMaintenance` 的"读失败只影响该字段"不同：这里**读失败就是不可用**。
    * 理由是这个端点没有文档 —— 换一版固件它可能就没了，而一个"点了必然失败"的按钮
@@ -421,8 +571,30 @@ export class CameraControlService {
     }
   }
 
+  // -- 泄漏估算参数（§5.1.10 / §5.1.11，V2.0 含 correction_rate） --------------
+
+  /** `GET /system/leakage`：读泄漏估算配置（局放→泄漏切换时模板要拿当前值打底）。 */
+  async readLeakage(deviceId: string): Promise<Fa371LeakageConfig> {
+    return mapLeakageConfig(await this.clientFor(deviceId).getLeakageConfig())
+  }
+
   /**
-   * 切换应用模式：读 → 写 → **重读** → 比对（`{requested, before, after, applied}`）。
+   * `PUT /system/leakage`：部分字段更新（手册原文："the corresponding field is sent
+   * separately"），写完**重读**交回设备权威值（与 writeRunMode 同一口径）。
+   */
+  async writeLeakage(
+    deviceId: string,
+    patch: CameraLeakagePatch
+  ): Promise<CameraLeakageWriteResult> {
+    const client = this.clientFor(deviceId)
+    const before = mapLeakageConfig(await client.getLeakageConfig())
+    await client.setLeakageConfig(patch)
+    const after = mapLeakageConfig(await client.getLeakageConfig())
+    return { requested: patch, before, after }
+  }
+
+  /**
+   * 切换检测模式 work_mode：读 → 写 → **重读** → 比对（`{requested, before, after, applied}`）。
    *
    * 只接受 `1` / `2` / `3`（真机实测过的三个值）：`work_mode` 在设备前端里的兜底是
    * "非 1 非 2 都当机械异响"，但**没有任何文档**说明其它数字是什么，发一个猜出来的
@@ -441,7 +613,7 @@ export class CameraControlService {
     if (!FA371_WORK_MODES.includes(mode)) {
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
-        `应用模式只能是 ${FA371_WORK_MODES.join(' / ')}（真机实测过的取值），收到 ${String(mode)}`
+        `检测模式 work_mode 只能是 ${FA371_WORK_MODES.join(' / ')}（真机实测过的取值），收到 ${String(mode)}`
       )
     }
 

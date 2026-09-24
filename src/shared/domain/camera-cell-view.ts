@@ -15,8 +15,8 @@
  *   |---|---|---|
  *   | `play` | 画面（RTSP → ffmpeg） | §5.1.6 实时视频 |
  *   | `timedomain` | `pcmData` 包络，拼够 **1 秒** | 手册把 `pcmData` 描述成 PCM 流，**没有**规定要画多长；"1 秒"是业主给的 |
- *   | `spectrum` | `fftData` 的一帧谱线 | 手册只写"FFT 数据"，**没有**规定坐标轴 |
- *   | `spectrogram` | `fftData` 连续多帧堆成瀑布 | **手册未说明**——手册没有"时频谱图"这一路，它是从 FFT 帧堆出来的 |
+ *   | `spectrum` | full `pcmData` -> local FFT | Uses the same PCM-derived FFT as Realtime Monitoring |
+ *   | `spectrogram` | full `pcmData` -> local rolling STFT | Uses the same PCM-derived STFT as Realtime Monitoring |
  *
  * **手册未说明的地方（不编造）**：
  *   · 频域图的**频率轴**：实测这台相机没有任何 HTTP 接口能给出采样率
@@ -61,8 +61,8 @@ export type CameraCellSourceKind = 'camera' | 'manual-rtsp' | 'empty' | 'other'
 export const CAMERA_CELL_VIEW_STREAM: Readonly<Record<CameraCellViewMode, 'pcmData' | 'fftData' | null>> = {
   play: null,
   timedomain: 'pcmData',
-  spectrum: 'fftData',
-  spectrogram: 'fftData'
+  spectrum: 'pcmData',
+  spectrogram: 'pcmData'
 }
 
 /**

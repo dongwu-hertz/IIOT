@@ -25,6 +25,7 @@ import { callApi, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import type { AlarmEvent } from '@shared/domain/models'
 import type { LinkageActionRecord, PendingAlarmRecord } from '@shared/ipc/contract'
+import { linkageDischargeText, linkageMetricsText } from '@renderer/lib/linkageText'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -47,11 +48,11 @@ const acknowledging = ref(false)
  *
  * 来源是**告警表**（`alarms`，`ALARM_SOURCES = ['fa8','e2']`）里还没有确认的那些行 ——
  * 也就是设备自己推上来的告警。**不是**联动那一份：联动记录说的是"我们为这条告警做了什么"
- * （见下面那个分区），两者不是同一种东西，所以角标只数这一份。
+ * （见下面那个分区），两者不是同一种东西。
  *
- * 为什么角标从"待处理联动告警"换成"未确认的设备告警"：原来那颗角标数的是**联动引擎的**
- * 待处理项，而操作员看到设备推来一条告警时，角标一动不动 —— 那正是业主报的这条。
- * 一份数字配一份列表：角标数 = 这个分区里列出的条数（`total`，不受下面 20 条上限影响）。
+ * 角标口径（2026-09-24 改）：两路都数——设备告警 + 相机联动待处理。此前角标只数设备
+ * 告警，相机报警时铃铛一动不动，正是业主报的"不同步"。两路不重叠（相机告警不进告警表、
+ * 盒子告警不进联动列表），相加不会重复计数；面板里两个分区也都在，数字与内容同源。
  */
 const deviceAlarms = ref<AlarmEvent[]>([])
 const deviceAlarmTotal = ref(0)
@@ -70,8 +71,18 @@ async function loadDeviceAlarms(): Promise<void> {
   deviceAlarmTotal.value = page?.total ?? 0
 }
 
-/** 角标上的数：未确认的**设备告警**条数。 */
-const bellCount = computed(() => deviceAlarmTotal.value)
+/** 角标上的数：未确认的**设备告警**条数 + 未确认的**相机联动告警**条数（2026-09-24 同步修复）。 */
+const bellCount = computed(() => deviceAlarmTotal.value + linkage.unacknowledgedCount)
+
+/**
+ * 图标红点（业主 2026-09-24）：有未确认的**高级**（3 级及以上 / critical）告警。
+ * 两路来源都数：相机联动记录按 `alarmLevelRaw` ≥3，声纹设备告警按 severity=critical。
+ */
+const hasHighLevelAlarm = computed(
+  () =>
+    linkage.unacknowledged.some((item) => (item.alarmLevelRaw ?? 0) >= 3) ||
+    deviceAlarms.value.some((alarm) => alarm.severity === 'critical')
+)
 
 async function acknowledgeDeviceAlarm(id: string): Promise<void> {
   acknowledging.value = true
@@ -151,14 +162,17 @@ function actionClass(record: LinkageActionRecord): string {
   return `action-line action-line--${record.status}`
 }
 
+/**
+ * 一条告警的设备侧指标（按检测模式取舍，2026-09-23）。
+ * 实现搬去 `lib/linkageText.ts`（铃铛面板 / 监测页告警卡 / 告警中心相机区块共用）。
+ */
 function metrics(record: PendingAlarmRecord): string {
-  const value = record.metrics
-  if (!value) return ''
-  if (value.soundmapIntensity === undefined && value.leakVolume === undefined) return ''
-  return t('linkage.pendingMetrics', {
-    intensity: value.soundmapIntensity ?? '—',
-    volume: value.leakVolume ?? '—'
-  })
+  return linkageMetricsText(t, record)
+}
+
+/** 放电类型的翻译键；未知取值不显示（宁缺毋假）。 */
+function dischargeLabel(record: PendingAlarmRecord): string {
+  return linkageDischargeText(t, record)
 }
 
 async function acknowledgeOne(eventId: string): Promise<void> {
@@ -221,6 +235,16 @@ function goToAlarms(): void {
         v-if="notices.count > 0"
         class="alarm-badge__problem"
         data-bell-problem
+        aria-hidden="true"
+      ></span>
+      <!--
+        高级告警红点（业主 2026-09-24）：有未确认的 3 级及以上告警时，图标右上角
+        一颗红点——只回答"有没有要紧的"，不抢数字角标的位置。
+      -->
+      <span
+        v-if="hasHighLevelAlarm"
+        class="alarm-badge__critical"
+        data-bell-critical
         aria-hidden="true"
       ></span>
       <span v-if="bellCount > 0" class="alarm-badge__count" data-bell-count>
@@ -361,7 +385,7 @@ function goToAlarms(): void {
               v-if="row.acknowledged"
               class="alarm-item__tag alarm-item__tag--ack"
             >{{ t('linkage.pendingAcknowledged') }}</span>
-            <span v-else class="alarm-item__tag">{{ t(`linkage.source${row.source === 'poll' ? 'Poll' : 'Websocket'}`) }}</span>
+            <span v-else class="alarm-item__tag">{{ t(`linkage.source${row.source === 'poll' ? 'Poll' : row.source === 'push' ? 'Push' : 'Websocket'}`) }}</span>
           </div>
 
           <div class="alarm-item__meta">
@@ -371,6 +395,7 @@ function goToAlarms(): void {
             <span v-if="row.strategyId !== undefined">
               {{ t('linkage.pendingStrategy') }}: {{ row.strategyId }}
             </span>
+            <span v-if="dischargeLabel(row)">{{ dischargeLabel(row) }}</span>
             <span v-if="metrics(row)">{{ metrics(row) }}</span>
           </div>
 
@@ -475,6 +500,18 @@ function goToAlarms(): void {
   border-radius: 50%;
   background: var(--color-danger);
   box-shadow: 0 0 0 1.5px var(--color-bg);
+}
+
+/* 高级告警红点（左上，与右上角的系统消息点、数字角标错开位置）。 */
+.alarm-badge__critical {
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  box-shadow: 0 0 0 1.5px var(--color-bg), 0 0 6px var(--color-danger);
 }
 
 /* 面板底部的出口（去告警记录页）：与面板同宽、靠右，与头部那条分隔线呼应。 */

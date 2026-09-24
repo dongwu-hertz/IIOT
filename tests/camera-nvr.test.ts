@@ -1014,6 +1014,90 @@ describe('alarm service: orchestration and candidate plumbing', () => {
     await service.deleteConditions(DEVICE_ID, [3])
     assert.equal(calls[0], 'deleteConditions:3')
   })
+
+  it('诊断说明键名自动判定：默认键读不回就 PUT 修正，验证通过后记住胜者', async () => {
+    // 设备只认 `diagnosis` 键（手册 §5.1.23 的 diagosisn 被静默忽略）——
+    // 这正是 2026-09-23 之前操作员必须在界面里手选键名的原因，现在必须自动完成。
+    const created: Array<Record<string, unknown>> = []
+    const updated: Array<Record<string, unknown>> = []
+    const client: CameraAlarmOperations = {
+      listAlarmStrategies: async () => ({
+        ret: 200,
+        msg: 'SUCCESS',
+        alarm_strategy_list: [
+          {
+            id: 1,
+            name: storedName,
+            alarm_id: 3,
+            level: 1,
+            // 设备把说明存进了它认的那个键，映射层两个键都认。
+            ...(storedDiagnosis !== undefined ? { diagnosis: storedDiagnosis } : {})
+          }
+        ]
+      }),
+      createAlarmStrategy: async (body) => {
+        created.push(body as unknown as Record<string, unknown>)
+        // 设备只认 diagnosis：发 diagosisn 时说明被丢弃。
+        storedDiagnosis = (body as { diagnosis?: string }).diagnosis
+        storedName = (body as { name?: string }).name ?? storedName
+        return { ret: 200, msg: 'SUCCESS' }
+      },
+      updateAlarmStrategy: async (body) => {
+        updated.push(body as unknown as Record<string, unknown>)
+        storedDiagnosis = (body as { diagnosis?: string }).diagnosis
+        return { ret: 200, msg: 'SUCCESS' }
+      },
+      deleteAlarmStrategies: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      listAlarmConditions: async () => ({ ret: 200, msg: 'SUCCESS', alarm_condition_list: [] }),
+      createAlarmCondition: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      updateAlarmCondition: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      deleteAlarmConditions: async () => ({ ret: 200, msg: 'SUCCESS' })
+    }
+    let storedDiagnosis: string | undefined
+    let storedName = 'strategy-1'
+    const service = new CameraAlarmService({ clientFor: () => client })
+
+    const draft = { ...emptyStrategyDraft(), name: 'strategy-1', conditionId: 3, diagnosis: '电晕放电' }
+    await service.createStrategy(DEVICE_ID, draft)
+    // 第一次按手册默认 POST diagosisn → 读不回 → **PUT 修正**这条（不重复建）→ 读回成功。
+    assert.equal(created.length, 1)
+    assert.ok('diagosisn' in (created[0] ?? {}) && !('diagnosis' in (created[0] ?? {})))
+    assert.equal(updated.length, 1)
+    assert.ok('diagnosis' in (updated[0] ?? {}))
+
+    // 胜者已记住：再写一次只发一次请求，且直接用 diagnosis。
+    created.length = 0
+    await service.createStrategy(DEVICE_ID, { ...draft, name: 'strategy-2' })
+    assert.equal(created.length, 1)
+    assert.ok('diagnosis' in (created[0] ?? {}))
+  })
+
+  it('显式传 diagnosisKey 时不探测（Protocol Lab / 测试路径）', async () => {
+    const created: unknown[] = []
+    const client: CameraAlarmOperations = {
+      listAlarmStrategies: async () => ({ ret: 200, msg: 'SUCCESS', alarm_strategy_list: [] }),
+      createAlarmStrategy: async (body) => {
+        created.push(body)
+        return { ret: 200, msg: 'SUCCESS' }
+      },
+      updateAlarmStrategy: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      deleteAlarmStrategies: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      listAlarmConditions: async () => ({ ret: 200, msg: 'SUCCESS', alarm_condition_list: [] }),
+      createAlarmCondition: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      updateAlarmCondition: async () => ({ ret: 200, msg: 'SUCCESS' }),
+      deleteAlarmConditions: async () => ({ ret: 200, msg: 'SUCCESS' })
+    }
+    const service = new CameraAlarmService({ clientFor: () => client })
+    await service.createStrategy(
+      DEVICE_ID,
+      { ...emptyStrategyDraft(), name: 's', conditionId: 3, diagnosis: 'note' },
+      { diagnosisKey: 'both' }
+    )
+    assert.equal(created.length, 1)
+    const body = created[0] as { diagosisn?: string; diagnosis?: string }
+    assert.equal(body.diagosisn, 'note')
+    assert.equal(body.diagnosis, 'note')
+  })
 })
 
 // ---------------------------------------------------------------------------

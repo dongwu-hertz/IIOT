@@ -19,9 +19,11 @@ import { describe, it } from 'node:test'
 
 import { LOCALES, LOCALE_DESCRIPTORS, resolveLocale, isAppLocale } from '../src/shared/i18n/locales'
 import { zhCN } from '../src/shared/i18n/messages/zh-CN'
+import { zhTW } from '../src/shared/i18n/messages/zh-TW'
 import { en } from '../src/shared/i18n/messages/en'
 import { es } from '../src/shared/i18n/messages/es'
 import { tr } from '../src/shared/i18n/messages/tr'
+import { ru } from '../src/shared/i18n/messages/ru'
 import {
   AlarmType,
   ALARM_TYPE_KEYS,
@@ -42,9 +44,11 @@ type Catalogue = Record<string, unknown>
 
 const CATALOGUES: Record<string, Catalogue> = {
   'zh-CN': zhCN as unknown as Catalogue,
+  'zh-TW': zhTW as unknown as Catalogue,
   en: en as unknown as Catalogue,
   es: es as unknown as Catalogue,
-  tr: tr as unknown as Catalogue
+  tr: tr as unknown as Catalogue,
+  ru: ru as unknown as Catalogue
 }
 
 /** Flatten to `a.b.c -> value`, which is the shape vue-i18n looks keys up by. */
@@ -86,9 +90,11 @@ describe('locale catalogue', () => {
     // looking at an interface they cannot read — which is exactly who needs it.
     const endonyms: Record<string, string> = {
       'zh-CN': '简体中文',
+      'zh-TW': '繁體中文',
       en: 'English',
       es: 'Español',
-      tr: 'Türkçe'
+      tr: 'Türkçe',
+      ru: 'Русский'
     }
     for (const descriptor of LOCALE_DESCRIPTORS) {
       assert.equal(descriptor.endonym, endonyms[descriptor.code])

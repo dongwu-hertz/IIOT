@@ -1,1 +1,74 @@
-{  "name": "hertzinno-acoustic-box-manager",  "version": "1.0.19",  "description": "HAIS - HERTZINNO 声学设备管理软件（Acoustic Box / AE08 系列）",  "main": "./out/main/index.js",  "author": {    "name": "HERTZINNO",    "email": "info@hertzinno.com",    "url": "https://www.hertzinno.com"  },  "license": "UNLICENSED",  "private": true,  "engines": {    "node": ">=22"  },  "scripts": {    "dev": "electron-vite dev",    "prebuild": "node scripts/patch-native-deps.cjs",    "build": "npm run typecheck && electron-vite build",    "preview": "electron-vite preview",    "start": "electron-vite preview",    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",    "typecheck": "npm run typecheck:node && npm run typecheck:web",    "test": "npm run test:build && node --test \".test-build/tests/**/*.test.js\"",    "test:build": "node scripts/clean-test-build.cjs && tsc -p tsconfig.tests.json && node scripts/rewrite-aliases.cjs",    "test:inproc": "npm run test:build && node scripts/run-tests-inproc.cjs",    "build:check": "node scripts/build-check.cjs",    "smoke": "node scripts/smoke.cjs",    "diagnose": "npm run test:build && node scripts/protocol-diagnose.cjs",    "mock-device": "node scripts/mock-device.cjs",    "device-check": "npm run test:build && node scripts/device-check.cjs",    "postinstall": "electron-builder install-app-deps && node scripts/patch-native-deps.cjs",    "rebuild": "node scripts/patch-native-deps.cjs && npm rebuild better-sqlite3",    "patch:native": "node scripts/patch-native-deps.cjs",    "patch:native:check": "node scripts/patch-native-deps.cjs --check",    "verify:packaged": "node scripts/verify-packaged.cjs",    "verify:fa371": "node scripts/verify-fa371.cjs",    "verify:remember": "node scripts/remember-login-proof.cjs",    "pack:dir": "npm run build && electron-builder --dir",    "dist:win": "npm run build && electron-builder --win --x64 --publish never",    "dist:win:offline": "npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs",    "dist:win:signed": "node scripts/sign-preflight.cjs && npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.signed.cjs",    "platform-check": "npm run build && node scripts/platform-check.cjs"  },  "dependencies": {    "@duckdb/node-api": "1.4.4-r.4",    "@ffmpeg-installer/ffmpeg": "1.1.0",    "better-sqlite3": "13.0.3",    "electron-log": "5.4.4",    "hyparquet": "1.30.1",    "hyparquet-writer": "0.16.9"  },  "devDependencies": {    "@electron/rebuild": "4.0.1",    "@types/better-sqlite3": "7.6.13",    "@types/node": "22.20.0",    "@vitejs/plugin-vue": "6.0.8",    "echarts": "6.1.0",    "electron": "38.8.6",    "electron-builder": "26.15.3",    "electron-vite": "5.0.0",    "pinia": "3.0.4",    "typescript": "5.9.3",    "vite": "7.3.6",    "vue": "3.5.42",    "vue-i18n": "11.2.1",    "vue-router": "4.6.4",    "vue-tsc": "2.2.10"  },  "releaseDate": "2026-09-21",  "homepage": "https://www.hertzinno.com"}
+{
+  "name": "hertzinno-acoustic-box-manager",
+  "version": "1.0.21",
+  "description": "HAIS - HERTZINNO 声学设备管理软件（Acoustic Box / AE08 系列）",
+  "main": "./out/main/index.js",
+  "author": {
+    "name": "HERTZINNO",
+    "email": "info@hertzinno.com",
+    "url": "https://www.hertzinno.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "prebuild": "node scripts/patch-native-deps.cjs",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "npm run test:build && node --test \".test-build/tests/**/*.test.js\"",
+    "test:build": "node scripts/clean-test-build.cjs && tsc -p tsconfig.tests.json && node scripts/rewrite-aliases.cjs",
+    "test:inproc": "npm run test:build && node scripts/run-tests-inproc.cjs",
+    "build:check": "node scripts/build-check.cjs",
+    "smoke": "node scripts/smoke.cjs",
+    "diagnose": "npm run test:build && node scripts/protocol-diagnose.cjs",
+    "mock-device": "node scripts/mock-device.cjs",
+    "device-check": "npm run test:build && node scripts/device-check.cjs",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-native-deps.cjs",
+    "rebuild": "node scripts/patch-native-deps.cjs && npm rebuild better-sqlite3",
+    "patch:native": "node scripts/patch-native-deps.cjs",
+    "patch:native:check": "node scripts/patch-native-deps.cjs --check",
+    "verify:packaged": "node scripts/verify-packaged.cjs",
+    "verify:fa371": "node scripts/verify-fa371.cjs",
+    "verify:remember": "node scripts/remember-login-proof.cjs",
+    "pack:dir": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:win:offline": "npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs",
+    "dist:win:signed": "node scripts/sign-preflight.cjs && npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.signed.cjs",
+    "platform-check": "npm run build && node scripts/platform-check.cjs"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.4.4-r.4",
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "better-sqlite3": "13.0.3",
+    "electron-log": "5.4.4",
+    "hyparquet": "1.30.1",
+    "hyparquet-writer": "0.16.9",
+    "lucide-vue-next": "^1.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "4.0.1",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.20.0",
+    "@vitejs/plugin-vue": "6.0.8",
+    "echarts": "6.1.0",
+    "electron": "38.8.6",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "pinia": "3.0.4",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vue": "3.5.42",
+    "vue-i18n": "11.2.1",
+    "vue-router": "4.6.4",
+    "vue-tsc": "2.2.10"
+  },
+  "releaseDate": "2026-09-24",
+  "homepage": "https://www.hertzinno.com"
+}

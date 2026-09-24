@@ -14,12 +14,15 @@
  * 这里就是那道翻译 + 拦截，全部是可注入客户端的形式，因此**不需要真相机**也能测。
  *
  * ---------------------------------------------------------------------------
- * 不要把歧义「修掉」
+ * 歧义的处理方式（2026-09-23 更新）
  * ---------------------------------------------------------------------------
- * `buildStrategyCreateDto` 的 `diagnosisKey` 与 `buildConditionWriteDto` 的
- * 目标 id 方式都是**显式参数**，默认值取自 `shared/domain/camera-alarm.ts` 的
- * 具名候选（`diagosisn` / `id`）。手册没实测过哪一种设备认，所以本文件既不合并
- * 两个键名，也不悄悄补字段；切换候选是操作员在对话框里的显式动作。
+ * `buildConditionWriteDto` 的目标 id 方式仍是**显式参数**（手册未给验证手段，
+ * 默认值取自 `shared/domain/camera-alarm.ts` 的具名候选）。
+ *
+ * 诊断说明键名（§8.3 C22）**不再让操作员手选**：`createStrategy`/`updateStrategy`
+ * 缺省走 `writeStrategyWithVerifiedKey` —— 按手册口径先选键、写入后**读回验证**、
+ * 换候选重试并记住胜者。显式传 `options.diagnosisKey`（测试 / Protocol Lab）时
+ * 仍照发不探测。
  */
 
 import { AppError, ErrorCodes } from '@shared/errors'
@@ -41,6 +44,7 @@ import type {
   Fa371AlarmStrategyPage
 } from '@shared/domain/fa371'
 import { mapAlarmConditionPage, mapAlarmStrategyPage } from './mappers'
+import { deviceLog } from '../../logging/logger'
 import type {
   Fa371AckDto,
   Fa371AlarmConditionPageDto,
@@ -64,7 +68,13 @@ function assertValid(issues: readonly CameraAlarmIssue[]): void {
 }
 
 export interface StrategyWriteOptions {
-  /** 诊断说明落到哪个键（§8.3 C22 的三选一候选）。 */
+  /**
+   * 诊断说明键名的**显式覆盖**（§8.3 C22）：给了就照发，不做探测（测试与
+   * Protocol Lab 用）。**不给时**（界面走这条路）：服务按手册口径先选默认键
+   * （新建 `diagosisn` / 修改 `diagnosis`），写完后**读回验证**——文本原样回来
+   * 即该键被设备接受；没回来就换候选重试、`both` 保底，并把胜者记住。
+   * 操作员不再需要在界面里替设备猜键名（业主 2026-09-23）。
+   */
   diagnosisKey?: CameraAlarmDiagnosisKeyStyle
 }
 
@@ -129,8 +139,10 @@ export function buildStrategyUpdateDto(
  *
  * 开关字段发 `0`/`1`（不是布尔）：手册字段表写的就是 0/1，`discharge_switch`
  * 的类型甚至标成 string，但取值同样是 `0`/`1`——发数字是最保守的共同解。
- * `discharge_*` 是**只写**字段（§8.3 C26），读取侧不会回它们，因此界面上标注
- * 「写后读不回」而不是假装能读回来。
+ * `discharge_*` 是**只写**字段（§8.3 C26）。产品侧现在把“放电类型”定义为异常
+ * 发生后的诊断结论，而不是告警成立的前置门槛，因此这里固定关闭 discharge 判据。
+ * 这样 dB / 主频 / 频谱比对中的任意已启用异常条件仍可独立触发告警，后续再由
+ * PRPD/诊断链路给出放电类型结论。
  */
 export function buildConditionWriteDto(
   draft: CameraAlarmConditionDraft
@@ -150,9 +162,9 @@ export function buildConditionWriteDto(
     nc_switch: draft.ncSwitch ? 1 : 0,
     nc_logical_operator: Math.trunc(draft.ncLogicalOperator),
     nc_arithmetic_operator: Math.trunc(draft.ncOperator),
-    discharge_switch: draft.dischargeSwitch ? 1 : 0,
-    discharge_logical_operator: Math.trunc(draft.dischargeLogicalOperator),
-    discharge_type: Math.trunc(draft.dischargeType),
+    discharge_switch: 0,
+    discharge_logical_operator: 0,
+    discharge_type: 0,
     notes: draft.notes.trim()
   }
 }
@@ -224,6 +236,14 @@ export class CameraAlarmService {
   private readonly clientFor: (deviceId: string) => CameraAlarmOperations
   readonly diagnosisKey: CameraAlarmDiagnosisKeyStyle
   readonly conditionIdStyle: CameraAlarmConditionIdStyle
+  /**
+   * 每台相机**实测胜出**的诊断说明键（读回验证记住）。
+   *
+   * 键名探测每个设备一生只做一两次（第一次保存策略时），之后沿用手册口径 +
+   * 这个胜者，不再重复写两遍。进程重启后重新探测一次 —— 探测的代价是一次额外
+   * 的 PUT + GET，用它换"永远按设备实测行为写"是值得的。
+   */
+  private readonly resolvedDiagnosisKeys = new Map<string, CameraAlarmDiagnosisKeyStyle>()
 
   constructor(options: CameraAlarmServiceOptions) {
     this.clientFor = options.clientFor
@@ -250,10 +270,13 @@ export class CameraAlarmService {
     draft: CameraAlarmStrategyDraft,
     options: StrategyWriteOptions = {}
   ): Promise<Fa371AlarmStrategyPage> {
-    const body = buildStrategyCreateDto(draft, { diagnosisKey: options.diagnosisKey ?? this.diagnosisKey })
-    await this.clientFor(deviceId).createAlarmStrategy(body)
-    // 新建不返回 id（§8.3 C22），所以只能重读列表让操作员看到新策略。
-    return this.listStrategies(deviceId, 1)
+    // 显式指定键名（测试/Protocol Lab）→ 照发不探测；否则走自动判定（读回验证）。
+    if (options.diagnosisKey !== undefined) {
+      const body = buildStrategyCreateDto(draft, { diagnosisKey: options.diagnosisKey })
+      await this.clientFor(deviceId).createAlarmStrategy(body)
+      return this.listStrategies(deviceId, 1)
+    }
+    return this.writeStrategyWithVerifiedKey(deviceId, draft, 'create')
   }
 
   async updateStrategy(
@@ -265,11 +288,144 @@ export class CameraAlarmService {
     if (id === undefined) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少要修改的策略 id')
     }
-    const body = buildStrategyUpdateDto(draft, id, {
-      diagnosisKey: options.diagnosisKey ?? this.diagnosisKey
+    if (options.diagnosisKey !== undefined) {
+      const body = buildStrategyUpdateDto(draft, id, { diagnosisKey: options.diagnosisKey })
+      await this.clientFor(deviceId).updateAlarmStrategy(body)
+      return this.listStrategies(deviceId, 1)
+    }
+    return this.writeStrategyWithVerifiedKey(deviceId, draft, 'update')
+  }
+
+  /**
+   * 写策略并自动判定诊断说明键（§8.3 C22，2026-09-23 取代操作员手选）。
+   *
+   * 手册自身在这个键名上就是矛盾的：§5.1.23（新建）字段表写 `diagosisn`（笔误键，
+   * 手册要求原样发送），§5.1.25（修改）写 `diagnosis`。设备到底认哪个，手册没说 ——
+   * 但**读侧会带回诊断说明文本**（`mapAlarmStrategy` 认两个键），所以这件事可以
+   * 用"写入 → 重读列表 → 看文本是否原样回来"实测出来，而不必让操作员在界面里
+   * 替设备做协议选择题。
+   *
+   * 候选顺序：上次实测胜出的键 → 手册口径默认（新建 diagosisn / 修改 diagnosis）→
+   * 另一个单键 → `both` 保底。验证通过即记住胜者；全部候选都没读回时如实返回
+   * 最后一次写入后的列表（写入可能已生效，只是无法验证 —— 不假装知道）。
+   *
+   * 诊断说明为空时键名无关紧要，一次写入直接返回。
+   */
+  private async writeStrategyWithVerifiedKey(
+    deviceId: string,
+    draft: CameraAlarmStrategyDraft,
+    mode: 'create' | 'update'
+  ): Promise<Fa371AlarmStrategyPage> {
+    const client = this.clientFor(deviceId)
+    const diagnosis = draft.diagnosis.trim()
+    // update 的 id 合法性由 buildStrategyUpdateDto 复验（同一道校验，不重复实现）。
+    const id = mode === 'update' ? (draft.id as number) : undefined
+
+    if (diagnosis === '') {
+      const body =
+        mode === 'create'
+          ? buildStrategyCreateDto(draft, { diagnosisKey: 'diagosisn' })
+          : buildStrategyUpdateDto(draft, id as number, { diagnosisKey: 'diagnosis' })
+      if (mode === 'create') await client.createAlarmStrategy(body as Fa371AlarmStrategyCreateDto)
+      else await client.updateAlarmStrategy(body as Fa371AlarmStrategyUpdateDto)
+      return this.listStrategies(deviceId, 1)
+    }
+
+    const manualDefault: CameraAlarmDiagnosisKeyStyle = mode === 'create' ? 'diagosisn' : 'diagnosis'
+    const other: CameraAlarmDiagnosisKeyStyle = manualDefault === 'diagosisn' ? 'diagnosis' : 'diagosisn'
+    const candidates = [
+      this.resolvedDiagnosisKeys.get(deviceId),
+      manualDefault,
+      other,
+      'both'
+    ].filter((key, index, list): key is CameraAlarmDiagnosisKeyStyle =>
+      key !== undefined && list.indexOf(key) === index
+    )
+
+    /**
+     * 新建第一次 POST 之后记下刚创建那条的 id：若键不对，后续候选改用 PUT **修正**
+     * 这条策略，而不是再 POST 出一条同名副本（设备列表里堆重复策略比一次修正难看得多）。
+     * 按 名称+等级+绑定条件 认这条策略，三个字段同时相同才动手，避免改到同名的另一条。
+     */
+    let createdId: number | undefined
+
+    for (const key of candidates) {
+      if (createdId === undefined) {
+        await client.createAlarmStrategy(
+          buildStrategyCreateDto(draft, { diagnosisKey: key }) as Fa371AlarmStrategyCreateDto
+        )
+      } else {
+        await client.updateAlarmStrategy(
+          buildStrategyUpdateDto(draft, createdId, { diagnosisKey: key }) as Fa371AlarmStrategyUpdateDto
+        )
+      }
+
+      const match = await this.readBackStrategy(deviceId, draft, mode, createdId)
+      if (match?.diagnosis === diagnosis) {
+        if (this.resolvedDiagnosisKeys.get(deviceId) !== key) {
+          this.resolvedDiagnosisKeys.set(deviceId, key)
+          deviceLog().info('FA371 诊断说明键已按读回验证确定', { deviceId, diagnosisKey: key, mode })
+        }
+        return this.listStrategies(deviceId, 1)
+      }
+      if (createdId === undefined) {
+        createdId = this.identifyCreatedStrategy(match, draft)
+      }
+      deviceLog().warn('FA371 诊断说明键未通过读回验证，尝试下一个候选', {
+        deviceId,
+        mode,
+        diagnosisKey: key
+      })
+    }
+
+    deviceLog().warn('FA371 诊断说明键全部候选均未读回（写入可能已生效但无法验证）', {
+      deviceId,
+      mode,
+      tried: candidates
     })
-    await this.clientFor(deviceId).updateAlarmStrategy(body)
     return this.listStrategies(deviceId, 1)
+  }
+
+  /**
+   * 重读策略列表，找回刚写入的那条。
+   *
+   * 修改模式按 id 认；新建模式第一次读回按名称+等级+绑定条件认（新建没有 id 可拿，
+   * §8.3 C22），并把它的 id 交出去供后续候选 PUT 修正。
+   */
+  private async readBackStrategy(
+    deviceId: string,
+    draft: CameraAlarmStrategyDraft,
+    mode: 'create' | 'update',
+    createdId: number | undefined
+  ): Promise<Fa371AlarmStrategy | undefined> {
+    const page = mapAlarmStrategyPage(await this.clientFor(deviceId).listAlarmStrategies(1))
+    if (mode === 'update') {
+      return page.items.find((item) => item.id !== undefined && Number(item.id) === Number(createdId ?? draft.id))
+    }
+    return page.items.find(
+      (item) =>
+        item.name === draft.name.trim() &&
+        item.level === Math.trunc(draft.level) &&
+        Number(item.alarmConditionId) === Number(draft.conditionId)
+    )
+  }
+
+  /** 从读回匹配里取出整数 id（PUT 修正要用）；取不到就返回 undefined（后续候选会再 POST）。 */
+  private identifyCreatedStrategy(
+    match: Fa371AlarmStrategy | undefined,
+    draft: CameraAlarmStrategyDraft
+  ): number | undefined {
+    const raw = match?.id
+    if (raw === undefined) return undefined
+    const value = Number(raw)
+    if (!Number.isInteger(value) || value <= 0) {
+      deviceLog().warn('FA371 新建策略的读回 id 不是正整数，无法按 id 修正键名，后续候选将重新新建', {
+        name: draft.name,
+        rawId: raw
+      })
+      return undefined
+    }
+    return value
   }
 
   async deleteStrategies(deviceId: string, ids: readonly number[]): Promise<Fa371AlarmStrategyPage> {

@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 
 export interface Migration {
   version: number
@@ -1043,6 +1043,38 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_uid ON devices (device_uid);
         CREATE INDEX IF NOT EXISTS idx_devices_status ON devices (status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_push_secret ON devices (push_secret);
+      `)
+    }
+  },
+  {
+    version: 19,
+    name: 'camera-alarm-region-metadata',
+    up: (db) => {
+      /**
+       * FA371 `/system/scan_area` only persists rectangle geometry. Region names and
+       * stable identities are application metadata, required by the alarm/event centre
+       * so a future hit can be rendered as e.g. "#02 OLTC" instead of an anonymous box.
+       *
+       * `area_index` is the CURRENT order sent to the camera and may change after a
+       * deletion; `id` is the durable identity and therefore the primary key.
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS camera_alarm_regions (
+          id          TEXT PRIMARY KEY,
+          device_id   TEXT NOT NULL REFERENCES devices (id) ON DELETE CASCADE,
+          area_index  INTEGER NOT NULL CHECK (area_index >= 0),
+          name        TEXT NOT NULL,
+          left_top_x  INTEGER NOT NULL CHECK (left_top_x >= 0),
+          left_top_y  INTEGER NOT NULL CHECK (left_top_y >= 0),
+          width       INTEGER NOT NULL CHECK (width >= 0),
+          height      INTEGER NOT NULL CHECK (height >= 0),
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL,
+          UNIQUE (device_id, area_index)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_camera_alarm_regions_device
+          ON camera_alarm_regions (device_id, area_index);
       `)
     }
   }

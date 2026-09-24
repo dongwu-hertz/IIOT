@@ -36,6 +36,7 @@ import {
   mapDetectStatus,
   mapDetectionResult,
   mapDischargeTypeKey,
+  mapEnabledStrategyView,
   mapImagingConfig,
   mapLeakageConfig,
   mapNcFilePage,
@@ -573,6 +574,37 @@ describe('FA371 mapper: /alarm_strategy', () => {
     const page = mapAlarmStrategyPage({ alarm_strategy_list: [STRATEGY], page_total: 4 })
     assert.equal(page.items.length, 1)
     assert.equal(page.pageTotal, 4)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 启用中的策略视图（GET /alarm_strategy_enable，2026-09-23 真机修正）
+// ---------------------------------------------------------------------------
+
+describe('FA371 mapper: /alarm_strategy_enable 视图', () => {
+  it('响应项不带 Switch 字段时，出现在该端点即视为启用（真机行为）', () => {
+    // 真机实测：/alarm_strategy_enable 的响应项没有 Switch 标记，但出现在这个
+    // 端点本身就意味着"启用中"。要求 enabled===true 会让 ids 永远为空，
+    // 「开始检测」被永久禁用。
+    const view = mapEnabledStrategyView({
+      ret: 200,
+      msg: 'SUCCESS',
+      alarm_strategy_list: [{ id: 7, name: 'PD 策略' }]
+    })
+    assert.deepEqual(view.ids, ['7'])
+    assert.equal(view.items[0]?.enabled, true)
+  })
+
+  it('带显式 Switch 标记时以标记为准（Switch=0 的不算启用）', () => {
+    const view = mapEnabledStrategyView({
+      alarm_strategy_list: [{ id: 7, Switch: 0 }, { id: 8, Switch: 1 }]
+    })
+    assert.deepEqual(view.ids, ['8'])
+  })
+
+  it('没有任何策略启用时是空数组', () => {
+    const view = mapEnabledStrategyView({ ret: 200, msg: 'SUCCESS', alarm_strategy_list: [] })
+    assert.deepEqual(view.ids, [])
   })
 })
 

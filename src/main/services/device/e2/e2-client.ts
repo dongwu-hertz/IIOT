@@ -53,6 +53,18 @@ export type E2PasswordStyle = 'salted' | 'plain'
 /** 厂商盐（与 FA371 同一个）。 */
 const E2_PASSWORD_SALT = 'lfxs'
 
+/**
+ * SN-16 空气声呐的**端口布局**（2026-09-22 真机实测，192.168.110.234）：
+ *   - **8888**：真正的 API 服务 —— `/login` **只在这里**；
+ *   - **80**：nginx —— 网页、`/static_file/` 静态文件、以及**部分** GET 接口的反代
+ *     （`/system`、`/alarm_log_all`、`/alarm_log` 能通，但 `/login` 回 nginx 的 404 HTML）。
+ *
+ * 手册（V3.2 第 5 章）通篇只写路径、没写端口，而软件默认填 80 —— 于是登录请求拿到一段
+ * HTML 404 页面，表现为 `INVALID_RESPONSE`（"设备返回的数据格式无法识别"）。
+ * 所以：登录 404 时回退到 8888 再试；静态文件在 API 端口不可用时回退到 80。
+ */
+const E2_API_FALLBACK_PORT = 8888
+
 /** 口令 → 设备要的 32 位 MD5 十六进制（小写）。 */
 export function e2PasswordDigest(password: string, style: E2PasswordStyle = 'salted'): string {
   const material = style === 'salted' ? `${password}${E2_PASSWORD_SALT}` : password
@@ -70,6 +82,12 @@ export interface E2ClientOptions {
   baseUrl: string
   credentials: E2Credentials
   timeoutMs?: number
+  /**
+   * 端口回退对（默认 `{ web: 80, api: 8888 }`，实测依据见 `E2_API_FALLBACK_PORT`）。
+   * 存在的意义是**测试**：单测里的假设备监听的是随机端口，没法用 80/8888 复现
+   * "登录在 404、换端口才通"的整台设备形状。生产代码不要传。
+   */
+  portPair?: { web: number; api: number }
 }
 
 /** `GET /workmode` 的收窄结果。 */
@@ -166,6 +184,7 @@ export class E2Client {
   private readonly transport: HttpTransport
   private readonly credentials: E2Credentials
   private readonly timeoutMs: number
+  private readonly portPair: { web: number; api: number }
   private baseUrl: string
   private token?: string
   /**
@@ -177,12 +196,20 @@ export class E2Client {
   private variant?: E2Variant
   /** 上一次登录用的是哪种口令摘要（两份手册不一致，见 `e2PasswordDigest`）。 */
   private passwordStyle?: E2PasswordStyle
+  /**
+   * 静态文件 / 网页所在的基地址 —— 实测与 API **不同端口**（API 8888、静态 80，见
+   * `E2_API_FALLBACK_PORT` 的注释）。登录回退到 8888 成功时把原基地址记在这里。
+   */
+  private webBaseUrl?: string
+  /** 静态文件实测成功的那个基地址（记住赢家，下一条文件不再挨个试）。 */
+  private staticBaseUrl?: string
 
   constructor(options: E2ClientOptions) {
     this.transport = options.transport
     this.baseUrl = normaliseE2BaseUrl(options.baseUrl)
     this.credentials = options.credentials
     this.timeoutMs = options.timeoutMs ?? 8_000
+    this.portPair = options.portPair ?? { web: 80, api: E2_API_FALLBACK_PORT }
   }
 
   get currentBaseUrl(): string {
@@ -201,9 +228,11 @@ export class E2Client {
 
   setBaseUrl(baseUrl: string): void {
     this.baseUrl = normaliseE2BaseUrl(baseUrl)
-    // 地址变了：token 与变体都可能不再适用（另一台设备），下一次调用重新判定。
+    // 地址变了：token、变体与端口布局都可能不再适用（另一台设备），下一次调用重新判定。
     this.token = undefined
     this.variant = undefined
+    this.webBaseUrl = undefined
+    this.staticBaseUrl = undefined
   }
 
   invalidateToken(): void {
@@ -244,6 +273,37 @@ export class E2Client {
     return this.resolvedEndpoints
   }
 
+  /**
+   * 登录用的候选基地址：当前地址 +（默认/80 端口时）8888 回退。
+   *
+   * 为什么只猜这两个端口：它们是**真机实测**出来的布局（见 `E2_API_FALLBACK_PORT`），
+   * 别的端口不猜 —— 乱猜端口会让"地址填错了"变成"等一串超时"。
+   */
+  private loginBaseCandidates(): string[] {
+    const bases = [this.baseUrl]
+    const alternate = alternatePortBaseUrl(this.baseUrl, this.portPair.api, [
+      this.portPair.web,
+      this.portPair.api
+    ])
+    if (alternate !== undefined) bases.push(alternate)
+    return bases
+  }
+
+  /**
+   * 静态文件（`/static_file`）的候选基地址：记住的赢家 → 当前 API 地址 → 网页端口。
+   *
+   * 2026-09-22 实测：API 在 8888 时 `/static_file` 只在 80 的 nginx 上（8888 回 501）。
+   */
+  private staticFileBases(): string[] {
+    const bases = [
+      this.staticBaseUrl,
+      this.baseUrl,
+      this.webBaseUrl ??
+        alternatePortBaseUrl(this.baseUrl, this.portPair.web, [this.portPair.web, this.portPair.api])
+    ]
+    return [...new Set(bases.filter((value): value is string => typeof value === 'string'))]
+  }
+
   /** 一个用途的候选路径（按顺序）：先已确认的，再手册那条，最后另一代那条。 */
   private candidatePaths(kind: 'basic' | 'alarmLogAll' | 'alarmLogConditional'): string[] {
     const both = E2_ENDPOINTS_BY_VARIANT.auscultation
@@ -265,9 +325,11 @@ export class E2Client {
    * 200 和 **1.jpg 的字节**，结果是"每一张都下载成功、内容全是第一张"。
    * 路径是每个**端点**的属性，`file_path` 是每个**文件**的属性，两者不能一起记。
    *
-   * 三条候选；前两条是两代手册的查询式接口，第三条是实测到的**静态文件**路径。
+   * 候选分两组；查询式接口是两代手册各一条，静态文件是实测到的那一种。
+   * 静态文件**可能在另一个端口**（2026-09-22 实测：API 8888、静态 80），所以按
+   * `staticFileBases()` 每个基地址各生成一条，URL 是完整的（`authorised()` 认得绝对地址）。
    */
-  private fileCandidates(filePath: string): Array<{ key: string; url: string }> {
+  private fileCandidates(filePath: string): Array<{ key: string; url: string; base?: string }> {
     const both = E2_ENDPOINTS_BY_VARIANT.auscultation.alarmFile
     const sonar = E2_ENDPOINTS_BY_VARIANT.airSonar.alarmFile
     const query = (path: string): string =>
@@ -279,14 +341,21 @@ export class E2Client {
       this.variant === 'airSonar' ? both : sonar
     ]
     const candidates = [...new Set(apiPaths)].map((path) => ({ key: path, url: query(path) }))
-    // 静态文件那条放最后：它是"实测有、但两份手册都没写"的那一种。
+    // 静态文件那组**不需要 token**（它就是一个静态文件），但多带一个 Authorization 头没有影响。
+    const staticCandidates = this.staticFileBases().map((base) => ({
+      key: '/static_file',
+      url: `${base}/static_file/${filePath}`,
+      base
+    }))
     const staticFirst = resolved === '/static_file'
-    const staticCandidate = { key: '/static_file', url: `/static_file/${filePath}` }
-    return staticFirst ? [staticCandidate, ...candidates] : [...candidates, staticCandidate]
+    return staticFirst ? [...staticCandidates, ...candidates] : [...candidates, ...staticCandidates]
   }
 
   /**
-   * 读一个 JSON 端点，404 时换下一条候选。
+   * 读一个 JSON 端点，404/501 时换下一条候选。
+   *
+   * 为什么 501 也算"没有这条"：2026-09-22 实测一台 SN-16，它对**不实现的端点**回
+   * `501 Not Implemented`（空正文），而不是 404 —— 只认 404 的话回退链在第一条就断了。
    *
    * `query` 是查询串（`?a=b`，没有就传空串）：**候选之间只有路径不同**，所以查询串在这里
    * 拼接一次，避免每个候选各拼一遍（那种写法最容易两处不一致）。
@@ -297,22 +366,22 @@ export class E2Client {
     options: CallOptions
   ): Promise<T> {
     const candidates = this.candidatePaths(kind)
-    let lastError: unknown
     for (const path of candidates) {
       try {
         const result = await this.call<T>(`${path}${query}`, 'GET', undefined, options)
         this.rememberEndpoint(kind, path)
         return result
       } catch (error) {
-        // 只有 404 才换下一条：400（参数错）、401（认证）都不该被"换个路径再试"掩盖。
-        const notFound = error instanceof AppError && /HTTP 404/.test(error.message)
-        if (!notFound) throw error
-        lastError = error
+        // 只有"设备没有这条"才换下一条：400（参数错）、401（认证）都不该被"换个路径再试"掩盖。
+        const missing = error instanceof AppError && /HTTP (404|501)/.test(error.message)
+        if (!missing) throw error
       }
     }
-    throw lastError instanceof AppError
-      ? lastError
-      : new AppError(ErrorCodes.DEVICE_ERROR, '设备上没有这个端点', kind)
+    throw new AppError(
+      ErrorCodes.DEVICE_ERROR,
+      `设备上没有这个端点（${candidates.length} 条已知路径都回 404/501）`,
+      kind
+    )
   }
 
   // -------------------------------------------------------------------------
@@ -326,54 +395,84 @@ export class E2Client {
    * 也是同厂 FA371 的写法），401 再试不加盐（2023 版手册的写法）。两次都 401 才报认证失败。
    * 一旦某一种成功就记住它，后续重新登录只用那一种。
    *
-   * 401 之外的状态码一律按"设备回了意外的东西"处理（`INVALID_RESPONSE`），
+   * **基地址也有候选**（2026-09-22 真机）：`/login` 只在 8888，而默认填的 80 是 nginx，
+   * 它回一段 HTML 的 404。所以 404 时换候选基地址再试；成功就切换 `baseUrl` 并把原地址
+   * 记成 `webBaseUrl`（静态文件还要用它）。
+   *
+   * 401/404 之外的状态码一律按"设备回了意外的东西"处理（`INVALID_RESPONSE`），
    * 不把它伪装成认证失败 —— 两者的排查方向完全不同。
    */
   async login(options: { signal?: AbortSignal } = {}): Promise<string> {
     const styles: E2PasswordStyle[] = this.passwordStyle
       ? [this.passwordStyle]
       : ['salted', 'plain']
+    const bases = this.loginBaseCandidates()
 
     let lastStatus = 0
-    for (const style of styles) {
-      const response = await this.transport.request({
-        method: 'POST',
-        url: `${this.baseUrl}${E2_ENDPOINTS_BY_VARIANT.auscultation.login}`,
-        json: {
-          username: this.credentials.username,
-          password: e2PasswordDigest(this.credentials.password, style)
-        },
-        timeoutMs: this.timeoutMs,
-        throwOnHttpError: false,
-        ...(options.signal ? { signal: options.signal } : {})
-      })
-      lastStatus = response.status
+    for (const base of bases) {
+      let tryNextBase = false
+      for (const style of styles) {
+        const response = await this.transport.request({
+          method: 'POST',
+          url: `${base}${E2_ENDPOINTS_BY_VARIANT.auscultation.login}`,
+          json: {
+            username: this.credentials.username,
+            password: e2PasswordDigest(this.credentials.password, style)
+          },
+          timeoutMs: this.timeoutMs,
+          throwOnHttpError: false,
+          ...(options.signal ? { signal: options.signal } : {})
+        })
+        lastStatus = response.status
 
-      if (response.status === 401) continue
+        if (response.status === 401) continue
 
-      if (!response.ok) {
+        // 404 = 这个端口上**没有登录服务**（nginx 的 HTML 错误页），换下一个候选基地址。
+        if (response.status === 404 && bases.length > 1) {
+          tryNextBase = true
+          break
+        }
+
+        if (!response.ok) {
+          throw new AppError(
+            ErrorCodes.INVALID_RESPONSE,
+            `登录返回意外状态 HTTP ${response.status}`,
+            'login'
+          )
+        }
+
+        const token = asString((response.json as Record<string, unknown> | undefined)?.token)
+        if (token === undefined) {
+          throw new AppError(ErrorCodes.INVALID_RESPONSE, '登录响应里没有 token', 'login')
+        }
+        if (base !== this.baseUrl) {
+          deviceLog().info('听诊盒子登录在回退端口成功，切换 API 基地址', {
+            from: this.baseUrl,
+            to: base
+          })
+          this.webBaseUrl = this.baseUrl
+          this.baseUrl = base
+        }
+        if (this.passwordStyle !== style) {
+          deviceLog().info('听诊盒子登录成功', { baseUrl: this.baseUrl, passwordStyle: style })
+        }
+        this.passwordStyle = style
+        this.token = token
+        return token
+      }
+      if (!tryNextBase) {
+        // 这个基地址上登录服务**在**、只是拒绝口令：换端口没有意义，如实报认证失败。
         throw new AppError(
-          ErrorCodes.INVALID_RESPONSE,
-          `登录返回意外状态 HTTP ${response.status}`,
+          ErrorCodes.AUTH_FAILED,
+          `设备拒绝登录（用户名或口令不正确，HTTP ${lastStatus}）`,
           'login'
         )
       }
-
-      const token = asString((response.json as Record<string, unknown> | undefined)?.token)
-      if (token === undefined) {
-        throw new AppError(ErrorCodes.INVALID_RESPONSE, '登录响应里没有 token', 'login')
-      }
-      if (this.passwordStyle !== style) {
-        deviceLog().info('听诊盒子登录成功', { baseUrl: this.baseUrl, passwordStyle: style })
-      }
-      this.passwordStyle = style
-      this.token = token
-      return token
     }
 
     throw new AppError(
-      ErrorCodes.AUTH_FAILED,
-      `设备拒绝登录（用户名或口令不正确，HTTP ${lastStatus}）`,
+      ErrorCodes.DEVICE_ERROR,
+      `设备上没有登录接口（${bases.length} 个候选地址的 /login 都回 HTTP 404）`,
       'login'
     )
   }
@@ -639,12 +738,11 @@ export class E2Client {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少告警文件路径或文件名')
     }
     /*
-     * 三条候选路径，**设备回话说了算**（2026-09-17 真机验证）：
+     * 候选路径，**设备回话说了算**（2026-09-17 / 2026-09-22 两次真机验证）：
      *   1. 这一代手册的 `GET /saving_alarm_file?file_path=`；
      *   2. 另一代的 `GET /alarm_files?file_path=`；
-     *   3. **静态文件** `GET /static_file/<file_path>` —— 一台 V3.4.0 的 SN-16 实测就是这个
-     *      （设备自己的前端 `syslog.js` 里写着 `static_file/{saving_path}alarm.wav` 与
-     *      `static_file/{saving_path}{n}.jpg`，两个手册里的路径在它上面都是 404）。
+     *   3. **静态文件** `GET /static_file/<file_path>` —— 实测两台 SN-16 都是这个；
+     *      而且它可能在**另一个端口**（API 8888、静态 80），每个候选基地址都会试到。
      * 静态路径那条**不需要 token**（它就是一个静态文件），但多带一个 Authorization 头
      * 对静态服务没有影响。
      */
@@ -657,7 +755,8 @@ export class E2Client {
         ...(input.maxBytes !== undefined ? { maxBytes: input.maxBytes } : {})
       })
       lastStatus = response.status
-      if (response.status === 404) continue
+      // 404/501 都是"这条路径在这台设备上不存在"，换下一条（501 的实测依据见 `callResolved()`）。
+      if (response.status === 404 || response.status === 501) continue
       if (!response.ok) {
         throw new AppError(
           ErrorCodes.DEVICE_ERROR,
@@ -672,12 +771,16 @@ export class E2Client {
       // 记住这一次成功的那条**路径**（不是带 file_path 的整条 URL）：同一台设备上后面的
       // 文件不再挨个试，但每条文件仍然用自己的 file_path。
       this.rememberEndpoint('alarmFile', candidate.key)
+      // 静态文件还要记住**成功的基地址**：它与 API 可能不同端口（见 `staticFileBases()`）。
+      if (candidate.key === '/static_file' && candidate.base !== undefined) {
+        this.staticBaseUrl = candidate.base
+      }
       return bytes
     }
 
     throw new AppError(
       ErrorCodes.NOT_IMPLEMENTED,
-      `设备上没有这个告警文件（可能已被 5000 条保留策略清掉；三条已文档化的下载路径都回了 HTTP ${lastStatus}）：${filePath}`,
+      `设备上没有这个告警文件（可能已被 5000 条保留策略清掉；所有已知下载路径都回 404/501，最后一条 HTTP ${lastStatus}）：${filePath}`,
       filePath
     )
   }
@@ -775,7 +878,8 @@ export class E2Client {
 
     const response = await this.transport.request({
       method,
-      url: `${this.baseUrl}${path}`,
+      // 绝对地址原样用（静态文件可能在另一个端口，见 `fileCandidates()`）；相对路径拼当前基地址。
+      url: /^https?:\/\//i.test(path) ? path : `${this.baseUrl}${path}`,
       headers: { Authorization: `Bearer ${this.token ?? ''}` },
       ...(body === undefined ? {} : { json: body }),
       timeoutMs: options.timeoutMs ?? this.timeoutMs,
@@ -847,5 +951,30 @@ export function normaliseE2BaseUrl(input: string): string {
     return `${url.protocol}//${url.host}`
   } catch {
     throw new AppError(ErrorCodes.VALIDATION_ERROR, `设备地址格式不正确: ${input}`)
+  }
+}
+
+/**
+ * 同一台主机**换端口**的基地址。
+ *
+ * 只在 `http:` 下、且当前端口属于已知端口对时才换算（https 的端口语义不同；
+ * 用户显式填的其它端口也不替它猜 —— 那会把"地址错了"变成"等一串超时"）。
+ * 目标是 80 时返回**无端口**形式。
+ */
+function alternatePortBaseUrl(
+  baseUrl: string,
+  targetPort: number,
+  knownPorts: readonly number[]
+): string | undefined {
+  try {
+    const url = new URL(baseUrl)
+    if (url.protocol !== 'http:') return undefined
+    const current = url.port === '' ? 80 : Number(url.port)
+    if (current === targetPort) return undefined
+    if (!knownPorts.includes(current)) return undefined
+    url.port = targetPort === 80 ? '' : String(targetPort)
+    return url.origin
+  } catch {
+    return undefined
   }
 }

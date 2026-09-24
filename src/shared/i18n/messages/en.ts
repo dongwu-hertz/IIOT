@@ -505,8 +505,39 @@ presets, the licence boundaries
     none: 'No alarm'
   },
 
+  sonarUi: {
+    mapTitle: 'Device location',
+    noGis: 'This device has no GIS coordinates yet (set the installation position in Devices).',
+    currentSpl: 'Current level',
+    azimuth: 'Pointing direction',
+    playAudio: 'Play latest recording',
+    stopAudio: 'Stop playback',
+    noAudio: 'No playable recording yet',
+    latestAlarm: 'Latest alarm',
+    noSnapshot: 'No snapshot for this alarm.',
+    alarmDirection: 'Alarm direction',
+    alarmSpl: 'Level',
+    alarmType: 'Alarm type',
+    alarmTime: 'Alarm time',
+    noAlarms: 'No alarm records for this device yet.',
+    history: 'Alarm history'
+  },
   alarmsUi: {
     countSummary: '{total} records, {selected} selected',
+    metricBandEnergyRatio: 'Band energy ratio',
+    detailDevice: 'Device',
+    detailContent: 'Content',
+    overviewStatus: 'Status',
+    cameraEvidenceMissing: 'No snapshot image for this alarm.',
+    cameraEvidenceLoading: 'Loading the snapshot image…',
+    cameraEvidenceNoVideo: 'No local linkage recording for this alarm.',
+    cameraActionsTitle: 'Linkage action results',
+    cameraAlarmNotFound: 'This camera alarm is no longer in the pending list (it may have been acknowledged and then dropped at the retention cap).',
+    viewInEventCenter: 'Open full evidence in the event center',
+    cameraRowBadge: 'Camera',
+    cameraSectionTitle: 'Camera alarms',
+    cameraSectionEmpty: 'No alarm pushed by the camera yet.',
+    cameraAlarmGeneric: 'Camera alarm',
     bulkAcknowledge: 'Acknowledge selected',
     bulkUnacknowledge: 'Unacknowledge selected',
     addSelectedToSamples: 'Add to sample library',
@@ -718,8 +749,9 @@ presets, the licence boundaries
     spectrogramSection: 'Spectrogram',
     /** ③b: the third graph card — the decimated envelope itself, same data the play button plays. */
     waveformSection: 'Acoustic waveform',
-    waveformHint: 'Decimated envelope of one 100 ms frame (the same data the play button plays)',
     waveformAmplitude: 'Normalised amplitude',
+    addToWall: 'Add to video wall',
+    onWall: 'On the video wall',
     waitingAudio: 'Waiting for audio frames…',
     /** ③b timeline playback: local files only — this family has no continuous device-side recording. */
     playbackSection: 'Timeline playback',
@@ -1439,7 +1471,6 @@ presets, the licence boundaries
     spectrumUnknownAxis: 'The device does not provide a frequency axis: the horizontal axis shows spectrum bin numbers.',
     voiceprintPending: 'No voiceprint change chart for this channel yet; the seven feature readings are in the right column.',
     waveformPending: 'This device does not provide a realtime waveform.',
-    prpdUnavailable: 'The current device interface does not provide phase-resolved PRPD data; this is an explicit no-data state.',
     pdProbability: 'PD PROBABILITY',
     pdProbabilityEmpty: 'The device does not provide partial-discharge class probabilities.',
     leakAnalysis: 'LEAK ANALYSIS',
@@ -2296,6 +2327,18 @@ presets, the licence boundaries
    * Camera acoustic streams (FA371 manual §5.2). No message may contain `@`.
    */
   cameraStreamUi: {
+    detectMode: 'Detection mode value',
+    modePrpdTitle: 'PRPD',
+    modeLeakageTitle: 'Leakage Data',
+    modeMechanicalTitle: 'Mechanical Features',
+    modeAnalysisTitle: 'Mode Analysis',
+    prpdPhase: 'Phase',
+    prpdAmplitude: 'Amplitude',
+    prpdCount: 'Count',
+    prpdPhaseAxis: 'Phase (°)',
+    modeDataStatus: 'Status',
+    modeDataWaiting: 'Waiting for mode-specific feature data.',
+    modeSelectHint: 'Select a Detection Mode to show mode-specific analysis.',
     stop: 'Stop receiving',
     startSpectrum: 'Start spectrum',
     startWaveform: 'Start waveform',
@@ -2408,6 +2451,8 @@ presets, the licence boundaries
     recordingBadge: 'Recording {time}',
     recordSaved: 'Recording saved: duration {duration}, size {size}, file {path}',
     recordWarning: 'Note: {reason}',
+    snapshotSavedTitle: 'Snapshot saved',
+    recordSavedTitle: 'Recording saved',
     snapshotSaved: 'Snapshot saved: {path}',
     openFolder: 'Open containing folder',
     copyDone: 'RTSP address copied (it contains the device password; do not share it).',
@@ -2417,7 +2462,6 @@ presets, the licence boundaries
     overlayDevice: 'Device: {name}',
     overlayStatus: 'Status: {status}',
     overlayStream: 'Stream: {mode} · {address}',
-    fullscreenFailed: 'Could not enter full screen; check the window permissions.'
   },
 
   /**
@@ -2435,15 +2479,57 @@ presets, the licence boundaries
     /** The alarm card on the live-monitoring page (side by side with camera control). */
     entryHint: 'Strategies and conditions take effect on the device; this page only reads and edits them.',
     noAlarms: 'No alarm records for this camera on this machine yet.',
+    /** Shown in the Alarms card empty state when the linkage master switch is off (camera alarms only exist through the linkage engine). */
+    linkageDisabledHint: 'Alarm linkage is switched off, so camera detections will not appear here. Enable it under Settings → Alarm linkage.',
     /** Title of the "Alarm results" card below the video on the monitor page (owner batch 20260921, third batch item 5). */
     recentTitle: 'Alarms',
+    /*
+     * Unified header of the alarm table (owner 2026-09-26 item 1). Time / level /
+     * type reuse `alarmsUi.columnTime` / `columnSeverity` / `columnType` so the
+     * same column has one name everywhere; these two are camera-specific readings.
+     * A cell the device did not report shows an em dash, never 0.
+     */
+    columnIntensity: 'Sound intensity',
+    columnMainFrequency: 'Main frequency',
+    /** Pager readout (rows per page is fixed, see `CAMERA_ALARM_PAGE_SIZE`). */
+    pageStatus: 'Page {page} / {pages}',
+    /** Clicking a row opens THAT alarm's detail in the alarm centre. */
+    openAlarmDetail: 'Open this alarm in the alarm center',
     goAlarmList: 'Open the alarm center',
     // `subtitle` was deleted with the notice line it rendered; `refresh` was the
     // text label of the old refresh button, which is now icon-only and therefore
     // named by `refreshIcon` (aria-label + title).
     tabStrategies: 'Alarm strategies',
     tabConditions: 'Alarm conditions',
-    refreshIcon: 'Re-read the alarm strategies and alarm conditions',
+    tabRegions: 'Alarm regions',
+    regionHint: 'Opening this page first reads the current alarm regions from the camera. Each region has a stable id and name; Save writes geometry to the camera and stores the id/name in the local database.',
+    regionColX: 'X %',
+    regionColY: 'Y %',
+    regionColW: 'W %',
+    regionColH: 'H %',
+    regionAdd: 'Add region',
+    regionDeleteSelected: 'Delete selected',
+    regionClearSelection: 'Clear selection',
+    regionEmpty: 'No alarm regions configured.',
+    regionClear: 'Clear all',
+    regionSave: 'Save regions',
+    regionReload: 'Load from camera',
+    regionCleared: 'Cleared (not written to the camera yet — Save to apply).',
+    regionSaved: 'Alarm regions saved: geometry was written to the camera and region ids/names were stored locally.',
+    regionNotApplied: 'The camera acknowledged the write, but the read-back regions do not match this edit. The UI has been restored to the camera read-back.',
+    regionMetadataSaveFailed: 'The regions were written to the camera, but their local ids/names could not be saved: {reason}',
+    regionInvalid: 'Every region needs a name and X/Y/W/H as 0–100 percentages, with W/H above 0 and inside the frame.',
+    regionVideoStart: 'Start video',
+    regionDraw: 'Draw region',
+    regionDrawing: 'Drawing…',
+    regionDrawHint: 'Start the video, tap "Draw region", then drag on the picture to outline an alarm region; the numeric table below works too.',
+    strategyEnable: 'Enable',
+    strategyDisable: 'Disable',
+    strategyEnableSaved: 'Enable state written to the camera.',
+    regionColIndex: 'No.',
+    regionColName: 'Name',
+    regionDefaultName: 'Region {n}',
+    refreshIcon: 'Re-read alarm strategies, enable state, conditions and regions',
     loading: 'Reading alarm configuration…',
     empty: 'The device returned no records.',
     newStrategy: 'New strategy',
@@ -2451,6 +2537,7 @@ presets, the licence boundaries
     newCondition: 'New condition',
     editCondition: 'Edit condition',
     save: 'Save',
+    saveToCamera: 'Save to Camera',
     cancel: 'Cancel',
     edit: 'Edit',
     delete: 'Delete',
@@ -2483,7 +2570,8 @@ presets, the licence boundaries
     branchDecibel: 'Sound pressure level (dB)',
     branchDominantFreq: 'Main frequency',
     branchComparison: 'Spectrum comparison',
-    branchDischarge: 'Discharge (write-only)',
+    branchDischarge: 'Discharge diagnosis',
+    dischargeDiagnosisHint: 'An enabled acoustic abnormality (dB, main frequency or spectrum comparison) can raise the alarm first. Discharge type is diagnosed afterwards and is not required to match before the alarm is raised.',
     operatorGt: 'greater than',
     operatorLt: 'less than',
     operatorEq: 'equal to',
@@ -2502,27 +2590,17 @@ presets, the licence boundaries
       'The device returns only the condition name and its id; the full condition is listed in the section below.',
     selectCondition: 'Select a condition',
     noConditions: 'The device has no alarm conditions yet: create a condition before a strategy.',
-    diagnosisKeyLabel: 'Diagnostic description key',
-    diagnosisKeyDiagosisn: 'diagosisn (as written for POST)',
-    diagnosisKeyDiagnosis: 'diagnosis (as written for PUT)',
-    diagnosisKeyBoth: 'Send both keys (diagnostic probe)',
     conditionIdStyleLabel: 'How an updated condition is identified',
     conditionIdStyleId: 'Send id (following the strategy precedent)',
     conditionIdStyleAlarmConditionId: 'Send alarm_condition_id (the read-side spelling)',
     conditionIdStyleNone: 'Send no identifier (literal field table)',
     unverified: 'Unverified',
-    ambiguityDiagnosisLabel: 'The diagnostic description key differs between POST and PUT',
-    ambiguityDiagnosisNote:
-      'The POST field table writes diagosisn (the manual demands it be sent verbatim) while PUT writes diagnosis. The manual never says whether the device accepts both or only one, so this stays a selectable candidate.',
     ambiguityConditionIdLabel: 'Updating a condition cannot name its target',
     ambiguityConditionIdNote:
       'The request field table for updating a condition has no id field at all, so the manual cannot say which condition is meant. The default follows the strategy precedent (send id); the other two spellings remain available as candidates.',
     ambiguityLevelLabel: 'Two different alarm level ranges',
     ambiguityLevelNote:
       'The read-side table says 0~3 and the write side says 1~4. Nothing is silently shifted: 1~4 is sent as typed and whatever comes back is shown as-is, so a read-back 0 has no level name.',
-    ambiguitySwitchLabel: 'There is no enable/disable endpoint for a strategy',
-    ambiguitySwitchNote:
-      'Switch appears only in the read side, and the open interface has no endpoint to enable or disable a strategy — while an enabled strategy cannot be modified at all. The dialog therefore reports the state and cannot change it.',
     ambiguityDischargeLabel: 'The discharge branch exists only on the write side',
     ambiguityDischargeNote:
       'The discharge switch, logic and type appear only in the create/update field tables and are never returned by the read side; the discharge type enum is also missing 3. Not being able to read them back is how the manual is written, not a gap in this software.',
@@ -2543,12 +2621,13 @@ presets, the licence boundaries
     issueInterval: 'The interval must be a whole number not less than 0',
     issueTimes: 'The ordinal must be a whole number not less than 0',
     issueConditionName: 'The condition name cannot be empty (at most 64 characters)',
-    issueNoBranch: 'At least one of the four branches must be switched on, or the condition never takes part',
+    issueNoBranch: 'Enable at least one acoustic trigger: dB, main frequency or spectrum comparison.',
     issueSimilarity: 'The noise similarity must be between 0 and 1',
     issueDischargeType: 'Only discharge types 0/1/2/4 are defined (the manual is missing 3)',
     savedStrategy: 'The strategy was sent and the list refreshed.',
     savedCondition: 'The condition was sent and the list refreshed.',
     deleted: 'The delete request was sent and the list refreshed.',
+    deletedConditionAfterDisable: 'The linked enabled alarm strategy was disabled first, then the condition was deleted.',
     missingId:
       'The id of this record is not a whole number, so it cannot be changed or deleted (the read side may return it as a string, see spec §8.3 C21).',
     adminOnly: 'Creating, changing and deleting alarm configuration requires an administrator account.'
@@ -2591,9 +2670,48 @@ presets, the licence boundaries
    * tooltip and states one fact only: the endpoint is not in the device manual.
    */
   cameraControlUi: {
+    settingsTitle: 'Camera Control Settings',
+    detectionControlTitle: 'Detection control',
+    detectionModeLabel: 'Detection Mode',
+    leakageOpen: 'Leakage estimation parameters',
+    leakageParamsTitle: 'Leakage estimation parameters (written to camera /system/leakage)',
+    leakageDistance: 'Distance (m)',
+    leakageUnitLabel: 'Leakage unit',
+    monetaryUnitLabel: 'Currency',
+    valueOfGas: 'Value of gas',
+    energyCost: 'Energy cost',
+    specificPower: 'Specific power',
+    workingHours: 'Working hours',
+    correctionRate: 'Site correction rate',
+    costDisplay: 'Show leak cost',
+    leakageSave: 'Save leakage parameters',
+    leakageSaved: 'Leakage parameters saved (device read-back is authoritative)',
+    operationLabel: 'Operation',
+    frequencyBand: 'Frequency Band',
+    lowerFrequency: 'Lower frequency',
+    upperFrequency: 'Upper frequency',
+    suggestedFrequencyRange: 'Suggested frequency range: {range}',
+    recommendedForMode: 'Recommended for this mode: {range}',
+    imagingThreshold: 'Imaging Threshold',
+    imagingThresholdHint: 'Start from the current site background level; -30 dB is only a commissioning starting point.',
+    apply: 'Apply',
+    detectionModeUnavailable: 'Detection Mode is not exposed by the current camera firmware.',
+    activeRecentAlarms: '{count} unacknowledged alarm(s) — same count as the alarm icon in the top bar',
+    suggestedMechanicalBand: '2-50 kHz search range · active span <= {limit} kHz',
+    bandErrorMissing: 'Enter both lower and upper frequency limits.',
+    bandErrorNumeric: 'Frequency limits must be numeric.',
+    bandErrorRange: 'Frequency band must stay within 2-65 kHz.',
+    bandErrorOrder: 'Upper frequency must be greater than lower frequency.',
+    bandErrorWidth: 'Active imaging bandwidth cannot exceed {limit} kHz on this device.',
+    imagingSettingsApplied: 'Imaging band and threshold applied.',
+    imagingSettingsRejected: 'The device acknowledged the request, but the read-back values did not match.',
+    modeMismatchTitle: 'Detection Mode Mismatch',
+    modeMismatchMessage: 'Realtime Monitoring is configured for “{configured}”, but the camera is currently in “{actual}” mode. Confirm or change Detection Mode in Camera Control Settings.',
+    modeMismatchConfigured: 'Configured',
+    modeMismatchCamera: 'Camera Mode',
     title: 'Camera control',
     refresh: 'Refresh',
-    modeTitle: 'Detection mode',
+    modeTitle: 'Operation',
     modeSingle: 'Single detection',
     modeCruise: 'Smart patrol',
     modeUnknownHint: 'The device returned a value the manual does not define: 1 = single detection, -1 = smart patrol.',
@@ -2601,13 +2719,13 @@ presets, the licence boundaries
     modeReadBack: 'Device now: {value}',
     modeApplied: 'Applied',
     modeRejected: 'The device acknowledged the write but did not apply it',
-    appModeTitle: 'Application mode',
+    appModeTitle: 'Detection mode',
     appModeCurrent: 'Device now',
     appModePartialDischarge: 'Partial discharge',
     appModeGasLeak: 'Gas leak',
     appModeMechanical: 'Mechanical noise',
     appModeUnknownHint: 'The device returned a value outside the three measured ones (1 = partial discharge, 2 = gas leak, 3 = mechanical noise).',
-    appModeSourceHint: 'This endpoint is not in the device manual; a switch writes the application mode only.',
+    appModeSourceHint: 'This endpoint is not in the device manual; a switch writes Detection Mode (work_mode) only.',
     appModeApplied: 'Applied',
     appModeRejected: 'The device acknowledged the write but did not apply it',
     // Confirmation supplied by the product owner. It is NOT a verified device fact:
@@ -2615,7 +2733,7 @@ presets, the licence boundaries
     // only "deletes all historical data" statement is about Restore, and what we
     // measured is that writing `run_mode` clears the enabled-strategy pointer.
     // See the long Chinese note on `pendingWorkMode` in `CameraControlPanel.vue`.
-    appModeConfirmTitle: 'Switch application mode',
+    appModeConfirmTitle: 'Switch detection mode',
     appModeConfirmBody: 'Switching the mode erases all stored data. Continue?',
     appModeConfirmAction: 'Switch anyway',
     presetTitle: 'Application mode',
@@ -2731,12 +2849,11 @@ presets, the licence boundaries
   },
 
   cameraWallUi: {
-    title: 'Live video wall',
     layoutGroup: 'Cell layout',
     layoutLabel: '{count} cells',
     pickDevice: 'Choose camera',
     viewPlay: 'Video',
-    viewTimedomain: '1-second waveform',
+    viewTimedomain: 'Time Domain',
     viewSpectrum: 'Frequency spectrum',
     viewSpectrogram: 'Spectrogram',
     viewWaiting: 'Waiting for data…',
@@ -2800,7 +2917,6 @@ presets, the licence boundaries
     exitFullscreen: 'Exit fullscreen',
     audioOn: 'Enable sound',
     audioOff: 'Mute',
-    audioBadge: 'Sound on',
     volume: 'Volume',
     /** The vertical slider inside the popover (owner batch 12: click to reveal, drag up/down). */
     volumeLevel: 'Volume level',
@@ -2811,7 +2927,6 @@ presets, the licence boundaries
     volumeNoPicture: 'No picture in this cell, so it cannot play sound',
     activeBadge: 'Active cell',
     limitNotice: 'Up to {max} live streams at once; {active} running. Starting one more would exceed the limit — stop another cell first.',
-    limitSummary: '{active} of {max} live streams',
     layoutShrunk: 'The layout shrank: {count} cell(s) were stopped.'
   },
   /**
@@ -2840,15 +2955,22 @@ presets, the licence boundaries
    * sample mailbox.
    */
   linkage: {
+    popupTitle: 'Alarm linkage',
+    popupInfo: '{device} raised a notice-level alarm (level {level})',
+    popupWarning: '{device} raised an alarm (level {level})',
+    popupCritical: '{device} raised a CRITICAL alarm (level {level})!',
     title: 'Alarm linkage',
     enabled: 'Enable alarm linkage',
 
     sourceSection: 'Trigger sources',
     pollInterval: 'Polling interval (s)',
     useDetectFeedback: 'Enable the detect-feedback accelerator',
+    cameraPushEnabled: 'Receive camera-pushed alarms (HTTP)',
+    cameraPushPort: 'Push listener port',
     minAlarmLevel: 'Minimum alarm level',
     sourcePoll: 'Detection-log polling',
     sourceWebsocket: 'Detect-feedback stream',
+    sourcePush: 'Camera push',
     sourceRunning: 'Running',
     sourceStopped: 'Stopped',
     sourceLastPoll: 'Last poll',
@@ -2926,7 +3048,16 @@ presets, the licence boundaries
     pendingDropped: '{count} older alarms were dropped because the retained-record limit was reached',
     pendingLevel: 'Level',
     pendingStrategy: 'Strategy',
-    pendingMetrics: 'Sound-field intensity {intensity}, leakage {volume}',
+    metricIntensity: 'Sound intensity {value} dB',
+    metricDf: 'Dominant freq {value} Hz',
+    metricVolume: 'Leak volume {value}',
+    metricLeakCost: 'Leak cost {value}',
+    dischargeType: {
+      corona: 'Corona discharge',
+      suspension: 'Floating discharge',
+      surface: 'Surface discharge',
+      discharge: 'Discharge'
+    },
     pendingNoActions: 'No action ran for this alarm',
     pendingEngineOff: 'Alarm linkage is currently switched off',
     pendingShow: 'Show pending alarms',
@@ -3097,6 +3228,7 @@ presets, the licence boundaries
       related: 'Related',
       activity: 'Activity'
     },
+    colIndex: 'No.',
     overviewStatus: 'Status',
     overviewFirstDetected: 'First detected',
     overviewLastDetected: 'Last detected',

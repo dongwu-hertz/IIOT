@@ -343,10 +343,10 @@ export class NullPopupSink implements LinkagePopupSink {
  * （那会带来第二个渲染进程、预加载脚本与一整套状态），而它要显示的东西只有
  * 一行标题、一台设备、一行说明。
  *
- * `webPreferences.javascript: false` 是这个窗口最重要的安全设置——一段只显示
- * 文字的页面不需要任何脚本能力。代价是「点关闭」不能调 `window.close()`，
- * 所以窗口按 `autoDismissSeconds` 自动消失，也可以由主进程随时 `destroy()`；
- * 页面上显示的是一句**如实的话**（还有几秒关闭），而不是一个按不动的按钮。
+ * 脚本能力（2026-09-23 更新）：为右上角的 × 关闭钮开了一行内联脚本
+ * （`window.close()`）。窗口仍然是 `sandbox: true` + 无 Node、无网络、内容
+ * 是本地拼的静态字符串——放开的只是"点 × 能关上"这一件事。手动关闭的语义
+ * 见 sink 的 `onManualClose`（关掉 = 这条告警算处理过）。
  *
  * `params.title` / `params.body` 由调用方按当前界面语言渲染好后传入——
  * 本函数不认识任何一份文案目录。
@@ -381,6 +381,12 @@ export function renderPopupHtml(request: LinkagePopupRequest): string {
   .device{font-size:12px;opacity:.85;margin:0 0 4px}
   .body{font-size:12px;line-height:1.45;margin:0;word-break:break-word}
   .hint{font-size:10.5px;opacity:.6;margin:6px 0 0}
+  /* 手动关闭（业主 2026-09-23：「直到用户处理，或手动关闭告警弹窗」）；
+     右上角的 ×，关掉 = 这条告警算处理过（见 sink 的 onManualClose 接线）。 */
+  .close{position:absolute;top:6px;right:8px;width:22px;height:22px;border:none;border-radius:6px;
+    background:transparent;color:${colours.text};opacity:.65;font-size:14px;line-height:1;cursor:pointer;
+    -webkit-app-region:no-drag}
+  .close:hover{opacity:1;background:rgba(255,255,255,.12)}
 </style></head>
 <body><div class="wrap">
   <div class="icon">!</div>
@@ -390,7 +396,10 @@ export function renderPopupHtml(request: LinkagePopupRequest): string {
     <p class="body">${body}</p>
     <p class="hint">${dismissHint}</p>
   </div>
-</div></body></html>`
+</div>
+<button class="close" id="close" title="×">×</button>
+<script>document.getElementById('close').addEventListener('click',function(){window.close()})</script>
+</body></html>`
 }
 
 /** 弹窗页面里插入的都是设备名/时刻这类外部字符串，一律转义。 */
@@ -428,6 +437,17 @@ export interface ElectronPopupSinkOptions {
   maxStack: () => number
   /** 组装页面 HTML；注入以便测试渲染什么。 */
   renderHtml: (request: LinkagePopupRequest) => string
+  /**
+   * 弹窗贴哪块屏幕（2026-09-23「弹窗定位」修复）：给主窗口的 bounds，
+   * 弹窗出现在**主窗口所在那块屏**的右下角，而不是主屏——多屏工位上
+   * 告警弹到另一台显示器等于没弹。缺省回落到主屏。
+   */
+  anchorBounds?: () => { x: number; y: number; width: number; height: number } | undefined
+  /**
+   * 用户**手动**关掉弹窗（点 ×）时回调（popupId = 事件 id）。
+   * 自动消失（到点/被上限挤掉/应用退出）不触发——那不算用户处理了这条告警。
+   */
+  onManualClose?: (popupId: string) => void
 }
 
 /**
@@ -449,6 +469,8 @@ export class ElectronPopupSink implements LinkagePopupSink {
   private readonly windows = new Map<string, BrowserWindow>()
   private readonly timers = new Map<string, NodeJS.Timeout>()
   private htmlByRequest = new Map<string, string>()
+  /** 由定时器/上限/应用退出主动关掉的窗口：它们的 closed 不是「用户处理了」。 */
+  private readonly autoClosed = new Set<string>()
 
   constructor(options: ElectronPopupSinkOptions) {
     this.options = options
@@ -484,7 +506,7 @@ export class ElectronPopupSink implements LinkagePopupSink {
 
       const window = new BrowserWindow({
         width: 420,
-        height: 132,
+        height: 148,
         show: false,
         frame: false,
         resizable: false,
@@ -495,14 +517,14 @@ export class ElectronPopupSink implements LinkagePopupSink {
         focusable: false,
         skipTaskbar: true,
         alwaysOnTop: true,
-        // 出现在右下角而不是屏幕正中：告警通知不该遮住正在看的画面。
-        ...this.bottomRightPosition(420, 132),
+        // 出现在**主窗口所在那块屏**的右下角：多屏工位上弹到主屏等于没弹。
+        ...this.bottomRightPosition(420, 148),
         webPreferences: {
-          // 弹窗页面只有内联 CSS，没有任何脚本能力，也不需要 preload。
+          // 弹窗页面只有内联 CSS + 一行「× 关闭」的内联脚本（2026-09-23 起，
+          // 见 renderPopupHtml 的头注释）：无 Node、无网络、无 preload 不变。
           contextIsolation: true,
           nodeIntegration: false,
-          sandbox: true,
-          javascript: false
+          sandbox: true
         }
       })
 
@@ -519,6 +541,8 @@ export class ElectronPopupSink implements LinkagePopupSink {
         const timer = this.timers.get(request.popupId)
         if (timer) clearTimeout(timer)
         this.timers.delete(request.popupId)
+        // 用户点 × 关掉 = 这条告警算处理过；到点自动消失不算（见 onManualClose）。
+        if (!this.autoClosed.delete(request.popupId)) this.options.onManualClose?.(request.popupId)
       })
 
       await window.loadURL(this.urlFor(request.popupId))
@@ -543,7 +567,8 @@ export class ElectronPopupSink implements LinkagePopupSink {
   closeAll(): void {
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
-    for (const window of this.windows.values()) {
+    for (const [id, window] of this.windows) {
+      this.autoClosed.add(id)
       try {
         window.destroy()
       } catch {
@@ -570,6 +595,7 @@ export class ElectronPopupSink implements LinkagePopupSink {
       const timer = this.timers.get(oldest.value)
       if (timer) clearTimeout(timer)
       this.timers.delete(oldest.value)
+      this.autoClosed.add(oldest.value)
       try {
         window?.destroy()
       } catch {
@@ -587,6 +613,7 @@ export class ElectronPopupSink implements LinkagePopupSink {
       const window = this.windows.get(request.popupId)
       this.windows.delete(request.popupId)
       this.htmlByRequest.delete(request.popupId)
+      this.autoClosed.add(request.popupId)
       try {
         window?.destroy()
       } catch {
@@ -598,10 +625,13 @@ export class ElectronPopupSink implements LinkagePopupSink {
     this.timers.set(request.popupId, timer)
   }
 
-  /** 右下角；拿不到屏幕信息时回落到默认位置。 */
+  /** 主窗口所在屏幕的右下角；拿不到屏幕信息时回落到默认位置。 */
   private bottomRightPosition(width: number, height: number): { x?: number; y?: number } {
     try {
-      const display = screen.getPrimaryDisplay().workArea
+      const anchor = this.options.anchorBounds?.()
+      const display = anchor
+        ? screen.getDisplayMatching(anchor).workArea
+        : screen.getPrimaryDisplay().workArea
       return {
         x: Math.max(0, display.x + display.width - width - 16),
         y: Math.max(0, display.y + display.height - height - 16)

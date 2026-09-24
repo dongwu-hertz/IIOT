@@ -220,12 +220,23 @@ export class StreamManager extends EventEmitter {
     // per connection, so the sockets must be reopened.
     // The channel is baked into the subscription ping at construction time, so
     // a change requires rebuilding the sockets rather than mutating a field.
-    if (channelId !== this.channelId) {
+    const channelChanged = channelId !== this.channelId
+    if (channelChanged) {
       if (this.isRunning) this.stopAll()
       this.channelId = channelId
-      // Features and spectrum have no per-connection channel: they follow the
-      // DEVICE's selection, so the device must be switched too. Audio and the
-      // spectrogram DO carry a channel in their ping and are unaffected.
+    }
+    /*
+     * 2026-09-23「通道一没有读到特征帧」修复：通道选择**不再只在切换时发送**。
+     *
+     * 旧条件 `channelId !== this.channelId` 意味着：应用启动后第一次开流
+     * （管理器初值 0 = 目标 0）时，一次 `/channel_select` 都不会发——设备就停在
+     * 它自己 web 界面或上一次会话留下的通道上推流。帧里的 `cur_ch` 与渲染层的
+     * 订阅通道对不上，所有帧被 `belongsToSession` 丢掉，那一通道永远显示
+     * 「没有读到特征帧」。特征流与频谱跟随**设备**的当前通道（§4.3），所以
+     * 每次开流（含首次）都要把设备切到目标通道； reconcile（同通道换 kinds）
+     * 不重发——那是一次无意义的设备写。
+     */
+    if (channelChanged || !this.isRunning) {
       const select = this.options.selectChannel
       if (select) {
         void select(channelId).catch((error: unknown) => {

@@ -1,0 +1,597 @@
+ONLINE ACOUSTIC IMAGING CAMERA
+HZ-FA-371
+Full User Manual & Integration Guide
+Acoustic Imaging  •  Alarm Analytics  •  API Integration  •  Upgrade & Service
+[TABLE 0] rows=4
+Document version | V7.0 — Consolidated Draft
+Applicable software | V2.0.11
+Hardware platform | RK3568 • 200 kHz acoustic acquisition
+Release date | 15 September 2026
+[/TABLE 0]
+Shanghai Hertzinno Technology Co., Ltd.
+Industrial Acoustic Imaging & Condition Monitoring
+# About This Edition
+A consolidated HZ-FA-371 manual updated for the current V2.0.11 / RK3568 200 kHz platform.
+[TABLE 1] rows=1
+RELEASE-CONTROL NOTICE This is a consolidated draft prepared from the supplied HZ-FA-371 manual, alarm-strategy guide, practical guide, API workflow, software release notes, upgrade procedure, and version-difference workbook. Before external release, confirm any shipment-specific ratings printed on the device nameplate and certificate, especially power-input and enclosure-protection values where the supplied source documents are not fully consistent.
+[/TABLE 1]
+## Source set integrated into this manual
+[TABLE 2] rows=8
+Source | Version / Date | Used For
+HZ-FA-371 Gas Leak Instruction Manual | V6.3 / legacy full manual | Product overview, specifications, installation, Web UI, legacy API reference
+Online Acoustic Camera Practical Guide | V1.2 / 2026-09-15 | Three-mode operation, field parameter guidance, troubleshooting and application practice
+Acoustic Imaging Device Alarm Strategy | V1.2 | Alarm features, strategy logic, condition definitions and strategy creation
+Onboard Acoustic Camera API Workflow | V1.1 | HTTP + WebSocket + RTSP integration workflow and endpoint inventory
+HZ-FA-371 Software Release Notes | V2.0.11 | Current platform, new features, compatibility, reliability fixes
+FE128 ROBOT PLUS System Upgrade Procedure | V2.0 | Service/backend upgrade and FPGA procedure
+Software Upgrade Differences and Version Notes | current workbook | Version matrix, API/WS differences, Web upgrade and package compatibility
+[/TABLE 2]
+## What changed in this consolidated edition
+Current V2.0.11 baseline. The manual now treats RK3568 with 200 kHz acoustic acquisition as the current V2.0 series platform, with matching-package restrictions called out explicitly.
+Three application modes. Partial Discharge, Gas Leakage, and Mechanical Abnormal Noise are documented in a single operating workflow.
+V2.0 imaging functions. Up to three simultaneous acoustic targets, Focus Mode optimization, Real Sound Field cloud visualization, 0–15 dB dynamic range, transparency, palette settings, live audio, recording, snapshots, and full-screen video are included.
+Advanced alarm analytics. Band Energy Ratio, band-limited Dominant Frequency and Spectral Comparison, discharge classification, Kurtosis, and Crest Factor are integrated into the alarm chapter.
+Leakage and system enhancements. Leakage correction factor, 38 time zones, configurable HTTP service port, configuration persistence, and improved restart/RTSP/cache/validation behavior are reflected.
+Integration and service. API workflow, HTTP endpoint inventory, WebSocket streams, result retrieval, alarm push, browser upgrade, SSH fallback upgrade, and FPGA upgrade are consolidated into one document.
+## Document conventions
+[TABLE 3] rows=5
+Label | Meaning
+WARNING | A condition that may cause equipment damage, failed upgrade, data loss, or unsafe work if ignored.
+NOTE | Important context, limitation, or version-dependent behavior.
+STARTING VALUE | A field starting point from the practical guide; site tuning is still required.
+SERVICE ONLY | An action intended for trained or authorized service personnel.
+[/TABLE 3]
+Safety & Intended Use
+Read this chapter before installation, commissioning, field testing, or upgrade work.
+Intended use
+HZ-FA-371 is an online acoustic imaging camera intended for non-contact localization and analysis of sound sources in industrial environments. The supplied documents define three principal application modes: partial-discharge detection, pressurized-gas leak detection, and mechanical abnormal-noise detection.
+Partial Discharge Detection. Captures ultrasonic discharge signals from electrical equipment and supports PRPD-based analysis and discharge-type identification.
+Gas Leakage Detection. Locates turbulent acoustic emissions from pressurized leaks. The acoustic localization principle is not limited to a specific gas species; leakage estimation depends on configured site parameters.
+Mechanical Abnormal-Noise Detection. Localizes friction, impact, and abnormal sound from rotating, reciprocating, and transmission equipment such as motors, pumps, fans, bearings, gearboxes, conveyors, compressors, and engines.
+General safety
+Follow all site safety rules, electrical clearances, hazardous-area procedures, and permit-to-work requirements.
+Use appropriate PPE. Where toxic or hazardous gas may be present, use the respiratory and gas-detection protection required by the site.
+Do not rely on the acoustic camera as the sole protective or shutdown system for personnel safety or process safety.
+Keep the front microphone array and optical field of view unobstructed. Avoid severe vibration, impact, contamination, and mounting instability.
+Use network, power, and mounting accessories suitable for the installation environment and the actual device nameplate.
+[TABLE 4] rows=1
+NAMEPLATE VERIFICATION The legacy specification table lists DC 12 V / 3 A and IP68 & IP66, while the newer practical guide references a 12 V / 24 V adapter and IP65. Because the supplied documents conflict, this manual does not convert those values into a single universal rating. Confirm the exact shipment label/certificate before external issue or installation.
+[/TABLE 4]
+Upgrade safety
+Do not power off the device, disconnect the network, or remove storage media while an upgrade is in progress.
+Back up or verify critical settings and detection records before upgrading even though the standard package is designed not to overwrite the /sysdata database.
+Use only a package that matches the hardware platform and acoustic acquisition variant. V2.0 200 kHz packages must not be mixed with 132/96 kHz variants.
+After upgrading, verify software/FPGA versions, acoustic configuration, live view, alarm strategy, and real-time detection before returning the device to unattended service.
+Product Overview
+128-channel acoustic imaging with visible-light video and embedded condition analytics.
+Acoustic imaging principle
+The HZ-FA-371 uses a microphone array and beamforming-based localization. By comparing phase and timing differences between microphones, the device estimates sound-source direction and intensity and overlays the acoustic result on the visible-light image. The selected imaging frequency band determines which portion of the sound spectrum contributes to localization.
+Figure 2-1. HZ-FA-371 online acoustic imaging camera.
+Current V2.0.11 platform
+[TABLE 5] rows=10
+Area | V2.0.11 capability
+Acoustic acquisition | RK3568 platform; 200 kHz acoustic sampling baseline for the V2.0 series.
+Targets | Up to 3 acoustic targets simultaneously with improved multi-target localization.
+Focus Mode | Acoustic source-point calculation is performed inside the configured focus area.
+Real Sound Field | Cloud-map visualization with 0–15 dB dynamic range, adjustable transparency, and selectable palette.
+Alarm analytics | Sound Pressure Level, Dominant Frequency, Spectral Comparison, Band Energy Ratio, mode-specific discharge classification, Kurtosis, and Crest Factor.
+Leakage estimation | Site correction factor available to compensate leakage-estimation deviation.
+Web operation | Live audio monitoring, video recording, snapshot, full-screen video, and raw-channel data access are supported in V2.0.
+System | 38 time zones, custom HTTP service port, and configuration persistence across unexpected power loss.
+FPGA | Release notes identify FPGA firmware V0.5.1.6_251219 for the V2.0.11 release baseline.
+[/TABLE 5]
+Operating modes
+[TABLE 6] rows=4
+Mode | Primary purpose | Typical targets
+Partial Discharge | Locate and characterize ultrasonic discharge activity. | Switchgear, transformers, cable joints, busbars, overhead-line hardware.
+Gas Leakage | Locate pressurized-gas leakage and optionally estimate leak rate/cost. | Valves, flanges, pipeline connections, gas cylinders, process equipment.
+Mechanical Abnormal Noise | Locate abnormal friction, impact, and tonal/transient noise. | Motors, bearings, gearboxes, pumps, fans, conveyors, compressors, engines.
+[/TABLE 6]
+[TABLE 7] rows=1
+MODE AVAILABILITY The practical/API guides state that units may be shipped with only one application mode enabled. If a different mode is required, contact HERTZINNO technical support. Do not assume mode-switching availability on every shipment.
+[/TABLE 7]
+Specifications & Mechanical Interface
+Core hardware values from the legacy product specification, reconciled with V2.0.11 software capability.
+Technical specification
+[TABLE 8] rows=14
+Parameter | Value / Guidance
+Model | HZ-FA-371
+Microphone array | 128 high-precision MEMS digital microphones
+Sensor dynamic range | 30–120 dB (legacy specification)
+Acoustic bandwidth | 2–65 kHz
+Acoustic sampling | V2.0 series: 200 kHz; legacy V1.0 series: 132/96 kHz; V2.1 132/96 kHz listed as under testing in the version workbook.
+Product size | 135 × 135 × 48.5 mm
+Weight | < 900 g
+Visible camera | Fixed focal length 3.9 mm; field of view 60°
+Video | V2.0 feature matrix: 1920 × 1080, 30 fps; H.264; bitrate choices 4096 / 2048 / 1024 / 512 kbps
+Data transmission | Ethernet
+Video transmission | RTSP; browser live view is also provided by the device Web UI.
+Legacy nominal measuring distance | 0.5–50 m in the legacy specification; actual useful distance depends strongly on source strength, frequency, environment, and application.
+Power / ingress protection | Verify device nameplate/certificate — supplied source documents contain conflicting values.
+[/TABLE 8]
+Figure 3-1. Exterior dimension drawing from the legacy HZ-FA-371 manual.
+Connectors and installation interface
+The base manual shows bottom cable/connector interfaces and multiple mechanical mounting arrangements. Select brackets and cable routing suitable for the robot, column, pan-tilt unit, or fixed structure. Mounting hardware is project-specific and may be supplied separately.
+Figure 3-2. Example mounting arrangements.
+Installation & Network
+Plan the acoustic line of sight, mechanical stability, power, and network before commissioning.
+Installation position
+Keep the front microphone array and visible-light camera unobstructed.
+Minimize vibration transmitted from robots, pan-tilt units, vehicles, and machinery to the camera body.
+Choose a viewing angle that keeps the target inside both the optical field of view and the useful acoustic localization region.
+For high-voltage applications, maintain all required electrical safety clearances. Detection distance recommendations are not a substitute for electrical clearance rules.
+For outdoor and process installations, consider wind, airflow, reflected sound, nearby machinery, and barriers when choosing the location.
+Typical network topology
+Figure 4-1. Typical LAN topology: client PC / switch / HZ-FA-371 / application modes.
+The device and commissioning computer are normally connected to the same LAN. The default device IP address in the supplied manuals is 192.168.2.168. Configure the client PC on the same subnet before first login. Changing the device IP disconnects the current session; reconnect using the new address.
+Pre-commissioning checklist
+[TABLE 9] rows=9
+Check | Acceptance criterion
+Mechanical mounting | Device is secure; front face is unobstructed; vibration is minimized.
+Power | Correct supply verified against device label; stable power available.
+Network | PC can reach the device IP; subnet and gateway settings are appropriate.
+Browser | Modern browser can open the device Web page.
+Optics | Visible image is clear and target area is in view.
+Acoustic status | Ambient sound energy, spectrum/acoustic-signature plot, and device online status appear normal.
+System time | Date, time, and time zone are correct before collecting records.
+User security | Default password will be changed after commissioning.
+[/TABLE 9]
+Login & Quick Start
+Use the browser UI for commissioning and the same settings model for API integration.
+First login
+1. Connect to the device  Place the commissioning PC and HZ-FA-371 on the same network segment.
+2. Open the Web page  Enter the device IP in the browser. The default IP in the supplied manuals is 192.168.2.168.
+3. Authenticate  Default account: admin; default password: 123456.
+4. Change the password  After first connection, change the password under System Configuration → User Management.
+5. Perform the initial check  Confirm live video, acoustic plots, sound energy, current application mode, and unobstructed view.
+Figure 5-1. Device login page (legacy UI example).
+[TABLE 10] rows=1
+SECURITY The default admin / 123456 credentials are documented for initial access. Change the password during commissioning and manage device access according to the site security policy.
+[/TABLE 10]
+Fast commissioning workflow
+[TABLE 11] rows=11
+Step | Action
+1 | Log in and verify live video / spectrum / acoustic signature.
+2 | Select or confirm the required application mode.
+3 | Inspect the spectrum and set a target imaging band.
+4 | Set imaging threshold, target count, sensitivity, and enhancement.
+5 | Create or enable the required alarm strategy.
+6 | Use Single Detection for validation and tuning.
+7 | Review records and adjust thresholds/feature bands to reduce false alarms.
+8 | Move to Smart Patrol when the strategy is stable.
+9 | Verify alarm push / API integration if used.
+10 | Document the final site-specific settings and baseline reference files.
+[/TABLE 11]
+Live View & Imaging Operation
+The live view combines visible video, acoustic imaging, spectral plots, and detection controls.
+Console elements
+Figure 6-1. Live-view console example.
+[TABLE 12] rows=11
+Element | Function
+Spectrum | Real-time frequency spectrum. Use it to find target bands and interference.
+Acoustic Signature / STFT | Two-dimensional time-frequency representation of the current acoustic signal.
+Waveform | Time-domain amplitude/phase behavior.
+PRPD | Partial-discharge mode only; phase-resolved discharge distribution for discharge analysis.
+Imaging band | Selects the acoustic frequency region used for localization. Practical guide: 2–65 kHz, integer values, span 2–20 kHz.
+Imaging threshold | Energy threshold for acoustic imaging. Raising it rejects weaker signals/interference; lowering it increases sensitivity to weak sources.
+Target count | Maximum 3 in V2.0 series.
+Imaging sensitivity | Low / Medium / High; higher sensitivity follows signal changes more quickly but can reduce stability.
+Imaging enhancement | Improves target stability by using more analysis frames, at the cost of additional delay.
+Start Detection | Runs one detection cycle in Single Detection mode or starts periodic detection in Smart Patrol mode.
+[/TABLE 12]
+Imaging frequency band
+Choose the band after observing the spectrum rather than applying a fixed band everywhere. The practical guide gives an adjustable band of 2–65 kHz, with the upper limit greater than the lower limit and a typical configured span between 2 and 20 kHz. The V2.0 alarm engine also allows selected feature calculations—Dominant Frequency, Spectral Comparison, and Band Energy Ratio—to be constrained to user-defined frequency ranges.
+[TABLE 13] rows=1
+SAMPLING COMPATIBILITY The older V6.3 API documentation exposes 96/132 kHz sampling-rate parameters. The current V2.0.11 release baseline is 200 kHz. Do not force legacy sampling values into a V2.0.11 200 kHz unit; use the package and acoustic configuration that match the hardware variant.
+[/TABLE 13]
+Imaging threshold
+The threshold controls whether a source is strong enough to be visualized. In the practical guide, -30 is given as a general starting point for imaging, but it is not a universal alarm threshold. In noisy industrial environments, increase the threshold until persistent background interference is suppressed while the target source remains visible.
+Focus Mode and Zone Mode
+Focus Mode (V2.0 optimized). The V2.0 series calculates acoustic source points inside the defined focus box, reducing computation on irrelevant areas and improving site targeting.
+Zone Mode. Zone boxes can be used to constrain display/monitoring areas. The version workbook notes that zone processing behavior differs from Focus Mode; verify target behavior in the current build during commissioning.
+Real Sound Field visualization
+Real Sound Field cloud-map visualization is supported in the V2.0 platform.
+Dynamic range is adjustable from 0 to 15 dB.
+Cloud-map transparency is adjustable.
+Sound-field palette options listed in the version workbook include Rainbow, Iron Red, and Grayscale.
+Up to three targets are supported in real sound-field visualization on the current V2.0 platform.
+Video and audio functions
+V2.0 supports live audio monitoring, video recording, snapshots, and full-screen video.
+The V2.0 feature matrix lists 1920 × 1080 / 30 fps, H.264 and selectable maximum bitrate values.
+Video mirror/flip options include Default, Vertical Mirror, Horizontal Mirror, and Center Mirror.
+RTSP parameters are configurable. API workflow documentation lists the default video_port parameter as 443.
+Application Modes & Field Practice
+Start with spectral observation, then tune band, threshold, alarm features, and detection period for the actual site.
+Detection distance planning
+The practical guide states that the best overall measurement performance is generally achieved within 1–20 m. Maximum usable distance is not fixed because acoustic energy is affected by source strength, frequency, air absorption, wind, background noise, obstacles, reflections, and scattering. As a rule of acoustic propagation, sound pressure decreases by approximately 6 dB when distance doubles under free-field geometric spreading.
+[TABLE 14] rows=4
+Range | Starting frequency guidance | Use
+Near: 0.1–2 m | 2–65 kHz | Highest spatial resolution; tiny leaks and precise localization.
+Medium: 2–20 m | 2–45 kHz | Best balance of distance and accuracy; routine PD/leak/mechanical inspection.
+Long: 20–100 m | 2–30 kHz | Wide-area screening; low-frequency components propagate farther but spatial separation may decrease.
+[/TABLE 14]
+[TABLE 15] rows=1
+FIELD GUIDANCE, NOT A GUARANTEED RANGE The distance bands above are practical recommendations from the supplied guide. They are not a performance guarantee. High-frequency ultrasound attenuates rapidly in air; source strength and site noise can change the usable distance substantially.
+[/TABLE 15]
+Partial Discharge mode
+Partial-discharge mode detects ultrasonic signals generated by electrical discharge and adds PRPD analysis and discharge-type feature values. The alarm documentation supports corona/point-type discharge labeling (software wording varies by build), floating discharge, and surface discharge.
+[TABLE 16] rows=9
+Parameter | Starting value from practical guide | Tuning guidance
+Imaging band | 20–40 kHz | Inspect site spectrum; shift the band away from strong unrelated noise.
+Imaging threshold | Based on ambient energy | Start low enough to image the target; raise to reject persistent noise.
+Target count | 1 | Increase only when multiple simultaneous sources are required.
+Imaging sensitivity | Low | Increase if faster tracking is needed; verify stability.
+Imaging enhancement | Off | Enable only when improved target stability is more important than delay.
+Alarm features | Dominant Frequency + Spectral Comparison + Discharge Type | Use band-limited feature settings in V2.0 where appropriate.
+Detection period | 5–10 s | Longer periods increase statistical stability but also increase response/storage time.
+Strategy sensitivity | 20 (guide starting value) | Validate against normal/abnormal examples before unattended use.
+[/TABLE 16]
+Figure 7-1. Partial-discharge live-view / PRPD example from the practical guide.
+### Recommended operating sequence
+1. Survey the spectrum  Observe the live spectrum with normal equipment operating.
+2. Select the band  Choose a band that captures the discharge signature while avoiding dominant background noise.
+3. Set threshold  Confirm a suspected discharge source produces stable acoustic imaging.
+4. Run Single Detection  Collect repeated records and review PRPD and discharge-type feature behavior.
+5. Build the alarm strategy  Combine frequency-domain and discharge-type conditions appropriate to the site.
+6. Validate normal vs abnormal  Do not enable unattended Smart Patrol until false-alarm behavior is understood.
+7. Enable Smart Patrol  Use periodic monitoring after thresholds and baseline behavior are confirmed.
+Gas Leakage mode
+Leakage mode localizes broadband/turbulent sound from pressurized gas escaping through valves, flanges, joints, fittings, cylinders, and process equipment. Acoustic localization is independent of the gas species, but leakage-rate and cost estimates depend on configured process assumptions and a site correction factor.
+[TABLE 17] rows=9
+Parameter | Starting value from practical guide | Tuning guidance
+Imaging band | 25–45 kHz | Move the band to the strongest leak-to-background contrast.
+Target count | 1 | Use multiple targets only when multiple leak sources must be displayed.
+Imaging sensitivity | Low | Increase cautiously in unstable/noisy scenes.
+Imaging enhancement | Off | May be enabled for very small or weak leaks if delay is acceptable.
+Alarm features | Sound Pressure Level + Spectral Comparison | Band Energy Ratio can also be used on V2.0 when it better separates leak energy from noise.
+Detection period | 1–5 s | Use short cycles for responsive leak alarms, then validate stability.
+Strategy sensitivity | 20 (guide starting value) | Tune with actual site leak/no-leak examples.
+Leakage correction | Site-specific correction factor | Use to compensate systematic deviation in calculated leakage estimates.
+[/TABLE 17]
+Figure 7-2. Gas-leak localization example from the practical guide.
+### Leakage estimation inputs
+Leakage unit and currency unit.
+Gas value / energy cost parameters.
+Specific power and operating hours where cost conversion is used.
+Detection distance.
+Leakage-cost display option.
+V2.0 correction_rate / correction factor for site compensation.
+Mechanical Abnormal-Noise mode
+Mechanical mode is intended for abnormal friction, impact, tonal, or impulsive sound from rotating and reciprocating machinery. V2.0 adds Kurtosis and Crest Factor alarm features to improve sensitivity to transient impacts and waveform peaks.
+[TABLE 18] rows=8
+Parameter | Starting value from practical guide | Tuning guidance
+Imaging band | 2–50 kHz | Fine-tune after identifying the fault-related spectral band.
+Target count | 1 | Increase only if multiple sources must be tracked.
+Imaging sensitivity | Low | Increase for faster response only after stability testing.
+Imaging enhancement | Disabled | Enable when the source is weak and slower tracking is acceptable.
+Alarm features | Spectral Comparison + Kurtosis + Crest Factor | Use a reference spectrum from known-normal operation whenever possible.
+Detection period | 2–7 s | Balance transient capture against statistical stability.
+Strategy sensitivity | 40 (guide starting value) | Tune using repeated normal/fault samples.
+[/TABLE 18]
+Figure 7-3. Mechanical abnormal-noise detection example.
+Alarm Strategy & Decision Logic
+Use acoustic localization plus one or more acoustic feature conditions to decide whether an event should be recorded as an alarm.
+Strategy model
+Only one alarm strategy can be enabled at a time. A strategy contains a strategy name, one or more alarm-condition rules, a detection period, strategy sensitivity, alarm level, and diagnostic notes. An enabled strategy or an alarm condition bound to an enabled strategy cannot be modified or deleted until it is disabled.
+Figure 8-1. Alarm decision flow from the practical guide.
+Feature definitions
+[TABLE 19] rows=8
+Feature | Meaning / use | Mode notes
+Sound Pressure Level (SPL) | Sound-intensity level in dB. Lp = 20 log10(prms / pref), with pref = 20 µPa. | General
+Dominant Frequency | Frequency component with the highest concentration / peak in the analyzed spectrum. | General; V2.0 supports selected analysis band.
+Spectral Comparison | Compares the measured spectrum with a reference spectrum. Smaller difference means a closer match in the supplied strategy document. | General; requires reference file; V2.0 supports selected analysis band.
+Band Energy Ratio (BER) | Energy within a selected frequency band divided by total signal energy. | V2.0 new alarm condition.
+Discharge Type | Classification of discharge behavior; supplied documents refer to corona/point, floating, and surface discharge labels. | Partial Discharge only.
+Kurtosis | Statistical measure sensitive to impulsive/heavy-tailed behavior. Normal steady machinery is described near 3 in the source guide; impacts can raise it. | Mechanical only.
+Crest Factor | Signal peak divided by RMS value; higher values indicate stronger sharp peaks relative to average energy. | Mechanical only.
+[/TABLE 19]
+Strategy fields
+[TABLE 20] rows=7
+Field | Configuration
+Strategy Name | 1–20 characters in the alarm strategy guide.
+Alarm Conditions | Combine supported feature comparisons and logical conditions according to the monitoring objective.
+Detection Period | 1–30 s in the practical/API guide; use the current UI limit for the installed build.
+Sensitivity | Percentage-style strategy sensitivity controlling how many statistical results must satisfy the rule during the cycle. Higher sensitivity makes abnormal events easier to trigger.
+Alarm Level | Priority / urgency classification.
+Diagnostic Notes | Free-text background, purpose, scenario, and interpretation notes.
+[/TABLE 20]
+Example condition values
+[TABLE 21] rows=1
+EXAMPLES ONLY The values below are examples contained in the alarm-strategy document. They are not universal recommended thresholds and must be validated against site data.
+[/TABLE 21]
+[TABLE 22] rows=7
+Condition | Example from source | Evaluation note
+Sound Pressure Level | > 20 dB | 30 results evaluated per second in the source example.
+Dominant Frequency | > 3000 Hz | 30 results evaluated per second in the source example.
+Spectral Difference | > 20% | One comparison result per second in the source example.
+Band Energy Ratio | > 50% | One result per second in the source example.
+Kurtosis | > 3 | One result per second in the source example.
+Crest Factor | > 3 | One result per second in the source example.
+[/TABLE 22]
+Create and validate a strategy
+1. Create an alarm condition  Select required feature(s), operators, frequency bands, and thresholds. Add notes explaining the intended fault signature.
+2. Create a strategy  Set the strategy name, bind the alarm condition, detection period, sensitivity, alarm level, and diagnostic notes.
+3. Upload a spectral reference if needed  Download a representative sample from the Data page and upload it as the comparison file.
+4. Enable one strategy  If another strategy is enabled, disable it before enabling the new one.
+5. Validate in Single Detection  Run repeated normal and target-event tests. Adjust band limits and thresholds until false alarms and missed alarms are acceptable.
+6. Enable Smart Patrol  Use unattended cyclic monitoring only after the strategy has been validated for the actual environment.
+Figure 8-2. Alarm strategy list example.
+Figure 8-3. Alarm-condition configuration example.
+Data, Statistics & Alarm Push
+Review detection records locally or retrieve/push them through the integration interfaces.
+Data view
+Detection records are stored in the device database, with images, plots, videos, and other attachments stored as files. The supplied API workflow states that the device retains the latest 50 detection records and overwrites older records cyclically; plan external archiving if longer retention is required.
+Figure 9-1. Data view example.
+Single Detection vs Smart Patrol records
+[TABLE 23] rows=3
+Mode | Record behavior
+Single Detection | Each successful start-detection command produces one record, whether or not an alarm is triggered. Recommended during exploration and validation.
+Smart Patrol | The device repeats acquisition/analysis according to the enabled strategy. A record is saved only when the alarm rule is triggered.
+[/TABLE 23]
+Statistical plots
+The feature matrix describes statistical acquisition of ambient sound-pressure level and dominant frequency at periodic intervals, with trend plots provided in the Web interface. Use these trends to establish normal baselines and identify long-term shifts before changing alarm thresholds.
+Figure 9-2. Statistical trend view example.
+Alarm push
+The V2.0 platform supports HTTP alarm push to a configured external service. When an alarm record is generated, the device can send record data as JSON to the configured endpoint. The receiver can then use the returned saving path and file name to request the corresponding detection-result file from the device.
+System Configuration
+Configure time, network, users, ports, restart behavior, logs, and system information.
+Date, time, and time zone
+Set the correct device time before collecting records so event timestamps are meaningful.
+V2.0 adds time-zone configuration with support for 38 time zones according to the release notes.
+Time can also be read/set through the HTTP interfaces in integration workflows.
+Figure 10-1. Date & Time configuration example.
+Network and HTTP service port
+The default IP documented in the manuals is 192.168.2.168. DHCP/static network behavior depends on the current configuration. V2.0 adds a custom HTTP service-port setting. If the IP or service port is changed, update browser, API, alarm-push, and other integrations accordingly.
+Figure 10-2. Network configuration example.
+User management
+Change the default admin password during commissioning.
+Use the User Management page to maintain account credentials supported by the device build.
+API login uses the same authentication model and returns a token for subsequent calls.
+RTSP and scheduled restart
+Configure RTSP video parameters through the Web UI or /system/video API.
+The API workflow lists the default video_port parameter as 443; deployments may expose services through configured routing/ports.
+Scheduled restart is supported. V2.0.11 includes a fix for certain custom scheduled-restart configurations.
+Device logs, self-test, and reset
+Device logs can be downloaded from System Configuration → Device Logs as system_logs.log according to the API guide.
+Device Self-Test can be used to check whether the microphone hardware is operating normally.
+Restore Initialization resets IP address, username, and password to defaults and deletes historical data. Use it only when the data-loss impact is understood.
+[TABLE 24] rows=1
+CONFIGURATION PERSISTENCE V2.0.11 release notes state that configuration status is preserved across unexpected power loss and restored after restart. This does not replace normal commissioning records or backups.
+[/TABLE 24]
+Software & FPGA Upgrade
+Use the Web upgrade path for normal operation; use SSH/backend procedures only when authorized or when the Web upgrade cannot complete.
+Compatibility first
+[TABLE 25] rows=1
+DO NOT MIX SAMPLING-RATE VARIANTS V2.0.* is the RK3568 200 kHz branch. The workbook lists V2.1.* as the 132/96 kHz branch under testing. Use only a package intended for the installed platform and acoustic acquisition configuration.
+[/TABLE 25]
+Standard Web upgrade
+1. Verify the package  Confirm model/platform and target version. For this manual baseline, the package name is FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11.
+2. Verify data and power  Check current settings/records, use stable power, and use a wired LAN where practical.
+3. Log in  Open the device Web page and authenticate as an administrator.
+4. Upload package  Open System Settings → System Upgrade and select the upgrade package.
+5. Confirm upgrade  The device reboots; startup scripts detect and unpack the package, replace system components, and reboot again. The page may be unavailable temporarily.
+6. Verify completion  Log in after reboot and verify software/front-end versions, acoustic settings, live view, alarm operation, and device health.
+Figure 11-1. System Upgrade page example.
+Service / SSH fallback upgrade
+[TABLE 26] rows=1
+SERVICE ONLY Use this procedure only when authorized, or when the normal Web upgrade cannot be completed. Do not interrupt the process.
+[/TABLE 26]
+The supplied backend upgrade procedure uses MobaXterm/SSH and SFTP. Upload the matching package to /root/, make it executable, run the full system upgrade, then run the FPGA upgrade mode with the k410_4096 parameter.
+[TABLE 27] rows=1
+cd /root/ chmod 755 FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11 ./FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11 ./FE128_ROBOT_PLUS_upgrade_pkg_RK3568_v2.0.11 k410_4096
+[/TABLE 27]
+Wait for “Upgrade completed successfully!” for the system package.
+During FPGA upgrade, monitor progress to 100% and confirm “FPGA upgrade success” / “FPGA firmware upgraded successfully”.
+Restart the device after the upgrade procedure and complete functional verification.
+Post-upgrade verification
+[TABLE 28] rows=8
+Item | Verify
+Version | Software package and FPGA versions match the intended release.
+Acoustic acquisition | Platform/sampling variant is correct; imaging band operates normally.
+Live view | Visible video, acoustic overlay, spectrum, STFT, waveform, and mode-specific plots display correctly.
+Alarm | Enabled strategy, conditions, period, sensitivity, alarm level, and reference files are intact.
+Data | Detection records can be created and retrieved.
+Integration | HTTP/WS/RTSP and alarm-push clients reconnect and operate normally.
+Stability | Restart behavior, network settings, time zone, and service watchdog are normal.
+[/TABLE 28]
+API & Third-Party Integration
+HTTP for control/configuration, WebSocket for real-time data, and RTSP for video streaming.
+Interface model
+[TABLE 29] rows=4
+Interface | Primary role
+HTTP / REST | Login, parameter configuration, start/stop detection, detection logs/files, time, alarm strategy, alarm conditions, comparison files.
+WebSocket | Real-time PCM, FFT, STFT/acoustic signature, PRPD, localization points, feature values, crest factor, and detection feedback.
+RTSP | Video stream for third-party systems.
+[/TABLE 29]
+Authentication
+POST /login returns a token. All subsequent HTTP requests must include the token in the Authorization header. The API guide specifies the password hashing rule as MD5(plaintext password + "lfxs"), output as 32 lowercase hexadecimal characters. Invalid or missing authentication returns 401.
+[TABLE 30] rows=1
+POST /login Content-Type: application/json  {   "username": "admin",   "password": "<MD5(password + lfxs), 32 lowercase hex>" }  Response: { "token": "<encrypted token>" }
+[/TABLE 30]
+Recommended API workflow
+[TABLE 31] rows=11
+Order | Call / action
+1 | POST /login — obtain token.
+2 | GET current acoustic/image/video/run-mode/alarm state.
+3 | Configure /system/acoustic, /system/image, /system/video, /system/scan_area as required.
+4 | Create/enable one alarm strategy, or enable a preconfigured strategy.
+5 | Subscribe to required WebSocket real-time streams.
+6 | POST /turn_on_detect — receive detect_id in Single Detection mode.
+7 | Check /system/detect_status or receive /detectFeedback.
+8 | GET /detect_logs/{detect_id}; then GET /detect_file/{saving_path}/{file_name}.
+9 | POST /turn_off_detect when an early stop or Smart Patrol stop is required.
+10 | Handle token expiry, WS heartbeat/reconnect, and network changes.
+[/TABLE 31]
+V2.0 API compatibility
+Core HTTP request/response structures remain compatible with the previous platform according to the V2.0.11 release notes and version workbook.
+V2.0 alarm-condition endpoints add fields including detect_mode, df_thr2, hfr_main_sub_freq_upper, and hfr_main_sub_freq_lower.
+/system/leakage adds correction_rate in V2.0 and requires Leakage mode for the leakage-setting update.
+V2.0 applies stricter validation to several endpoints, so invalid values that may previously have been accepted can now return an error.
+Existing real-time WebSocket data channels remain structurally unchanged between the compared legacy and V2.0 versions.
+WebSocket streams
+[TABLE 32] rows=9
+Stream | Path | Format / frequency
+PCM Audio | /pcmData | float32 binary; 10 frames/s; 48 kHz PCM sampling in the API guide.
+FFT | /fftData | int16 binary; first 512 points; 5 frames/s.
+Acoustic Signature / STFT | /voiceprintData | integer binary; 1 frame/s.
+PRPD | /prpdData | integer binary; 1 frame/s.
+Localization / Energy | /energyData | int32 binary; pushed at scheduled intervals.
+Feature Values | /featureData | Real-time mode-specific feature values; listed as compatible in the version workbook.
+Crest Factor | /peak_factor | Real-time crest-factor stream; listed in the version workbook.
+Detection Feedback | /detectFeedback | JSON; one packet after each detection.
+[/TABLE 32]
+[TABLE 33] rows=1
+WEBSOCKET PORT ROUTING The API workflow gives the client-facing example ws://IP:80/<stream>, while the version workbook identifies the Main-Service WebSocket server internally as port 8888. Treat 8888 as implementation/internal-service information and connect through the port/routing exposed by the installed device configuration.
+[/TABLE 33]
+After a WebSocket connection is established, the API guide requires the client to send any message at least once per minute as a heartbeat; otherwise the server may disconnect the inactive connection. Binary streams are parsed little-endian.
+Detection result timing
+In Single Detection mode, POST /turn_on_detect returns a record ID. After detection completes, analysis and file saving may still require processing time. The API guide recommends waiting approximately 1–10 seconds before requesting GET /detect_logs/{detect_id}, with the required delay depending on the strategy period and system load.
+Integration error handling
+[TABLE 34] rows=8
+Condition | Handling
+401 authentication failure | Call POST /login again and retry with the new token.
+WebSocket disconnect | Reconnect and resubscribe; ensure heartbeat is sent at least once per minute.
+IP / port changed | Reconnect with the new address/port and update all clients.
+Strategy locked | Disable the active strategy before modifying or deleting it or its bound condition.
+No detection record yet | Wait for analysis/save completion, then retry GET /detect_logs/{detect_id}.
+Old records missing | Device keeps only the latest 50 records according to the API guide; implement external retention if required.
+Invalid V2.0 parameter | Read the error response and correct the value; V2.0 validation is stricter than the legacy implementation.
+[/TABLE 34]
+Troubleshooting & Maintenance
+Use symptoms, live spectrum, device status, and logs to distinguish configuration problems from signal/environment problems.
+[TABLE 35] rows=11
+Symptom | Likely cause | Action
+Cannot open Web page | PC/device not on same subnet; wrong IP/port; network issue. | Ping/reachability check, confirm 192.168.2.168 default only if unchanged, verify configured HTTP port.
+No live video | Network/video service or browser connection problem. | Check LAN, refresh login, verify video settings and service health.
+No acoustic image | Band does not include target; threshold too high; source too weak/far. | Inspect spectrum, move closer, select target band, lower threshold, confirm microphone self-test.
+Frequent false alarms | Threshold too low, sensitivity too high, strong interfering band, reference file not representative. | Raise imaging/alarm thresholds, narrow feature band, reduce sensitivity, update comparison baseline.
+Strategy cannot be edited | Strategy is enabled or condition is bound to enabled strategy. | Disable the strategy first.
+No new Smart Patrol records | No alarm condition was triggered. | Verify enabled strategy and conditions; use Single Detection for diagnosis.
+Records disappeared | Cyclic retention exceeded. | Export/archive externally; API guide states latest 50 records are retained.
+WebSocket disconnects | Heartbeat missing or network interrupted. | Send heartbeat at least once per minute; reconnect and resubscribe.
+Detection result not immediately available | Analysis/save still running. | Wait, then retry log/result retrieval.
+Unexpected behavior after upgrade | Wrong package variant or settings not verified. | Check version/sampling compatibility, configuration, service logs, and FPGA status.
+[/TABLE 35]
+Preventive maintenance
+Keep microphone openings and camera window clean and unobstructed using methods compatible with the installation environment.
+Periodically confirm mounting rigidity and cable/connector condition.
+Review device time, network settings, storage/record retention, and logs.
+Use Device Self-Test to confirm microphone hardware status after maintenance or suspected impact.
+Retain a record of site-specific imaging bands, alarm thresholds, strategy parameters, and reference spectra so settings can be restored after service.
+Before/after software upgrades, record software version, FPGA version, and acoustic acquisition variant.
+Appendix A — Defaults & Starting Parameters
+## A.1 Default access values
+[TABLE 36] rows=7
+Item | Default / source value
+Device IP | 192.168.2.168
+User name | admin
+Password | 123456
+Client-facing WebSocket example | ws://IP:80/<stream>
+RTSP video_port parameter | 443 in API workflow documentation
+Application mode availability | Shipment may expose only one mode; contact support for mode changes.
+[/TABLE 36]
+## A.2 Starting parameter matrix
+[TABLE 37] rows=4
+Application | Imaging band | Detection period | Alarm-feature starting set
+Partial Discharge | 20–40 kHz | 5–10 s | Dominant Frequency + Spectral Comparison + Discharge Type
+Gas Leakage | 25–45 kHz | 1–5 s | Sound Pressure Level + Spectral Comparison; optionally BER on V2.0
+Mechanical Noise | 2–50 kHz | 2–7 s | Spectral Comparison + Kurtosis + Crest Factor
+[/TABLE 37]
+[TABLE 38] rows=1
+TUNE ON SITE These values are starting points from the practical guide, not fixed acceptance criteria. Establish normal and fault baselines in the actual environment before enabling unattended alarms.
+[/TABLE 38]
+# Appendix B — Version Compatibility Matrix
+[TABLE 39] rows=13
+Capability | V1.0.* legacy | V2.0.* current | V2.1.* listed in workbook
+Platform | RK3568 | RK3568 | RK3568
+Acoustic sampling | 132/96 kHz | 200 kHz | 132/96 kHz
+Status in supplied material | Legacy | Current / V2.0.11 | Under testing
+Live audio | Not supported | Supported | Supported
+Recording / snapshot / full screen | Not supported | Supported | Supported
+Maximum target count | 6 | 3 | 3
+Leakage correction factor | Not supported | Supported | Supported
+Focus-mode computation | Full-screen calculation; display filtered by box | Calculation inside focus box | Calculation inside focus box
+Real Sound Field | Supported in some versions | Supported | Supported
+Band Energy Ratio alarm | Not supported | Supported | Supported
+Kurtosis / Crest Factor | Not supported | Supported | Supported
+Time zone / custom HTTP port | Legacy behavior | Supported | Supported
+[/TABLE 39]
+[TABLE 40] rows=1
+RELEASE BASELINE This manual uses V2.0.11 / 200 kHz as the current baseline because the supplied release notes identify that package as the HZ-FA-371 major update. Do not mix packages across sampling-rate branches.
+[/TABLE 40]
+# Appendix C — HTTP & WebSocket Reference
+## C.1 HTTP endpoint inventory
+[TABLE 41] rows=37
+Method | Path | Function
+POST | /login | Login; obtain token.
+GET | /system/acoustic | Get acoustic-field configuration.
+PUT | /system/acoustic | Set acoustic-field configuration.
+GET | /system/image | Get imaging configuration.
+PUT | /system/image | Set imaging configuration.
+GET | /system/video | Get video / RTSP configuration.
+PUT | /system/video | Set video / RTSP configuration.
+GET | /run_mode | Get operating mode.
+PUT | /run_mode | Set operating mode where enabled.
+GET | /system/scan_area | Get detection area.
+PUT | /system/scan_area | Set detection area.
+GET | /system/leakage | Get leakage-estimation settings; V2.0 includes correction_rate.
+PUT | /system/leakage | Set leakage-estimation settings; requires Leakage mode in V2.0.
+POST | /turn_on_detect | Start detection; returns detect_id in Single mode.
+POST | /turn_off_detect | Stop detection / Smart Patrol cycle.
+GET | /system/detect_status | Get current detection status.
+GET | /detect_logs/{detect_id} | Get detection result by ID.
+DELETE | /detect_logs | Delete detection logs.
+GET | /detect_file/{saving_path}/{file_name} | Download detection-result file.
+GET | /system_time | Get system time.
+PUT | /time_set_manually | Set system time.
+GET | /alarm_strategy | List alarm strategies.
+POST | /alarm_strategy | Add strategy.
+PUT | /alarm_strategy | Modify strategy; cannot modify while enabled.
+DELETE | /alarm_strategy | Delete strategy.
+GET | /alarm_strategy_enable | Get enabled strategy.
+PUT | /alarm_strategy_enable | Enable / disable strategy.
+GET | /alarm_condition | List alarm conditions.
+POST | /alarm_condition | Add alarm condition.
+PUT | /alarm_condition | Modify condition; locked if bound to enabled strategy.
+DELETE | /alarm_condition | Delete alarm condition.
+POST | /upload_nc | Upload spectral/noise comparison file.
+GET | /nc_filelist | List comparison files.
+DELETE | /nc_file | Delete comparison file.
+PUT | /update_ncfile | Update comparison-file metadata in version workbook.
+GET | /version | Get version information (listed in version workbook).
+[/TABLE 41]
+## C.2 Key configuration fields
+[TABLE 42] rows=11
+Endpoint / field | Meaning
+/system/acoustic: freq_up_limit / freq_down_limit | Upper/lower acoustic analysis band limits, kHz.
+/system/image: energy_threshold | Imaging energy threshold.
+/system/image: target_number | Number of detection targets; V2.0 max 3.
+/system/image: imaging_sensitivity | Imaging filter sensitivity.
+/system/image: imaging_enhance | Imaging enhancement / stability setting.
+/run_mode | 1 = Single Detection; -1 = Smart Patrol in API workflow documentation.
+/system/leakage: correction_rate | V2.0 leakage-estimation correction factor.
+/alarm_condition: hfr_main_sub_freq_lower / upper | V2.0 frequency-band fields for feature calculation as listed in the version workbook.
+/alarm_condition: df_thr2 | Additional V2.0 alarm-condition field listed in the version workbook.
+/alarm_condition: detect_mode | Mode-related field returned in V2.0 condition data.
+[/TABLE 42]
+## C.3 WebSocket stream inventory
+[TABLE 43] rows=9
+Path | Payload | Use
+/energyData | int32 binary | Acoustic energy / localization target points.
+/fftData | int16 binary | FFT spectrum.
+/prpdData | integer binary | PRPD plot.
+/voiceprintData | integer binary | Acoustic signature / STFT.
+/featureData | feature payload | Mode-specific feature values.
+/peak_factor | feature payload | Crest-factor stream.
+/pcmData | float32 binary | Real-time PCM audio.
+/detectFeedback | JSON string | Detection result feedback.
+[/TABLE 43]
+## C.4 Result-file retrieval pattern
+[TABLE 44] rows=1
+POST /turn_on_detect  →  detect_id GET  /system/detect_status GET  /detect_logs/{detect_id} GET  /detect_file/{log.saving_path}/{logs.file_name}
+[/TABLE 44]
+For unattended systems, /detectFeedback or HTTP alarm push can be used to receive event metadata without polling every record. Implement external archival before the device record ring reaches its retention limit.
+Technical Support
+For product configuration, integration, software upgrades, or application assistance, contact your HERTZINNO representative.
+www.hertzinno.com   •   info@hertzinno.com
+HZ-FA-371  |  Full User Manual & Integration Guide  |  V7.0 Consolidated Draft

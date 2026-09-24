@@ -90,7 +90,13 @@ export interface CameraAlarmStrategyDraft {
   diagnosis: string
 }
 
-/** 一条告警条件的草稿。三分支分别对应 dB / 主频 / 频谱比对。 */
+/**
+ * 一条告警条件的草稿。
+ *
+ * 告警是否成立由 dB / 主频 / 频谱比对这些“异常声学条件”决定；放电类型用于
+ * 异常发生后的诊断结论，不再作为“必须先匹配某一种放电类型才告警”的前置门槛。
+ * `discharge_*` 字段暂时保留在域模型里只是为了兼容旧配置/旧协议形状。
+ */
 export interface CameraAlarmConditionDraft {
   id?: number
   name: string
@@ -114,8 +120,9 @@ export interface CameraAlarmConditionDraft {
   /** NC 算术运算符：写入侧明确只有 `0` = `>`、`1` = `<`。 */
   ncOperator: number
   /**
-   * 放电判据三兄弟 —— **只存在于写入接口**（§8.3 C26，P0：读取侧字段表与
-   * §4.4 的 UI 描述里都没有）。所以它们在界面上要标注「写后读不回」。
+   * 设备接口遗留的放电字段 —— **只存在于写入接口**（§8.3 C26）。
+   * 当前产品逻辑不把它作为告警前置门槛：先由 dB / 主频 / 频谱异常触发，
+   * 再在放电检测链路中给出诊断类型。字段保留仅用于协议兼容。
    */
   dischargeSwitch: boolean
   dischargeLogicalOperator: number
@@ -302,11 +309,11 @@ export function validateConditionDraft(draft: CameraAlarmConditionDraft): Camera
       message: '条件名称不能为空（不超过 64 个字符）'
     })
   }
-  if (!draft.dbSwitch && !draft.dfSwitch && !draft.ncSwitch && !draft.dischargeSwitch) {
+  if (!draft.dbSwitch && !draft.dfSwitch && !draft.ncSwitch) {
     issues.push({
       field: 'switches',
       messageKey: 'cameraAlarmUi.issueNoBranch',
-      message: '四个判据（dB / 主频 / 频谱比对 / 放电）至少要打开一个，否则这条条件不会参与判定'
+      message: 'dB / 主频 / 频谱比对至少要打开一个，否则这条条件不会参与判定'
     })
   }
   const similarity = rangeIssue(
@@ -318,7 +325,7 @@ export function validateConditionDraft(draft: CameraAlarmConditionDraft): Camera
     '噪声相似度必须为 0~1'
   )
   if (similarity) issues.push(similarity)
-  if (![0, 1, 2, 4].includes(draft.dischargeType)) {
+  if (draft.dischargeSwitch && ![0, 1, 2, 4].includes(draft.dischargeType)) {
     issues.push({
       field: 'dischargeType',
       messageKey: 'cameraAlarmUi.issueDischargeType',
@@ -333,10 +340,8 @@ export function validateConditionDraft(draft: CameraAlarmConditionDraft): Camera
 // ---------------------------------------------------------------------------
 
 export type CameraAlarmAmbiguityId =
-  | 'diagnosisKey'
   | 'conditionUpdateId'
   | 'levelRange'
-  | 'strategySwitch'
   | 'dischargeFields'
   | 'thresholdUnits'
   | 'deleteBody'
@@ -360,12 +365,6 @@ export interface CameraAlarmAmbiguity {
  */
 export const CAMERA_ALARM_AMBIGUITIES: readonly CameraAlarmAmbiguity[] = [
   {
-    id: 'diagnosisKey',
-    labelKey: 'cameraAlarmUi.ambiguityDiagnosisLabel',
-    noteKey: 'cameraAlarmUi.ambiguityDiagnosisNote',
-    specRef: '§5.1.23 / §5.1.25 / §8.3 C22'
-  },
-  {
     id: 'conditionUpdateId',
     labelKey: 'cameraAlarmUi.ambiguityConditionIdLabel',
     noteKey: 'cameraAlarmUi.ambiguityConditionIdNote',
@@ -376,16 +375,6 @@ export const CAMERA_ALARM_AMBIGUITIES: readonly CameraAlarmAmbiguity[] = [
     labelKey: 'cameraAlarmUi.ambiguityLevelLabel',
     noteKey: 'cameraAlarmUi.ambiguityLevelNote',
     specRef: '§5.1.22 / §5.1.23 / §8.3 C21'
-  },
-  {
-    id: 'strategySwitch',
-    labelKey: 'cameraAlarmUi.ambiguitySwitchLabel',
-    noteKey: 'cameraAlarmUi.ambiguitySwitchNote',
-    // 旧规格把"策略启停"记成缺口 C33（"开放接口里没有启停端点"），
-    // 2026-09 的新手册第 340–346 行给出 `GET`/`PUT /alarm_strategy_enable`
-    // 把它证伪了（更正见 `docs/FA371-API-DELTA.md` §1）。启停现在由
-    // `camera-control-service.setStrategyEnabled` 实现，读侧 `Switch` 只是列表副本。
-    specRef: 'api-workflow.txt §Enable/Disable Alarm Strategy（GET/PUT /alarm_strategy_enable）；旧 §8.3 C33 已更正'
   },
   {
     id: 'dischargeFields',

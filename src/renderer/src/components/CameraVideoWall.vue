@@ -88,16 +88,15 @@ import {
   findWallItem,
   isCameraCellLive,
   type CameraCellView,
-  type CameraWallLayout,
-  type ViewportRect
+  type CameraWallLayout
 } from '@renderer/lib/cameraWall'
 import { formatBytes, formatDuration } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
+import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
 import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useCameraWallStore } from '@renderer/stores/liveWall'
 import { useSettingsStore } from '@renderer/stores/settings'
-import CameraAlarmDialog from '@renderer/components/CameraAlarmDialog.vue'
 import CameraCellPicker, {
   type CameraPickerItem,
   type CameraPickerViewOption
@@ -196,16 +195,10 @@ const noticeText = computed(() => {
 })
 
 /**
- * 标题右侧那一行**常驻**的用量摘要。
- *
- * 它此前复用 `cameraWallUi.limitNotice`，而那句话的后半截是"再开一路会超过上限，
- * 请先停掉另一格" —— 在「上限 4 路、当前 1 路」这种根本没到上限的情形下，这是一句
- * **假话**（界面实测就是这么显示的）。触发式的告警文案不能拿来当常驻摘要用。
- * 摘要只说事实（上限多少、在用多少），"到顶了该怎么办"留给真正超限时的提示。
+ * 标题右侧的「同时直播」摘要与墙的标题已按业主 2026-09-23 要求删除
+ * （连同 `summaryText` 这个 computed 一起）：上限用量只在真的到顶时以提示条出现，
+ * 不做常驻摘要。
  */
-const summaryText = computed(() =>
-  t('cameraWallUi.limitSummary', { max: wall.maxStreams, active: wall.summary.active })
-)
 
 /**
  * 暂停/继续轮换那颗按钮的名字：说的是**按下去会发生什么**，不是现在的状态。
@@ -307,6 +300,32 @@ function canStartCell(cell: CameraCellView): boolean {
  *      再收到一个失败）。
  * 只有三道都过了才真的调主进程，避免无意义的 IPC 往返与设备侧连接尝试。
  */
+/**
+ * 格子视频出错 / 结束（业主 2026-09-22 第 7、8 条）。
+ *
+ * 先回主进程问这一格的会话现在到底是什么状态；如果已经是 `error`，自动重试**一次**
+ * （操作员遇到的做法本来就是再点一次开始）。每台设备一次 —— 连续失败说明是真问题，
+ * 必须让错误留在屏幕上，而不是进入看不见的重试循环。恢复播放（状态离开 error）后
+ * 重置计数，下一次断流还能再自动救一次。
+ */
+const liveAutoRetried = new Set<string>()
+
+async function onCellVideoProblem(cell: CameraCellView): Promise<void> {
+  const deviceId = cell.deviceId
+  if (!deviceId) return
+  await refreshState(deviceId)
+  const status = cameraLive.sessionOf(deviceId)?.status
+  if (status === 'playing' || status === 'starting') {
+    liveAutoRetried.delete(deviceId)
+    return
+  }
+  if (status !== 'error' || liveAutoRetried.has(deviceId) || isBusy(cell.index)) return
+  liveAutoRetried.add(deviceId)
+  window.setTimeout(() => {
+    if (cameraLive.sessionOf(deviceId)?.status === 'error') void startCell(cell)
+  }, 2_000)
+}
+
 async function startCell(cell: CameraCellView): Promise<void> {
   const deviceId = cell.deviceId
   if (!deviceId || isBusy(cell.index)) return
@@ -413,7 +432,6 @@ async function toggleCell(cell: CameraCellView): Promise<void> {
  * scroll/resize 监听），所以不需要跟着动。
  */
 const pickerSlot = ref<number | null>(null)
-const pickerAnchor = ref<ViewportRect | null>(null)
 /** 触发浮层的按钮：关掉之后焦点要还给键盘用户，否则焦点会掉到 `<body>`。 */
 let pickerTrigger: HTMLElement | null = null
 
@@ -525,10 +543,7 @@ function togglePicker(cell: CameraCellView, event?: MouseEvent): void {
     closePicker()
     return
   }
-  const stage = cellEls.value[cell.index]
-  if (!stage) return
-  const rect = stage.getBoundingClientRect()
-  pickerAnchor.value = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+  // 选择器铺在格子里面（inline），不再需要量格子的视口矩形。
   pickerSlot.value = cell.index
   const target = event?.currentTarget
   pickerTrigger = target instanceof HTMLElement ? target : null
@@ -543,7 +558,6 @@ function togglePicker(cell: CameraCellView, event?: MouseEvent): void {
 function closePicker(restoreFocus = true): void {
   const trigger = pickerTrigger
   pickerSlot.value = null
-  pickerAnchor.value = null
   pickerTrigger = null
   if (restoreFocus && trigger && document.contains(trigger)) trigger.focus()
 }
@@ -677,6 +691,8 @@ function onVolumeInput(cell: CameraCellView, event: Event): void {
   if (!isCameraCellLive(cell.status)) return
   if (wall.audioSlot !== cell.index) wall.setAudio(cell.index)
   applyAudioOutput(cell.index, videoEls.value[cell.index] ?? null)
+  // 相机格的声音在包络播放器里（RTSP 无音轨），音量同步给它。
+  cameraAudioPlayer.setVolume(percent)
 }
 
 /** 音量图标按钮：把这一格切成出声格，或把已经在出声的这一格静音。 */
@@ -685,7 +701,83 @@ function toggleAudio(cell: CameraCellView): void {
   wall.toggleAudio(cell.index)
 }
 
-watch(() => wall.audioSlot, syncAudioOutput)
+// ---------------------------------------------------------------------------
+// 相机格的声音：RTSP 没有音轨，声音走声学通道 /pcmData（2026-09-23）
+// ---------------------------------------------------------------------------
+//
+// 实测（2026-09-23，相机实时流的 ffmpeg 协商日志）：相机的 RTSP 只有
+// `Stream #0:0 Video: h264`，**没有音频轨**——所以相机格「出声」靠 `<video>`
+// 元素永远是无声的，这不是音量问题，是那条流里根本没有声音。
+// 相机真正在出声的数据是声学 WebSocket `/pcmData`（与实时监测页波形/播放同源）。
+//
+// 因此：出声格是一台声学相机时，为它开一条 pcmData 会话 + 一个包络播放器
+// （与监测页同一个 `EnvelopePlayer`，含自动增益）；手填 RTSP 源与带音轨的源
+// 仍走 `<video>` 元素自己的音量/静音（`applyAudioOutput` 那一条不变）。
+// 出声格换走、关掉或离开页面时，订阅与播放器一起收尾。
+
+let cameraAudioUnsubscribe: (() => void) | undefined
+let cameraAudioDeviceId = ''
+let cameraAudioStartedByUs = false
+const cameraAudioPlayer = new EnvelopePlayer()
+
+function stopCameraAudio(): void {
+  cameraAudioUnsubscribe?.()
+  cameraAudioUnsubscribe = undefined
+  const deviceId = cameraAudioDeviceId
+  cameraAudioDeviceId = ''
+  void cameraAudioPlayer.suspend()
+  // 只停**这面墙**开的会话：别的页面（实时监测）开的会话不归这里管。
+  if (cameraAudioStartedByUs && deviceId !== '') {
+    cameraAudioStartedByUs = false
+    void callApi(() => window.api.fa371Stream.stop(deviceId))
+  }
+}
+
+async function startCameraAudio(cell: CameraCellView, deviceId: string): Promise<void> {
+  stopCameraAudio()
+  cameraAudioDeviceId = deviceId
+  cameraAudioPlayer.setVolume(Math.round(volumeOf(cell.index) * 100))
+  try {
+    await cameraAudioPlayer.resume()
+  } catch {
+    // 没有输出设备/自动播放策略拒绝：不出声，也不把这一格假装成"正在出声"。
+    cameraAudioDeviceId = ''
+    return
+  }
+  cameraAudioUnsubscribe = window.events?.onFa371Pcm?.((preview) => {
+    if (preview.deviceId !== cameraAudioDeviceId) return
+    cameraAudioPlayer.push(preview.waveform, preview.frameMs)
+  })
+  const result = await callApi(() => window.api.fa371Stream.start({ deviceId, kinds: ['pcmData'] }))
+  if (result.success) {
+    cameraAudioStartedByUs = true
+  } else {
+    stopCameraAudio()
+  }
+}
+
+/**
+ * 出声格变化时把「相机格的声音」对齐：出声格是声学相机就开声学音频，否则收尾。
+ * 回到这一页（onMounted）也调一次——墙的模型留着出声格，但 pcmData 会话随页面离开
+ * 已被收尾，不重接就会"徽标说在出声、耳朵听不到"。
+ */
+function syncCameraAudio(): void {
+  const slot = wall.audioSlot
+  const cell = slot === null ? undefined : cells.value.find((item) => item.index === slot)
+  const deviceId = cell?.deviceId ?? ''
+  const isCamera = deviceId !== '' && devices.byId(deviceId)?.kind === 'acousticCamera'
+  if (cell && isCamera) {
+    if (cameraAudioDeviceId === deviceId) return
+    void startCameraAudio(cell, deviceId)
+    return
+  }
+  stopCameraAudio()
+}
+
+watch(() => wall.audioSlot, () => {
+  syncAudioOutput()
+  syncCameraAudio()
+})
 
 // ---------------------------------------------------------------------------
 // 相机 NVR 交互：右键菜单、手动录像、抓图、回放、下载（**逐格**）
@@ -857,7 +949,11 @@ const menuItems = computed<CameraNvrMenuItem[]>(() => {
   const cell = menuCell.value
   // 没有相机就没有菜单项：模型会为一台不存在的相机画出一屏禁用项。
   if (!cell || cell.deviceId === null) return []
+  // Alarm configuration moved to the Camera Control settings on Realtime Monitoring.
+  // Keeping a second entry here would also reintroduce the second <video> viewer that can
+  // replace the wall viewer in RtspStreamService.
   return buildCameraNvrMenu(liveStateOf(cell), cellNvrEnvironment(cell))
+    .filter((item) => item.action !== 'alarm-config')
 })
 
 /** 菜单头部就是这一格的设备名（菜单是对**画面格**打开的）。 */
@@ -1060,9 +1156,6 @@ const downloadOpen = ref(false)
 const downloadDeviceId = ref('')
 const downloadDeviceName = ref('')
 
-const alarmDialogOpen = ref(false)
-const alarmTarget = ref<{ deviceId: string; deviceName: string } | null>(null)
-
 function openPlaybackDialog(deviceId: string, deviceName: string, presetId = ''): void {
   playbackDeviceId.value = deviceId
   playbackDeviceName.value = deviceName
@@ -1086,12 +1179,6 @@ function openDownloadDialog(deviceId: string, deviceName: string): void {
 function openCellPlayback(cell: CameraCellView): void {
   if (!cellHasDevice(cell)) return
   openPlaybackDialog(cell.deviceId as string, cell.deviceName)
-}
-
-function openCellAlarm(cell: CameraCellView): void {
-  if (!cellHasDevice(cell)) return
-  alarmTarget.value = { deviceId: cell.deviceId as string, deviceName: cell.deviceName }
-  alarmDialogOpen.value = true
 }
 
 /**
@@ -1191,10 +1278,6 @@ async function onCellMenuSelect(action: CameraNvrAction): Promise<void> {
       return
     case 'close-tile':
       await closeTile(cell)
-      return
-    case 'alarm-config':
-      alarmTarget.value = { deviceId, deviceName }
-      alarmDialogOpen.value = true
       return
     default:
       return
@@ -1338,30 +1421,21 @@ function canRecord(cell: CameraCellView): boolean {
 // 全屏
 // ---------------------------------------------------------------------------
 
-async function toggleFullscreen(cell: CameraCellView): Promise<void> {
-  const stage = cellEls.value[cell.index]
-  if (!stage) return
-  try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen()
-      return
-    }
-    await stage.requestFullscreen()
-  } catch {
-    // 浏览器/Electron 都可能拒绝（窗口未聚焦、权限策略）：如实说明，不要静默。
-    patchNvr(cell.index, { error: t('cameraNvrUi.fullscreenFailed'), notice: '' })
-  }
+/**
+ * 全屏 = 渲染层的固定层，不是原生 Fullscreen API（2026-09-23「总览界面全屏无效」修复）。
+ *
+ * 与实时监测页同一个决定（见 `MonitorView.toggleFullscreen` 的注释）：Electron 里
+ * 原生 `requestFullscreen()` 会被窗口焦点/权限策略挡住，实测就是"点了没反应"。
+ * 固定层是确定的：同一个 `<video>` 元素、同一条 RTSP 会话原地放大到整个窗口，
+ * 进出全屏不会丢画面。Esc 退出（监听器在 onMounted 里）。
+ */
+function toggleFullscreen(cell: CameraCellView): void {
+  if (!cells.value.some((item) => item.index === cell.index)) return
+  fullscreenSlot.value = fullscreenSlot.value === cell.index ? null : cell.index
 }
 
-function onFullscreenChange(): void {
-  if (!document.fullscreenElement) {
-    fullscreenSlot.value = null
-    return
-  }
-  const entry = Object.entries(cellEls.value).find(
-    ([, element]) => element === document.fullscreenElement
-  )
-  fullscreenSlot.value = entry ? Number(entry[0]) : null
+function onFullscreenKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') fullscreenSlot.value = null
 }
 
 // ---------------------------------------------------------------------------
@@ -1620,13 +1694,15 @@ watch(autoPlaySignal, () => {
 
 /** 主线：页面挂载时恢复墙上每一格的直播状态。 */
 onMounted(async () => {
-  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('keydown', onFullscreenKeydown)
   wall.bindDevices(devices.devices)
   if (devices.devices.length === 0) await devices.load()
   await syncDevices()
   // 已经在墙上的相机：把主进程里**可能还在跑**的会话状态读回来（切走再切回来
   // 时上一页**没有**停掉它们，因为离开的是页面、不是这些会话的所有者）。
   await refreshAllStates()
+  // 出声格是声学相机时声音来自 /pcmData 会话（随页面离开已收尾），回来要重接一次。
+  syncCameraAudio()
   // 录像状态的权威同样在主进程：不读一次，刷新页面后「正在录像」的红色指示器
   // 就会消失，而 ffmpeg 还在写盘 —— 那是界面在说假话。
   await refreshRecordingStates()
@@ -1671,7 +1747,10 @@ onBeforeUnmount(() => {
  * 主进程的，导航不会释放它，不收尾就会留下一个没人看得见的录制进程。
  */
 onUnmounted(() => {
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('keydown', onFullscreenKeydown)
+  // 相机格的声学音频（订阅 + 播放器 + 这面墙开的 pcmData 会话）随页面一起收尾。
+  stopCameraAudio()
+  void cameraAudioPlayer.close()
   // 菜单是 Teleport 到 body 的浮层，组件卸载不会带走它。
   menuOpen.value = false
   menuSlot.value = null
@@ -1798,16 +1877,17 @@ function cellBadgeClass(cell: CameraCellView): string {
 
 <template>
   <section class="camera-wall card">
-    <div class="section-header">
-      <h3 class="section-title">{{ t('cameraWallUi.title') }}</h3>
-
-      <div class="spacer"></div>
+    <!--
+      2026-09-23 业主要求：墙的标题（「实时视频墙」）与「同时直播」摘要行**删除**，
+      分屏档位（1/4/9/16）挪到墙底部的半隐藏停靠条（鼠标移到下方才出现）。
+      这一行只留下"没有相机"的提示与轮询指示器；都没有时整行不占高度。
+    -->
+    <div v-if="!cameraDevices.length || wall.queue.length > 0" class="section-header">
       <span v-if="!cameraDevices.length" class="muted">
         {{ t('cameraWallUi.noCamera') }}
       </span>
-      <!-- 文案与状态数来自模型，界面不自己求和。 -->
-      <span class="muted chart-hint">{{ summaryText }}</span>
 
+      <div class="spacer"></div>
       <!--
         轮询指示器（业主 2026-09-21 批「超出窗口数自动轮询」）：只在有队在等位时出现。
         `shown` = 正在显示的非空格数，`total` = shown + 队列长度；旁边那颗按钮
@@ -1841,45 +1921,18 @@ function cellBadgeClass(cell: CameraCellView): string {
           </svg>
         </button>
       </template>
-
-      <!--
-        手填 RTSP 地址的**新建入口不在这里**（业主 2026-09-19 第 11 批第 2 条：曾挪到实时监测页；
-        2026-09-21 第二批第 23 条又把该入口从实时监测页撤掉了 —— 管理界面随之没有挂载点，
-        见批次报告里的警告）。
-
-        这一面墙仍然**用得上**那些源：点某一格时，选择器里会列出
-        「名字（手填 RTSP）」（见 `pickerItems`）。两件事因此各归各的页：
-        新建/改名/改地址/删除原在实时监测页（`ManualRtspSources.vue`，现已无挂载），
-        把某一条放进第几格在这一页。
-      -->
-
-      <!--
-        档位控件右对齐（产品要求「切换窗口右对齐」），是标题行**最右边**的元素：
-        它后面不再渲染任何东西。图标自己就是标签，所以没有「分屏档位」这行字；
-        每个按钮的无障碍名字仍然说得出它是几档（aria-label 与 title），组本身也有
-        一个名字。
-      -->
-      <div
-        class="segment camera-wall__layout"
-        role="group"
-        :aria-label="t('cameraWallUi.layoutGroup')"
-      >
-        <button
-          v-for="option in CAMERA_WALL_LAYOUTS"
-          :key="option"
-          type="button"
-          class="segment__item"
-          :class="{ 'segment__item--active': option === layout }"
-          :aria-pressed="option === layout"
-          :aria-label="t('cameraWallUi.layoutLabel', { count: option })"
-          :title="t('cameraWallUi.layoutLabel', { count: option })"
-          @click="changeLayout(option)"
-        >
-          <!-- 图标与真实网格用同一份来源：档位本身 + `cameraWallColumns()`。 -->
-          <LayoutGridIcon :count="option" :columns="cameraWallColumns(option)" />
-        </button>
-      </div>
     </div>
+
+    <!--
+      手填 RTSP 地址的**新建入口不在这里**（业主 2026-09-19 第 11 批第 2 条：曾挪到实时监测页；
+      2026-09-21 第二批第 23 条又把该入口从实时监测页撤掉了 —— 管理界面随之没有挂载点，
+      见批次报告里的警告）。
+
+      这一面墙仍然**用得上**那些源：点某一格时，选择器里会列出
+      「名字（手填 RTSP）」（见 `pickerItems`）。两件事因此各归各的页：
+      新建/改名/改地址/删除原在实时监测页（`ManualRtspSources.vue`，现已无挂载），
+      把某一条放进第几格在这一页。
+    -->
 
     <p v-if="noticeText" class="alert alert--warning camera-wall__notice" role="status">
       {{ noticeText }}
@@ -1905,7 +1958,8 @@ function cellBadgeClass(cell: CameraCellView): string {
           'camera-wall__cell--audio': cell.audio,
           'camera-wall__cell--error':
             cell.status === 'error' || cell.status === 'ffmpeg-missing',
-          'camera-wall__cell--fullscreen': fullscreenSlot === cell.index
+          'camera-wall__cell--fullscreen': fullscreenSlot === cell.index,
+          'camera-wall__cell--chart': cell.view !== 'play' && !!cell.deviceId
         }"
         @dragover="onDragOver"
         @drop="onDrop(cell, $event)"
@@ -1924,6 +1978,7 @@ function cellBadgeClass(cell: CameraCellView): string {
         -->
         <video
           v-if="cell.view === 'play' && cell.url && isCameraCellLive(cell.status)"
+          :key="cell.url"
           :ref="(el) => bindVideo(cell.index, el as HTMLVideoElement | null)"
           class="camera-wall__video"
           :src="cell.url"
@@ -1932,8 +1987,8 @@ function cellBadgeClass(cell: CameraCellView): string {
           muted
           @loadeddata="onCellVideoReady(cell)"
           @playing="onCellVideoReady(cell)"
-          @error="cell.deviceId && refreshState(cell.deviceId)"
-          @ended="cell.deviceId && refreshState(cell.deviceId)"
+          @error="onCellVideoProblem(cell)"
+          @ended="onCellVideoProblem(cell)"
         ></video>
 
         <!--
@@ -1991,7 +2046,7 @@ function cellBadgeClass(cell: CameraCellView): string {
           它**永远显示**（业主 2026-09-21 批移除了「显示/隐藏叠加信息」那一项）：
           状态必须一直在场，值班台上一条"想看才出现"的状态等于没有状态。
         -->
-        <div v-if="cell.status !== 'empty'" class="camera-wall__overlay">
+        <div v-if="cell.status !== 'empty'" class="camera-wall__overlay" :class="{ 'camera-wall__overlay--chart': cell.view !== 'play' }">
           <button
             v-if="cameraDevices.length"
             type="button"
@@ -2008,9 +2063,10 @@ function cellBadgeClass(cell: CameraCellView): string {
           <span v-else class="camera-wall__name" :title="cell.deviceName">{{ cell.deviceName }}</span>
           <!-- 短状态徽标：这是**状态**，不是解释，所以它逐格保留。 -->
           <span :class="cellBadgeClass(cell)">{{ cellStatusLabel(cell) }}</span>
-          <span v-if="cell.audio" class="camera-wall__audio-badge">
-            {{ t('cameraWallUi.audioBadge') }}
-          </span>
+          <!--
+            「正在出声」文字徽标按业主 2026-09-23 要求删除：哪一格在出声由音量按钮的
+            按下态（`--on`）表达，不需要再写一行字。
+          -->
           <div class="spacer"></div>
           <span v-if="cell.index === wall.activeSlot" class="camera-wall__active-mark">
             {{ t('cameraWallUi.activeBadge') }}
@@ -2021,14 +2077,14 @@ function cellBadgeClass(cell: CameraCellView): string {
           手动录像的指示器：走动的时长 + 红点，**独立于叠加条**。
           叠加信息可以被收起来，而「这一路正在写盘」这件事不可以跟着消失。
         -->
-        <div v-if="nvrOf(cell.index).recording" class="camera-wall__rec" role="status">
+        <div v-if="cell.view === 'play' && nvrOf(cell.index).recording" class="camera-wall__rec" role="status">
           <span class="camera-wall__rec-dot" aria-hidden="true"></span>
           {{ t('cameraNvrUi.recordingBadge', { time: recordingClock(cell.index) }) }}
         </div>
 
         <!--
           底部控制条（业主 2026-09-19 第 12 批）：
-          **只有六颗播放器控件** —— 告警 / 全屏 / 暂停 / 切换录像 / 音量 / 手动录像，
+          **只有播放器控件** —— 全屏 / 暂停 / 切换录像 / 音量 / 手动录像，
           顺序就是业主给的那个顺序。四颗视图按钮**不在这里了**（它们搬进了右键菜单的
           「显示方式」，见 `camera-nvr.ts`）：那四颗问的是"这一格画什么"，不是播放器动作。
           音量也不再是一条常驻的横滑杆 —— 点「音量」才在图标上方弹出那张细滑条卡片
@@ -2041,29 +2097,7 @@ function cellBadgeClass(cell: CameraCellView): string {
           手填的第三方 RTSP 源**不是设备**：告警 / 切换录像 / 手动录像这三颗对它没有意义
           （它连设备 id 都没有），所以那一格只有 暂停 / 全屏 / 音量 三颗。
         -->
-        <div v-if="cell.status !== 'empty'" class="camera-wall__bar">
-          <!-- ① 告警（打开这一台相机的告警配置对话框；与右键菜单里那一项是同一个动作）。 -->
-          <button
-            v-if="cellHasDevice(cell)"
-            type="button"
-            class="camera-wall__bar-btn"
-            data-action="cell-alarm"
-            :aria-label="t('cameraWallUi.cellAlarm')"
-            :title="t('cameraWallUi.cellAlarm')"
-            @click.stop="openCellAlarm(cell)"
-          >
-            <svg class="camera-wall__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path
-                d="M8 2.2a3.4 3.4 0 0 0-3.4 3.4c0 2.9-1 3.9-1 3.9h8.8s-1-1-1-3.9A3.4 3.4 0 0 0 8 2.2Z"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.3"
-                stroke-linejoin="round"
-              />
-              <path d="M6.8 12.4a1.4 1.4 0 0 0 2.4 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-            </svg>
-          </button>
-
+        <div v-if="cell.status !== 'empty' && cell.view === 'play'" class="camera-wall__bar">
           <!-- ② 全屏。 -->
           <button
             type="button"
@@ -2250,30 +2284,60 @@ function cellBadgeClass(cell: CameraCellView): string {
         >
           {{ cellNvrMessage(cell) }}
         </p>
+
+        <!--
+          相机选择器（业主 2026-09-24）：**铺在被点的那一格里面**（inline 覆盖整格），
+          不再是格子旁边的浮动卡片——之前在格下方弹出，操作员要挪视线，很不方便。
+          组件挂在格子里（`position: relative`），内部跳过 Teleport 与锚点测量。
+        -->
+        <CameraCellPicker
+          v-if="pickerSlot === cell.index"
+          inline
+          open
+          :anchor="null"
+          :items="pickerItems"
+          :empty-label="t('cameraWallUi.pickNoOption')"
+          :label="pickerLabel"
+          @select="pickDevice"
+          @close="closePicker()"
+        />
       </div>
     </div>
 
     <!--
-      相机选择器：**一块自己画的浮层**，贴在被点的那一格旁边。
+      分屏档位（1/4/9/16）停靠条（业主 2026-09-23：从标题行挪下来）。
+      平时只剩一条细把手；鼠标移到墙的底部（或键盘聚焦进去）时按钮浮出。
+      图标与真实网格用同一份来源：档位本身 + `cameraWallColumns()`。
+    -->
+    <div class="camera-wall__layout-dock" data-layout-dock>
+      <span class="camera-wall__layout-handle" aria-hidden="true"></span>
+      <div
+        class="segment camera-wall__layout"
+        role="group"
+        :aria-label="t('cameraWallUi.layoutGroup')"
+      >
+        <button
+          v-for="option in CAMERA_WALL_LAYOUTS"
+          :key="option"
+          type="button"
+          class="segment__item"
+          :class="{ 'segment__item--active': option === layout }"
+          :aria-pressed="option === layout"
+          :aria-label="t('cameraWallUi.layoutLabel', { count: option })"
+          :title="t('cameraWallUi.layoutLabel', { count: option })"
+          @click="changeLayout(option)"
+        >
+          <LayoutGridIcon :count="option" :columns="cameraWallColumns(option)" />
+        </button>
+      </div>
+    </div>
 
-      为什么不再是原生 `<select>` + 隐藏宿主（业主 2026-09-18 报的 bug）：
-      原生下拉贴在它自己那个盒子的边上，而那个盒子（1×1、`clip: rect(0 0 0 0)`）在整面墙
-      的末尾 —— 墙一高就落到窗口外面，于是「点了 + 只弹一下 / 位置被盖住 / 根本没显示」。
-      现在的位置由 `placeCameraPicker()`（纯函数、有单测）算，浮层挂在 `<body>` 上
-      （`position: fixed`），不随页面的高度漂走。详见 `CameraCellPicker.vue` 的文件头。
-
+    <!--
+      相机选择器已搬进格子内部（业主 2026-09-24：铺满被点的那一格，见格子末尾的
+      `CameraCellPicker inline`），不再是墙级别的一份 Teleport 浮层。它历史上是
+      原生 `<select>` 隐藏宿主（2026-09-18 的 bug）→ 贴格浮层 → 现在的格内覆盖层。
       选项仍然只来自 `optionsForCell()`：「哪几台相机可选」没有第二份实现。
     -->
-    <CameraCellPicker
-      :open="pickerSlot !== null"
-      :anchor="pickerAnchor"
-      :items="pickerItems"
-      :empty-label="t('cameraWallUi.pickNoOption')"
-      :label="pickerLabel"
-      @select="pickDevice"
-      @close="closePicker()"
-    />
-
     <!--
       手填 RTSP 地址的**管理界面不在这里**（业主 2026-09-19 第 11 批第 2 条曾把它挪到实时监测页；
       2026-09-21 第二批第 23 条又从实时监测页撤掉，`ManualRtspSources.vue` 目前没有挂载点）。
@@ -2294,13 +2358,6 @@ function cellBadgeClass(cell: CameraCellView): string {
       :items="menuItems"
       @select="onCellMenuSelect"
       @close="closeMenu"
-    />
-
-    <!-- 告警配置：设备侧动作，作用在被右键那一格的相机上。 -->
-    <CameraAlarmDialog
-      v-model="alarmDialogOpen"
-      :device-id="alarmTarget?.deviceId ?? ''"
-      :device-name="alarmTarget?.deviceName ?? ''"
     />
 
     <!-- 本机录像回放：列表与播放都在弹窗里（`<video>` 吃回环地址）。 -->
@@ -2335,12 +2392,52 @@ function cellBadgeClass(cell: CameraCellView): string {
   font-size: 12px;
 }
 
-/* --- 分屏档位（标题行最右侧的图标分段控件） ---------------------------- */
+/* --- 分屏档位（底部半隐藏停靠条，业主 2026-09-23） ----------------------- */
 
 /*
- * 观感与通道墙的档位控件一致：两堵墙在同一个总览页上，同一个动作必须长得一样。
- * 控件里只有图标，所以 `segment__item--active` 是「现在在哪一档」唯一的可见证据。
+ * 停靠条平时只露一条细把手；鼠标移到墙的底部（悬停停靠条）或键盘聚焦进去时，
+ * 档位按钮浮出。隐藏时 `pointer-events: none` —— 看不见的按钮不能被点到。
  */
+.camera-wall__layout-dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 6px;
+  min-height: 14px;
+}
+
+.camera-wall__layout-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.camera-wall__layout-dock .camera-wall__layout {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  box-shadow: var(--shadow-lg);
+}
+
+.camera-wall__layout-dock:hover .camera-wall__layout,
+.camera-wall__layout-dock:focus-within .camera-wall__layout {
+  opacity: 1;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.camera-wall__layout-dock:hover .camera-wall__layout-handle {
+  opacity: 0;
+}
+
 .camera-wall__layout {
   display: inline-flex;
   gap: 2px;
@@ -2447,11 +2544,25 @@ function cellBadgeClass(cell: CameraCellView): string {
   border-color: var(--color-danger-border);
 }
 
+.camera-wall__cell--chart {
+  background: #fff;
+  border-color: var(--color-border);
+}
+
+/*
+ * 全屏 = 渲染层固定层（不用原生 Fullscreen API：Electron 里它会被窗口焦点/权限策略
+ * 挡住，实测"点了没反应"，2026-09-23）。格子原地变成覆盖整个窗口的黑色舞台，
+ * 视频元素与 RTSP 会话不动；Esc 退出。
+ */
 .camera-wall__cell--fullscreen {
-  width: 100vw;
-  height: 100vh;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  width: auto;
+  height: auto;
   min-height: 0;
   border-radius: 0;
+  background: #000;
 }
 
 /*
@@ -2566,6 +2677,16 @@ function cellBadgeClass(cell: CameraCellView): string {
   font-size: 11px;
 }
 
+.camera-wall__overlay--chart {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--color-text, #111827);
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+}
+
+.camera-wall__overlay--chart .camera-wall__name--action:focus-visible {
+  outline-color: var(--color-accent, #ff6a1a);
+}
+
 .camera-wall__name {
   font-weight: 600;
   max-width: 40%;
@@ -2602,12 +2723,7 @@ function cellBadgeClass(cell: CameraCellView): string {
   flex: 0 0 auto;
 }
 
-.camera-wall__audio-badge {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(21, 128, 61, 0.9);
-  font-size: 10px;
-}
+/* 「正在出声」文字徽标已按业主 2026-09-23 要求删除（音量按钮的按下态表达同一件事）。 */
 
 .camera-wall__active-mark {
   padding: 1px 6px;
@@ -2687,18 +2803,21 @@ function cellBadgeClass(cell: CameraCellView): string {
  *
  * 它**在格子里面**，而格子是 `overflow: hidden` —— 卡片随格宽伸缩，永远不会比格宽。
  */
+/*
+ * 音量浮层（业主 2026-09-23：竖排）。滑杆与静音钮**纵向**排列：滑杆在上、
+ * 静音钮在下。纵向 range 用 `writing-mode: vertical-lr` + `direction: rtl`
+ * （值大的一头朝上），Chromium 原生支持，不需要旋转 hack。
+ */
 .camera-wall__volume-pop {
   position: absolute;
   right: 8px;
   bottom: 36px;
   z-index: 4;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 8px;
-  width: 20%;
-  min-width: 76px;
-  max-width: 180px;
-  padding: 7px 10px;
+  padding: 10px 8px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: #fff;
@@ -2706,23 +2825,25 @@ function cellBadgeClass(cell: CameraCellView): string {
 }
 
 /*
- * 横向滑杆：轨道 4px 圆条、thumb 10px 圆点。原生 range 的样式必须同时写
+ * 竖向滑杆：轨道 4px 圆条、thumb 10px 圆点。原生 range 的样式必须同时写
  * WebKit 与 Gecko 两条伪元素（Firefox 不吃 `-webkit-slider-*`）， appearance 关掉，
  * 否则浏览器那套默认皮肤会从白卡片里透出来。
  */
 .camera-wall__volume-slider {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 14px;
+  flex: none;
+  width: 14px;
+  height: 96px;
   margin: 0;
   appearance: none;
   -webkit-appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
   background: transparent;
   cursor: pointer;
 }
 
 .camera-wall__volume-slider::-webkit-slider-runnable-track {
-  height: 4px;
+  width: 4px;
   border-radius: 999px;
   background: var(--color-bg-muted);
 }
@@ -2732,7 +2853,7 @@ function cellBadgeClass(cell: CameraCellView): string {
   -webkit-appearance: none;
   width: 10px;
   height: 10px;
-  margin-top: -3px;
+  margin-left: -3px;
   border: none;
   border-radius: 50%;
   background: var(--color-accent);

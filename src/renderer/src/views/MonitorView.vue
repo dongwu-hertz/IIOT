@@ -54,6 +54,7 @@ import {
 } from '@shared/domain/channel-alarm'
 import { decideMonitorAutoStart } from '@shared/domain/monitor-autostart'
 import type { CameraLiveState, CameraLiveStatus } from '@shared/domain/camera-live'
+import type { Fa371ScanArea } from '@shared/domain/fa371'
 import {
   buildCameraNvrMenu,
   cameraCaptureReadiness,
@@ -62,10 +63,18 @@ import {
   type CameraNvrMenuItem
 } from '@shared/domain/camera-nvr'
 import { useDevicesStore } from '@renderer/stores/devices'
-import { resetAutoPlayAttempts, useCameraLiveStore } from '@renderer/stores/cameraLive'
-import { useSettingsStore } from '@renderer/stores/settings'
 import { ALL_STREAM_KINDS, useMonitorStore } from '@renderer/stores/monitor'
 import { useFa371StreamStore } from '@renderer/stores/fa371Stream'
+import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
+import { useCameraWallStore } from '@renderer/stores/liveWall'
+import {
+  linkageDetectModeText,
+  linkageDischargeText,
+  linkageFrequencyText,
+  linkageIntensityText,
+  linkageSeverityOf
+} from '@renderer/lib/linkageText'
+import type { PendingAlarmRecord } from '@shared/ipc/contract'
 import { useFa371CameraSession } from '@renderer/composables/useFa371CameraSession'
 import { alarmTypeLabel, describeAlarmMask, eventSeverityLabel, streamKindLabel } from '@renderer/lib/labels'
 import {
@@ -116,6 +125,7 @@ import CameraRecordingPlaybackDialog from '@renderer/components/CameraRecordingP
 import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloadDialog.vue'
 import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
+import SonarOverviewPanel from '@renderer/components/SonarOverviewPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 
 const { t, locale } = useI18n()
@@ -123,11 +133,343 @@ const route = useRoute()
 const router = useRouter()
 const devices = useDevicesStore()
 const monitor = useMonitorStore()
-const cameraLiveStore = useCameraLiveStore()
-const settings = useSettingsStore()
+/**
+ * 相机告警的镜像（主进程联动引擎的待处理列表，AppShell 常驻订阅推送）。
+ * 这一页只**读**它；订阅/加载在 shell 那一层已经做过，这里不再发起第二次。
+ */
+const linkage = useAlarmLinkageStore()
 
 const selectedDeviceId = ref('')
 const activeChannelIndex = ref(0)
+
+/**
+ * 当前 FA-371 应用模式：1=局放，2=泄漏，3=机械。
+ *
+ * 这里把“软件已配置模式”和“相机实际 work_mode”严格分开：
+ * - cameraWorkMode / configuredCameraWorkModes：决定 PRPD / Leakage / Mechanical 显示什么；
+ * - observedCameraWorkModes：只用于进入设备时做一次一致性核对。
+ *
+ * 相机实际值不再直接驱动界面切换。若二者不一致，弹窗提醒，直到操作员手动修改设置。
+ */
+type CameraDetectionMode = 1 | 2 | 3
+const CAMERA_MODE_STORAGE_KEY = 'hertzinno.monitor.camera-detection-modes.v1'
+
+function isCameraDetectionMode(value: unknown): value is CameraDetectionMode {
+  return value === 1 || value === 2 || value === 3
+}
+
+function loadConfiguredCameraWorkModes(): Record<string, CameraDetectionMode> {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_MODE_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, CameraDetectionMode] =>
+        isCameraDetectionMode(entry[1])
+      )
+    )
+  } catch {
+    return {}
+  }
+}
+
+const configuredCameraWorkModes = ref<Record<string, CameraDetectionMode>>(loadConfiguredCameraWorkModes())
+const observedCameraWorkModes = ref<Record<string, CameraDetectionMode>>({})
+
+/**
+ * Single source of truth for which mode-specific analysis card is rendered.
+ * This computed value reads ONLY the software configuration map; camera observations never
+ * assign it directly, so work_mode polling/read-back cannot make PRPD appear/disappear.
+ */
+const cameraWorkMode = computed<CameraDetectionMode | undefined>(() => {
+  const deviceId = selectedDeviceId.value
+  if (deviceId === '') return undefined
+  // 尚未配置过（例如首次读取 work_mode 失败）时默认按局放渲染：
+  // 软件配置本来就是界面权威（见文件头），默认 1 让 PRPD 面板至少能显示数据状态，
+  // 而不是永远停在"请选择检测模式"——设备真推了数据却看不到，比默认模式更误导。
+  // 首次观察成功后真实值会覆盖这里（`onCameraWorkModeObserved`）。
+  return configuredCameraWorkModes.value[deviceId] ?? 1
+})
+
+const cameraModeMismatch = ref<{
+  deviceId: string
+  configured: CameraDetectionMode
+  actual: CameraDetectionMode
+} | null>(null)
+
+function persistConfiguredCameraWorkModes(): void {
+  try {
+    window.localStorage.setItem(CAMERA_MODE_STORAGE_KEY, JSON.stringify(configuredCameraWorkModes.value))
+  } catch {
+    // Persistence failure must not affect realtime monitoring. The in-memory latch remains valid.
+  }
+}
+
+function cameraDetectionModeText(mode: CameraDetectionMode): string {
+  if (mode === 1) return t('cameraControlUi.appModePartialDischarge')
+  if (mode === 2) return t('cameraControlUi.appModeGasLeak')
+  return t('cameraControlUi.appModeMechanical')
+}
+
+const cameraModeMismatchTitle = computed(() => t('cameraControlUi.modeMismatchTitle'))
+const cameraModeMismatchMessage = computed(() => {
+  const mismatch = cameraModeMismatch.value
+  if (!mismatch) return ''
+  return t('cameraControlUi.modeMismatchMessage', {
+    configured: cameraDetectionModeText(mismatch.configured),
+    actual: cameraDetectionModeText(mismatch.actual)
+  })
+})
+
+interface DetectionRegion {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const regionDrawMode = ref(false)
+const regionEditorOpen = ref(false)
+const detectionRegions = ref<DetectionRegion[]>([])
+const detectionRegionsBaseline = ref<DetectionRegion[]>([])
+const regionDraft = ref<DetectionRegion | null>(null)
+const detectionAreaBusy = ref(false)
+const detectionAreaError = ref('')
+const detectionAreaNotice = ref('')
+const detectionAreaLoadedDeviceId = ref('')
+let regionStart: { x: number; y: number } | null = null
+
+function onCameraWorkModeObserved(payload: { deviceId: string; mode: number | undefined }): void {
+  const { deviceId, mode } = payload
+  if (!isCameraDetectionMode(mode) || deviceId === '') return
+  // Ignore a late observation from the camera that was selected before the current one.
+  if (deviceId !== selectedDeviceId.value) return
+
+  observedCameraWorkModes.value = { ...observedCameraWorkModes.value, [deviceId]: mode }
+
+  const configured = configuredCameraWorkModes.value[deviceId]
+  if (!configured) {
+    // First use of this camera: establish the current camera mode as the software baseline once.
+    configuredCameraWorkModes.value = { ...configuredCameraWorkModes.value, [deviceId]: mode }
+    persistConfiguredCameraWorkModes()
+    cameraModeMismatch.value = null
+    return
+  }
+
+  // The configured mode remains authoritative for the UI. The observation only decides whether
+  // the one-time mismatch dialog is needed; it never directly switches PRPD/Leakage/Mechanical.
+  cameraModeMismatch.value = configured === mode
+    ? null
+    : { deviceId, configured, actual: mode }
+}
+
+function onCameraWorkModeChange(payload: { deviceId: string; mode: number | undefined }): void {
+  const { deviceId, mode } = payload
+  if (!isCameraDetectionMode(mode) || deviceId === '') return
+  if (deviceId !== selectedDeviceId.value) return
+
+  configuredCameraWorkModes.value = { ...configuredCameraWorkModes.value, [deviceId]: mode }
+  observedCameraWorkModes.value = { ...observedCameraWorkModes.value, [deviceId]: mode }
+  persistConfiguredCameraWorkModes()
+  cameraModeMismatch.value = null
+}
+
+function closeCameraModeMismatch(): void {
+  cameraModeMismatch.value = null
+}
+
+function normalisedStagePoint(event: PointerEvent): { x: number; y: number } | null {
+  const stage = stageEl.value
+  if (!stage) return null
+  const rect = stage.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return null
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))
+  }
+}
+
+function beginDetectionRegion(event: PointerEvent): void {
+  if (!regionDrawMode.value) return
+  const point = normalisedStagePoint(event)
+  if (!point) return
+  event.preventDefault()
+  regionStart = point
+  regionDraft.value = { id: 'draft', x: point.x, y: point.y, width: 0, height: 0 }
+  stageEl.value?.setPointerCapture?.(event.pointerId)
+}
+
+function updateDetectionRegion(event: PointerEvent): void {
+  if (!regionDrawMode.value || !regionStart || !regionDraft.value) return
+  const point = normalisedStagePoint(event)
+  if (!point) return
+  const x = Math.min(regionStart.x, point.x)
+  const y = Math.min(regionStart.y, point.y)
+  regionDraft.value = {
+    id: 'draft',
+    x,
+    y,
+    width: Math.abs(point.x - regionStart.x),
+    height: Math.abs(point.y - regionStart.y)
+  }
+}
+
+function finishDetectionRegion(event: PointerEvent): void {
+  if (!regionStart || !regionDraft.value) return
+  updateDetectionRegion(event)
+  const draft = regionDraft.value
+  if (draft.width >= 0.015 && draft.height >= 0.015) {
+    detectionRegions.value.push({ ...draft, id: `region-${Date.now()}-${detectionRegions.value.length + 1}` })
+  }
+  regionStart = null
+  regionDraft.value = null
+  stageEl.value?.releasePointerCapture?.(event.pointerId)
+}
+
+function scanAreaReferenceSize(): { width: number; height: number } {
+  const video = videoEl.value
+  const width = video?.videoWidth && video.videoWidth > 0 ? video.videoWidth : 1920
+  const height = video?.videoHeight && video.videoHeight > 0 ? video.videoHeight : 1080
+  return { width, height }
+}
+
+function scanAreaToRegions(area: Fa371ScanArea): DetectionRegion[] {
+  const { width, height } = scanAreaReferenceSize()
+  return area.areas
+    .filter((item) => item.drawStatus !== 0)
+    .flatMap((item, index) => {
+      if (
+        item.leftTopX === undefined || item.leftTopY === undefined ||
+        item.width === undefined || item.height === undefined
+      ) return []
+      return [{
+        id: `device-region-${index + 1}`,
+        x: Math.min(1, Math.max(0, item.leftTopX / width)),
+        y: Math.min(1, Math.max(0, item.leftTopY / height)),
+        width: Math.min(1, Math.max(0, item.width / width)),
+        height: Math.min(1, Math.max(0, item.height / height))
+      }]
+    })
+}
+
+function regionsToScanArea(): Fa371ScanArea {
+  const { width, height } = scanAreaReferenceSize()
+  /**
+   * 业主 2026-09-23：没有绘制任何告警区域时**默认全画面告警**——写一个覆盖
+   * 整帧的区域，而不是把空数组交给设备（空数组在设备侧是"没有任何告警区域"
+   * 还是"全画面"，手册没有定义，不能赌）。
+   */
+  const areas = detectionRegions.value.length > 0
+    ? detectionRegions.value.map((region) => ({
+        height: Math.round(region.height * height),
+        width: Math.round(region.width * width),
+        drawStatus: 1,
+        leftTopX: Math.round(region.x * width),
+        leftTopY: Math.round(region.y * height)
+      }))
+    : [{ height, width, drawStatus: 1, leftTopX: 0, leftTopY: 0 }]
+  return {
+    centerFocusCode: 2,
+    coordinateSpace: 'pixel_video_frame',
+    areas
+  }
+}
+
+async function loadDetectionRegions(): Promise<void> {
+  const deviceId = selectedDeviceId.value
+  if (!deviceId || !isCamera.value || detectionAreaBusy.value) return
+  detectionAreaBusy.value = true
+  detectionAreaError.value = ''
+  try {
+    const result = await callApi(() => window.api.cameraControl.readScanArea(deviceId))
+    if (!result.success) {
+      detectionAreaError.value = resultMessage(result)
+      return
+    }
+    const area = unwrap(result)
+    detectionRegions.value = area ? scanAreaToRegions(area) : []
+    detectionAreaLoadedDeviceId.value = deviceId
+    detectionAreaNotice.value = ''
+  } finally {
+    detectionAreaBusy.value = false
+  }
+}
+
+async function applyDetectionRegions(): Promise<boolean> {
+  const deviceId = selectedDeviceId.value
+  if (!deviceId || detectionAreaBusy.value) return false
+  detectionAreaBusy.value = true
+  detectionAreaError.value = ''
+  detectionAreaNotice.value = ''
+  try {
+    const result = await callApi(() => window.api.cameraControl.writeScanArea(deviceId, regionsToScanArea()))
+    if (!result.success) {
+      detectionAreaError.value = resultMessage(result)
+      return false
+    }
+    const write = unwrap(result)
+    if (!write) return false
+    detectionRegions.value = scanAreaToRegions(write.after)
+    detectionAreaNotice.value = write.applied
+      ? t('cameraAlarmUi.regionSaved')
+      : t('cameraAlarmUi.regionNotApplied')
+    return write.applied === true
+  } finally {
+    detectionAreaBusy.value = false
+  }
+}
+
+function toggleRegionDrawMode(): void {
+  regionEditorOpen.value = true
+  regionDrawMode.value = !regionDrawMode.value
+  regionStart = null
+  regionDraft.value = null
+}
+
+async function openAlarmRegionConfiguration(): Promise<void> {
+  // Reuse the PRIMARY live video instead of opening a second <video>. The RTSP loopback session
+  // has one viewer, so the old Alarm dialog could replace the monitor viewer and leave this page
+  // showing "video unavailable" until it reconnected. Editing in-place removes that race.
+  if (!cameraActive.value && !cameraBusy.value) await startCameraLive()
+  regionEditorOpen.value = true
+  regionDrawMode.value = false
+  regionStart = null
+  regionDraft.value = null
+  detectionAreaError.value = ''
+  detectionAreaNotice.value = ''
+  if (detectionAreaLoadedDeviceId.value !== selectedDeviceId.value) await loadDetectionRegions()
+  detectionRegionsBaseline.value = detectionRegions.value.map((region) => ({ ...region }))
+}
+
+function cancelAlarmRegionConfiguration(): void {
+  detectionRegions.value = detectionRegionsBaseline.value.map((region) => ({ ...region }))
+  regionEditorOpen.value = false
+  regionDrawMode.value = false
+  regionStart = null
+  regionDraft.value = null
+  detectionAreaError.value = ''
+  detectionAreaNotice.value = ''
+}
+
+async function saveAlarmRegionConfiguration(): Promise<void> {
+  const applied = await applyDetectionRegions()
+  if (!applied) return
+  detectionRegionsBaseline.value = detectionRegions.value.map((region) => ({ ...region }))
+  regionEditorOpen.value = false
+  regionDrawMode.value = false
+  regionStart = null
+  regionDraft.value = null
+}
+
+function clearDetectionRegions(): void {
+  detectionRegions.value = []
+  regionDraft.value = null
+  regionStart = null
+  // 清除后保持框选状态：操作员的下一个动作几乎一定是重画，少一次点击。
+  regionDrawMode.value = true
+  detectionAreaNotice.value = t('cameraAlarmUi.regionCleared')
+}
 /** Real sample rate, read through the config API (never guessed locally). */
 const sampleRate = ref<number | null>(null)
 
@@ -859,11 +1201,25 @@ const spectrumOption = computed<EChartsCoreOption>(() => {
  * 而不是原始采样 —— 与「播放」按钮听到的是同一份数据、同一个形状。所以横轴是
  * **这一帧内的毫秒**（0..frameMs），不是绝对时间：一帧画一屏，下一帧覆盖上一帧。
  */
+/**
+ * 声学波形 Y 轴的对称量程（0 点固定在卡片中心，2026-09-23）。
+ * 在 computed 里维护：当前帧峰值高就立即跟上（信号不被裁），低了就 ×0.98 慢回落。
+ * 下限 1e-3 只是防"除零/零量程"，不是测量值。
+ */
+let waveformYMax = 1e-3
+
 const waveformOption = computed<EChartsCoreOption>(() => {
   const frame = monitor.content.audio
   const points = frame?.waveform ?? []
   const frameMs = frame?.frameMs ?? 100
   const last = Math.max(points.length - 1, 1)
+  let peak = 0
+  for (const value of points) {
+    const magnitude = Math.abs(value)
+    if (magnitude > peak) peak = magnitude
+  }
+  const target = Math.max(peak * 1.15, 1e-3)
+  waveformYMax = target > waveformYMax ? target : Math.max(target, waveformYMax * 0.98)
   return {
     animation: false,
     grid: { left: 46, right: 16, top: 24, bottom: 28 },
@@ -883,10 +1239,12 @@ const waveformOption = computed<EChartsCoreOption>(() => {
     },
     yAxis: {
       type: 'value',
-      // 波形是归一化幅度（±1 满量程），固定量程才能在帧与帧之间比较响度；
-      // `scale: true` 会让安静的帧看起来和响的帧一样高。
-      min: -1,
-      max: 1,
+      // Y 轴以 0 为中心、随信号自适应（2026-09-23 业主：「0 点固定在卡片中心」）。
+      // 实测 AE08 的包络是物理量级的小数（±1e-4 上下），固定 ±1 会让波形贴成一条
+      // 平线；对称自适应量程既保住"0 永远居中"，又让信号真的看得见。峰值快升慢降，
+      // 帧与帧之间量程不跳。
+      min: -waveformYMax,
+      max: waveformYMax,
       name: t('monitorUi.waveformAmplitude'),
       nameTextStyle: { color: TEXT_SECONDARY, fontSize: 10 },
       axisLine: { show: false },
@@ -1067,12 +1425,38 @@ useFa371CameraSession(selectedDeviceId, isCamera)
 /** 红外温度帧（/inrared_data，16 B/帧）。会话随默认接收一起开这一路；设备没推时为空。 */
 const fa371Stream = useFa371StreamStore()
 
+/**
+ * 「添加到视频墙」（业主 2026-09-24）：监测页看到画面时能一键把这台相机放进
+ * 总览的视频墙。墙的模型只认自己 `bindDevices` 过的清单，所以动作前先把当前
+ * 设备表灌进去——幂等，同一台设备重复添加由 `slotForDevice` 挡住。
+ */
+const cameraWall = useCameraWallStore()
+const cameraOnWall = computed(
+  () => selectedDeviceId.value !== '' && cameraWall.slotForDevice(selectedDeviceId.value) >= 0
+)
+
+function addCameraToWall(): void {
+  const id = selectedDeviceId.value
+  if (id === '' || cameraOnWall.value) return
+  cameraWall.bindDevices(devices.devices)
+  cameraWall.placeDeviceAuto(id)
+}
+
 const infraredFrame = computed(() => fa371Stream.infrared)
 
 /** 温度数值：设备没给的字段显示 —— 0 ℃ 也是一个真实温度，不能拿 0 占位。 */
 function infraredValue(value: number | undefined, digits = 1): string {
   return value === undefined ? EMPTY_VALUE : formatNumber(value, digits)
 }
+
+/** 红外入口只在设备**真的推过**红外帧后才出现（2026-09-22 业主第 4 条）。
+ *
+ * 相机有没有红外能力，唯一的诚实判据是数据：/inrared_data 推过帧 = 有声温成像能力；
+ * 从未推过 = 非红外机型，温度入口整体不渲染（"做不到的不渲染"）。
+ * 帧到达前短暂不出现是刻意的：给一个非红外机型常驻一个永远只有"—"的温度面板，
+ * 比晚一两秒出现更误导。
+ */
+const hasInfraredFrames = computed(() => fa371Stream.hasFrames('infraredData'))
 
 const cameraLive = ref<CameraLiveState | null>(null)
 const cameraBusy = ref(false)
@@ -1150,26 +1534,6 @@ const cameraMessage = computed(() => {
   return ''
 })
 
-const cameraModeLabel = computed(() =>
-  cameraLive.value?.mode === 'transcode'
-    ? t('cameraLiveUi.modeTranscode')
-    : t('cameraLiveUi.modeRemux')
-)
-
-/** Bytes actually forwarded, and which RTSP address candidate is in use. */
-const cameraMeta = computed(() => {
-  const state = cameraLive.value
-  if (!state) return ''
-  const parts: string[] = []
-  if (state.bytesSent !== undefined) {
-    parts.push(t('cameraLiveUi.dataForwarded', { count: state.bytesSent }))
-  }
-  if (state.attempt !== undefined) {
-    parts.push(t('cameraLiveUi.attemptInfo', { index: state.attempt, id: state.attemptId ?? '' }))
-  }
-  return parts.join(' · ')
-})
-
 /** Read the main process's authoritative session state (an unguarded read). */
 async function refreshCameraState(): Promise<void> {
   const id = selectedDeviceId.value
@@ -1226,6 +1590,104 @@ const DEVICE_ALARM_SAMPLE = 50
 /** 按通道分组的告警小结（纯函数在 `@shared/domain/channel-alarm.ts`）。 */
 const alarmsByChannel = computed(() => groupAlarmsByChannel(deviceAlarms.value))
 
+/**
+ * 相机分支「告警信息」卡片的真正数据源（2026-09-23「相机告警不显示」修复）。
+ *
+ * 上面的 `deviceAlarms` 读的是本地 `alarms` 表，而那张表只被听诊盒子（AE08/IoT
+ * 接入）的告警写入 —— 相机的局放告警走的是联动引擎：`/detect_logs` 轮询 → 判定
+ * → `PendingAlarmStore`，**永远不会**落到 `alarms` 表。所以相机页用 `deviceAlarms`
+ * 注定永远为空，这正是"相机明明在告警、卡片却一条都没有"的原因。
+ *
+ * 这里改读联动引擎的待处理镜像（`AppShell` 常驻订阅推送，实时刷新、不额外轮询），
+ * 按当前设备过滤、按发生时刻倒序。
+ */
+const cameraLinkageAlarms = computed(() =>
+  linkage.pending
+    .filter((item) => item.deviceId === selectedDeviceId.value)
+    .slice()
+    .sort((a, b) => b.at - a.at)
+)
+
+/** 联动总开关是否关着（`null` = 状态还没读到，不出提示）。 */
+const linkageDisabled = computed(() => linkage.status !== null && !linkage.status.enabled)
+
+/**
+ * 这台设备**还没确认**的告警条数 —— 「告警控制」角标与告警卡标题右侧那个数字读它。
+ *
+ * 业主 2026-09-26 第 2 条：「告警控制里面显示的是 200 个告警，这内容应该和软件整体
+ * 右上角的告警 ICON 一致」。
+ *
+ * 顶栏那颗图标（`AlarmLinkagePanel.bellCount`）数的是
+ * `deviceAlarmTotal + linkage.unacknowledgedCount` —— 也就是**未确认**口径。相机告警
+ * 只存在于联动这一路（相机告警不进 `alarms` 表，见上面那段注释），所以对相机而言
+ * 与铃铛同源的那一半就是 `linkage.unacknowledged`。
+ *
+ * 这里刻意**不加** `deviceAlarms`（本地告警表）那一半：那台表只装听诊盒子的告警，
+ * 相机分支加上它只会把别的设备的历史算到这台相机头上。
+ */
+const cameraAlarmUnacknowledgedCount = computed(
+  () => cameraLinkageAlarms.value.filter((alarm) => !alarm.acknowledged).length
+)
+
+/**
+ * 告警信息表每页几行（业主 2026-09-26 第 1 条：告警数量要支持换页）。
+ *
+ * 固定 8 行：这一块的高度要与左边 PRPD 那块（16:9 舞台 + 标题）对齐，
+ * 行数由"标题 + 8 行 + 页脚"刚好铺满那个高度决定。**不是**按容器高度动态算的 ——
+ * 动态算要在 resize 时重新分页，翻页翻到一半列表会自己变页，比多一条滚动条更难用。
+ */
+const CAMERA_ALARM_PAGE_SIZE = 8
+
+const cameraAlarmPage = ref(1)
+
+const cameraAlarmPages = computed(() =>
+  Math.max(1, Math.ceil(cameraLinkageAlarms.value.length / CAMERA_ALARM_PAGE_SIZE))
+)
+
+/** 页码夹回范围：换设备、确认掉告警、新告警到达都会改总页数。 */
+watch(cameraAlarmPages, (pages) => {
+  if (cameraAlarmPage.value > pages) cameraAlarmPage.value = pages
+  if (cameraAlarmPage.value < 1) cameraAlarmPage.value = 1
+})
+
+watch(selectedDeviceId, () => {
+  cameraAlarmPage.value = 1
+})
+
+const pagedCameraAlarms = computed(() => {
+  const start = (cameraAlarmPage.value - 1) * CAMERA_ALARM_PAGE_SIZE
+  return cameraLinkageAlarms.value.slice(start, start + CAMERA_ALARM_PAGE_SIZE)
+})
+
+/**
+ * 点告警行 → **告警中心**里这一条的详情（业主 2026-09-26 第 3 条）。
+ *
+ * 改成跳告警中心的原因：这台相机的告警证据（音频 / 视频 / 抓帧 / 检测文件）在告警中心
+ * 与事件中心两处都有入口，而从"告警信息"这一行出发时操作员要的是**这一条**的详情，
+ * 不是"那一台设备的所有事件"。`?cameraAlarm=<eventId>` 让告警中心直接把这一条打开。
+ *
+ * 设备筛选仍然一起带上：告警中心的列表要以这一台为默认条件，否则从这一行过去会看到
+ * 全库的告警，还得自己再选一次设备。
+ */
+function openCameraAlarmDetail(alarm: PendingAlarmRecord): void {
+  void router.push({
+    path: '/alarms',
+    query: { device: alarm.deviceId, cameraAlarm: alarm.eventId }
+  })
+}
+
+/**
+ * 告警类型那一格：放电类型 > 检测模式 > 通用「告警」（与告警中心 `cameraAlarmTypeText`
+ * 同一优先级；两处说的是同一行数据，不能各排一个顺序）。
+ */
+function cameraAlarmTypeText(alarm: PendingAlarmRecord): string {
+  return (
+    linkageDischargeText(t, alarm) ||
+    linkageDetectModeText(t, alarm) ||
+    t('alarmsUi.cameraAlarmGeneric')
+  )
+}
+
 async function startCameraLive(): Promise<void> {
   const id = selectedDeviceId.value
   if (!id || cameraBusy.value) return
@@ -1266,8 +1728,43 @@ async function stopCameraLive(): Promise<void> {
  * crashed ffmpeg is reported there as an `error` state carrying its stderr tail, and
  * that is what the panel must show instead of a silently frozen last frame.
  */
+/**
+ * 中途断流自动重试（业主 2026-09-22 第 8 条「流错误」；2026-09-24 改成**有限多次**）。
+ *
+ * 相机把空闲/过载的 RTSP 会话踢掉时（表现为"流错误"），操作员的做法本来就是手动再点
+ * 一次开始 —— 这一步把它自动化。改为 3 次退避重试（2s/5s/10s）：只试一次的旧版在
+ * 相机负载高（告警密集 + 多路流）时仍然留给用户一条黑屏；连续 3 次都失败说明是真
+ * 问题（地址变了、相机确实不推了），错误留在屏幕上。画面稳定播放 30 秒就把计数清零
+ * ——偶发被踢不该消耗掉"真出问题时"的重试额度。
+ */
+let liveAutoRetryCount = 0
+const LIVE_AUTO_RETRY_MAX = 3
+const LIVE_AUTO_RETRY_DELAYS_MS = [2_000, 5_000, 10_000]
+let liveStableTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 画面稳定 30 秒：把重试计数清零（偶发被踢不该吃掉真故障时的额度）。 */
+function noteLiveStable(): void {
+  if (liveStableTimer !== undefined) clearTimeout(liveStableTimer)
+  liveStableTimer = setTimeout(() => {
+    liveAutoRetryCount = 0
+  }, 30_000)
+}
+
 function onVideoProblem(): void {
-  void refreshCameraState()
+  void refreshCameraState().then(() => {
+    if (
+      cameraStatus.value === 'error' &&
+      liveAutoRetryCount < LIVE_AUTO_RETRY_MAX &&
+      !cameraBusy.value &&
+      selectedDeviceId.value !== ''
+    ) {
+      const delay = LIVE_AUTO_RETRY_DELAYS_MS[Math.min(liveAutoRetryCount, LIVE_AUTO_RETRY_DELAYS_MS.length - 1)] ?? 10_000
+      liveAutoRetryCount += 1
+      window.setTimeout(() => {
+        if (cameraStatus.value === 'error') void startCameraLive()
+      }, delay)
+    }
+  })
 }
 
 /**
@@ -1282,7 +1779,11 @@ function onVideoProblem(): void {
  * `refreshCameraState()`，成功的这条路以前没有对应的一步。
  */
 function onVideoReady(): void {
+  // 播放真的开始了：30 秒稳定后清重试计数（而不是一到帧就清——
+  // 起来又掉的抖动序列不能被当成"每次都成功了"）。
+  noteLiveStable()
   void refreshCameraState()
+  if (detectionAreaLoadedDeviceId.value !== selectedDeviceId.value) void loadDetectionRegions()
   // 一有画面就把记住的音量写上去（元素是这一刻才存在的，之前写不了）。
   applyAudioOutput()
 }
@@ -1395,8 +1896,6 @@ function toggleSoundMute(): void {
  */
 const cameraVolumeOpen = ref(false)
 const infraredOpen = ref(false)
-/** 叠加信息条显隐（默认显示；业主同批把「显示/隐藏叠加信息」做成控制条上一颗开关）。 */
-const overlayVisible = ref(true)
 
 function onCameraPopsDocMouseDown(event: MouseEvent): void {
   const target = event.target
@@ -1450,6 +1949,9 @@ const recordingId = ref('')
 const nvrBusy = ref(false)
 const nvrError = ref('')
 const nvrNotice = ref('')
+const saveResultOpen = ref(false)
+const saveResultKind = ref<'snapshot' | 'recording'>('snapshot')
+const saveResultMessage = ref('')
 /** 最近一次抓图的路径：提示条上的「打开所在文件夹」用它。 */
 const lastSnapshotAbsolute = ref('')
 const menuOpen = ref(false)
@@ -1463,7 +1965,8 @@ const menuY = ref(0)
  * （相机页只有一格），但通道墙上会有多格，那时读所选设备就是错的。
  */
 const menuDeviceId = ref('')
-const alarmDialogOpen = ref(false)
+const alarmConditionDialogOpen = ref(false)
+const alarmStrategyDialogOpen = ref(false)
 /**
  * ⑤ 本机回放 / 检测记录下载两块弹窗的状态。
  *
@@ -1553,9 +2056,8 @@ const nvrEnvironment = computed<CameraNvrEnvironment>(() => ({
  */
 const menuItems = computed<CameraNvrMenuItem[]>(() =>
   buildCameraNvrMenu(cameraLive.value, nvrEnvironment.value, { flips: flip.value })
+    .filter((item) => item.action !== 'alarm-config')
 )
-
-const recordingClock = computed(() => formatDuration(recordingElapsed.value))
 
 /**
  * 抓图提示里的路径：优先显示存储根相对路径的尾部（绝对路径太长），
@@ -1567,6 +2069,18 @@ const snapshotLabel = computed(() => {
   const parts = path.split(/[\\/]/)
   return parts.slice(-3).join('/')
 })
+
+const saveResultTitle = computed(() =>
+  saveResultKind.value === 'snapshot'
+    ? t('cameraNvrUi.snapshotSavedTitle')
+    : t('cameraNvrUi.recordSavedTitle')
+)
+
+function showSaveResult(kind: 'snapshot' | 'recording', message: string): void {
+  saveResultKind.value = kind
+  saveResultMessage.value = message
+  saveResultOpen.value = true
+}
 
 function onCameraContextMenu(event: MouseEvent): void {
   // 浏览器原生菜单在监控软件里没有意义，而且会把我们的菜单顶掉。
@@ -1613,11 +2127,11 @@ async function toggleManualRecording(): Promise<void> {
       const saved = unwrap(result)
       if (saved) {
         recordingId.value = saved.recordingId ?? ''
-        nvrNotice.value = t('cameraNvrUi.recordSaved', {
+        showSaveResult('recording', t('cameraNvrUi.recordSaved', {
           duration: formatDuration(saved.durationMs),
           size: formatBytes(saved.fileSize),
           path: saved.relativePath
-        })
+        }))
         // 码流中途断掉时主进程会给出诊断；文件已保留，但必须让操作员看见。
         if (saved.warning) {
           nvrError.value = t('cameraNvrUi.recordWarning', { reason: saved.warning })
@@ -1653,7 +2167,7 @@ async function takeSnapshot(): Promise<void> {
     const captured = unwrap(result)
     if (!captured) return
     lastSnapshotAbsolute.value = captured.absolutePath
-    nvrNotice.value = t('cameraNvrUi.snapshotSaved', { path: snapshotLabel.value })
+    showSaveResult('snapshot', t('cameraNvrUi.snapshotSaved', { path: snapshotLabel.value }))
   } finally {
     nvrBusy.value = false
   }
@@ -1666,23 +2180,21 @@ async function revealSnapshot(): Promise<void> {
   if (!result.success) nvrError.value = resultMessage(result)
 }
 
-async function toggleFullscreen(): Promise<void> {
-  const stage = stageEl.value
-  if (!stage) return
-  try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen()
-    } else {
-      await stage.requestFullscreen()
-    }
-  } catch {
-    // 浏览器/Electron 都可能拒绝（窗口未聚焦、权限策略）；如实说明，不要静默。
-    nvrError.value = t('cameraNvrUi.fullscreenFailed')
-  }
+function toggleFullscreen(): void {
+  if (!stageEl.value) return
+  // Electron/Chromium's native Fullscreen API can be blocked by window focus or
+  // permission policy. The product requirement is "make the video fill the app
+  // window", not "put the whole OS window into browser fullscreen". A renderer-side
+  // fixed layer is deterministic, keeps the same video element/session alive and
+  // therefore cannot lose the RTSP viewer while switching in/out.
+  fullscreen.value = !fullscreen.value
+  menuOpen.value = false
 }
 
-function onFullscreenChange(): void {
-  fullscreen.value = document.fullscreenElement === stageEl.value
+function onFullscreenKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !fullscreen.value) return
+  event.preventDefault()
+  fullscreen.value = false
 }
 
 /**
@@ -1739,7 +2251,7 @@ async function onMenuSelect(action: CameraNvrAction): Promise<void> {
       await takeSnapshot()
       return
     case 'alarm-config':
-      alarmDialogOpen.value = true
+      alarmConditionDialogOpen.value = true
       return
     case 'toggle-fullscreen':
       await toggleFullscreen()
@@ -1791,7 +2303,7 @@ async function finaliseRecordingIfAny(): Promise<void> {
 }
 
 onMounted(async () => {
-  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('keydown', onFullscreenKeydown, true)
   if (devices.devices.length === 0) await devices.load()
   /*
    * 每次进入这一页都重新允许一次自动起播（与总览页同一个口径，见
@@ -1799,7 +2311,6 @@ onMounted(async () => {
    * 而"一次进程一次尝试"会让第二次进入这一页时画面停着不动。
    * 「操作员按过停止」那一位**保留** —— 他明确不要的东西不因为换页面就回来。
    */
-  resetAutoPlayAttempts()
   syncFromRoute()
   if (selectedDeviceId.value) {
     // 通道表要先到手，初始通道才能避开被明确关闭的那几路。
@@ -1849,18 +2360,25 @@ onMounted(async () => {
  * IPC 快照，不是 store 里的那一份，地址不会自己出现。
  */
 async function autoPlayCameraIfWorking(): Promise<void> {
-  if (!settings.loaded) await settings.load()
-  const decision = await cameraLiveStore.autoPlayIfWorking({
-    autoPlayEnabled: settings.settings?.autoPlayCameraLive !== false,
-    cameraRegistered: devices.devices.some((device) => device.kind === 'acousticCamera'),
-    deviceId: selectedDeviceId.value,
-    deviceStatus: selectedDevice.value?.status ?? 'UNKNOWN'
-  })
-  if (decision.action === 'start' || decision.action === 'adopt') await refreshCameraState()
+  // 实时监测页本身就是“看实时数据”的入口：进入页面后直接尝试起播，不再要求
+  // 操作员先点播放，也不再受总览页的自动播放偏好开关影响。设备离线/RTSP 关闭时
+  // startCameraLive() 会保留真实错误状态，不伪造一张黑色“正在播放”画面。
+  await refreshCameraState()
+  if (!cameraActive.value && cameraStatus.value !== 'starting') await startCameraLive()
 }
+
 
 // Keep the store's notion of "current device" in sync when the user switches.
 watch(selectedDeviceId, async (id) => {
+  cameraModeMismatch.value = null
+  detectionRegions.value = []
+  regionDrawMode.value = false
+  regionEditorOpen.value = false
+  detectionAreaLoadedDeviceId.value = ''
+  detectionAreaError.value = ''
+  detectionAreaNotice.value = ''
+  regionDraft.value = null
+  regionStart = null
   if (!id) return
   const live = isLive.value
   devices.select(id)
@@ -1936,7 +2454,7 @@ watch(selectedDeviceId, async (id) => {
  * is idempotent and documents the contract at the call site.
  */
 onUnmounted(() => {
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('keydown', onFullscreenKeydown, true)
   // 音量浮层的 click-outside 监听同理：组件没了，监听必须跟着掉。
   document.removeEventListener('mousedown', onVolumePopoverDocMouseDown, true)
   // 控制条浮层（音量 / 红外）的同一条监听同理。
@@ -1949,6 +2467,8 @@ onUnmounted(() => {
   void audioPlayer.close()
   // 录音计时器必须在卸载时清掉：它持有一个闭包，留着就是一个静默的泄漏。
   stopRecordingTimer()
+  // 断流重试的"稳定 30 秒"计时器同理。
+  if (liveStableTimer !== undefined) clearTimeout(liveStableTimer)
   // 正在进行的录像正式收尾（登记进录像表），而不是丢下一个隐藏的 ffmpeg。
   void finaliseRecordingIfAny()
   // The camera session owns an ffmpeg child process and a bound loopback port in the
@@ -2185,413 +2705,436 @@ const sessionLabel = computed(() => {
            播放信息（已转发字节数 / 地址候选）那枚徽标的悬停说明随徽标一起去了
            控制条按钮的 title 与叠加条。
       ------------------------------------------------------------------ -->
-      <div v-if="isCamera" class="camera-split">
-      <div class="camera-split__main">
-      <section class="card camera-live">
-        <!--
-          * 单通道 NVR 画面：视频填满面板，叠加信息浮在画面之上。
-          * 右键菜单挂在这一层上，因为它是「视频表面」，而不是整个页面。
-        -->
-        <div
-          ref="stageEl"
-          class="camera-live__stage"
-          :class="{ 'camera-live__stage--fullscreen': fullscreen }"
-          @contextmenu="onCameraContextMenu"
-        >
-          <video
-            v-if="cameraLiveUrl"
-            ref="videoEl"
-            class="camera-live__video"
-            :src="cameraLiveUrl"
-            :style="{ transform: videoTransform }"
-            :class="{
-              'camera-live__video--paused': picturePaused,
-              'camera-live__video--flipped': flipActive
-            }"
-            autoplay
-            muted
-            playsinline
-            @error="onVideoProblem"
-            @ended="onVideoProblem"
-            @loadeddata="onVideoReady"
-            @playing="onVideoReady"
-          ></video>
-          <p v-else class="camera-live__placeholder">{{ cameraStatusLabel }}</p>
-
-          <!-- 叠加条默认显示；「叠加」开关（业主 2026-09-21 第三批）切换它的显隐。 -->
-          <div v-if="overlayVisible" class="camera-live__overlay">
-            <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayDevice', { name: selectedDevice?.name ?? '' }) }}</span>
-            <span class="camera-live__overlay-line">{{ t('cameraNvrUi.overlayStatus', { status: cameraStatusLabel }) }}</span>
-            <span class="camera-live__overlay-line">
-              {{ t('cameraNvrUi.overlayStream', { mode: cameraModeLabel, address: cameraLive?.rtspUrl || t('cameraLiveUi.rtspAddressUnknown') }) }}
-            </span>
-          </div>
-
-          <div v-if="recording" class="camera-live__rec" role="status">
-            <span class="camera-live__rec-dot" aria-hidden="true"></span>
-            {{ t('cameraNvrUi.recordingBadge', { time: recordingClock }) }}
-          </div>
-        </div>
-
-        <p v-if="nvrError" class="alert alert--danger" role="alert">{{ nvrError }}</p>
-        <p v-else-if="nvrNotice" class="alert alert--success" role="status">
-          {{ nvrNotice }}
-          <button
-            v-if="lastSnapshotAbsolute"
-            type="button"
-            class="btn btn--sm"
-            @click="revealSnapshot"
-          >
-            {{ t('cameraNvrUi.openFolder') }}
-          </button>
-        </p>
-
-        <p v-if="cameraMessage" :class="cameraAlertClass" role="status">
-          {{ cameraMessage }}
-        </p>
-
-        <!--
-          视频窗口下方的**通用播放器式控制条**（业主 2026-09-18 第 10 批第 22 条；
-          2026-09-21 第三批改版）：暂停 / 播放 · 启停 · 录制 · 查看（抓图）· 回放 ·
-          告警配置 · 红外 · 叠加 · 音量（图标 + 浮层，浮层内有滑杆与静音开关）。
-          三个翻转开关已移进右键菜单（「翻转」子菜单），这里不再有三颗开关。
-
-          两件事与原来不同：
-            · 动作**不再画在画面上方**（原来那排按钮在视频上面）；控制条在画面**下方**，
-              与任何播放器的位置一致；
-            · **原生 `controls` 关掉了**：它自带一条控制条，而业主要的那几个动作它一个都
-              没有（录制、抓图、回放、告警配置）—— 两条控制条并排只会互相抢注意力。
-
-          每一项的可用性都读**同一个 `readiness`**（右键菜单用的也是它），所以"菜单亮着但
-          按钮灰着"这种漂移在结构上不可能发生；不可用时把原因写在 `title` 里。
-        -->
-        <div class="camera-controls" data-camera-controlbar>
-          <button
-            type="button"
-            class="btn btn--sm"
-            :disabled="!cameraActive"
-            :title="cameraActive ? '' : t('cameraLiveUi.volumeNoPicture')"
-            data-action="camera-pause"
-            @click="togglePicturePause"
-          >
-            {{ picturePaused ? t('cameraLiveUi.playPicture') : t('cameraLiveUi.pausePicture') }}
-          </button>
-
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--primary': !cameraActive }"
-            :disabled="cameraBusy"
-            :title="cameraMeta || undefined"
-            data-action="camera-power"
-            @click="toggleCameraLive"
-          >
-            {{
-              cameraActive
-                ? t('cameraLiveUi.stop')
-                : cameraStatus === 'error'
-                  ? t('cameraLiveUi.retry')
-                  : t('cameraLiveUi.start')
-            }}
-          </button>
-
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--danger': recording }"
-            :disabled="nvrBusy || !(recording || readiness.ready)"
-            :title="recording || readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
-            data-action="camera-record"
-            @click="toggleManualRecording"
-          >
-            {{
-              recording
-                ? t('cameraNvrUi.menuStopRecording')
-                : t('cameraNvrUi.menuStartRecording')
-            }}
-          </button>
-
-          <button
-            type="button"
-            class="btn btn--sm"
-            :disabled="nvrBusy || !readiness.ready"
-            :title="readiness.ready ? '' : readiness.reasonText || t(readiness.reasonKey)"
-            data-action="camera-snapshot"
-            @click="takeSnapshot"
-          >
-            {{ t('cameraLiveUi.lookSnapshot') }}
-          </button>
-
-          <button
-            type="button"
-            class="btn btn--sm"
-            data-action="camera-playback"
-            @click="playbackOpen = true"
-          >
-            {{ t('cameraLiveUi.lookPlayback') }}
-          </button>
-
-          <button
-            type="button"
-            class="btn btn--sm"
-            data-action="camera-alarm-config"
-            @click="alarmDialogOpen = true"
-          >
-            {{ t('cameraNvrUi.menuAlarmConfig') }}
-          </button>
-
-          <!--
-            红外（业主 2026-09-21 第三批）：弹层显示 /inrared_data 的四个温度数值
-            （中心 / 最高 / 最低 / 发射率）。**协议只有温度数值，没有红外视频流** ——
-            浮层里把这件事写明（cameraLiveUi.infraredNoVideo），不画一块黑布冒充热像图。
-            设备没推数据时各项显示 —。
-          -->
-          <span class="camera-controls__anchor">
-            <button
-              type="button"
-              class="btn btn--sm btn--icon"
-              :class="{ 'btn--primary': infraredOpen }"
-              :aria-expanded="infraredOpen"
-              :aria-label="t('cameraLiveUi.infrared')"
-              :title="t('cameraLiveUi.infrared')"
-              data-camera-infrared
-              @click="infraredOpen = !infraredOpen"
-            >
-              <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                <path d="M8 2a2.6 2.6 0 0 1 2.6 2.6v4.9a3.4 3.4 0 1 1-5.2 0V4.6A2.6 2.6 0 0 1 8 2Z" fill="none" stroke="currentColor" stroke-width="1.3" />
-                <circle cx="8" cy="10.6" r="1.4" fill="currentColor" />
-              </svg>
-            </button>
-            <div
-              v-if="infraredOpen"
-              class="camera-controls__pop camera-controls__infrared"
-              data-camera-infrared-pop
-            >
-              <dl class="camera-infrared__grid">
-                <dt>{{ t('realtimeUi.metric.centerTemp') }}</dt>
-                <dd>{{ infraredValue(infraredFrame?.centerTemp) }}</dd>
-                <dt>{{ t('realtimeUi.metric.maxTemp') }}</dt>
-                <dd>{{ infraredValue(infraredFrame?.maxTemp) }}</dd>
-                <dt>{{ t('realtimeUi.metric.minTemp') }}</dt>
-                <dd>{{ infraredValue(infraredFrame?.minTemp) }}</dd>
-                <dt>{{ t('cameraLiveUi.infraredEmissivity') }}</dt>
-                <dd>{{ infraredValue(infraredFrame?.emissivity, 2) }}</dd>
-              </dl>
-              <p class="muted camera-infrared__note">{{ t('realtimeUi.tempUnitHint') }}</p>
-              <p class="muted camera-infrared__note">{{ t('cameraLiveUi.infraredNoVideo') }}</p>
-            </div>
-          </span>
-
-          <!--
-            叠加（业主 2026-09-21 第三批）：切换画面左上角那条叠加信息（设备 / 状态 / 码流）
-            的显隐。默认显示；「叠加」两个字就是开关的 aria 名（cameraLiveUi.overlayToggle）。
-          -->
-          <button
-            type="button"
-            class="btn btn--sm btn--icon"
-            :class="{ 'btn--primary': overlayVisible }"
-            :aria-pressed="overlayVisible"
-            :aria-label="t('cameraLiveUi.overlayToggle')"
-            :title="t('cameraLiveUi.overlayToggle')"
-            data-camera-overlay
-            @click="overlayVisible = !overlayVisible"
-          >
-            <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path d="M2.4 4.4h11.2M2.4 8h11.2M2.4 11.6h7.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-            </svg>
-          </button>
-
-          <!--
-            音量（第 21 条「音量可调并**记住**」；2026-09-21 第三批收成图标 + 浮层，
-            与画面墙同一套交互）。没有画面时禁用并把原因说清楚 —— 一个按下去什么都不会
-            发生的音量滑杆比没有它更糟（与画面墙同一条口径）。
-          -->
-          <span class="camera-controls__volume">
-            <button
-              type="button"
-              class="btn btn--sm btn--icon"
-              :class="{ 'btn--primary': liveSoundOn }"
-              :disabled="!cameraActive"
-              :aria-expanded="cameraVolumeOpen"
-              :aria-label="liveVolumeLabel"
-              :title="liveVolumeLabel"
-              data-camera-volume-trigger
-              @click="cameraVolumeOpen = !cameraVolumeOpen"
-            >
-              <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
-                <path
-                  v-if="liveSoundOn"
-                  d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.3"
-                  stroke-linecap="round"
-                />
-                <path
-                  v-else
-                  d="M11 6 L14 10 M14 6 L11 10"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.3"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </button>
-            <!--
-              音量浮层：一条水平滑杆 + 一颗静音开关（画面墙那颗的同款）。滑杆的值仍然
-              按设备持久化（saveCameraVolume）；静音是「要不要出声」，不记住。
-            -->
-            <div v-if="cameraVolumeOpen" class="camera-controls__pop camera-controls__volume-pop" data-camera-volume-pop>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                class="camera-controls__slider"
-                data-action="camera-volume"
-                :value="liveVolumePercent"
-                :disabled="!cameraActive"
-                :aria-label="liveVolumeLabel"
-                :title="liveVolumeLabel"
-                @input="onLiveVolumeInput"
-              />
-              <button
-                type="button"
-                class="btn btn--sm btn--icon"
-                :class="{ 'btn--primary': !soundMuted && liveVolume > 0 }"
-                :disabled="!cameraActive"
-                :aria-pressed="!soundMuted"
-                :aria-label="liveVolumeLabel"
-                :title="liveVolumeLabel"
-                data-action="camera-volume-mute"
-                @click="toggleSoundMute"
+      <div v-if="isCamera" class="camera-workspace">
+        <!-- Top: live video + camera controls. -->
+        <div class="camera-split camera-split--top">
+          <div class="camera-split__main">
+            <section class="card camera-live">
+              <div
+                ref="stageEl"
+                class="camera-live__stage"
+                :class="{
+                  'camera-live__stage--fullscreen': fullscreen,
+                  'camera-live__stage--drawing': regionDrawMode
+                }"
+                @contextmenu="onCameraContextMenu"
+                @pointerdown="beginDetectionRegion"
+                @pointermove="updateDetectionRegion"
+                @pointerup="finishDetectionRegion"
+                @pointercancel="finishDetectionRegion"
               >
-                <svg class="camera-controls__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                  <path d="M3 6 H5.6 L9 3 V13 L5.6 10 H3 Z" fill="currentColor" />
-                  <path
-                    v-if="!soundMuted"
-                    d="M11.2 5.4 A4.2 4.2 0 0 1 11.2 10.6"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.3"
-                    stroke-linecap="round"
-                  />
-                  <path
-                    v-else
-                    d="M11 6 L14 10 M14 6 L11 10"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.3"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </button>
+                <video
+                  v-if="cameraLiveUrl"
+                  ref="videoEl"
+                  class="camera-live__video"
+                  :src="cameraLiveUrl"
+                  :style="{ transform: videoTransform }"
+                  :class="{
+                    'camera-live__video--paused': picturePaused,
+                    'camera-live__video--flipped': flipActive
+                  }"
+                  autoplay
+                  muted
+                  playsinline
+                  @error="onVideoProblem"
+                  @ended="onVideoProblem"
+                  @loadeddata="onVideoReady"
+                  @playing="onVideoReady"
+                ></video>
+                <div v-else class="camera-live__placeholder" :title="cameraStatusLabel" aria-live="polite">
+                  <svg class="camera-live__placeholder-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 7h11v10H4zM15 10l5-3v10l-5-3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+
+                <!-- Detection regions use normalized coordinates so resize/resolution changes do not move them. -->
+                <div class="camera-detection-regions" aria-hidden="true">
+                  <span
+                    v-for="region in detectionRegions"
+                    :key="region.id"
+                    class="camera-detection-region"
+                    :style="{
+                      left: `${region.x * 100}%`,
+                      top: `${region.y * 100}%`,
+                      width: `${region.width * 100}%`,
+                      height: `${region.height * 100}%`
+                    }"
+                  ></span>
+                  <span
+                    v-if="regionDraft"
+                    class="camera-detection-region camera-detection-region--draft"
+                    :style="{
+                      left: `${regionDraft.x * 100}%`,
+                      top: `${regionDraft.y * 100}%`,
+                      width: `${regionDraft.width * 100}%`,
+                      height: `${regionDraft.height * 100}%`
+                    }"
+                  ></span>
+                </div>
+
+                <!-- No text overlays in the video surface: recording is a visual indicator only. -->
+                <span v-if="recording" class="camera-live__rec camera-live__rec--icon" role="status" :title="t('cameraNvrUi.menuStopRecording')">
+                  <span class="camera-live__rec-dot" aria-hidden="true"></span>
+                </span>
+
+                <button
+                  v-if="fullscreen"
+                  type="button"
+                  class="camera-live__fullscreen-exit"
+                  :title="t('cameraNvrUi.menuExitFullscreen')"
+                  :aria-label="t('cameraNvrUi.menuExitFullscreen')"
+                  @pointerdown.stop
+                  @click.stop="toggleFullscreen"
+                >
+                  <svg viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="M7 3.5V7H3.5M11 7h3.5V3.5M14.5 11H11v3.5M7 14.5V11H3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Alarm-region controls intentionally live OUTSIDE the video surface.
+                   This keeps the whole picture available for pointer drawing and avoids
+                   a floating panel intercepting the first drag gesture. -->
+              <aside
+                v-if="regionEditorOpen"
+                class="camera-detection-editor camera-detection-editor--external"
+              >
+                <div class="camera-detection-editor__header">
+                  <strong>{{ t('cameraAlarmUi.tabRegions') }}</strong>
+                  <span>{{ detectionRegions.length }}</span>
+                </div>
+                <div class="camera-detection-editor__actions">
+                  <button type="button" class="btn btn--sm" :class="{ 'btn--primary': regionDrawMode }" @click="toggleRegionDrawMode">
+                    {{ regionDrawMode ? t('cameraAlarmUi.regionDrawing') : t('cameraAlarmUi.regionDraw') }}
+                  </button>
+                  <button type="button" class="btn btn--sm" :disabled="detectionAreaBusy || detectionRegions.length === 0" @click="clearDetectionRegions">
+                    {{ t('cameraAlarmUi.regionClear') }}
+                  </button>
+                  <button type="button" class="btn btn--sm" :disabled="detectionAreaBusy" @click="cancelAlarmRegionConfiguration">{{ t('common.cancel') }}</button>
+                  <button type="button" class="btn btn--sm btn--primary" :disabled="detectionAreaBusy" @click="saveAlarmRegionConfiguration">{{ t('common.save') }}</button>
+                </div>
+                <p class="camera-detection-editor__hint">{{ t('cameraAlarmUi.regionDrawHint') }}</p>
+                <p v-if="detectionAreaError" class="camera-detection-editor__error">{{ detectionAreaError }}</p>
+                <p v-else-if="detectionAreaNotice" class="camera-detection-editor__notice">{{ detectionAreaNotice }}</p>
+              </aside>
+
+              <p v-if="nvrError" class="alert alert--danger" role="alert">{{ nvrError }}</p>
+              <p v-else-if="nvrNotice" class="alert alert--success" role="status">
+                {{ nvrNotice }}
+                <button v-if="lastSnapshotAbsolute" type="button" class="btn btn--sm" @click="revealSnapshot">
+                  {{ t('cameraNvrUi.openFolder') }}
+                </button>
+              </p>
+              <p v-if="cameraMessage" :class="cameraAlertClass" role="status">{{ cameraMessage }}</p>
+
+              <!-- Icon-only player toolbar. Text is available only through title/aria-label. -->
+              <div class="camera-controls camera-controls--icons" data-camera-controlbar>
+                <button
+                  type="button"
+                  class="camera-control-btn camera-control-btn--icon"
+                  :class="{ 'camera-control-btn--active': picturePaused }"
+                  :disabled="!cameraActive"
+                  :title="picturePaused ? t('cameraLiveUi.playPicture') : t('cameraLiveUi.pausePicture')"
+                  :aria-label="picturePaused ? t('cameraLiveUi.playPicture') : t('cameraLiveUi.pausePicture')"
+                  data-action="camera-pause"
+                  @click="togglePicturePause"
+                >
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <path v-if="picturePaused" d="M5.2 3.6 14 9l-8.8 5.4Z" fill="currentColor" />
+                    <path v-else d="M5.2 3.8h2.6v10.4H5.2Zm5 0h2.6v10.4h-2.6Z" fill="currentColor" />
+                  </svg>
+                </button>
+
+                <button
+                  type="button"
+                  class="camera-control-btn camera-control-btn--icon"
+                  :class="{ 'camera-control-btn--active': cameraActive }"
+                  :disabled="cameraBusy"
+                  :title="cameraActive ? t('cameraLiveUi.stop') : cameraStatus === 'error' ? t('cameraLiveUi.retry') : t('cameraLiveUi.start')"
+                  :aria-label="cameraActive ? t('cameraLiveUi.stop') : cameraStatus === 'error' ? t('cameraLiveUi.retry') : t('cameraLiveUi.start')"
+                  data-action="camera-power"
+                  @click="toggleCameraLive"
+                >
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="M9 2.7v6.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                    <path d="M5.1 4.7a6 6 0 1 0 7.8 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                  </svg>
+                </button>
+
+                <span class="camera-controls__divider" aria-hidden="true"></span>
+
+                <button
+                  type="button"
+                  class="camera-control-btn camera-control-btn--icon"
+                  :class="{ 'camera-control-btn--recording': recording }"
+                  :disabled="nvrBusy || !(recording || readiness.ready)"
+                  :title="recording ? t('cameraNvrUi.menuStopRecording') : t('cameraNvrUi.menuStartRecording')"
+                  :aria-label="recording ? t('cameraNvrUi.menuStopRecording') : t('cameraNvrUi.menuStartRecording')"
+                  data-action="camera-record"
+                  @click="toggleManualRecording"
+                >
+                  <span class="camera-control-btn__record-dot" aria-hidden="true"></span>
+                </button>
+
+                <button
+                  type="button"
+                  class="camera-control-btn camera-control-btn--icon"
+                  :disabled="nvrBusy || !readiness.ready"
+                  :title="t('cameraLiveUi.lookSnapshot')"
+                  :aria-label="t('cameraLiveUi.lookSnapshot')"
+                  data-action="camera-snapshot"
+                  @click="takeSnapshot"
+                >
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="M3 5.7h3l1-1.6h4l1 1.6h3v8.2H3Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+                    <circle cx="9" cy="9.8" r="2.3" fill="none" stroke="currentColor" stroke-width="1.4" />
+                  </svg>
+                </button>
+
+                <button type="button" class="camera-control-btn camera-control-btn--icon" :title="t('cameraLiveUi.lookPlayback')" :aria-label="t('cameraLiveUi.lookPlayback')" data-action="camera-playback" @click="playbackOpen = true">
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="M3 9a6 6 0 1 0 1.8-4.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                    <path d="M3 3.7v3.7h3.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="m8 6.6 4 2.4-4 2.4Z" fill="currentColor" />
+                  </svg>
+                </button>
+
+                <span class="camera-controls__divider" aria-hidden="true"></span>
+
+                <span v-if="hasInfraredFrames" class="camera-controls__anchor">
+                  <button
+                    type="button"
+                    class="camera-control-btn camera-control-btn--icon"
+                    :class="{ 'camera-control-btn--active': infraredOpen }"
+                    :aria-expanded="infraredOpen"
+                    :aria-label="t('cameraLiveUi.infrared')"
+                    :title="t('cameraLiveUi.infrared')"
+                    data-camera-infrared
+                    @click="infraredOpen = !infraredOpen"
+                  >
+                    <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                      <path d="M9 2.4a2.8 2.8 0 0 1 2.8 2.8v4.5a3.7 3.7 0 1 1-5.6 0V5.2A2.8 2.8 0 0 1 9 2.4Z" fill="none" stroke="currentColor" stroke-width="1.4" />
+                      <circle cx="9" cy="11.2" r="1.5" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <div v-if="infraredOpen" class="camera-controls__pop camera-controls__infrared" data-camera-infrared-pop>
+                    <dl class="camera-infrared__grid">
+                      <dt>{{ t('realtimeUi.metric.centerTemp') }}</dt><dd>{{ infraredValue(infraredFrame?.centerTemp) }}</dd>
+                      <dt>{{ t('realtimeUi.metric.maxTemp') }}</dt><dd>{{ infraredValue(infraredFrame?.maxTemp) }}</dd>
+                      <dt>{{ t('realtimeUi.metric.minTemp') }}</dt><dd>{{ infraredValue(infraredFrame?.minTemp) }}</dd>
+                      <dt>{{ t('cameraLiveUi.infraredEmissivity') }}</dt><dd>{{ infraredValue(infraredFrame?.emissivity, 2) }}</dd>
+                    </dl>
+                  </div>
+                </span>
+
+                <span class="camera-controls__volume">
+                  <button
+                    type="button"
+                    class="camera-control-btn camera-control-btn--icon"
+                    :class="{ 'camera-control-btn--active': liveSoundOn }"
+                    :disabled="!cameraActive"
+                    :aria-expanded="cameraVolumeOpen"
+                    :aria-label="liveVolumeLabel"
+                    :title="liveVolumeLabel"
+                    data-camera-volume-trigger
+                    @click="cameraVolumeOpen = !cameraVolumeOpen"
+                  >
+                    <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                      <path d="M3.2 6.8h2.6L9.5 3.7v10.6l-3.7-3.1H3.2Z" fill="currentColor" />
+                      <path v-if="liveSoundOn" d="M12 6a4 4 0 0 1 0 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                      <path v-else d="m12 6.4 3 5.2m0-5.2-3 5.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                  <div v-if="cameraVolumeOpen" class="camera-controls__pop camera-controls__volume-pop" data-camera-volume-pop>
+                    <input type="range" min="0" max="100" step="1" class="camera-controls__slider" data-action="camera-volume" :value="liveVolumePercent" :disabled="!cameraActive" :aria-label="liveVolumeLabel" :title="liveVolumeLabel" @input="onLiveVolumeInput" />
+                    <button type="button" class="camera-control-btn camera-control-btn--icon camera-control-btn--light" :class="{ 'camera-control-btn--active': !soundMuted && liveVolume > 0 }" :disabled="!cameraActive" :aria-pressed="!soundMuted" :aria-label="liveVolumeLabel" :title="liveVolumeLabel" data-action="camera-volume-mute" @click="toggleSoundMute">
+                      <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                        <path d="M3.2 6.8h2.6L9.5 3.7v10.6l-3.7-3.1H3.2Z" fill="currentColor" />
+                        <path v-if="!soundMuted" d="M12 6a4 4 0 0 1 0 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                        <path v-else d="m12 6.4 3 5.2m0-5.2-3 5.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                </span>
+
+                <!--
+                  「添加到视频墙」（业主 2026-09-24：「打开预览看到有视频，应该能直接
+                  添加进去」）：有画面的相机一键进总览的视频墙——第一个空格，墙满了
+                  进轮询队列，已在墙上时按钮就是状态而不是动作。
+                -->
+                <button
+                  type="button"
+                  class="camera-control-btn camera-control-btn--icon"
+                  :class="{ 'camera-control-btn--active': cameraOnWall }"
+                  :disabled="cameraOnWall"
+                  :title="cameraOnWall ? t('monitorUi.onWall') : t('monitorUi.addToWall')"
+                  :aria-label="cameraOnWall ? t('monitorUi.onWall') : t('monitorUi.addToWall')"
+                  data-action="add-to-wall"
+                  @click="addCameraToWall"
+                >
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <rect x="2.5" y="2.5" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+                    <rect x="10" y="2.5" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+                    <rect x="2.5" y="10" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+                    <path d="M12.75 10v5.5M10 12.75h5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                  </svg>
+                </button>
+
+                <button type="button" class="camera-control-btn camera-control-btn--icon" :class="{ 'camera-control-btn--active': fullscreen }" :title="fullscreen ? t('cameraNvrUi.menuExitFullscreen') : t('cameraNvrUi.menuFullscreen')" :aria-label="fullscreen ? t('cameraNvrUi.menuExitFullscreen') : t('cameraNvrUi.menuFullscreen')" @click="toggleFullscreen">
+                  <svg class="camera-control-btn__icon" viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="M3.5 7V3.5H7M11 3.5h3.5V7M14.5 11v3.5H11M7 14.5H3.5V11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+
+                <span class="camera-controls__live-dot" :class="{ 'camera-controls__live-dot--on': cameraStatus === 'playing' }" :title="cameraStatusLabel" aria-hidden="true"></span>
+              </div>
+            </section>
+          </div>
+
+          <div class="camera-split__side">
+            <CameraControlPanel
+              :device-id="selectedDeviceId"
+              :sections="['mode', 'detect', 'preset']"
+              :alarm-count="cameraAlarmUnacknowledgedCount"
+              :configured-work-mode="cameraWorkMode"
+              @work-mode-observed="onCameraWorkModeObserved"
+              @work-mode-change="onCameraWorkModeChange"
+              @alarm-condition-config="alarmConditionDialogOpen = true"
+              @alarm-strategy-config="alarmStrategyDialogOpen = true"
+              @alarm-region-config="openAlarmRegionConfiguration"
+            />
+          </div>
+        </div>
+
+        <!--
+          Realtime acoustic workspace: the first row is the two large analysis charts;
+          the second row is mode-specific analysis (PRPD / leakage / mechanical) plus alarms.
+          The former Realtime Audio card is intentionally removed.
+        -->
+        <div class="camera-realtime-grid">
+          <CameraAcousticPanel :sections="['voiceprint']" :show-status="false" :work-mode="cameraWorkMode" />
+          <CameraAcousticPanel :sections="['spectrum']" :show-status="false" :work-mode="cameraWorkMode" />
+          <CameraAcousticPanel :sections="['mode']" :show-status="false" :work-mode="cameraWorkMode" />
+
+          <section class="card camera-alarm-result camera-alarm-history-card">
+            <div class="section-header camera-alarm-result__header">
+              <div class="camera-alarm-result__heading">
+                <span class="camera-alarm-result__indicator" :class="{ 'camera-alarm-result__indicator--quiet': cameraAlarmUnacknowledgedCount === 0 }" aria-hidden="true"></span>
+                <h3 class="section-title">{{ t('cameraAlarmUi.recentTitle') }}</h3>
+                <!--
+                  角标口径与**顶栏那颗告警图标**一致（业主 2026-09-26 第 2 条：
+                  「告警控制里面显示的是 200 个告警，这内容应该和软件整体右上角的告警 ICON
+                  一致」）：只数这台设备**还没确认**的告警条数。
+
+                  改之前这里数是 `cameraLinkageAlarms.length`（这台设备在联动待处理列表里的
+                  **全部**条目，上限 200）—— 于是一屏已经处理完的历史告警一直把角标顶在
+                  上限或历史总数上，与顶栏那个"还有多少事没看"的数字对不上。
+                -->
+                <span class="camera-alarm-result__count" data-camera-alarm-count>{{ cameraAlarmUnacknowledgedCount }}</span>
+              </div>
+              <!--
+                相机告警的完整证据链在事件中心（/events 支持 ?device= 预置筛选）；
+                /alarms 这张表只有听诊盒子的告警，指过去对相机就是空页（2026-09-24 修）。
+              -->
+              <RouterLink class="btn btn--sm" :to="{ path: '/events', query: { device: selectedDeviceId } }" data-link="camera-alarm-history">
+                {{ t('cameraAlarmUi.goAlarmList') }}
+              </RouterLink>
             </div>
-          </span>
+            <!--
+              相机告警只存在于联动引擎的待处理列表（`cameraLinkageAlarms`），不在本地
+              `alarms` 表 —— 那张表只有听诊盒子的告警。总开关关着时列表必然为空，
+              空态里直接把这句话说出来，否则操作员分不清"没告警"与"功能没开"。
+            -->
+            <div class="camera-alarm-entry__list" data-camera-alarms>
+              <p v-if="cameraLinkageAlarms.length === 0 && linkageDisabled" class="muted camera-alarm-result__empty" data-camera-alarms-empty>
+                {{ t('cameraAlarmUi.linkageDisabledHint') }}
+              </p>
+              <p v-else-if="cameraLinkageAlarms.length === 0" class="muted camera-alarm-result__empty" data-camera-alarms-empty>{{ t('cameraAlarmUi.noAlarms') }}</p>
+              <template v-else>
+                <!--
+                  告警内容 = 相机推送过来的字段本身（2026-09-24 业主：把推送内容展示出来）。
+                  业主 2026-09-26 第 1 条要求它有**统一标题格**，五列固定：
+                  时间 / 告警等级 / 告警类型 / 声场强度 / 主频。
 
-          <!--
-            翻转已移进右键菜单（业主 2026-09-21 第三批）：右键画面 →「翻转」子菜单
-            （左右 / 上下 / 90°，带当前状态的 ✓）。控制条这里不再有三颗开关。
-          -->
+                  为什么是"五列固定"而不是"按模式取舍列"：这是一张**设备原始输出的表**，
+                  列在数据到达之前就存在（没有值的那一格显示 `—`，不隐藏、不写 0）。
+                  逐格取值的规则仍在 `lib/linkageText.ts`（与铃铛面板同一套口径），
+                  所以同一行在这里与在面板里是同一个数。
+                -->
+                <table class="camera-alarm-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" class="camera-alarm-table__time">{{ t('alarmsUi.columnTime') }}</th>
+                      <th scope="col" class="camera-alarm-table__level">{{ t('alarmsUi.columnSeverity') }}</th>
+                      <th scope="col">{{ t('alarmsUi.columnType') }}</th>
+                      <th scope="col" class="camera-alarm-table__num">{{ t('cameraAlarmUi.columnIntensity') }}</th>
+                      <th scope="col" class="camera-alarm-table__num">{{ t('cameraAlarmUi.columnMainFrequency') }}</th>
+                      <th scope="col" class="camera-alarm-table__action">
+                        <span class="sr-only">{{ t('alarmsUi.menuDetail') }}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="alarm in pagedCameraAlarms"
+                      :key="alarm.eventId"
+                      class="camera-alarm-table__row"
+                      :data-camera-alarm="alarm.eventId"
+                      role="link"
+                      tabindex="0"
+                      :title="t('cameraAlarmUi.openAlarmDetail')"
+                      @click="openCameraAlarmDetail(alarm)"
+                      @keydown.enter="openCameraAlarmDetail(alarm)"
+                    >
+                      <td class="camera-alarm-table__time">{{ formatDateTime(alarm.at) }}</td>
+                      <td>
+                        <span class="badge" :class="`badge--severity-${linkageSeverityOf(alarm)}`">
+                          {{ alarm.alarmLevelRaw === undefined ? '—' : `${t('linkage.pendingLevel')} ${alarm.alarmLevelRaw}` }}
+                        </span>
+                      </td>
+                      <td class="camera-alarm-table__type">{{ cameraAlarmTypeText(alarm) }}</td>
+                      <!-- `—` = 设备这一次没有报这个量；绝不写 0（那会被读成"测到了 0"）。 -->
+                      <td class="camera-alarm-table__num">{{ linkageIntensityText(t, alarm) || '—' }}</td>
+                      <td class="camera-alarm-table__num">{{ linkageFrequencyText(t, alarm) || '—' }}</td>
+                      <td class="camera-alarm-table__action">
+                        <span v-if="!alarm.acknowledged" class="camera-alarm-table__unack" aria-hidden="true"></span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <!--
+                  换页（业主 2026-09-26 第 1 条：「告警数量应该支持自动换页的功能」）。
+                  每页固定 `CAMERA_ALARM_PAGE_SIZE` 行，设备切换/新告警到达时页码自动夹回范围内，
+                  所以不会停在一个空页上。
+                -->
+                <div v-if="cameraAlarmPages > 1" class="camera-alarm-pager" data-camera-alarm-pager>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    data-action="camera-alarm-prev"
+                    :disabled="cameraAlarmPage <= 1"
+                    @click="cameraAlarmPage -= 1"
+                  >
+                    {{ t('alarmsUi.prevPage') }}
+                  </button>
+                  <span class="muted camera-alarm-pager__status" data-camera-alarm-page>
+                    {{ t('cameraAlarmUi.pageStatus', { page: cameraAlarmPage, pages: cameraAlarmPages }) }}
+                  </span>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    data-action="camera-alarm-next"
+                    :disabled="cameraAlarmPage >= cameraAlarmPages"
+                    @click="cameraAlarmPage += 1"
+                  >
+                    {{ t('alarmsUi.nextPage') }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </section>
         </div>
-      </section>
-
-      <!--
-        检测结果卡（业主 2026-09-21 第三批）：检测文本列表 + 「检测记录库」按钮。
-        声学面板按 sections 取用的三份实例之一；会话生命周期在页面上（composable）。
-      -->
-      <CameraAcousticPanel
-        :sections="['detect']"
-        @open-library="downloadOpen = true"
-      />
-
-      <!--
-        告警结果卡（业主 2026-09-21 第三批）：原告警入口卡里的「最近几条告警」就地列表
-        迁来成为独立卡，并保留「查看告警记录」链接（带 ?device= 预置筛选）。
-        数据与告警记录页同源（同一个 `alarms.query`）。
-      -->
-      <section class="card camera-alarm-result">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraAlarmUi.recentTitle') }}</h3>
-          <RouterLink
-            class="btn btn--sm"
-            :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
-            data-link="camera-alarm-history"
-          >
-            {{ t('cameraAlarmUi.goAlarmList') }}
-          </RouterLink>
-        </div>
-        <div class="camera-alarm-entry__list" data-camera-alarms>
-          <p v-if="deviceAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
-          <p v-else-if="deviceAlarms.length === 0" class="muted" data-camera-alarms-empty>
-            {{ t('cameraAlarmUi.noAlarms') }}
-          </p>
-          <ul v-else class="camera-alarm-entry__items">
-            <li v-for="alarm in deviceAlarms" :key="alarm.id" :data-camera-alarm-id="alarm.id">
-              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
-              <span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
-              <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
-                {{ alarm.snapshotDir ? t('mapUi.hasSnapshot') : t('mapUi.noSnapshot') }}
-              </span>
-              <span v-if="alarm.deviceReason" class="muted">{{ alarm.deviceReason }}</span>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <!-- 声学波形卡（时域波形 + 电平表 + 包络播放）随检测/告警一起放在视频下方。 -->
-      <CameraAcousticPanel :sections="['audio']" />
-      </div>
-
-      <div class="camera-split__side">
-      <!--
-        相机控制：**检测模式 / 应用场景 / 检测启停**。
-
-        业主 2026-09-18 第 10 批第 24 条要求这一页「支持检测模式、告警配置、告警信息与历史告警展示」，
-        **推翻了 2026-09-17（⑨）那条**「检测模式…搬去设备管理的配置界面」。所以 `mode`
-        （工作模式＝**检测模式**：局放 / 气体泄漏 / 机械）在这一页回来了。
-
-        实现上没有第二份：`CameraControlPanel` 是按 `sections` 取用的同一份组件，
-        设备详情页那几个页签照旧 —— 两处共享同一批 IPC 与同一套"读了要写回"的规矩
-        （那个组件文件头写的就是这条理由）。
-      -->
-      <CameraControlPanel
-        :device-id="selectedDeviceId"
-        :sections="['mode', 'detect', 'preset']"
-      />
-
-      <section class="card camera-alarm-entry">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('cameraNvrUi.menuAlarmConfig') }}</h3>
-        </div>
-        <p class="muted alarm-entry__hint">{{ t('cameraAlarmUi.entryHint') }}</p>
-        <div class="btn-row">
-          <button type="button" class="btn btn--primary btn--sm" @click="alarmDialogOpen = true">
-            {{ t('cameraNvrUi.menuAlarmConfig') }}
-          </button>
-          <!--
-            第 24 条的「历史告警展示」：**这一台**的记录。带上 `?device=` 之后
-            告警记录页会预置设备筛选（见 `AlarmsView` 的 onMounted）——
-            原来这个链接指向不筛任何设备的 /alarms，一个从"这一台相机"出发的入口
-            落到全库列表上是答非所问。
-          -->
-          <RouterLink
-            class="btn btn--sm"
-            :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
-            data-link="camera-alarm-history"
-          >
-            {{ t('cameraAlarmUi.goAlarmList') }}
-          </RouterLink>
-        </div>
-      </section>
-
-      <!--
-        声纹图 + 频谱图（业主 2026-09-21 第三批）：右列 35% 里**上下排列**（不再并排）。
-        声学面板的会话状态行（状态徽标 + 「停止接收」）随这一份实例渲染（只有一份）。
-      -->
-      <CameraAcousticPanel :sections="['voiceprint', 'spectrum']" />
-      </div>
       </div>
 
       <!--
@@ -2616,10 +3159,41 @@ const sessionLabel = computed(() => {
 
       <CameraAlarmDialog
         class="camera-board__overlay"
-        v-model="alarmDialogOpen"
+        v-model="alarmConditionDialogOpen"
+        section="conditions"
         :device-id="selectedDeviceId"
         :device-name="selectedDevice?.name ?? ''"
       />
+
+      <CameraAlarmDialog
+        class="camera-board__overlay"
+        v-model="alarmStrategyDialogOpen"
+        section="strategies"
+        :device-id="selectedDeviceId"
+        :device-name="selectedDevice?.name ?? ''"
+      />
+
+      <AppModal
+        v-model="saveResultOpen"
+        :title="saveResultTitle"
+        width="480px"
+        :close-on-overlay="false"
+      >
+        <p>{{ saveResultMessage }}</p>
+        <template #footer>
+          <button
+            v-if="saveResultKind === 'snapshot' && lastSnapshotAbsolute"
+            type="button"
+            class="btn"
+            @click="revealSnapshot"
+          >
+            {{ t('cameraNvrUi.openFolder') }}
+          </button>
+          <button type="button" class="btn btn--primary" @click="saveResultOpen = false">
+            {{ t('common.close') }}
+          </button>
+        </template>
+      </AppModal>
 
       <!-- 本机录像回放：这一页只有一台设备，所以目标就是被右键/所选的那一台。 -->
       <CameraRecordingPlaybackDialog
@@ -3016,7 +3590,6 @@ const sessionLabel = computed(() => {
           <div class="section-header">
             <h3 class="section-title">{{ t('monitorUi.waveformSection') }}</h3>
             <div class="waveform-card__actions" role="group" :aria-label="t('monitorUi.audioSection')">
-              <span class="muted chart-hint">{{ t('monitorUi.waveformHint') }}</span>
               <button
                 type="button"
                 class="btn btn--sm btn--icon"
@@ -3079,7 +3652,7 @@ const sessionLabel = computed(() => {
                   </svg>
                 </button>
                 <!--
-                  迷你音量浮层：一条水平滑杆（与画面墙那一颗同一套交互，简化掉静音开关 ——
+                  迷你音量浮层：一条竖向滑杆（与画面墙那一颗同一套交互与方向，简化掉静音开关 ——
                   播放/停止按钮已经说清了"有没有声音"）。滑杆的值仍然推给 EnvelopePlayer。
                 -->
                 <div v-if="volumePopoverOpen" class="waveform-card__volume-pop" data-waveform-volume-pop>
@@ -3154,6 +3727,31 @@ const sessionLabel = computed(() => {
         设备自己的原因原话 / 四项读数。再往下是去「告警中心」的入口（按设备预筛），
         因为"看全部历史"是那一页的职责，弹窗只回答"这一路现在怎么了"。
       -->
+
+      <AppModal
+        :model-value="cameraModeMismatch !== null"
+        :title="cameraModeMismatchTitle"
+        width="520px"
+        @update:model-value="(open) => { if (!open) closeCameraModeMismatch() }"
+      >
+        <p class="alert alert--warning" role="alert">{{ cameraModeMismatchMessage }}</p>
+        <dl v-if="cameraModeMismatch" class="camera-mode-mismatch__facts">
+          <div>
+            <dt>{{ t('cameraControlUi.modeMismatchConfigured') }}</dt>
+            <dd>{{ cameraDetectionModeText(cameraModeMismatch.configured) }}</dd>
+          </div>
+          <div>
+            <dt>{{ t('cameraControlUi.modeMismatchCamera') }}</dt>
+            <dd>{{ cameraDetectionModeText(cameraModeMismatch.actual) }}</dd>
+          </div>
+        </dl>
+        <template #footer>
+          <button type="button" class="btn btn--primary" @click="closeCameraModeMismatch">
+            {{ t('common.close') }}
+          </button>
+        </template>
+      </AppModal>
+
       <AppModal
         :model-value="channelAlarmDetail !== null"
         :title="t('monitorUi.channelAlarmDetailTitle', { channel: channelLabel(channelAlarmDetail ?? 0) })"
@@ -3260,6 +3858,13 @@ const sessionLabel = computed(() => {
         口径记在 `docs/Ivms4200-UX-REFERENCE.md` §15.49。
       -->
       <template v-else-if="isSonar">
+        <!--
+          声呐总览（业主 2026-09-24 第 9 条改版）：GIS 地图（左 66%、16:9、设备居中）
+          + 右栏（当前分贝/方位/播放录音 + 最近一次告警）+ 下方全部历史告警。
+          实现与诚实边界都在 `SonarOverviewPanel.vue` 的文件头。
+        -->
+        <SonarOverviewPanel :device-id="selectedDeviceId" />
+
         <DeviceInstallationCard :installation="selectedDevice?.installation" :device-id="selectedDevice?.id" />
 
         <AuscultationPanel :device-id="selectedDeviceId" />
@@ -3289,9 +3894,25 @@ const sessionLabel = computed(() => {
  * 由 `.app-content` 的内边距独家决定这件事没有被这次重排改变。
  */
 .camera-board {
+  --camera-card-gap: var(--space-4);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: var(--space-5);
+  gap: var(--camera-card-gap);
+  /*
+   * **板子自己没有内边距**（业主 2026-09-26 第 1 条：「这个页面中卡片之间的距离以及卡片
+   * 和边沿的距离应该是和设备管理里的卡片与边缘的距离一致的」）。
+   *
+   * 原来这里是 `padding: var(--camera-card-gap)`（四边 16px）。它与 `.app-content`
+   * 自己的内边距**叠加**，于是相机页每张卡离窗口边沿比设备管理页远 16px ——
+   * 设备管理页没有第二层内边距（`.app-content` 的 padding 是那一页唯一的边距来源，
+   * 口径写在 `main.css` 的 `.page` 注释里）。
+   *
+   * 删掉它之后，三个数与设备管理页逐项相同：
+   *   · 卡片↔卡片（同一行）= `--camera-card-gap` = `--space-4` = 设备管理 `.card-grid` 的 gap；
+   *   · 卡片↔卡片（上下两块）= 同一个值（`gap` 两个方向同值）；
+   *   · 卡片↔窗口边沿 = `.app-content` 的内边距 = 设备管理页同一个来源。
+   * 卡片内部仍旧是 `.card` 的 `padding: var(--space-4)`，两页一致。
+   */
   /*
    * `align-items: start`：网格项的默认值是 `stretch`，同一行里最高的一块会把其余
    * 几块**拉到一样高**（实测：1920x1080 上相机控制会被拉到与声学图一样高，多出来
@@ -3306,7 +3927,7 @@ const sessionLabel = computed(() => {
  * 维持 --space-5 不动。
  */
 .camera-board--voiceprint {
-  gap: calc(var(--space-5) * 0.1);
+  --camera-card-gap: calc(var(--space-5) * 0.1);
 }
 
 /* 无论并排成几列都必须占满整幅宽的两块：设备头 / 相机分支的 65/35 两列容器。 */
@@ -3315,15 +3936,16 @@ const sessionLabel = computed(() => {
 }
 
 /*
- * 相机分支的左右两列（业主 2026-09-21 第三批）：左 65% 放视频与视频下方的三张卡，
- * 右 35% 是相机控制 → 告警配置 → 状态行 → 声纹图 → 频谱图的纵向栈。
+ * 相机分支的左右两列：左 65% 是“画面 + 实时诊断区”，右 35% 是
+ * “检测控制 → 声纹/频谱 → 告警配置”的纵向栈。视频下方的检测与告警优先并排，
+ * 波形作为进一步诊断的下钻层独占整行。
  * `fr` 比例在任何宽度下保持 65/35；`min-width: 0` 让 ECharts 的 canvas 不顶出列宽。
  * 窄窗口（< 1100px）折成一列 —— 两列都压到 35% 的列宽里坐标轴就读不出来了。
  */
 .camera-split {
   display: grid;
   grid-template-columns: 65fr 35fr;
-  gap: var(--space-5);
+  gap: var(--camera-card-gap);
   grid-column: 1 / -1;
   align-items: start;
 }
@@ -3338,7 +3960,7 @@ const sessionLabel = computed(() => {
 .camera-split__side {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--camera-card-gap);
   min-width: 0;
 }
 
@@ -3780,15 +4402,16 @@ const sessionLabel = computed(() => {
 }
 
 /*
- * 迷你音量浮层（画面墙那一颗的简化版）：白底细边 + 轻阴影，一条 140px 水平滑杆。
+ * 迷你音量浮层（业主 2026-09-23：竖排）：白底细边 + 轻阴影，一条 96px **竖向**滑杆。
  * 浮层**悬在卡头下方**（absolute），不参与文档流，不会把图往下挤。
+ * 竖向 range 用 `writing-mode: vertical-lr` + `direction: rtl`（值大的一头朝上）。
  */
 .waveform-card__volume-pop {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 20;
-  padding: 8px 10px;
+  padding: 10px 8px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-bg);
@@ -3796,8 +4419,11 @@ const sessionLabel = computed(() => {
 }
 
 .waveform-card__volume-pop input[type='range'] {
-  width: 140px;
+  width: 14px;
+  height: 96px;
   margin: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
 }
 
 .chart-panel {
@@ -4042,19 +4668,17 @@ const sessionLabel = computed(() => {
 .camera-live {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+  border-color: #24282f;
+  background: #111318;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
 }
 
 /*
- * 单路画面的**16:9 窗口**（业主 2026-09-17 的 ⑤；2026-09-21 第三批去掉限宽）。
- *
- * 为什么不是"撑满卡片高度"：画面比例由设备决定，而窗口比例是我们能定的。把窗口固定成
- * 16:9（并让 `<video>` 用 `object-fit: contain` 在窗口内留黑边）之后，操作员看到的
- * 画面框不会随着窗口高度忽胖忽瘦 —— 那正是"视频窗口"与"一块会变形的黑布"的区别。
- *
- * 窗口宽度 = 左列（65%）宽度：`aspect-ratio` 让高度由宽度算出来，16:9 随列宽。
- * 原来的 `max-width: calc(72vh * 16 / 9)` 限宽会留下两侧空白 —— 新布局里视频要
- * 撑满左列，限宽删掉了（全屏时比例仍由 `--fullscreen` 那条交还给屏幕）。
+ * 预览区始终保持 16:9。深色背景不是装饰，而是把它明确成“视频设备表面”，
+ * 与页面其余白色业务卡片形成职责区分。视频仍然 contain，绝不拉伸原始画面。
  */
 .camera-live__stage {
   position: relative;
@@ -4063,99 +4687,239 @@ const sessionLabel = computed(() => {
   justify-content: center;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at 50% 48%, rgba(42, 48, 58, 0.52), transparent 58%),
+    #050608;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   overflow: hidden;
+}
+
+.camera-live__stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
 }
 
 .camera-live__video {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
-  /*
-   * 翻转/旋转（第 21 条）走 `transform`，所以这几条不能少：
-   *   · `transform-origin: center` 是默认值，写出来是为了说明转的是画面中心；
-   *   · 过渡 120ms：翻转是"一眼看懂发生了什么"的动作，瞬变会让人以为画面闪了一下；
-   *   · `will-change` 不加 —— 一个常驻的合成层为一台离线相机白占显存。
-   */
+  background: #050608;
   transform-origin: center center;
-  transition: transform 0.12s ease;
+  transition: transform 0.12s ease, filter 0.16s ease;
 }
 
-/* 暂停（画面冻结）时给一个明确的视觉信号：静止的画面与"卡住的流"必须看得出来。 */
 .camera-live__video--paused {
-  filter: saturate(0.65) brightness(0.92);
+  filter: saturate(0.58) brightness(0.88);
 }
 
 /*
- * 控制条（第 22 条）：**画面下方**，与任何播放器的位置一致。
- *
- * 一行放不下时换行（`flex-wrap`）：这一条里从 6 个动作到 12 个控件都有，
- * 挤在一行会把音量滑杆压到几像素宽。
+ * NVR 式底部控制条：功能不删，只重排优先级。
+ * transport = 播放/连接；evidence = 录像/抓图/回放；tools = 配置/红外/叠加/音量。
  */
 .camera-controls {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
+  gap: 8px;
+  min-height: 54px;
+  padding: 8px 10px;
+  color: #d9dde5;
+  background: #15181e;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
-/*
- * 音量按钮（2026-09-21 第三批收成图标 + 浮层，与画面墙同一套交互）。
- * 相对定位做浮层锚点；`margin-left: auto` 把它推到控制条右端。
- */
-.camera-controls__volume {
-  position: relative;
+.camera-controls__group {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.camera-controls__group--tools {
   margin-left: auto;
 }
 
-/* 红外按钮：同为浮层锚点（浮层比按钮宽，右缘对齐）。 */
+.camera-controls__divider {
+  width: 1px;
+  height: 22px;
+  flex: 0 0 1px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.camera-control-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #d9dde5;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+}
+
+.camera-control-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.camera-control-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.camera-control-btn:focus-visible {
+  outline: 2px solid #ff6a1a;
+  outline-offset: 2px;
+}
+
+.camera-control-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.camera-control-btn--primary {
+  color: #fff;
+  background: #ff6a1a;
+}
+
+.camera-control-btn--primary:hover:not(:disabled) {
+  background: #f15e0d;
+  border-color: transparent;
+}
+
+.camera-control-btn--active {
+  color: #ffb27d;
+  background: rgba(255, 106, 26, 0.13);
+  border-color: rgba(255, 106, 26, 0.2);
+}
+
+.camera-control-btn--recording {
+  color: #fff;
+  background: rgba(190, 36, 47, 0.88);
+  border-color: rgba(255, 113, 122, 0.24);
+}
+
+.camera-control-btn--recording:hover:not(:disabled) {
+  background: rgba(208, 42, 54, 0.96);
+}
+
+.camera-control-btn--icon {
+  width: 34px;
+  padding: 0;
+}
+
+.camera-control-btn--compact {
+  padding-inline: 8px;
+}
+
+.camera-control-btn--light {
+  color: var(--color-text-primary);
+}
+
+.camera-control-btn__icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+}
+
+.camera-control-btn__record-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: #ff5360;
+  box-shadow: 0 0 0 3px rgba(255, 83, 96, 0.08);
+}
+
+.camera-control-btn--recording .camera-control-btn__record-dot {
+  background: #fff;
+  animation: camera-rec-pulse 1.2s ease-in-out infinite;
+}
+
+.camera-controls__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.11);
+  color: #8f98a7;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.camera-controls__status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #656d79;
+}
+
+.camera-controls__status-dot--on {
+  background: #36c275;
+  box-shadow: 0 0 0 3px rgba(54, 194, 117, 0.12);
+}
+
+.camera-controls__volume,
 .camera-controls__anchor {
   position: relative;
   display: inline-flex;
+  align-items: center;
 }
 
-.camera-controls__icon {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
-
-/*
- * 控制条浮层（音量 / 红外）：白底细边 + 轻阴影的小卡片，贴在按钮上方、
- * 右缘对齐按钮 —— 与画面墙音量浮层同一族做法，只是横排在控制条之上。
- */
+/* 浮层属于工具面板，不继承底部控制条的深色表面，保证温度/滑杆可读性。 */
 .camera-controls__pop {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + 8px);
   z-index: 40;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
   box-shadow: var(--shadow-lg);
 }
 
-.camera-controls__slider {
-  width: 140px;
+/* 音量浮层（业主 2026-09-22 第 5 条）：滑杆**纵向**排列，静音开关在滑杆下方。
+ * Chromium 用 `writing-mode: vertical-lr` + `direction: rtl` 把原生 range 转纵向
+ * （bottom = 小值在底部，符合"往上推变大"的直觉）；不支持该写法的旧内核会
+ * 退回横向滑杆（`width: 140px` 那一行仍在），功能不受影响。 */
+.camera-controls__volume-pop {
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.camera-controls__volume-pop .camera-controls__slider {
+  width: auto;
+  height: 120px;
+  writing-mode: vertical-lr;
+  direction: rtl;
 }
 
 .camera-controls__slider:disabled {
   opacity: 0.5;
 }
 
-/* 红外浮层：比音量浮层宽，数值排成两列（标签 / 值），下面挂两行说明。 */
 .camera-controls__infrared {
   align-items: stretch;
   flex-direction: column;
@@ -4185,6 +4949,340 @@ const sessionLabel = computed(() => {
   margin: 0;
   font-size: 11px;
   line-height: 1.4;
+}
+
+/* 全屏：仅视频表面铺满；播放器逻辑不变。 */
+.camera-live__stage--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  aspect-ratio: auto;
+  margin-inline: 0;
+  border-radius: 0;
+  background: #050608;
+}
+
+.camera-live__fullscreen-exit {
+  position: absolute;
+  z-index: 10;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.camera-live__fullscreen-exit:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.camera-live__fullscreen-exit svg {
+  width: 18px;
+  height: 18px;
+}
+
+.camera-live__stage--fullscreen .camera-live__video {
+  max-height: 100vh;
+  height: 100vh;
+  object-fit: contain;
+}
+
+/*
+ * HUD 只占左上角一小块：设备 + 实时状态是第一层；码流信息降为第二层。
+ * 避免把监控画面当作“承载日志文本的容器”。
+ */
+.camera-live__overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: min(72%, 620px);
+  padding: 8px 10px;
+  color: #f8fafc;
+  background: rgba(9, 12, 17, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.camera-live__overlay-primary,
+.camera-live__overlay-secondary {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.camera-live__overlay-primary {
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.camera-live__overlay-secondary {
+  gap: 6px;
+  color: rgba(235, 239, 245, 0.68);
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.camera-live__device-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.camera-live__status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #727b88;
+}
+
+.camera-live__status-dot--on {
+  background: #44ce82;
+  box-shadow: 0 0 0 3px rgba(68, 206, 130, 0.12);
+}
+
+.camera-live__status-text {
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 500;
+}
+
+.camera-live__overlay-separator {
+  opacity: 0.52;
+}
+
+.camera-live__overlay-address {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 录像指示器：右上固定，不和左侧 HUD 竞争空间。 */
+.camera-live__rec {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  color: #fff;
+  background: rgba(176, 31, 43, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+.camera-live__rec-dot {
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border-radius: 50%;
+  animation: camera-rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes camera-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.camera-live > .alert {
+  margin: 10px 10px 0;
+}
+
+.camera-live > .alert:last-of-type {
+  margin-bottom: 10px;
+}
+
+.camera-live__hint {
+  font-size: 12px;
+}
+
+.camera-live__placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  margin: 0;
+  padding: var(--space-4);
+  color: #8f98a7;
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 1380px) {
+  .camera-control-btn__label--utility {
+    display: none;
+  }
+
+  .camera-controls__status {
+    display: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .camera-controls {
+    flex-wrap: wrap;
+  }
+
+  .camera-controls__group--tools {
+    margin-left: 0;
+  }
+
+  .camera-controls__status {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .camera-control-btn__label {
+    display: none;
+  }
+
+  .camera-control-btn {
+    width: 36px;
+    padding: 0;
+  }
+
+  .camera-controls__divider {
+    display: none;
+  }
+
+  .camera-live__overlay {
+    max-width: calc(100% - 24px);
+  }
+}
+
+/* --- camera diagnostic workspace ---------------------------------------- */
+
+/*
+ * 视频下面不再是三张同权重卡片从上到下堆叠。检测结论与最近告警属于“先判断有没有事”的
+ * 第一层，因此并排；波形属于“为什么”的第二层，因此单独整行。auto-fit 让左列变窄时自然折行。
+ */
+.camera-diagnostic-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.camera-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.camera-diagnostic-grid__detect,
+.camera-waveform-zone {
+  min-width: 0;
+}
+
+/* 最近告警是实时诊断的一部分，视觉上比“告警配置入口”更靠前，但仍保持白色业务表面。 */
+.camera-alarm-result {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.camera-alarm-result__header {
+  gap: var(--space-3);
+}
+
+.camera-alarm-result__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.camera-alarm-result__indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #ff6a1a;
+  box-shadow: 0 0 0 3px rgba(255, 106, 26, 0.10);
+}
+
+.camera-alarm-result__count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-alarm-result__history {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.camera-alarm-result__empty {
+  margin: 0;
+  padding: 18px 4px 12px;
+  text-align: center;
+}
+
+.camera-alarm-result__spl {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.camera-alarm-result__reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 告警策略属于低频配置，放到右栏末端并降低一点视觉重量。 */
+.camera-alarm-entry--secondary {
+  background: var(--color-bg-subtle);
+  box-shadow: none;
+}
+
+@media (max-width: 760px) {
+  .camera-diagnostic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-alarm-result__header {
+    align-items: flex-start;
+  }
 }
 
 /*
@@ -4223,89 +5321,330 @@ const sessionLabel = computed(() => {
   min-width: 132px;
 }
 
-/* 全屏时铺满：窗口比例这时由屏幕决定（`<video>` 仍然 contain，不拉伸）。 */
-.camera-live__stage--fullscreen {
-  width: 100vw;
-  height: 100vh;
-  max-width: none;
-  aspect-ratio: auto;
-  margin-inline: 0;
-  border-radius: 0;
-}
 
-.camera-live__stage--fullscreen .camera-live__video {
-  max-height: 100vh;
-  height: 100vh;
-  object-fit: contain;
-}
 
-/* 叠加信息：设备名 / 状态 / 码流，浮动在画面上，可整体隐藏。 */
-.camera-live__overlay {
-  position: absolute;
-  top: 8px;
-  left: 8px;
+/* --- camera realtime workspace v4 -------------------------------------- */
+.camera-workspace {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #f9fafb;
-  background: rgba(17, 24, 39, 0.55);
-  border-radius: 6px;
-  pointer-events: none;
-  max-width: calc(100% - 16px);
+  gap: var(--camera-card-gap);
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
-.camera-live__overlay-line {
+.camera-split--top {
+  grid-column: auto;
+  align-items: stretch;
+}
+
+.camera-split--top > .camera-split__main,
+.camera-split--top > .camera-split__side {
+  height: 100%;
+}
+
+.camera-split--top .camera-live,
+.camera-split--top :deep(.cctl),
+.camera-split--top :deep(.cctl > .cctl__card) {
+  height: 100%;
+}
+
+.camera-controls--icons {
+  justify-content: flex-start;
+  gap: 5px;
+}
+
+.camera-controls__live-dot {
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: #68717e;
+}
+
+.camera-controls__live-dot--on {
+  background: #36c275;
+  box-shadow: 0 0 0 3px rgba(54, 194, 117, 0.12);
+}
+
+.camera-live__placeholder-icon {
+  width: 34px;
+  height: 34px;
+  color: #66707e;
+}
+
+.camera-live__rec--icon {
+  width: 24px;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
+}
+
+.camera-live__stage--drawing {
+  cursor: crosshair;
+}
+
+.camera-detection-regions {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.camera-detection-region {
+  position: absolute;
+  border: 2px solid rgba(255, 106, 26, 0.95);
+  background: rgba(255, 106, 26, 0.08);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.camera-detection-region--draft {
+  border-style: dashed;
+  background: rgba(255, 106, 26, 0.04);
+}
+
+
+.camera-detection-editor {
+  width: 100%;
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
+.camera-detection-editor--external {
+  position: relative;
+  z-index: 1;
+}
+
+.camera-detection-editor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: 12px;
+}
+
+.camera-detection-editor__header span,
+.camera-detection-editor__hint,
+.camera-detection-editor__notice,
+.camera-detection-editor__error {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.camera-detection-editor__header span,
+.camera-detection-editor__hint { color: var(--color-text-secondary); }
+.camera-detection-editor__notice { margin-top: 6px; color: var(--color-success-text, #166534); }
+.camera-detection-editor__error { margin-top: 6px; color: var(--color-danger-text, #b91c1c); }
+
+.camera-detection-editor__actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.camera-detection-editor__actions .btn {
+  justify-content: center;
+  min-width: 0;
+}
+
+.camera-realtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--camera-card-gap);
+  /*
+   * `stretch`（不是 `start`）：业主 2026-09-26 第 1 条要求「告警信息这个窗口的高度和
+   * 左侧 PRPD 的相同」。第二行就是 [mode(=PRPD) | 告警信息] 两格，网格项默认的 stretch
+   * 让两块**由行高统一** —— 谁更高就都那么高，不需要在 CSS 里写死任何像素，也不会因为
+   * PRPD 舞台的 16:9 比例将来变了而失效。
+   */
+  align-items: stretch;
+  min-width: 0;
+}
+
+.camera-realtime-grid > * {
+  min-width: 0;
+}
+
+/*
+ * 告警信息表（业主 2026-09-26 第 1 条：统一标题格 + 五列固定）。
+ *
+ * 与 `.devices-table` 同一套视觉口径（表头一条细底边、行间一条分隔线、数字列等宽字体），
+ * 因为业主对"卡片间距与边距要和设备管理一致"的要求说的就是这个页面的表格观感。
+ */
+.camera-alarm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.camera-alarm-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.camera-alarm-table__time { width: 132px; }
+.camera-alarm-table__level { width: 86px; }
+.camera-alarm-table__num { width: 104px; text-align: right; }
+.camera-alarm-table__action { width: 18px; }
+
+.camera-alarm-table tbody td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  vertical-align: middle;
+}
+
+.camera-alarm-table__row {
+  cursor: pointer;
+  outline: none;
+}
+
+.camera-alarm-table__row:hover,
+.camera-alarm-table__row:focus-visible {
+  background: var(--color-bg-hover);
+}
+
+.camera-alarm-table td.camera-alarm-table__time,
+.camera-alarm-table td.camera-alarm-table__num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.camera-alarm-table td.camera-alarm-table__time {
+  color: var(--color-text-secondary);
+}
+
+.camera-alarm-table__type {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 录制指示器：必须一眼可辨（红色圆点 + 走动的时长），不能只是换个按钮文字。 */
-.camera-live__rec {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+/* 未确认标记：一枚小圆点，与标题那颗指示灯同一套颜色语义。 */
+.camera-alarm-table__unack {
+  display: block;
+  width: 6px;
+  height: 6px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: #ff6a1a;
+}
+
+.camera-alarm-pager {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: 6px 0 0;
+  margin-top: auto;
+}
+
+.camera-alarm-pager__status {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  color: #fef2f2;
-  background: rgba(153, 27, 27, 0.85);
-  border-radius: 999px;
-  pointer-events: none;
+  white-space: nowrap;
 }
 
-.camera-live__rec-dot {
-  width: 8px;
-  height: 8px;
-  background: #ef4444;
-  border-radius: 50%;
-  animation: camera-rec-pulse 1.2s ease-in-out infinite;
+/* 表格自己滚：行数由每页行数决定，卡片高度仍然由那一行里更高的 PRPD 决定。 */
+.camera-alarm-entry__list > .camera-alarm-table,
+.camera-alarm-entry__list > .camera-alarm-pager {
+  flex: 0 0 auto;
 }
 
-@keyframes camera-rec-pulse {
-  0%,
-  100% {
-    opacity: 1;
+.camera-alarm-entry__list {
+  overflow-y: auto;
+}
+
+
+.camera-alarm-result__indicator--quiet {
+  background: #36c275;
+  box-shadow: 0 0 0 3px rgba(54, 194, 117, 0.10);
+}
+
+.camera-alarm-result--compact .camera-alarm-entry__items,
+.camera-alarm-history-card .camera-alarm-entry__items {
+  max-height: 235px;
+  overflow: auto;
+}
+
+/*
+ * 告警卡内容铺满整张卡（业主 2026-09-24：「告警信息应该占据全部卡片」）：
+ * 网格行高由旁边三张图撑出来，列表 flex 撑满并自己滚动，而不是只顶上部的
+ * 180/235px 一条。行可点（进事件中心的关联细节），鼠标给手型与悬停底色。
+ */
+.camera-alarm-history-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-alarm-history-card .camera-alarm-entry__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-alarm-history-card .camera-alarm-entry__items {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.camera-alarm-history-card .camera-alarm-entry__items li {
+  cursor: pointer;
+  border-radius: var(--radius-sm, 6px);
+  padding: 2px 4px;
+}
+
+.camera-alarm-history-card .camera-alarm-entry__items li:hover {
+  background: var(--color-bg-subtle);
+}
+
+
+@media (max-width: 760px) {
+  .camera-realtime-grid {
+    grid-template-columns: 1fr;
   }
-  50% {
-    opacity: 0.25;
-  }
+
 }
 
-.camera-live__hint {
-  font-size: 12px;
+
+.camera-mode-mismatch__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
 }
 
-.camera-live__placeholder {
-  color: #d1d5db;
-  font-size: 13px;
-  padding: var(--space-4);
-  text-align: center;
+.camera-mode-mismatch__facts > div {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-bg-subtle, #f7f8fa);
 }
+
+.camera-mode-mismatch__facts dt {
+  margin-bottom: 4px;
+  color: var(--color-text-muted, #6b7280);
+  font-size: 11px;
+}
+
+.camera-mode-mismatch__facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
 </style>

@@ -91,6 +91,10 @@ function createFake(options: FakeOptions = {}): Fake {
   const operations: CameraControlOperations = {
     getRunMode: unused,
     setRunMode: unused,
+    getLeakageConfig: unused,
+    setLeakageConfig: unused,
+    getScanArea: unused,
+    setScanArea: unused,
     getDetectStatus: unused,
     startDetection: unused,
     stopDetection: unused,

@@ -1,6 +1,10 @@
 <script setup lang="ts">
 /**
  * **地图信息（GIS）**（原「点位图」，业主 2026-09-17 第 8 批建的页；2026-09-18 第 10 批
+ *
+ * 2026-09-21 UI 收敛：本页现在只承担 GIS Monitoring Console。地图是唯一主工作区；
+ * 设备列表、完整告警工作台和 RealtimeMonitor 不再常驻页面，选中落点后只显示轻量详情与跳转入口。
+ * 2026-09-22：地图控件统一改用 Lucide 图标；地图设置入口从本页移除；GIS 页始终渲染系统设置选定的底图。
  * 第 12 条改名并挪到设备管理之前，第 13/14/17 条重排了这一页的版面）。
  *
  * ---------------------------------------------------------------------------
@@ -68,12 +72,11 @@
  * 地图比例、SVG 画布、瓦片排布与相关测试都**不动**。
  */
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import type { AlarmEvent, Device } from '@shared/domain/models'
-import type { CameraLiveStatus } from '@shared/domain/camera-live'
-import type { E2AlarmSnapshotView, E2SyncOutcome } from '@shared/ipc/contract'
+import type { E2SyncOutcome } from '@shared/ipc/contract'
 import {
   deviceMapLayout,
   mapGridSteps,
@@ -85,6 +88,7 @@ import { isPointComplete } from '@shared/domain/device-installation'
 import {
   MAX_TILE_ZOOM,
   MIN_TILE_ZOOM,
+  defaultMapTilesConfig,
   TILE_SIZE,
   clampTileZoom,
   panMapCenter,
@@ -98,12 +102,6 @@ import {
 } from '@shared/domain/map-tiles'
 import { toFileUrl } from '@renderer/lib/fileUrl'
 import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
-import {
-  DEVICE_MAP_PAGE_SIZE,
-  clampListPage,
-  listPageCount,
-  listPageSlice
-} from '@renderer/lib/listPaging'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
@@ -111,16 +109,25 @@ import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
-import RealtimeMonitor from '@renderer/components/realtime/RealtimeMonitor.vue'
-import { useRealtimeMonitorStore } from '@renderer/stores/realtimeMonitor'
-import type { RealtimeActionId } from '@shared/domain/realtime-monitor'
+import {
+  Search,
+  MapPin,
+  Monitor,
+  BellRing,
+  Wifi,
+  WifiOff,
+  Crosshair,
+  ZoomIn,
+  ZoomOut,
+  LocateFixed,
+  TriangleAlert,
+  X
+} from 'lucide-vue-next'
 
 const { t } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const devices = useDevicesStore()
 const settings = useSettingsStore()
-const realtime = useRealtimeMonitorStore()
 const detailDialog = useDeviceDetailDialogStore()
 
 /**
@@ -140,13 +147,9 @@ const CANVAS = { width: 1280, height: 720 }
  */
 const MAP_PADDING = 48
 
-const loading = ref(false)
 const selectedId = ref('')
 const alarms = ref<AlarmEvent[]>([])
 const alarmsLoading = ref(false)
-const selectedAlarmId = ref('')
-const snapshots = ref<E2AlarmSnapshotView | null>(null)
-const snapshotsLoading = ref(false)
 const syncing = ref(false)
 const syncOutcome = ref<E2SyncOutcome | null>(null)
 const actionError = ref('')
@@ -265,14 +268,17 @@ function gridLineX(longitude: number): number {
 // 在线底图（GIS；业主 2026-09-19 追加第 1 条）
 // ---------------------------------------------------------------------------
 /**
- * 设置里的地图配置。只有**显式打开**时才返回它；关着时整块在线底图不渲染，
- * 这一页与过去完全一样（本机 SVG 网格，不出网）。**默认关闭**是离线优先的硬约束。
+ * GIS Console 始终需要一个真实底图。地图服务、API key、缓存来源等仍只在
+ * System Settings -> Integrations -> Maps & GIS 中维护；本页只消费配置，不再提供设置入口。
+ *
+ * 旧实现把 `mapTiles.enabled === false` 解释成“完全不画底图”，因此默认设置下只剩经纬度网格，
+ * 很容易被理解为“地图没有加载”。现在将 `enabled` 仅视为旧版本兼容字段：GIS 页面始终渲染
+ * 当前选择的地图源；设置尚未加载时使用共享层的默认 OpenStreetMap 配置作为运行时兜底。
+ * 这里不会回写设置。
  */
-const tilesEnabled = computed(() => tileConfig.value !== null)
-
-const tileConfig = computed<MapTilesConfig | null>(() => {
-  const config = settings.settings?.mapTiles
-  return config?.enabled ? config : null
+const tileConfig = computed<MapTilesConfig>(() => {
+  const configured = settings.settings?.mapTiles ?? defaultMapTilesConfig()
+  return { ...configured, enabled: true }
 })
 
 /** 电脑时区（IANA 名）；取不到就退回 UTC（查表会落到世界中心，缩放 2）。 */
@@ -319,9 +325,9 @@ const homeView = computed<MapCenter>(() => {
 const mapView = ref<MapCenter | null>(null)
 const tileErrors = ref<string[]>([])
 watch(
-  tilesEnabled,
-  (enabled) => {
-    mapView.value = enabled ? { ...homeView.value } : null
+  homeView,
+  (center) => {
+    mapView.value = { ...center }
     tileErrors.value = []
   },
   { immediate: true }
@@ -521,11 +527,6 @@ const selectedDevice = computed<Device | undefined>(() =>
   selectedId.value === '' ? undefined : devices.byId(selectedId.value)
 )
 
-/** 这一台是不是**空气声呐**（只有它才有球机抓图那一套）。 */
-const selectedIsSonar = computed(
-  () => selectedDevice.value?.kind === 'auscultationBox' && selectedDevice.value?.e2Variant === 'airSonar'
-)
-
 const pointText = computed(() => {
   const installation = selectedDevice.value?.installation
   if (!installation || installation.gisLatitude === undefined) return t('installUi.unset')
@@ -544,6 +545,43 @@ function markerTone(device: Device): 'alarm' | 'online' | 'offline' {
   if (facts && facts.pending > 0) return 'alarm'
   return device.status === 'ONLINE' ? 'online' : 'offline'
 }
+
+type MapDeviceFilter = 'all' | 'alarm' | 'online' | 'offline'
+const mapSearch = ref('')
+const mapDeviceFilter = ref<MapDeviceFilter>('all')
+
+function matchesMapFilter(device: Device): boolean {
+  if (mapDeviceFilter.value === 'alarm') return (alarmFacts.value[device.id]?.pending ?? 0) > 0
+  if (mapDeviceFilter.value === 'online') return device.status === 'ONLINE'
+  if (mapDeviceFilter.value === 'offline') return device.status !== 'ONLINE'
+  return true
+}
+
+const filteredDisplayMarkers = computed(() => {
+  const term = mapSearch.value.trim().toLocaleLowerCase()
+  return displayMarkers.value.filter((marker) => {
+    const device = devices.byId(marker.id)
+    if (!device || !matchesMapFilter(device)) return false
+    return term === '' || device.name.toLocaleLowerCase().includes(term) || (device.ip ?? '').toLocaleLowerCase().includes(term)
+  })
+})
+
+const mapSearchResults = computed(() => {
+  const term = mapSearch.value.trim().toLocaleLowerCase()
+  if (term === '') return []
+  return filteredDisplayMarkers.value.slice(0, 8)
+})
+
+function chooseSearchResult(deviceId: string): void {
+  selectDevice(deviceId)
+  centerOnDevice(deviceId)
+  mapSearch.value = ''
+}
+
+const selectedFacts = computed<DeviceAlarmFacts | undefined>(() =>
+  selectedDevice.value ? alarmFacts.value[selectedDevice.value.id] : undefined
+)
+const selectedLatestAlarm = computed<AlarmEvent | undefined>(() => alarms.value[0])
 
 /** 图上每一个标记的色调（按 id 查一次，模板里不用重复算）。 */
 const markerTones = computed<Record<string, 'alarm' | 'online' | 'offline'>>(() => {
@@ -583,12 +621,6 @@ const alarmStatus = computed<{ known: boolean; pending: number }>(() => {
   return { known: true, pending }
 })
 
-function alarmCell(deviceId: string): string {
-  const facts = alarmFacts.value[deviceId]
-  if (!facts || facts.pending < 0) return t('mapUi.notRead')
-  return String(facts.pending)
-}
-
 /**
  * 实时数据那一行的方位角：**录入的方位角**（`installation.azimuthDeg`）。
  *
@@ -599,36 +631,6 @@ function alarmCell(deviceId: string): string {
 function liveAzimuth(device: Device): string {
   const azimuth = device.installation?.azimuthDeg
   return azimuth === undefined ? t('installUi.unset') : `${azimuth}°`
-}
-
-/**
- * 设备列表的**翻页**（业主 2026-09-19 第 11 批第 5 条：默认最多 10 台，超过就翻页）。
- *
- * 页码不直接信：`devicePageClamped` 每次都夹进合法区间。设备从 23 台删到 3 台之后，
- * 原来存的第 5 页必须落回第 1 页 —— 否则屏幕上是一张空表，而数据一条不少。
- * `pageStart` 是"这一页第一台在总表里的序号"，序号列要的是**总表里的序号**（不是 1..10）。
- */
-const devicePage = ref(1)
-const devicePageClamped = computed(() =>
-  clampListPage(devicePage.value, devices.devices.length, DEVICE_MAP_PAGE_SIZE)
-)
-const devicePages = computed(() => listPageCount(devices.devices.length, DEVICE_MAP_PAGE_SIZE))
-const pagedDevices = computed(() =>
-  listPageSlice(devices.devices, devicePage.value, DEVICE_MAP_PAGE_SIZE)
-)
-const devicePageStart = computed(() => (devicePageClamped.value - 1) * DEVICE_MAP_PAGE_SIZE)
-
-/** 设备表变短（删设备）时把页码拉回合法区间：`clampListPage` 是唯一的判据。 */
-watch(
-  () => devices.devices.length,
-  (total) => {
-    const clamped = clampListPage(devicePage.value, total, DEVICE_MAP_PAGE_SIZE)
-    if (clamped !== devicePage.value) devicePage.value = clamped
-  }
-)
-
-function goToDevicePage(page: number): void {
-  devicePage.value = clampListPage(page, devices.devices.length, DEVICE_MAP_PAGE_SIZE)
 }
 
 async function loadDeviceAlarmFacts(): Promise<void> {
@@ -653,41 +655,14 @@ async function loadDeviceAlarmFacts(): Promise<void> {
 
 function selectDevice(deviceId: string): void {
   selectedId.value = deviceId
-  selectedAlarmId.value = ''
-  snapshots.value = null
-  // 规格 §27：整页只有一个 currentFocusDeviceId；实时工作台与设备列表都由它驱动。
-  realtime.selectDevice(deviceId)
+  syncOutcome.value = null
   void loadAlarms(deviceId)
-  void closeSnapshots()
 }
 
-/** 实时工作台的底部动作：没有能力就不显示，显示的都有去处。 */
-function onRealtimeAction(action: RealtimeActionId): void {
-  const device = selectedDevice.value
-  if (!device) return
-  switch (action) {
-    case 'liveView':
-    case 'listen':
-      void router.push({ path: '/monitor', query: { device: device.id } })
-      return
-    case 'history':
-    case 'analysis':
-      void router.push({ path: '/trends', query: { device: device.id } })
-      return
-    case 'ptz':
-    case 'configuration':
-      // 详情自业主 20260921 起是弹窗：PTZ（空气声呐）与「配置」都进同一个详情弹窗。
-      detailDialog.show(device.id, device.name)
-      return
-  }
-}
-
-/** Event -> Live（规格 §28）：告警选中与快照都收掉，回到当前设备的实时数据。 */
-function onRealtimeReturnToLive(): void {
-  selectedAlarmId.value = ''
-  snapshots.value = null
-  void closeSnapshots()
-  realtime.returnToLive()
+function clearSelectedDevice(): void {
+  selectedId.value = ''
+  alarms.value = []
+  syncOutcome.value = null
 }
 
 /** 双击一行设备 / 点设备名 = 打开这一台的详情**弹窗**（业主 20260921；声纹设备与相机都走这一条）。 */
@@ -705,61 +680,17 @@ const hoveredDevice = computed<Device | undefined>(() =>
   hoveredId.value === '' ? undefined : devices.byId(hoveredId.value)
 )
 
-/**
- * 悬停浮层里"设备类型"那一格：三种主动连接机型走 `domain.deviceKind.*`；
- * `pushDevice`（业主 20260921 第 12 条）的标签在 `devicesUi.kindPushDevice`
- * （与设备管理页同一条分支，见 `DevicesView.kindLabel`）。
- */
-function hoverKindLabel(device: Device): string {
-  return device.kind === 'pushDevice'
-    ? t('devicesUi.kindPushDevice')
-    : t(`domain.deviceKind.${device.kind}`)
-}
-
-/**
- * 悬停那一台**当前的视频流状态**（只有相机有）。
- *
- * 为什么悬停要去问一次主进程：视频流的状态是主进程的事实（会话在不在、是不是
- * `rtsp-disabled`），渲染层没有第二份。一次 IPC 换一行准确的话，比在浮层里写一句
- * "未知"好。
- *
- * **浮层里不放 `<video>`**：主进程对一台相机只有一条会话、一条会话只有一个观看者，
- * 悬停去接管它会把正在看这一路的人的画面当场换掉。所以这里给状态，不给画面 ——
- * 理由写在模板那段注释里。
- */
-const hoverLiveStatus = ref<CameraLiveStatus | null>(null)
-const hoverLiveDiagnosis = ref('')
-
-async function loadHoverStream(deviceId: string): Promise<void> {
-  hoverLiveStatus.value = null
-  hoverLiveDiagnosis.value = ''
-  const result = await callApi(() => window.api.cameraLive.state(deviceId))
-  // 悬停已经移走了：这一条结果不该写进另一个设备的浮层。
-  if (hoveredId.value !== deviceId) return
-  if (!result.success) return
-  const state = unwrap(result)?.[0] ?? null
-  hoverLiveStatus.value = state?.status ?? 'idle'
-  hoverLiveDiagnosis.value = state?.error ?? ''
-}
-
+/** 地图悬停只保留现场判断最需要的信息：设备、连接状态、告警和最近 SPL。 */
 function openHover(deviceId: string): void {
   hoveredId.value = deviceId
-  const device = devices.byId(deviceId)
-  if (device?.kind === 'acousticCamera') void loadHoverStream(deviceId)
 }
 
 function closeHover(): void {
   hoveredId.value = ''
-  hoverLiveStatus.value = null
-  hoverLiveDiagnosis.value = ''
 }
 
 /**
- * 浮层的位置：**百分比**，不量盒子。
- *
- * 标记坐标在画布的逻辑坐标系里（`CANVAS` 1280×720），而定比例那一层
- * （`.map-canvas-frame`）与画布**恰好同比例**，所以 `x / 1280`、`y / 720` 就是它在浮层
- * 坐标系里的位置。量 `getBoundingClientRect()` 要等一帧、而且缩放或滚动时会晚一拍。
+ * 浮层的位置：百分比，不量盒子。标记坐标与 1280×720 SVG 使用同一套逻辑坐标。
  */
 const hoverStyle = computed(() => {
   const device = hoveredDevice.value
@@ -772,32 +703,11 @@ const hoverStyle = computed(() => {
   }
 })
 
-/**
- * 「当前视频流」那一行的文字。
- *
- * 复用 `cameraLiveUi.status*` 那几条（**一件事只有一处措辞**）：浮层上写的"RTSP 未启用"
- * 与相机页徽标上那句必须是同一句，否则同一次故障会有两种说法。
- * 主进程给了原文（诊断）时优先用它 —— 它引用了设备亲口说的话。
- */
-const hoverStreamText = computed(() => {
-  if (hoverLiveStatus.value === null) return t('common.loading')
-  if (hoverLiveDiagnosis.value !== '') return hoverLiveDiagnosis.value
-  switch (hoverLiveStatus.value) {
-    case 'starting':
-      return t('cameraLiveUi.statusStarting')
-    case 'playing':
-      return t('cameraLiveUi.statusPlaying')
-    case 'rtsp-disabled':
-      return t('cameraLiveUi.statusRtspDisabled')
-    case 'ffmpeg-missing':
-      return t('cameraLiveUi.statusFfmpegMissing')
-    case 'limit-exceeded':
-      return t('overviewLiveUi.statusLimitExceeded')
-    case 'error':
-      return t('cameraLiveUi.statusError')
-    default:
-      return t('cameraLiveUi.statusIdle')
-  }
+const hoverSplText = computed(() => {
+  const device = hoveredDevice.value
+  if (!device) return '—'
+  const spl = alarmFacts.value[device.id]?.latestSpl
+  return spl === undefined ? '—' : `${formatNumber(spl, 1)} dB`
 })
 
 /** 有未确认告警就说条数，没有就明说没有（「—」读不出"没有"还是"没读到"）。 */
@@ -849,30 +759,7 @@ async function syncNow(): Promise<void> {
   await loadDeviceAlarmFacts()
 }
 
-async function openSnapshots(alarm: AlarmEvent): Promise<void> {
-  const device = selectedDevice.value
-  if (!device) return
-  selectedAlarmId.value = alarm.id
-  snapshots.value = null
-  // 点告警 = 进入 Event 模式（规格 §27/§28）；实时工作台切到这条告警的上下文。
-  realtime.selectEvent(alarm.id, device.id)
-  snapshotsLoading.value = true
-  const result = await callApi(() => window.api.e2.alarmSnapshots(device.id, alarm.id))
-  snapshotsLoading.value = false
-  if (!result.success) {
-    actionError.value = resultMessage(result)
-    return
-  }
-  actionError.value = ''
-  snapshots.value = unwrap(result) ?? null
-}
-
-async function closeSnapshots(): Promise<void> {
-  await callApi(() => window.api.e2.closeSnapshots())
-}
-
 onMounted(async () => {
-  loading.value = true
   // 地图配置与开关都在设置里；进这一页也要能自己读到（settings 是共享 store，不会重复请求）。
   if (!settings.loaded) await settings.load()
   if (devices.devices.length === 0) await devices.load()
@@ -893,18 +780,13 @@ onMounted(async () => {
    * 误读的代价比"一开始空着"大得多。只有 `?device=` 指向一台图上有的设备时才自动选中。
    * 上一次进入这一页留下的选中状态也要清掉（它是上一个会话的上下文）。
    */
-  realtime.clearSelection()
   if (focused) {
     selectDevice(focused.id)
     // 在线底图下，时区中心不一定看得到这一台；?device= 要把它居中。
     centerOnDevice(focused.id)
   }
-  loading.value = false
 })
 
-onUnmounted(() => {
-  void closeSnapshots()
-})
 </script>
 
 <template>
@@ -955,8 +837,50 @@ onUnmounted(() => {
           @pointerup="onMapPointerUp"
           @pointercancel="onMapPointerUp"
         >
+          <div class="map-toolbar" data-map-toolbar @pointerdown.stop @wheel.stop>
+            <div class="map-toolbar__search-wrap">
+              <Search class="map-toolbar__search-icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
+              <input
+                v-model="mapSearch"
+                class="input map-toolbar__search"
+                type="search"
+                placeholder="Search mapped devices"
+                aria-label="Search mapped devices"
+              />
+              <div v-if="mapSearchResults.length > 0" class="map-search-results">
+                <button
+                  v-for="result in mapSearchResults"
+                  :key="result.id"
+                  type="button"
+                  class="map-search-results__item"
+                  @click="chooseSearchResult(result.id)"
+                >
+                  <span>{{ result.name }}</span>
+                  <span class="muted">{{ devices.byId(result.id)?.ip }}</span>
+                </button>
+              </div>
+            </div>
+            <div class="map-toolbar__filters" role="group" aria-label="Device status filter">
+              <button type="button" class="btn btn--icon map-icon-btn" :class="{ 'btn--primary': mapDeviceFilter === 'all' }" title="All mapped devices" aria-label="All mapped devices" @click="mapDeviceFilter = 'all'">
+                <MapPin :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn--icon map-icon-btn" :class="{ 'btn--primary': mapDeviceFilter === 'alarm' }" title="Devices with alarms" aria-label="Devices with alarms" @click="mapDeviceFilter = 'alarm'">
+                <BellRing :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn--icon map-icon-btn" :class="{ 'btn--primary': mapDeviceFilter === 'online' }" title="Online devices" aria-label="Online devices" @click="mapDeviceFilter = 'online'">
+                <Wifi :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button type="button" class="btn btn--icon map-icon-btn" :class="{ 'btn--primary': mapDeviceFilter === 'offline' }" title="Offline devices" aria-label="Offline devices" @click="mapDeviceFilter = 'offline'">
+                <WifiOff :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </div>
+            <button type="button" class="btn btn--icon map-icon-btn" title="Center map" aria-label="Center map" @click="resetMapView">
+              <Crosshair :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </div>
+
           <!--
-            在线底图（业主 2026-09-19 追加第 1 条）：只有设置里显式打开才渲染。
+            在线底图：GIS 页始终渲染 System Settings 选定的地图源；设置尚未加载时使用默认 OSM。
             瓦片是普通 <img>（connect-src 仍是 none，因此不能变成 fetch 数据通道）；
             署名固定在地图右下角，放大/缩小/拖拽在控制条与画布手势上。
           -->
@@ -969,6 +893,9 @@ onUnmounted(() => {
               :style="tileStyle(tile)"
               alt=""
               draggable="false"
+              loading="eager"
+              decoding="async"
+              referrerpolicy="no-referrer"
               data-map-tile
               :data-tile-key="tile.key"
               :data-tile-mode="tileModes[tile.key] ?? (useTileCache ? 'cache' : 'online')"
@@ -978,8 +905,16 @@ onUnmounted(() => {
               某些瓦片加载失败（没有外网、服务拒绝）时如实说一句，而不是留一块白，
               更不能把失败说成"这里没有地图"。点位与设备列表不依赖瓦片。
             -->
-            <div v-if="tileFailureCount > 0" class="map-tile-error" data-map-tile-error role="status">
-              {{ t('mapUi.tilesError', { failed: tileFailureCount, total: tilePlacements.length }) }}
+            <div
+              v-if="tileFailureCount > 0"
+              class="map-tile-error"
+              data-map-tile-error
+              role="status"
+              :title="t('mapUi.tilesError', { failed: tileFailureCount, total: tilePlacements.length })"
+              :aria-label="t('mapUi.tilesError', { failed: tileFailureCount, total: tilePlacements.length })"
+            >
+              <TriangleAlert :size="16" :stroke-width="1.8" aria-hidden="true" />
+              <span>{{ tileFailureCount }}</span>
             </div>
           </div>
           <svg
@@ -1031,7 +966,7 @@ onUnmounted(() => {
               </text>
             </g>
             <g
-              v-for="marker in displayMarkers"
+              v-for="marker in filteredDisplayMarkers"
               :key="marker.id"
               class="map-marker"
               :class="[
@@ -1058,47 +993,45 @@ onUnmounted(() => {
           </svg>
 
           <!--
-            底图没开时如实说一声（业主 20260921 批第 9 条：「地图信息里面都是空的」——
-            出厂默认离线优先、底图关闭，画布只剩网格，操作员需要知道去哪开）。
-            点位与网格不依赖底图，开不开都在。
-          -->
-          <div v-if="!tileConfig" class="map-tiles-off" data-map-tiles-off role="status">
-            {{ t('mapUi.tilesOffHint') }}
-          </div>
-
-          <!--
             署名与缩放控制放在 SVG **外面**（同一层、z-index 更高）：
             它们在瓦片层之上、可点；瓦片本身永远不会被控制条挡住。
           -->
           <div v-if="tileConfig?.attribution" class="map-attribution" data-map-attribution>
             {{ tileConfig?.attribution }}
           </div>
-          <div v-if="tileConfig" class="map-zoom-controls" data-map-zoom-controls @pointerdown.stop @wheel.stop>
+          <div class="map-zoom-controls" data-map-zoom-controls @pointerdown.stop @wheel.stop>
             <button
               type="button"
-              class="btn"
-              data-map-zoom-out
-              :aria-label="t('mapUi.zoomOut')"
-              :disabled="zoomOutDisabled"
-              @click="zoomBy(-1)"
-            >−</button>
-            <span class="map-zoom-level" data-map-zoom-level>
-              {{ t('mapUi.zoomLevel', { zoom: mapZoom }) }}
-            </span>
-            <button
-              type="button"
-              class="btn"
+              class="btn btn--icon map-icon-btn"
               data-map-zoom-in
+              :title="t('mapUi.zoomIn')"
               :aria-label="t('mapUi.zoomIn')"
               :disabled="zoomInDisabled"
               @click="zoomBy(1)"
-            >+</button>
+            >
+              <ZoomIn :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </button>
             <button
               type="button"
-              class="btn"
+              class="btn btn--icon map-icon-btn"
+              data-map-zoom-out
+              :title="t('mapUi.zoomOut')"
+              :aria-label="t('mapUi.zoomOut')"
+              :disabled="zoomOutDisabled"
+              @click="zoomBy(-1)"
+            >
+              <ZoomOut :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="btn btn--icon map-icon-btn"
               data-map-zoom-reset
+              :title="t('mapUi.zoomReset')"
+              :aria-label="t('mapUi.zoomReset')"
               @click="resetMapView"
-            >{{ t('mapUi.zoomReset') }}</button>
+            >
+              <LocateFixed :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </button>
           </div>
 
           <!--
@@ -1129,38 +1062,23 @@ onUnmounted(() => {
             data-map-hover
           >
             <div class="map-hover__head">
-              <span class="map-table__tone" :class="`map-table__tone--${markerTone(hoveredDevice)}`"
-                aria-hidden="true"></span>
+              <span class="map-table__tone" :class="`map-table__tone--${markerTone(hoveredDevice)}`" aria-hidden="true"></span>
               <strong>{{ hoveredDevice.name }}</strong>
             </div>
             <dl class="map-hover__kv">
               <div class="map-hover__item">
-                <dt>{{ t('addDeviceUi.kindLabel') }}</dt>
-                <dd>{{ hoveredDevice ? hoverKindLabel(hoveredDevice) : '' }}</dd>
-              </div>
-              <div class="map-hover__item">
                 <dt>{{ t('devicesUi.onlineColumn') }}</dt>
-                <dd>
-                  <StatusBadge :status="hoveredDevice.status" :connection-type="hoveredDevice.connectionType" />
-                </dd>
-              </div>
-              <div class="map-hover__item">
-                <dt>{{ t('devices.ip') }}</dt>
-                <dd class="mono">{{ hoveredDevice.ip || t('monitorUi.noAddress') }}</dd>
-              </div>
-              <!-- 只有相机有"当前视频流"这一行（声纹设备没有视频流）。 -->
-              <div v-if="hoveredDevice.kind === 'acousticCamera'" class="map-hover__item">
-                <dt>{{ t('mapUi.hoverStream') }}</dt>
-                <dd data-map-hover-stream>{{ hoverStreamText }}</dd>
+                <dd><StatusBadge :status="hoveredDevice.status" :connection-type="hoveredDevice.connectionType" /></dd>
               </div>
               <div class="map-hover__item">
                 <dt>{{ t('mapUi.colAlarms') }}</dt>
-                <dd :data-map-hover-alarm="alarmCell(hoveredDevice.id)">
-                  {{ hoverAlarmText }}
-                </dd>
+                <dd>{{ hoverAlarmText }}</dd>
+              </div>
+              <div class="map-hover__item">
+                <dt>{{ t('metrics.spl') }}</dt>
+                <dd>{{ hoverSplText }}</dd>
               </div>
             </dl>
-            <p class="muted map-hover__hint">{{ t('mapUi.hoverHint') }}</p>
           </div>
 
           <!--
@@ -1183,30 +1101,115 @@ onUnmounted(() => {
             :aria-label="t('mapUi.statusLabel')"
             data-map-statusbar
           >
-            <span class="map-status__item" data-map-status-mapped>
-              {{ t('mapUi.statusMapped', { count: layout.markers.length }) }}
+            <span class="map-status__item" data-map-status-mapped :title="t('mapUi.statusMapped', { count: layout.markers.length })">
+              <MapPin :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ layout.markers.length }}</strong>
             </span>
-            <span class="map-status__item" data-map-status-total>
-              {{ t('mapUi.statusTotal', { count: devices.devices.length }) }}
+            <span class="map-status__item" data-map-status-total :title="t('mapUi.statusTotal', { count: devices.devices.length })">
+              <Monitor :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ devices.devices.length }}</strong>
             </span>
-            <span class="map-status__item" data-map-status-online>
-              {{ t('mapUi.statusOnline', { count: onlineCount }) }}
+            <span class="map-status__item map-status__item--online" data-map-status-online :title="t('mapUi.statusOnline', { count: onlineCount })">
+              <Wifi :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ onlineCount }}</strong>
             </span>
-            <span class="map-status__item" data-map-status-offline>
-              {{ t('mapUi.statusOffline', { count: offlineCount }) }}
+            <span class="map-status__item map-status__item--offline" data-map-status-offline :title="t('mapUi.statusOffline', { count: offlineCount })">
+              <WifiOff :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ offlineCount }}</strong>
             </span>
             <span
               class="map-status__item map-status__item--alarm"
               data-map-status-alarms
               :data-map-status-alarm-known="alarmStatus.known ? 'yes' : 'no'"
+              :title="t('mapUi.statusAlarms', { count: alarmStatus.known ? alarmStatus.pending : t('mapUi.notRead') })"
             >
-              {{
-                t('mapUi.statusAlarms', {
-                  count: alarmStatus.known ? alarmStatus.pending : t('mapUi.notRead')
-                })
-              }}
+              <BellRing :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <strong>{{ alarmStatus.known ? alarmStatus.pending : '—' }}</strong>
             </span>
           </div>
+
+          <aside
+            v-if="selectedDevice"
+            class="map-detail-panel"
+            data-map-detail-panel
+            @pointerdown.stop
+            @wheel.stop
+          >
+            <header class="map-detail-panel__header">
+              <div class="map-detail-panel__title">
+                <span class="map-table__tone" :class="`map-table__tone--${markerTone(selectedDevice)}`" aria-hidden="true"></span>
+                <div>
+                  <strong>{{ selectedDevice.name }}</strong>
+                  <div class="muted mono map-detail-panel__ip">{{ selectedDevice.ip || '—' }}</div>
+                </div>
+              </div>
+              <button type="button" class="btn btn--ghost btn--icon map-icon-btn" aria-label="Close device panel" title="Close" @click="clearSelectedDevice">
+                <X :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div class="map-detail-panel__status">
+              <StatusBadge :status="selectedDevice.status" :connection-type="selectedDevice.connectionType" />
+              <span v-if="(selectedFacts?.pending ?? 0) > 0" class="badge badge--danger">
+                {{ selectedFacts?.pending }} {{ t('mapUi.alarmsTitle') }}
+              </span>
+            </div>
+
+            <dl class="map-detail-panel__kv">
+              <div>
+                <dt>Position</dt>
+                <dd class="mono">{{ pointText }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('installUi.azimuth') }}</dt>
+                <dd>{{ liveAzimuth(selectedDevice) }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('metrics.spl') }}</dt>
+                <dd>{{ selectedFacts?.latestSpl === undefined ? '—' : `${formatNumber(selectedFacts.latestSpl, 1)} dB` }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('mapUi.colAlarms') }}</dt>
+                <dd>{{ selectedFacts?.pending === undefined || selectedFacts.pending < 0 ? '—' : selectedFacts.pending }}</dd>
+              </div>
+            </dl>
+
+            <section class="map-detail-panel__latest">
+              <div class="section-header">
+                <h4 class="section-title">Latest Alarm</h4>
+                <span v-if="alarmsLoading" class="muted">{{ t('common.loading') }}</span>
+              </div>
+              <div v-if="selectedLatestAlarm" class="map-latest-alarm">
+                <div>
+                  <strong>{{ formatDateTime(selectedLatestAlarm.timestamp) }}</strong>
+                  <span class="muted">{{ selectedLatestAlarm.spl === undefined ? '—' : `${formatNumber(selectedLatestAlarm.spl, 1)} dB` }}</span>
+                </div>
+                <span class="badge" :class="selectedLatestAlarm.acknowledged ? 'badge--success' : 'badge--warning'">
+                  {{ selectedLatestAlarm.acknowledged ? t('alarmsUi.ackAcknowledged') : t('alarmsUi.ackUnacknowledged') }}
+                </span>
+              </div>
+              <p v-else-if="!alarmsLoading" class="muted map-detail-panel__empty">{{ t('mapUi.noAlarms') }}</p>
+            </section>
+
+            <p v-if="syncOutcome" class="muted map-detail-panel__sync-result">
+              {{ t('mapUi.syncOutcome', { created: syncOutcome.alarmsCreated, existing: syncOutcome.alarmsExisting, linked: syncOutcome.snapshotsLinked, missing: syncOutcome.filesMissing }) }}
+            </p>
+
+            <div class="map-detail-panel__actions">
+              <RouterLink class="btn btn--primary btn--sm" :to="`/monitor?device=${selectedDevice.id}`">Live Monitor</RouterLink>
+              <RouterLink class="btn btn--sm" :to="{ path: '/alarms', query: { device: selectedDevice.id } }">Alarm Center</RouterLink>
+              <button type="button" class="btn btn--sm" @click="openDeviceDetail(selectedDevice.id)">{{ t('devicesUi.configure') }}</button>
+              <button
+                v-if="selectedDevice.kind === 'auscultationBox'"
+                type="button"
+                class="btn btn--sm"
+                :disabled="syncing"
+                @click="syncNow"
+              >
+                {{ syncing ? t('mapUi.syncing') : t('mapUi.sync') }}
+              </button>
+            </div>
+          </aside>
         </div>
 
         <!-- 「点一个标记查看这台设备…」只在**图上有落点**时才有意义。 -->
@@ -1214,239 +1217,10 @@ onUnmounted(() => {
       </section>
 
       <!--
-        ② 左：设备列表（业主第 17 条的第一张）。
-        ③ 右：告警列表（第二张）。**两张卡的高度必须一致**（业主 2026-09-19 第 11 批第 5 条：
-        「告警列表卡片高度应该始终与左侧设备保持一致」），做法见 `.map-split` 的样式注释。
-
-        列表只有三列（同一条：序号 / 设备名称 / 状态 —— 原来还有 设备类型 / 点位 / 未确认告警），
-        而且**点设备名称进详情**；宽度是内容区的一半（「宽度调整为现在的 50%」）。
-        超过 `DEVICE_MAP_PAGE_SIZE`（10）台就翻页 —— 页码由 `lib/listPaging.ts` 的纯函数夹住。
+        GIS 页面只负责“设备在哪里、哪里有异常、如何快速进入下一步”。
+        完整设备管理、告警处置与实时分析分别留在 Device Management / Alarm Center / Live Monitor，
+        避免在地图页复制三套工作台。
       -->
-      <div class="map-split" data-map-split>
-        <section class="card map-block map-block--devices" data-map-devices>
-          <div class="section-header">
-            <h3 class="section-title">{{ t('mapUi.devicesTitle') }}</h3>
-            <span class="muted">{{ t('mapUi.devicesCount', { count: devices.devices.length }) }}</span>
-          </div>
-          <table class="table map-table">
-            <thead>
-              <tr>
-                <th scope="col" class="map-table__index">{{ t('devicesUi.indexColumn') }}</th>
-                <th scope="col">{{ t('devices.name') }}</th>
-                <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(device, index) in pagedDevices"
-                :key="device.id"
-                class="is-clickable"
-                :class="{ 'map-table__row--active': device.id === selectedId }"
-                :data-map-device-row="device.id"
-                @click="selectDevice(device.id)"
-                @dblclick="openDeviceDetail(device.id)"
-              >
-                <td class="map-table__index muted">{{ devicePageStart + index + 1 }}</td>
-                <td>
-                  <!--
-                    名字是一个**入口**（业主：点设备名称进设备详情）。用 `<button>` 而不是
-                    `<RouterLink>`：这一行本身也有点击（选中），链接会让"选中"与"跳走"在同一次
-                    点击里打架，而按钮的 `@click.stop` 说得清这里只做跳转这一件事。
-                  -->
-                  <button
-                    type="button"
-                    class="map-table__name"
-                    :title="t('devicesUi.openDetail')"
-                    data-action="map-device-detail"
-                    @click.stop="openDeviceDetail(device.id)"
-                  >
-                    {{ device.name }}
-                  </button>
-                </td>
-                <td>
-                  <StatusBadge :status="device.status" :connection-type="device.connectionType" />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <!-- 超过一页才出现：10 台以内显示它只是多一行没有用的控件。 -->
-          <div v-if="devicePages > 1" class="map-pager" data-map-pager>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-action="map-page-prev"
-              :disabled="devicePageClamped <= 1"
-              @click="goToDevicePage(devicePageClamped - 1)"
-            >
-              {{ t('mapUi.pagePrev') }}
-            </button>
-            <span class="muted" data-map-page-status>
-              {{ t('mapUi.pageStatus', { page: devicePageClamped, pages: devicePages }) }}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-action="map-page-next"
-              :disabled="devicePageClamped >= devicePages"
-              @click="goToDevicePage(devicePageClamped + 1)"
-            >
-              {{ t('mapUi.pageNext') }}
-            </button>
-          </div>
-
-          <p class="muted map-panel__hint">{{ t('mapUi.devicesHint') }}</p>
-        </section>
-
-      <!--
-        ③ 告警列表（第二张）。业主 2026-09-19 第 11 批第 5 条把它放到设备列表的**右侧**，
-        并要求「告警列表卡片高度应该始终与左侧设备保持一致」。抓图与同步仍挂在这一段里。
-      -->
-      <section class="card map-block map-block--alarms" data-map-alarms>
-        <!--
-          这一层是"高度与左边一致"的实现要点（见 `.map-split` 的样式注释）：它**绝对定位**
-          于卡片内部，因此它的内容**不参与**这一行的高度计算 —— 行高只由左边那张设备卡决定，
-          这一张被 `stretch` 拉成同样的高度，内容再多也只在卡片内部滚动。
-        -->
-        <div class="map-block__fill">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('mapUi.alarmsTitle') }}</h3>
-          <span class="muted">
-            {{
-              selectedDevice
-                ? t('mapUi.alarmsFor', { name: selectedDevice.name })
-                : t('mapUi.pickOne')
-            }}
-          </span>
-        </div>
-
-        <template v-if="selectedDevice">
-          <div class="map-selected">
-            <StatusBadge :status="selectedDevice.status" :connection-type="selectedDevice.connectionType" />
-            <span class="muted">{{ t('mapUi.point') }}：<span class="mono">{{ pointText }}</span></span>
-            <span class="muted">{{ t('installUi.azimuth') }}：{{ liveAzimuth(selectedDevice) }}</span>
-            <div class="btn-row">
-              <!-- 「配置」= 打开设备详情弹窗（业主 20260921 起详情是弹窗；原来是去整页路由）。 -->
-              <button
-                type="button"
-                class="btn btn--sm"
-                @click="detailDialog.show(selectedDevice.id, selectedDevice.name)"
-              >
-                {{ t('devicesUi.configure') }}
-              </button>
-              <RouterLink class="btn btn--sm" :to="`/monitor?device=${selectedDevice.id}`">
-                {{ t('devicesUi.viewColumn') }}
-              </RouterLink>
-              <button
-                v-if="selectedDevice.kind === 'auscultationBox'"
-                type="button"
-                class="btn btn--primary btn--sm"
-                :disabled="syncing"
-                data-action="map-sync"
-                @click="syncNow"
-              >
-                {{ syncing ? t('mapUi.syncing') : t('mapUi.sync') }}
-              </button>
-            </div>
-          </div>
-
-          <p v-if="syncOutcome" class="muted map-panel__hint" data-map-sync-outcome>
-            {{
-              t('mapUi.syncOutcome', {
-                created: syncOutcome.alarmsCreated,
-                existing: syncOutcome.alarmsExisting,
-                linked: syncOutcome.snapshotsLinked,
-                missing: syncOutcome.filesMissing
-              })
-            }}
-          </p>
-
-          <span v-if="alarms.length > 0" class="muted">
-            {{ t('mapUi.alarmCount', { count: alarms.length }) }}
-          </span>
-
-          <p v-if="alarmsLoading" class="muted">{{ t('common.loading') }}</p>
-          <p v-else-if="alarms.length === 0" class="muted" data-map-no-alarms>
-            {{ t('mapUi.noAlarms') }}
-          </p>
-          <ul v-else class="map-alarms">
-            <li v-for="alarm in alarms" :key="alarm.id">
-              <button
-                type="button"
-                class="map-alarms__item"
-                :class="{ 'map-alarms__item--active': alarm.id === selectedAlarmId }"
-                :data-alarm-id="alarm.id"
-                @click="openSnapshots(alarm)"
-              >
-                <span class="map-alarms__time">{{ formatDateTime(alarm.timestamp) }}</span>
-                <span class="map-alarms__value">
-                  {{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}
-                </span>
-                <span class="badge" :class="alarm.snapshotDir ? 'badge--success' : ''">
-                  {{ alarm.snapshotDir ? t('mapUi.hasSnapshot') : t('mapUi.noSnapshot') }}
-                </span>
-              </button>
-            </li>
-          </ul>
-
-          <!--
-            抓图：三种状态分开说（有图 / 设备上本来没有 / 库里记着但文件已不在）。
-            `img` 的地址是主进程回环端点（含每会话令牌），CSP 只放行 `127.0.0.1`。
-          -->
-          <div v-if="selectedAlarmId" class="map-snapshots" data-map-snapshots>
-            <div class="section-header">
-              <h4 class="section-title">{{ t('mapUi.snapshotTitle') }}</h4>
-              <span v-if="snapshots?.state === 'ok'" class="muted">
-                {{ t('mapUi.snapshotCount', { count: snapshots.files.length }) }}
-              </span>
-            </div>
-            <p v-if="snapshotsLoading" class="muted">{{ t('mapUi.snapshotLoading') }}</p>
-            <template v-else-if="snapshots">
-              <p v-if="snapshots.state === 'not-captured'" class="alert alert--warning" data-snapshot-not-captured>
-                {{ t('mapUi.snapshotNotCaptured') }}
-              </p>
-              <p v-else-if="snapshots.state === 'files-gone'" class="alert alert--warning" data-snapshot-files-gone>
-                {{ t('mapUi.snapshotFilesGone') }}
-              </p>
-              <div v-else class="map-snapshots__grid">
-                <figure v-for="file in snapshots.files" :key="file.name">
-                  <img :src="file.url" :alt="file.name" loading="lazy" />
-                  <figcaption class="muted">{{ file.name }}</figcaption>
-                </figure>
-              </div>
-            </template>
-          </div>
-
-          <p v-if="selectedIsSonar" class="muted map-panel__hint">{{ t('mapUi.sonarHint') }}</p>
-        </template>
-
-        <p v-else class="muted">{{ t('mapUi.pickOne') }}</p>
-        </div>
-      </section>
-      </div>
-
-      <!--
-        ④ 实时监测 / Live Monitor（业主 2026-09-20《GIS Realtime Data UX/UI Spec V1.0》）。
-
-        这一块从"整幅宽的三列表格（分贝 / 平稳度 / 方位）"改成一台**当前聚焦设备**的
-        实时监测工作台：Header + 模板三栏（主数据 / 主可视化 / 分析详情）+ 能力驱动的底部动作。
-        它不再一次列全部设备：设备/告警列表已经把"哪一台"选好了，工作台只回答"这一台现在
-        在发生什么"（规格 §2：不要叫"实时数据列表"，它是一个工作台）。
-
-        数据出处仍然只有一条口径：`alarms` 是选中设备最近 20 条告警（last-known 值），
-        `alarmFacts[selectedId].pending` 是未确认条数（Header 的告警色只看它，不按数值猜）；
-        FA8 的实时值由 `useRealtimeMonitorFeed()` 从既有 monitor 会话取。没有的字段显示
-        `—`，不编 0（规格 §31）。
-      -->
-      <RealtimeMonitor
-        data-map-live
-        class="map-block"
-        :device="selectedDevice"
-        :alarms="alarms"
-        :pending-alarms="alarmFacts[selectedId]?.pending ?? -1"
-        @action="onRealtimeAction"
-        @return-to-live="onRealtimeReturnToLive"
-      />
     </template>
   </div>
 </template>
@@ -1481,74 +1255,223 @@ onUnmounted(() => {
   padding-block: calc(var(--space-2) * 0.1);
 }
 
-/*
- * 本页纵向流间隙整体收到 10%（业主 20260921 批第 9 条）：原来 地图→列表 ≈ 44px
- * （padding 8 + .page gap 20 + .map-split margin 16）、列表→实时数据 ≈ 36px
- * （gap 20 + margin 16），现在分别 ≈ 4.4px / 3.6px。只作用本页：`.map-page` 覆盖
- * 全局 `.page` 的 gap，不动其它分支页。
- */
+/* GIS 页面只保留地图主体，因此页面本身不需要额外的纵向卡片间隔。 */
 .map-page {
-  gap: calc(var(--space-5) * 0.1);
+  gap: var(--space-2);
 }
 
-.map-block {
-  /* 同上：设备列表→实时数据间距 16px → 1.6px。 */
-  margin-top: calc(var(--space-4) * 0.1);
-}
-
-/*
- * 左设备列表 / 右告警列表。
- *
- * **两栏等宽**（业主："宽度调整为现在的 50%"：那一列原来是整幅宽）。
- *
- * 「告警卡片高度与左侧一致」是怎么做到的（纯 CSS，没有量盒子、没有 ResizeObserver）：
- *   1. 网格项默认 `align-items: stretch`，所以两张卡在同一行里本来就被拉成同一高度；
- *   2. 问题在于**行高由谁决定** —— 内容是 `auto` 时取两者中更高的那个。告警列表可能比
- *      设备列表长得多（20 条告警 vs 3 台设备），那样行高会被告警那一侧撑开，
- *      于是"一样高"变成了"一起变高"。
- *   3. 所以告警卡的内容被放进 `.map-block__fill`：**绝对定位**的元素不参与父级的内容高度计算
- *      （`.map-block--alarms` 是 `position: relative`），行高因此只由设备卡决定，
- *      告警卡被 `stretch` 拉成完全一样的高度，内容超出就在卡片内部滚动（`.map-alarms`）。
- *   4. `min-height` 写在**两张卡上、同一个值**：只有一台设备时设备卡很矮，
- *      这一条保证两张都至少这么高（否则告警卡会被压成一条缝）。
- */
-.map-split {
-  /*
-   * `auto-fit` + `minmax(340px, 1fr)`：宽窗口上两栏**各占一半**（业主："宽度调整为现在的 50%"，
-   * 即设备列表从整幅宽收到半幅），窄到放不下两栏时自动落回上下排列 ——
-   * 不写像素断点，与页面其它自适应板子同一种做法。
-   */
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  align-items: stretch;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
-}
-
-/* 分栏之后这一行自己不再叠 `margin-top`：间距由 `.map-split` 的 `gap` 管。 */
-.map-split > .map-block {
-  margin-top: 0;
-}
-
-.map-block--devices,
-.map-block--alarms {
-  min-height: 320px;
-}
-
-.map-block--alarms {
-  position: relative;
-  padding: 0;
-  overflow: hidden;
-}
-
-.map-block__fill {
+.map-toolbar {
   position: absolute;
-  inset: 0;
-  padding: var(--space-4);
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 6;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 420px);
+  padding: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.88);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px rgba(16, 24, 40, 0.08);
+}
+
+.map-toolbar__search-wrap {
+  position: relative;
+}
+
+.map-toolbar__search-icon {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  z-index: 2;
+  color: var(--color-text-secondary);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.map-toolbar__search {
+  width: 210px;
+  height: 30px;
+  padding-left: 30px;
+}
+
+.map-icon-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-toolbar__filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.map-search-results {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 9;
+  width: 280px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.14);
+}
+
+.map-search-results__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-search-results__item:hover {
+  background: var(--color-bg-subtle);
+}
+
+.map-detail-panel {
+  position: absolute;
+  top: 54px;
+  right: var(--space-2);
+  z-index: 6;
+  width: min(330px, calc(100% - 16px));
+  max-height: calc(100% - 66px);
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.94);
+  background: color-mix(in srgb, var(--color-bg) 94%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.14);
+}
+
+.map-detail-panel__header,
+.map-detail-panel__title,
+.map-detail-panel__status,
+.map-detail-panel__actions,
+.map-latest-alarm,
+.map-latest-alarm > div {
+  display: flex;
+  align-items: center;
+}
+
+.map-detail-panel__header {
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.map-detail-panel__title {
+  min-width: 0;
+  gap: 6px;
+}
+
+.map-detail-panel__ip {
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.map-detail-panel__status {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-3);
+}
+
+.map-detail-panel__kv {
+  margin: var(--space-3) 0 0;
+}
+
+.map-detail-panel__kv > div {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+}
+
+.map-detail-panel__kv dt {
+  color: var(--color-text-secondary);
+}
+
+.map-detail-panel__kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.map-detail-panel__latest {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.map-latest-alarm {
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  font-size: 11.5px;
+}
+
+.map-latest-alarm > div {
+  min-width: 0;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.map-detail-panel__empty,
+.map-detail-panel__sync-result {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+}
+
+.map-detail-panel__actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 980px) {
+  .map-toolbar {
+    max-width: calc(100% - 16px);
+  }
+
+  .map-status {
+    top: 58px;
+    max-width: calc(100% - 360px);
+  }
+
+  .map-detail-panel {
+    top: auto;
+    bottom: var(--space-2);
+    max-height: 52%;
+  }
 }
 
 /*
@@ -1626,9 +1549,6 @@ onUnmounted(() => {
   z-index: 1;
 }
 
-.map-canvas__bg--transparent {
-  fill: transparent;
-}
 
 /* 法定署名固定在地图右下角；不参与点击，因此不会挡住落点。 */
 .map-attribution {
@@ -1661,13 +1581,6 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--color-bg) 86%, transparent);
 }
 
-.map-zoom-level {
-  min-width: 52px;
-  text-align: center;
-  font-size: 11.5px;
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
 
 /* 有些瓦片失败时如实说一句；它压在画布左上角，不吃鼠标事件。 */
 .map-tile-error {
@@ -1675,31 +1588,19 @@ onUnmounted(() => {
   left: var(--space-2);
   top: var(--space-2);
   z-index: 3;
-  max-width: 62%;
-  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
   border: 1px solid var(--color-warning-border);
   border-radius: var(--radius-sm);
   background: var(--color-warning-soft);
   color: var(--color-warning);
   font-size: 11.5px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: help;
 }
 
-/* 底图未启用提示：与 .map-tile-error 同款做法，位置在左下（右下角是署名位）。 */
-.map-tiles-off {
-  position: absolute;
-  left: var(--space-2);
-  bottom: var(--space-2);
-  z-index: 3;
-  max-width: 62%;
-  padding: 4px 8px;
-  border: 1px solid var(--color-border, rgba(148, 163, 184, 0.4));
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.88);
-  color: var(--color-text-muted, #64748b);
-  font-size: 11.5px;
-  pointer-events: none;
-}
 
 /* 网格坐标刻度（业主 20260921 批第 9 条）：小字、压线角上、不抢落点的视觉权重。 */
 .map-grid__label {
@@ -1731,7 +1632,30 @@ onUnmounted(() => {
 }
 
 .map-status__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   white-space: nowrap;
+  pointer-events: auto;
+}
+
+
+.map-status__item svg {
+  flex: 0 0 auto;
+}
+
+.map-status__item strong {
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-status__item--online {
+  color: var(--color-success);
+}
+
+.map-status__item--offline {
+  color: var(--color-text-secondary);
 }
 
 /* 告警那一项是这条状态栏里唯一"有事"的数：有未确认告警时用危险色。 */
@@ -1804,6 +1728,15 @@ onUnmounted(() => {
 
 .map-canvas__bg {
   fill: var(--color-bg-subtle);
+}
+
+/*
+ * Tile mode must stay transparent so the raster basemap below the SVG remains visible.
+ * This intentionally has higher specificity than `.map-canvas__bg`; otherwise the base
+ * rule later in this style block masks every successfully loaded map tile.
+ */
+.map-canvas__bg.map-canvas__bg--transparent {
+  fill: transparent;
 }
 
 .map-grid line {
@@ -1879,154 +1812,4 @@ onUnmounted(() => {
   background: var(--color-text-tertiary);
 }
 
-.map-table {
-  width: 100%;
-}
-
-/* 序号列：业主 2026-09-19 更正第 3 条（设备管理页同款）——「序号下面的数字应该是居中对齐」。 */
-.map-table .map-table__index {
-  text-align: center;
-  white-space: nowrap;
-}
-
-.map-table__num {
-  text-align: right;
-  white-space: nowrap;
-}
-
-/*
- * 设备名称是一个入口（点它进设备详情）：看起来仍是一格文字，但指针与 hover 说得出它是可点的。
- * 这三条与设备管理页那一套 `.devices-table__name--action` 是同一份读法。
- */
-.map-table__name {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.map-table__name:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-.map-table__name:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
-}
-
-/* 翻页（第 5 条）：上一页 / 第 N 页 / 下一页，右对齐在设备卡底部。 */
-.map-pager {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
-
-.map-table__row--active {
-  background: var(--color-accent-soft);
-}
-
-.map-selected {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  font-size: 12.5px;
-  margin-bottom: var(--space-2);
-}
-
-.map-panel__hint {
-  font-size: 11.5px;
-  margin: 0;
-}
-
-/*
- * 告警条目列表。
- *
- * 与左边设备卡**同高**之后，这一列的高度是定死的（由设备卡决定），所以这里不再写
- * `max-height: 260px`：那会在高窗口上留出一段空白、在矮窗口上又把卡片顶高。
- * 改成"占满剩余高度、超出自己滚"（`flex: 1` + `min-height: 0`），配合
- * `.map-block__fill` 的 flex 列布局 —— 抓图那一块因此在它下面正常占位。
- */
-.map-alarms {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.map-alarms__item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.map-alarms__item:hover {
-  border-color: var(--color-border-strong);
-}
-
-.map-alarms__item--active {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-}
-
-.map-alarms__time {
-  flex: 1;
-  min-width: 0;
-}
-
-.map-alarms__value {
-  font-variant-numeric: tabular-nums;
-}
-
-.map-snapshots {
-  border-top: 1px solid var(--color-border);
-  padding-top: var(--space-2);
-  margin-top: var(--space-2);
-}
-
-.map-snapshots__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: var(--space-2);
-}
-
-.map-snapshots__grid figure {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.map-snapshots__grid img {
-  width: 100%;
-  height: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-subtle);
-}
-
-.map-snapshots__grid figcaption {
-  font-size: 11px;
-}
 </style>

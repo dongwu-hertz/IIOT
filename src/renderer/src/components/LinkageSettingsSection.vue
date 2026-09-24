@@ -189,13 +189,22 @@ function formatTime(value: number | undefined): string {
           <input v-model="draft.useDetectFeedback" type="checkbox" :disabled="!canWrite" />
           <span class="field-label">{{ t('linkage.useDetectFeedback') }}</span>
         </label>
+        <!-- 相机主动推送（手册「Alarm push」）：打开后软件在本机端口监听，并把各相机的 push_url 写过来 -->
+        <label class="field checkbox-field">
+          <input v-model="draft.cameraPush.enabled" type="checkbox" :disabled="!canWrite" />
+          <span class="field-label">{{ t('linkage.cameraPushEnabled') }}</span>
+        </label>
+        <label class="field">
+          <span class="field-label">{{ t('linkage.cameraPushPort') }}</span>
+          <input v-model.number="draft.cameraPush.port" class="input" type="number" min="1024" max="65535" :disabled="!canWrite || !draft.cameraPush.enabled" />
+        </label>
       </div>
 
       <!-- 触发源健康度：0 帧是一个结论，所以照实显示 -->
       <dl v-if="engineStatus" class="kv source-kv">
         <div v-for="source in engineStatus.sources" :key="source.kind" class="kv__item">
           <dt class="kv__label">
-            {{ source.kind === 'poll' ? t('linkage.sourcePoll') : t('linkage.sourceWebsocket') }}
+            {{ source.kind === 'poll' ? t('linkage.sourcePoll') : source.kind === 'push' ? t('linkage.sourcePush') : t('linkage.sourceWebsocket') }}
           </dt>
           <dd class="kv__value">
             <span :class="source.running ? 'text-ok' : 'muted'">

@@ -41,6 +41,8 @@ import { zhCN } from '../src/shared/i18n/messages/zh-CN'
 import { en } from '../src/shared/i18n/messages/en'
 import { es } from '../src/shared/i18n/messages/es'
 import { tr } from '../src/shared/i18n/messages/tr'
+import { ru } from '../src/shared/i18n/messages/ru'
+import { zhTW } from '../src/shared/i18n/messages/zh-TW'
 import { i18n } from '../src/renderer/src/i18n'
 
 // ---------------------------------------------------------------------------
@@ -73,8 +75,10 @@ function state(overrides: Partial<CameraLiveState> & Pick<CameraLiveState, 'stat
 
 function catalogue(locale: string): Record<string, unknown> {
   if (locale === 'zh-CN') return zhCN as unknown as Record<string, unknown>
+  if (locale === 'zh-TW') return zhTW as unknown as Record<string, unknown>
   if (locale === 'en') return en as unknown as Record<string, unknown>
   if (locale === 'es') return es as unknown as Record<string, unknown>
+  if (locale === 'ru') return ru as unknown as Record<string, unknown>
   return tr as unknown as Record<string, unknown>
 }
 
@@ -634,11 +638,17 @@ describe('CameraVideoWall template', () => {
     assert.match(source, /const autoPlaySignal = computed\(/)
     assert.match(source, /watch\(autoPlaySignal,/)
     // `scheduleSettleRefresh` 的 setTimeout 是一次性的补读（起播之后把 starting 换成
-    // playing），它不参与判定，也不重试。
-    assert.equal(
-      (source.match(/window\.setTimeout/g) ?? []).length,
-      1,
-      '组件里出现了第二个定时器：自动起播不该靠定时器'
+    // playing），它不参与判定，也不重试。第二个 setTimeout 是 2026-09-22 业主第 8 条
+    // 加的一次性**断流自动重试**（`onCellVideoProblem`，每设备只试一次）——它只在
+    // 视频出错那一刻触发，同样不参与自动起播的判定，更不是轮询。
+    const setTimeouts = [...source.matchAll(/window\.setTimeout/g)].map((match) => match.index ?? -1)
+    assert.equal(setTimeouts.length, 2, '组件里出现了计划外的定时器')
+    const retryAt = source.indexOf('function onCellVideoProblem')
+    const retryEnd = source.indexOf('async function startCell')
+    assert.ok(
+      retryAt >= 0 && retryEnd > retryAt &&
+      setTimeouts.some((index) => index > retryAt && index < retryEnd),
+      '第二个定时器不在 onCellVideoProblem（一次性断流重试）里'
     )
     // 判定那一段（从目标相机的 computed 到挂载钩子）里不许有周期任务：
     // 「自动起播被写成轮询」是这个缺陷的名字，所以规则钉在那一段上，而不是钉在

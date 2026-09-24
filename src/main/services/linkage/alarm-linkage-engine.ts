@@ -29,7 +29,8 @@
  *   - **冷却 / 频率上限**：`evaluateAction` 里的三张表（按规则的时间窗、
  *     离散接口格、全局窗口）。命中就 `skipped`，并且**同样计数**——
  *     一封发不出去的邮件每 10 秒重试一次，日志就是噪音。
- *   - **每个动作独立开关 + 总开关默认关**：`evaluateAction` 的第一段。
+ *   - **每个动作独立开关 + 总开关**（2026-09-23 起总开关默认开，邮件动作仍默认关）：
+ *     `evaluateAction` 的第一段。
  *   - **幂等**：`seen` 去重表 + `PendingAlarmStore.upsert` 的幂等写入。
  *   - **失败隔离**：每个动作单独 `await` 并各自 `try/catch`；一个失败的邮件
  *     不会让录像回滚，一个失败的录像也不会让告警消失（告警先落待处理列表）。
@@ -104,7 +105,10 @@ export interface LinkageCandidate {
   observedAt: number
   alarmLevelRaw?: number
   strategyId?: number
-  metrics?: { soundmapIntensity?: number; leakVolume?: number }
+  /** 相机判定的检测模式（1 局放 / 2 泄漏 / 3 机械）与放电类型键（2026-09-23 真机字段）。 */
+  detectMode?: number
+  dischargeTypeKey?: string
+  metrics?: { soundmapIntensity?: number; leakVolume?: number; leakCost?: number; alarmDb?: number; alarmDf?: number }
   /** 源自己知道的判定依据（`is_alarm` 存在与否）。 */
   alarmFlag?: boolean
 }
@@ -338,6 +342,8 @@ export class AlarmLinkageEngine {
       source: candidate.source,
       ...(candidate.alarmLevelRaw !== undefined ? { alarmLevelRaw: candidate.alarmLevelRaw } : {}),
       ...(candidate.strategyId !== undefined ? { strategyId: candidate.strategyId } : {}),
+      ...(candidate.detectMode !== undefined ? { detectMode: candidate.detectMode } : {}),
+      ...(candidate.dischargeTypeKey !== undefined ? { dischargeTypeKey: candidate.dischargeTypeKey } : {}),
       ...(candidate.metrics !== undefined ? { metrics: candidate.metrics } : {})
     })
 

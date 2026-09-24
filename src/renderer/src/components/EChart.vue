@@ -17,10 +17,11 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 // actually renders are registered, which keeps the renderer bundle small.
 // `EChartsCoreOption` is the runtime-agnostic option type of the core build.
 import * as echarts from 'echarts/core'
-import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
+import { BarChart, HeatmapChart, LineChart, ScatterChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
+  MarkLineComponent,
   TooltipComponent,
   VisualMapComponent
 } from 'echarts/components'
@@ -31,7 +32,13 @@ echarts.use([
   LineChart,
   BarChart,
   HeatmapChart,
+  // PRPD 是散点图（`type: 'scatter'`）。漏注册它时生产构建不会报错，
+  // 而是**静默丢弃整条 series**（echarts Global.js 里 `ComponentModelClass`
+  // 为空的分支只在 dev 打一条日志）—— 表现就是"图一直在、点永远不显示"，
+  // 正是 2026-09-23 实时监测页 PRPD 空白的直接原因。
+  ScatterChart,
   GridComponent,
+  MarkLineComponent,
   TooltipComponent,
   VisualMapComponent,
   // 第 13 批第 6 条：「所有折线图支持时间轴放大缩小」。`dataZoom` 是一个**组件**，
@@ -46,8 +53,16 @@ const props = withDefaults(
     height?: string
     /** Shown as an overlay when there is nothing to plot yet. */
     placeholder?: string
+    /**
+     * 数据高频更新的实时图（PRPD 散点、实时 FFT/声纹）用 **merge** 更新而不是
+     * `setOption(option, true)` 整图替换。notMerge 每更新一次就把坐标轴、markLine、
+     * 画布全部推倒重建 —— 10 帧/秒的设备流意味着每秒 10 次整图闪烁与重建开销，
+     * 实测就是"PRPD 不断刷新"和视频卡顿的一部分（2026-09-22）。
+     * merge 只替换 series.data，图形容状（轴/系列个数）稳定的实时图必须走这条路。
+     */
+    mergeUpdates?: boolean
   }>(),
-  { height: '220px', placeholder: '' }
+  { height: '220px', placeholder: '', mergeUpdates: false }
 )
 
 const emit = defineEmits<{
@@ -72,6 +87,16 @@ const emit = defineEmits<{
        * 而那条回声正是"改状态 → 重算选项 → setOption → 再回声"这条死循环的燃料。
        */
       userDriven: boolean
+    }
+  ): void
+  (
+    event: 'chartclick',
+    payload: {
+      componentType: string
+      seriesType?: string
+      seriesName?: string
+      name?: string
+      data?: unknown
     }
   ): void
 }>()
@@ -128,6 +153,22 @@ onMounted(() => {
   if (!container.value) return
   chart = echarts.init(container.value, undefined, { renderer: 'canvas' })
   chart.setOption(props.option, true)
+  chart.on('click', (event) => {
+    const payload = event as {
+      componentType?: string
+      seriesType?: string
+      seriesName?: string
+      name?: string
+      data?: unknown
+    }
+    emit('chartclick', {
+      componentType: payload.componentType ?? '',
+      ...(payload.seriesType ? { seriesType: payload.seriesType } : {}),
+      ...(payload.seriesName ? { seriesName: payload.seriesName } : {}),
+      ...(payload.name ? { name: payload.name } : {}),
+      data: payload.data
+    })
+  })
   chart.on('dataZoom', (event) => {
     // ECharts 的载荷有两种形状（`batch` 与平铺），两者都要认；认不出来的就不发事件。
     const payload = event as {
@@ -173,7 +214,8 @@ onMounted(() => {
 watch(
   () => props.option,
   (option) => {
-    chart?.setOption(option, true)
+    if (props.mergeUpdates) chart?.setOption(option)
+    else chart?.setOption(option, true)
   },
   { deep: false }
 )

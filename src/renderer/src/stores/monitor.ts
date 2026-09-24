@@ -433,12 +433,21 @@ export const useMonitorStore = defineStore('monitor', () => {
   }
 
   function handleFeature(event: FeatureStreamEvent): void {
-    if (!belongsToSession(event.deviceId, event.feature.channelId)) return
+    if (event.deviceId !== deviceId.value) return
     // `FeatureStreamEvent.feature` is `RealtimeFeature` minus `deviceId`, so this
     // is a rename of the envelope, not a protocol mapping.
     const frame: RealtimeFeature = { ...event.feature, deviceId: event.deviceId }
-    pushCapped<RealtimeFeature>(features, frame, FEATURE_HISTORY_LIMIT)
-    // 顺手记进"每通道最后一次读数"：这一路现在就是活的那一路，读数是新的。
+    /*
+     * 2026-09-23：每通道读数表**不再**被会话过滤器拦（「通道一没有读到特征帧」）。
+     *
+     * 帧里的 `cur_ch` 是设备自述的通道号（实测 0 起始，PROTOCOL-FINDINGS 4.3），
+     * 它本来就是这一帧的真相——记进"每通道最后一次读数"不是错标。切通道的间隙
+     * （设备还没切过去）到达的旧通道帧，正好让另一路留下带时间戳的旧读数，
+     * 而不是永远停在"未读取"。
+     *
+     * 趋势缓冲（`features`）仍然只收**当前订阅的那一路**：把两路画进同一条
+     * 趋势才是这里本来要防的错标，那半句守卫不变。
+     */
     channelFeatures.value = recordChannelFeature(channelFeatures.value, frame)
     // 同一帧也追加进该通道的时间线（检测模式 2×2 图的数据源；纯函数见 lib/channelFeatures.ts）。
     channelFeatureHistory.value = recordChannelFeatureHistory(
@@ -446,6 +455,8 @@ export const useMonitorStore = defineStore('monitor', () => {
       frame,
       FEATURE_HISTORY_LIMIT
     )
+    if (frame.channelId !== channelId.value) return
+    pushCapped<RealtimeFeature>(features, frame, FEATURE_HISTORY_LIMIT)
     countFrame('features')
   }
 

@@ -48,7 +48,7 @@ export type { StreamState }
 // ---------------------------------------------------------------------------
 
 /**
- * 五路 WebSocket 通道的**稳定标识**。
+ * 实时 WebSocket 通道的**稳定标识**。
  *
  * 取值即手册路径去掉斜杠后的 camelCase（`/fftData` -> `fftData`），
  * 这样日志、IPC 推送与 Protocol Lab 报告里的名字与手册逐字一致。
@@ -58,6 +58,7 @@ export type { StreamState }
 export type Fa371StreamKind =
   | 'fftData'
   | 'voiceprintData'
+  | 'prpdData'
   | 'energyData'
   | 'pcmData'
   | 'detectFeedback'
@@ -75,6 +76,7 @@ export type Fa371StreamKind =
 export const FA371_CORE_STREAM_KINDS: readonly Fa371StreamKind[] = [
   'fftData',
   'voiceprintData',
+  'prpdData',
   'energyData',
   'pcmData',
   'detectFeedback'
@@ -99,6 +101,7 @@ export const FA371_ALL_STREAM_KINDS: readonly Fa371StreamKind[] = [
 export const FA371_STREAM_PATHS: Readonly<Record<Fa371StreamKind, string>> = {
   fftData: '/fftData',
   voiceprintData: '/voiceprintData',
+  prpdData: '/prpdData',
   energyData: '/energyData',
   pcmData: '/pcmData',
   detectFeedback: '/detectFeedback',
@@ -156,6 +159,12 @@ export const FA371_STREAM_MEASURED: Readonly<Record<Fa371StreamKind, Fa371Stream
     fixedFrameBytes: false,
     layout: 'JPEG（JFIF/SOF0 600×400、3 分量、基线），逐帧 44853–45460 B'
   },
+  prpdData: {
+    fps: 2,
+    bytesPerFrame: 23_000,
+    fixedFrameBytes: false,
+    layout: '实测 2026-09-23（局放检测开启后，probe-prpd.cjs）：JPEG（JFIF），约 21–25 kB/帧、约 2 帧/s；手册只写 "integer binary"，与 /voiceprintData 一样是设备渲染图'
+  },
   energyData: {
     fps: 29.92,
     bytesPerFrame: 20,
@@ -212,6 +221,14 @@ export const FA371_STREAM_SPECS: Readonly<Record<Fa371StreamKind, Fa371StreamSpe
     cadence: '手册 1 帧/秒（§5.2.2）；实测 10.07 帧/秒、JPEG 约 45 kB/帧',
     specRefs: '§8.4 D2、D4（位宽/宽高/通道/像素格式全未定义 —— 实测推的是 JPEG 图像，不是数值矩阵）'
   },
+  prpdData: {
+    kind: 'prpdData',
+    path: '/prpdData',
+    perSecond: 1,
+    payload: 'int32',
+    cadence: '手册 1 帧/秒；版本表确认 Main-Service 注册为 PRPD_DATA；实测 2026-09-23 约 2 帧/秒、JPEG 约 21–25 kB/帧（局放检测开启后）',
+    specRefs: '手册只给 integer binary；实测推的是 JPEG 图像（probe-prpd.cjs），数值口径仅保留给 mock/旧固件候选'
+  },
   energyData: {
     kind: 'energyData',
     path: '/energyData',
@@ -243,8 +260,8 @@ export const FA371_STREAM_SPECS: Readonly<Record<Fa371StreamKind, Fa371StreamSpe
   }
 }
 
-/** 手册对 `pcmData` 明确给出的采样率；其余参数未定义。 */
-export const FA371_PCM_SAMPLE_RATE_HZ = 48_000
+/** 当前 V2.0 设备基线采样率。旧版 API 文档曾写 48 kHz；当前项目按已确认的 200 kHz 平台运行。 */
+export const FA371_PCM_SAMPLE_RATE_HZ = 200_000
 
 // ---------------------------------------------------------------------------
 // 连接状态
@@ -387,6 +404,22 @@ export interface Fa371EnergyTarget {
 }
 
 /** `/energyData`：若干组目标点（组数 = 当前目标数量，最多 3）。 */
+/**
+ * `/prpdData`：手册说 integer binary，**实测（2026-09-23，局放检测开启后）是 JPEG 图像帧**
+ * （与 /voiceprintData 同一情况）。jpeg 候选下 `values` 为空、原图在 `jpegBase64`。
+ */
+export interface Fa371PrpdFrame {
+  kind: 'prpdData'
+  bytes: Uint8Array
+  /** 数值候选按 little-endian int32 解码的结果；jpeg 候选下为空。 */
+  values: Int32Array
+  /** 设备渲染好的 PRPD 图（jpeg 候选且魔数校验通过时存在）。 */
+  jpegBase64?: string
+  profile: Fa371DecodeProfile
+  receivedAt: number
+  sequence: number
+}
+
 export interface Fa371EnergyFrame {
   kind: 'energyData'
   bytes: Uint8Array
@@ -457,10 +490,11 @@ export interface Fa371DetectFeedbackFrame {
   sequence: number
 }
 
-/** 五路通道联合。判别字段是 `kind`。 */
+/** 通道联合。判别字段是 `kind`。 */
 export type Fa371Frame =
   | Fa371FftFrame
   | Fa371VoiceprintFrame
+  | Fa371PrpdFrame
   | Fa371EnergyFrame
   | Fa371PcmFrame
   | Fa371InfraredFrame
@@ -541,6 +575,18 @@ export interface Fa371VoiceprintPreview {
   jpegBytes?: number
 }
 
+export interface Fa371PrpdPreview {
+  deviceId: string
+  kind: 'prpdData'
+  timestamp: number
+  /** 数值候选映射出的点；layout 标明使用了哪种运行时解释。jpeg 帧时为 `[]`。 */
+  points: Array<[number, number]>
+  rawCount: number
+  layout: 'phase-amplitude-pairs' | 'indexed-amplitude' | 'jpeg-image'
+  /** 设备渲染好的 PRPD 图（实测 2026-09-23：局放检测开启后 /prpdData 推 JPEG）。 */
+  jpegBase64?: string
+}
+
 export interface Fa371EnergyPreview {
   deviceId: string
   kind: 'energyData'
@@ -558,6 +604,8 @@ export interface Fa371PcmPreview {
   rms: number
   /** 抽稀后的有符号包络（保留极值，不平均）。 */
   waveform: number[]
+  /** 完整单声道 Float32 帧，供 Renderer 统一计算时域 / FFT / STFT。 */
+  rawSamples: Float32Array
   sampleRate: number
   channels: number
   /** 源帧包含的样本数（按假设解码）；实测 4800 = 48 kHz 下的 100 ms。 */
@@ -595,6 +643,7 @@ export interface Fa371DetectFeedbackPreview {
 export type Fa371StreamPreview =
   | Fa371FftPreview
   | Fa371VoiceprintPreview
+  | Fa371PrpdPreview
   | Fa371EnergyPreview
   | Fa371PcmPreview
   | Fa371InfraredPreview

@@ -82,6 +82,13 @@ const props = defineProps<{
   emptyLabel: string
   /** 无障碍名字（「选择相机」/「更换相机」），与触发它的那个按钮同一句。 */
   label: string
+  /**
+   * 业主 2026-09-24：选择器**铺在被点的那一格里面**（inline 覆盖层），不再是
+   * 格子旁边的浮动卡片——浮在下方要挪视线，铺进播放窗口里点选就在原地。
+   * inline 时由调用方把它渲染在格子内部（`position: relative` 的容器里），
+   * 组件内部跳过 Teleport 与锚点测量。
+   */
+  inline?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -120,7 +127,14 @@ const activeIndex = ref(-1)
 async function place(): Promise<void> {
   await nextTick()
   const element = menu.value
-  if (!element || !props.anchor) return
+  if (!element) return
+  // inline：铺满格子，没有"落点"要算；聚焦 + 高亮复位仍然要做。
+  if (props.inline) {
+    element.focus()
+    activeIndex.value = stepItems.value.length > 0 ? 0 : -1
+    return
+  }
+  if (!props.anchor) return
   const rect = element.getBoundingClientRect()
   const placed = placeCameraPicker(
     props.anchor,
@@ -249,7 +263,9 @@ watch(
       stepItemId.value = null
       activeIndex.value = -1
     }
-  }
+  },
+  // inline 模式随格子 `v-if` 挂载：挂载即打开，watcher 不 immediate 就漏掉开场。
+  { immediate: true }
 )
 
 onBeforeUnmount(() => {
@@ -260,12 +276,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Teleport to="body">
+  <!-- inline 时 Teleport 停用：组件随格子渲染在 DOM 原位（格子内部），覆盖整格。 -->
+  <Teleport to="body" :disabled="inline">
     <div
       v-if="open"
       ref="menu"
       class="picker"
-      :style="{ left: `${position.left}px`, top: `${position.top}px` }"
+      :class="{ 'picker--inline': inline }"
+      :style="inline ? undefined : { left: `${position.left}px`, top: `${position.top}px` }"
       data-camera-picker
       role="listbox"
       tabindex="-1"
@@ -356,6 +374,21 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   outline: none;
+}
+
+/* inline（业主 2026-09-24）：铺满被点的那一格，选相机不挪视线。 */
+.picker--inline {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.97);
+  overflow-y: auto;
 }
 
 .picker__item {

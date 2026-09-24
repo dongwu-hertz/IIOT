@@ -70,6 +70,8 @@ function createFake(options: FakeOptions = {}): Fake {
   const strategyWrites: Array<{ switch: number; id: number }> = []
 
   const operations: CameraControlOperations = {
+    getLeakageConfig: () => Promise.reject(new Error('unused')),
+    setLeakageConfig: () => Promise.reject(new Error('unused')),
     async getRunMode() {
       const value = runModeReads[Math.min(readIndex, runModeReads.length - 1)]
       readIndex += 1
@@ -77,6 +79,13 @@ function createFake(options: FakeOptions = {}): Fake {
     },
     async setRunMode(body) {
       runModeWrites.push(body.run_mode)
+      return { ret: 200, msg: 'SUCCESS' }
+    },
+    // 本用例不触碰检测区域；接口形状要求存在即可。
+    async getScanArea() {
+      return undefined as never
+    },
+    async setScanArea() {
       return { ret: 200, msg: 'SUCCESS' }
     },
     async getDetectStatus() {
@@ -479,6 +488,8 @@ describe('camera control: 维护', () => {
 describe('camera control: 管理员校验', () => {
   const WRITES: CameraControlAction[] = [
     'writeRunMode',
+    // 检测区域写在设备上、会影响检测范围，与改运行方式同级。
+    'writeScanArea',
     'turnOnDetect',
     'turnOffDetect',
     'setStrategyEnabled',
@@ -490,6 +501,8 @@ describe('camera control: 管理员校验', () => {
   ]
   const READS: CameraControlAction[] = [
     'readRunMode',
+    // 读检测区域只是读设备状态。
+    'readScanArea',
     'readDetectStatus',
     'readEnabledStrategy',
     'readMaintenance',

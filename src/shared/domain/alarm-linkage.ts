@@ -32,12 +32,15 @@ export const LINKAGE_ACTION_KINDS: readonly LinkageActionKind[] = [
   'email'
 ]
 
-/** 触发的来源。两个源可以同时报同一个事件，靠事件身份去重。 */
-export type LinkageTriggerSourceKind = 'poll' | 'websocket'
+/** 触发的来源。多个源可以同时报同一个事件，靠事件身份去重。 */
+export type LinkageTriggerSourceKind = 'poll' | 'websocket' | 'push'
 
 export const LINKAGE_TRIGGER_SOURCE_KINDS: readonly LinkageTriggerSourceKind[] = [
   'poll',
-  'websocket'
+  'websocket',
+  // 相机主动 HTTP 推送（/push_config，2026-09-24 真机实测端点）：手册「Alarm push」
+  // 推荐的无人值守接收方式。与另外两个源共用同一个事件身份与去重表。
+  'push'
 ]
 
 /**
@@ -204,7 +207,13 @@ export interface LinkageRuntimeSettings {
  * 落在时段内外、界面要说明它不改变设备侧行为），那是产品决策而不是补一个字段。
  */
 export interface AlarmLinkageConfig {
-  /** 总开关。**默认 false**：装完就发邮件是缺陷，不是功能。 */
+  /**
+   * 总开关。**默认 true**（业主 2026-09-23：「告警信息应该默认开启」）——
+   * 装完软件、相机在跑局放模板，告警就该弹窗提示，不需要先去设置里翻开关。
+   * 仍然是一个可关的设置：用户在设置页关掉后，保存的值优先于这里的出厂值。
+   * 注意默认开的是**引擎与本地动作**；邮件仍然默认关闭（`actions.email`），
+   * 装完就往外发邮件是缺陷，不是功能。
+   */
   enabled: boolean
   /** 轮询 `/detect_logs` 的间隔（秒）。这是今天就能工作的主触发源。 */
   pollIntervalSeconds: number
@@ -224,11 +233,30 @@ export interface AlarmLinkageConfig {
   notices: LinkageNoticeSettings
   email: LinkageEmailSettings
   runtime: LinkageRuntimeSettings
+  /**
+   * 相机主动 HTTP 推送（手册「Alarm push」；端点 `/push_config`，2026-09-24 实测）。
+   *
+   * **默认关闭**：开它意味着在本机局域网端口上起一个监听，默认开监听是缺陷
+   * （与 IoT 接入默认关同一条理由）。用户在设置里打开后，软件把各相机的
+   * `push_url` 写到本机监听地址（写后读回验证）。
+   */
+  cameraPush: LinkageCameraPushSettings
 }
 
-/** 出厂的完整默认值。整个引擎默认**关闭**。 */
+/** 相机推送接收的配置。 */
+export interface LinkageCameraPushSettings {
+  /** 总开关：关 = 不监听、不写相机。 */
+  enabled: boolean
+  /** 本机监听端口（推送 URL 里的端口）。 */
+  port: number
+}
+
+/** 相机推送监听的出厂端口（IoT 接入用 8080/1883，错开）。 */
+export const LINKAGE_CAMERA_PUSH_DEFAULT_PORT = 8099
+
+/** 出厂的完整默认值。引擎默认**开启**（业主 2026-09-23），邮件默认关闭。 */
 export const DEFAULT_ALARM_LINKAGE_CONFIG: AlarmLinkageConfig = {
-  enabled: false,
+  enabled: true,
   pollIntervalSeconds: 10,
   useDetectFeedback: true,
   minAlarmLevel: 0,
@@ -259,7 +287,59 @@ export const DEFAULT_ALARM_LINKAGE_CONFIG: AlarmLinkageConfig = {
     attachFrame: true,
     cooldownSeconds: 60
   },
-  runtime: { maxActionsPerMinute: 20, cooldown: { periodSeconds: 60, perPeriod: 10, perInterface: 2 } }
+  runtime: { maxActionsPerMinute: 20, cooldown: { periodSeconds: 60, perPeriod: 10, perInterface: 2 } },
+  cameraPush: { enabled: false, port: LINKAGE_CAMERA_PUSH_DEFAULT_PORT }
+}
+
+/**
+ * 2026-09-23 之前**唯一的**出厂配置：与现在的默认逐字段相同，只是 `enabled: false`。
+ *
+ * 为什么需要认出它：设置服务的 `persist()` 是**整包写入**——任何一次设置保存
+ * （哪怕只是改了存储路径）都会把当时的 `alarmLinkage` 默认值一起落库。于是老装上
+ * 很多库里躺着一份「用户从未碰过联动设置、但 `enabled: false` 已持久化」的记录，
+ * 只改出厂默认值对它们不生效。
+ *
+ * 识别规则因此非常窄：**归一化后与这份旧默认逐字段完全相等**才视为「用户没碰过」，
+ * 允许设置服务把它升级成新默认；任何字段被用户改过（哪怕只改了一秒冷却），都视为
+ * 用户的选择，原样保留。
+ */
+const LEGACY_DEFAULT_ALARM_LINKAGE_CONFIG: AlarmLinkageConfig = {
+  ...DEFAULT_ALARM_LINKAGE_CONFIG,
+  enabled: false,
+  actions: { ...DEFAULT_ALARM_LINKAGE_CONFIG.actions },
+  recording: { ...DEFAULT_ALARM_LINKAGE_CONFIG.recording },
+  popup: { ...DEFAULT_ALARM_LINKAGE_CONFIG.popup },
+  notices: { ...DEFAULT_ALARM_LINKAGE_CONFIG.notices },
+  email: { ...DEFAULT_ALARM_LINKAGE_CONFIG.email },
+  runtime: {
+    ...DEFAULT_ALARM_LINKAGE_CONFIG.runtime,
+    cooldown: { ...DEFAULT_ALARM_LINKAGE_CONFIG.runtime.cooldown }
+  }
+}
+
+/** 深度相等（键序无关）。这两个配置对象都是纯 JSON 形状，不含函数与循环引用。 */
+function deepEqualJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (typeof left !== typeof right) return false
+  if (left === null || right === null || typeof left !== 'object') return false
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => deepEqualJson(value, right[index]))
+  }
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  const rightKeys = Object.keys(rightRecord)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every((key) => key in rightRecord && deepEqualJson(leftRecord[key], rightRecord[key]))
+}
+
+/**
+ * 一份（已归一化的）配置是不是「旧出厂默认」——即用户从未改过联动设置的老装。
+ * 设置服务在读取路径上用它把这类记录升级到 `enabled: true` 的新默认。
+ */
+export function isLegacyDefaultAlarmLinkageConfig(config: AlarmLinkageConfig): boolean {
+  return deepEqualJson(config, LEGACY_DEFAULT_ALARM_LINKAGE_CONFIG)
 }
 
 /** 邮件模板的默认值；界面用它们填占位，而不是展示空框。 */
@@ -371,6 +451,25 @@ export interface LinkageTrigger {
 export interface LinkageMetrics {
   soundmapIntensity?: number
   leakVolume?: number
+  /** 泄漏价格（`data_2`，仅泄漏模式携带，2026-09-24）。 */
+  leakCost?: number
+  /** 告警时刻的声压级 dB（`last_alarm_db`，2026-09-23 真机实测存在）。 */
+  alarmDb?: number
+  /** 告警时刻的主频 Hz（`last_alarm_df`）。 */
+  alarmDf?: number
+}
+
+/**
+ * 告警事件的设备侧语义（相机自己判定的结果，2026-09-23 真机字段实测）。
+ *
+ * 「检测与判断都在相机上、软件只接收」是产品口径：这两个字段就是相机判定结论的
+ * 一部分（什么模式、哪种放电类型），软件**不重新推导**，只如实携带与展示。
+ */
+export interface LinkageAlarmSemantics {
+  /** 检测模式原始值（1 局放 / 2 泄漏 / 3 机械——与 work_mode 同一取值域）。 */
+  detectMode?: number
+  /** 放电类型稳定键（`FA371_DISCHARGE_TYPE_KEYS`；未知取值不携带）。 */
+  dischargeTypeKey?: string
 }
 
 export interface LinkageActionOutcome {
@@ -425,6 +524,9 @@ export interface PendingAlarmRecord {
   source: LinkageTriggerSourceKind
   alarmLevelRaw?: number
   strategyId?: number
+  /** 相机判定的检测模式与放电类型（2026-09-23；含义见 `LinkageAlarmSemantics`）。 */
+  detectMode?: number
+  dischargeTypeKey?: string
   metrics?: LinkageMetrics
   /** 联动录像的 id（录像动作成功时）。 */
   recordingId?: string

@@ -21,6 +21,16 @@ export class EnvelopePlayer {
   private nextStartTime = 0
   /** 0..1；`setVolume()` 之前排进队列的声音也会被它改。 */
   private volume = DEFAULT_VOLUME_PERCENT / 100
+  /**
+   * 自动增益的滚动峰值（2026-09-23「播放没声音」修复）。
+   *
+   * 实测：AE08 `/audio_stream` 的 float32 是**物理量级**的小数（±1e-4 上下，
+   * 约 −80 dBFS），不是归一化满量程——照原值播就是事实上的静音。这里按滚动峰值
+   * 把信号抬到约 −6 dBFS（0.5）：峰值本身慢衰减（×0.98/帧），增益不会随单个
+   * 瞬态上下泵。只影响"听到的响度"，不改变波形的相对形状；波形图显示的仍是
+   * 原始值，两件事不混。
+   */
+  private peakTrack = 0
 
   /** 在当前手势里创建/唤醒 AudioContext。创建失败（没有输出设备）由调用方报告。 */
   async resume(): Promise<void> {
@@ -83,7 +93,20 @@ export class EnvelopePlayer {
     const duration = Math.max(0.02, frameMs / 1000)
     const length = Math.max(2, Math.round(context.sampleRate * duration))
     const buffer = context.createBuffer(1, length, context.sampleRate)
-    buffer.copyToChannel(resampleEnvelope(waveform, length), 0)
+    const resampled = resampleEnvelope(waveform, length)
+
+    // 自动增益（见 `peakTrack` 的注释）：物理量级的小幅值信号不抬就是静音。
+    let framePeak = 0
+    for (const value of resampled) {
+      const magnitude = Math.abs(value)
+      if (magnitude > framePeak) framePeak = magnitude
+    }
+    this.peakTrack = Math.max(framePeak, this.peakTrack * 0.98)
+    const scale = this.peakTrack > 1e-9 ? Math.min(1000, Math.max(0.1, 0.5 / this.peakTrack)) : 1
+    if (scale !== 1) {
+      for (let index = 0; index < resampled.length; index += 1) resampled[index] = (resampled[index] ?? 0) * scale
+    }
+    buffer.copyToChannel(resampled, 0)
 
     const now = context.currentTime
     const start = scheduleStartTime(this.nextStartTime, now)

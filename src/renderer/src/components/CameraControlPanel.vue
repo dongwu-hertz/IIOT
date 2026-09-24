@@ -5,10 +5,10 @@
  * ---------------------------------------------------------------------------
  * 这个面板回答四个问题
  * ---------------------------------------------------------------------------
- *   1. 检测模式现在是什么？能改吗？—— `GET`/`PUT /run_mode`，手册字段名就是
- *      **检测模式**：`1` 单次检测 / `-1` 智能巡航；
- *   2. 这台设备在做**哪种应用**？—— 局部放电 / 气体泄漏 / 机械异响，
- *      `GET`/`PUT /system`（**端点未文档化**，真机实测可读可写，见下面「应用模式」一节）；
+ *   1. 运行方式现在是什么？能改吗？—— `GET`/`PUT /run_mode`：
+ *      `1` 单次检测 / `-1` 智能巡航；
+ *   2. Detection Mode 现在是什么？—— `work_mode`：局部放电 / 气体泄漏 / 机械异响，
+ *      `GET`/`PUT /system`（端点未文档化，真机实测可读可写）；
  *   3. 检测在跑吗？能开始/停止吗？—— `POST /turn_on_detect` /
  *      `POST /turn_off_detect` + `GET /system/detect_status`；
  *   4. 维护能做什么？—— 版本信息可读（`GET /dev_info` / `GET /basic`），
@@ -36,10 +36,15 @@
  * 自包含：只依赖 `deviceId`，自带本地状态，不改动 `CameraAcousticPanel` /
  * `CameraAlarmDialog`。所有文案走 `cameraControlUi.*`。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Fa371AlarmStrategy, Fa371DetectStatus, Fa371RunModeConfig, Fa371WorkModeValue } from '@shared/domain/fa371'
-import { Fa371RunMode } from '@shared/domain/fa371'
+import {
+  FA371_WORK_MODES,
+  type Fa371AlarmStrategy,
+  type Fa371DetectStatus,
+  type Fa371RunModeConfig,
+  type Fa371WorkModeValue
+} from '@shared/domain/fa371'
 import type {
   CameraDetectActionResult,
   CameraEnabledStrategyView,
@@ -63,7 +68,7 @@ import type {
   CameraModePresetWriteResult,
   CameraModeRequestedValues
 } from '@shared/domain/camera-mode-preset'
-import { CAMERA_BAND_MAX_WIDTH_KHZ, CAMERA_MODE_PRESETS, CAMERA_PRESETS_REJECTED_BY_DEVICE } from '@shared/domain/camera-mode-preset'
+import { CAMERA_BAND_MAX_WIDTH_KHZ } from '@shared/domain/camera-mode-preset'
 import { useSessionStore } from '@renderer/stores/session'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatBytes, formatDuration } from '@renderer/lib/format'
@@ -98,11 +103,168 @@ const props = defineProps<{
   deviceId: string
   /** 只渲染这几块（不传＝全部）。见 `CameraControlSection`。 */
   sections?: readonly CameraControlSection[]
+  /** 当前设备的实时告警数量；实时监测页把它放在标题右侧。 */
+  alarmCount?: number
+  /**
+   * 实时监测页当前“已确认/已保存”的检测模式。
+   * 它是界面显示 PRPD / Leakage / Mechanical 的权威值；设备 work_mode 只用于一致性核对。
+   */
+  configuredWorkMode?: Fa371WorkModeValue
+}>()
+
+const emit = defineEmits<{
+  /** 首次读取到设备实际 work_mode；父页面只做一致性核对，不用它反复改显示模式。 */
+  (event: 'workModeObserved', payload: { deviceId: string; mode: Fa371WorkModeValue }): void
+  /** 操作员在设置弹窗中明确修改模式且设备读回确认后，更新父页面保存的模式。 */
+  (event: 'workModeChange', payload: { deviceId: string; mode: Fa371WorkModeValue }): void
+  /** 实时监测页把三类告警配置拆成三个独立入口；具体弹窗/画面编辑器由父页面承载。 */
+  (event: 'alarmConditionConfig'): void
+  (event: 'alarmStrategyConfig'): void
+  (event: 'alarmRegionConfig'): void
 }>()
 
 const activeSections = computed<readonly CameraControlSection[]>(
   () => props.sections ?? ALL_SECTIONS
 )
+
+/** Realtime Monitoring uses the compact operational control layout. */
+const realtimeLayout = computed(() => {
+  const sections = activeSections.value
+  return (
+    sections.includes('mode') &&
+    sections.includes('preset') &&
+    sections.includes('detect') &&
+    !sections.includes('strategy') &&
+    !sections.includes('maintenance') &&
+    !sections.includes('upgrade')
+  )
+})
+const detectionSettingsOpen = ref(false)
+const settingsWorkModeDraft = ref<Fa371WorkModeValue | null>(null)
+let detectStatusPollTimer: number | null = null
+let workModeLoadedDeviceId = ''
+
+function isConfirmedWorkMode(value: unknown): value is Fa371WorkModeValue {
+  return value === 1 || value === 2 || value === 3
+}
+
+/**
+ * Application mode is treated as a latched device setting in Realtime Monitoring.
+ * Read it once when a camera is selected. After that, ordinary refreshes (detect status,
+ * imaging settings, strategy state, etc.) must NOT re-read or republish work_mode.
+ * The latch is refreshed only after the operator explicitly changes Detection Mode.
+ */
+async function refreshWorkMode(deviceId: string, force = false): Promise<void> {
+  if (!wants('mode') || deviceId === '') return
+  if (!force && workModeLoadedDeviceId === deviceId && isConfirmedWorkMode(workModeRaw.value)) return
+
+  const result = await callApi(() => window.api.cameraControl.readWorkMode(deviceId))
+  // The operator may switch cameras while this request is in flight. Never publish an old
+  // camera's work_mode into the newly selected camera's software state.
+  if (props.deviceId !== deviceId) return
+  if (!result.success) {
+    // Keep the last confirmed UI mode. A transient read failure must never hide/show PRPD.
+    return
+  }
+
+  const read = unwrap(result) ?? null
+  if (read) workModeInfo.value = read
+  const raw = read?.view.raw
+  if (!read?.available || !isConfirmedWorkMode(raw)) return
+
+  workModeLoadedDeviceId = deviceId
+  emit('workModeObserved', { deviceId, mode: raw })
+}
+
+/**
+ * Realtime monitoring has one selected camera. Keep detection state and the currently
+ * enabled strategy in sync on the same lightweight 2 s poll so Start never remains
+ * stale after the alarm-policy dialog changes device state.
+ */
+async function refreshRealtimeDetectStatus(): Promise<void> {
+  if (!realtimeLayout.value || !wants('detect') || props.deviceId === '' || busy.value) return
+  // Keep the Start button in sync with alarm-policy changes made in the separate
+  // alarm dialog. Previously this poll refreshed only detect_status, so after an
+  // operator enabled/disabled a strategy the Start button could remain grey until
+  // the whole Camera Control panel was manually refreshed.
+  const [detectResult, enabledResult] = await Promise.all([
+    callApi(() => window.api.cameraControl.readDetectStatus(props.deviceId)),
+    callApi(() => window.api.cameraControl.readEnabledStrategy(props.deviceId))
+  ])
+  if (detectResult.success) detect.value = unwrap(detectResult) ?? null
+  if (enabledResult.success) enabledStrategies.value = unwrap(enabledResult) ?? null
+}
+
+function startDetectStatusPolling(): void {
+  if (!realtimeLayout.value || detectStatusPollTimer !== null) return
+  void refreshRealtimeDetectStatus()
+  // 2 s 一拍（2026-09-23 下调，原 500 ms）：状态徽标 2 s 的延迟看不出差别，但相机
+  // 的 HTTP 服务是单线程的小服务 —— 500 ms 一拍等于全天不间断地占着它（设备日志里
+  // 一上午 1300+ 次 /system/detect_status，还挤掉了其它请求的连接）。
+  detectStatusPollTimer = window.setInterval(() => { void refreshRealtimeDetectStatus() }, 2_000)
+}
+
+function openDetectionSettings(): void {
+  // Frequency has its own editor under Operation Mode. Opening the camera-settings
+  // modal starts from the last device read, so an unfinished frequency edit is not
+  // accidentally persisted when the operator only intends to change imaging settings.
+  syncManualSettingsFromDevice()
+  // The modal starts from the monitoring software's configured mode, not from a fresh camera read.
+  // This lets the operator explicitly re-apply the expected mode when the camera was changed elsewhere.
+  settingsWorkModeDraft.value = isConfirmedWorkMode(props.configuredWorkMode)
+    ? props.configuredWorkMode
+    : isConfirmedWorkMode(workModeRaw.value)
+      ? workModeRaw.value
+      : null
+  detectionSettingsOpen.value = true
+}
+
+function closeDetectionSettings(): void {
+  // Cancel means cancel the whole settings edit, including frequency / threshold drafts.
+  syncManualSettingsFromDevice()
+  detectionSettingsOpen.value = false
+  settingsWorkModeDraft.value = null
+}
+
+async function applyDetectionSettings(): Promise<void> {
+  const next = settingsWorkModeDraft.value
+  const deviceId = props.deviceId
+  if (!isConfirmedWorkMode(next) || deviceId === '' || manualBandError.value !== '') return
+
+  // Imaging threshold is edited here; frequency lives directly under Operation Mode. Persist
+  // any pending camera-setting draft before requesting a Detection Mode change so writes cannot race.
+  if (manualSettingsDirty.value) {
+    const saved = await saveManualImagingSettings()
+    if (!saved) return
+  }
+
+  detectionSettingsOpen.value = false
+  settingsWorkModeDraft.value = null
+
+  // Important mismatch case: software may be configured for PD while the camera is already
+  // in Gas mode. If the operator explicitly selects Gas and presses Apply, no device write is
+  // needed, but the software configuration still has to move to Gas.
+  if (next === workModeRaw.value) {
+    if (next !== props.configuredWorkMode) {
+      outcome.value = t('cameraControlUi.appModeApplied')
+      emit('workModeChange', { deviceId, mode: next })
+    }
+    return
+  }
+
+  requestWorkMode(next)
+}
+
+function openAlarmConfiguration(kind: 'condition' | 'strategy' | 'region'): void {
+  // Alarm configuration is intentionally outside this modal: each type owns its own Save/Cancel.
+  // Entering one of those editors is navigation, not an implicit Save of frequency/threshold edits.
+  syncManualSettingsFromDevice()
+  detectionSettingsOpen.value = false
+  settingsWorkModeDraft.value = null
+  if (kind === 'condition') emit('alarmConditionConfig')
+  else if (kind === 'strategy') emit('alarmStrategyConfig')
+  else emit('alarmRegionConfig')
+}
 
 /** 这一块要不要渲染 / 要不要为它去读设备。**读写共用同一个判据**。 */
 function wants(section: CameraControlSection): boolean {
@@ -137,7 +299,7 @@ const maintenance = ref<CameraMaintenanceInfo | null>(null)
 const canWrite = computed(() => session.isAdmin)
 
 // ---------------------------------------------------------------------------
-// 检测模式
+// 运行方式（run_mode：单次检测 / 智能巡航）
 // ---------------------------------------------------------------------------
 
 /** 控件只有两态；设备回了别的值时两态都不选中，并把原始值显示出来。 */
@@ -152,15 +314,6 @@ const modeRawText = computed(() => {
 const modeUnrecognised = computed(() => mode.value !== null && mode.value.raw !== undefined && mode.value.mode === undefined)
 
 /** 写完之后设备实际是什么 —— 界面显示这个，而不是请求值。 */
-const modeReadBackText = computed(() => {
-  const result = modeOutcome.value
-  if (!result) return ''
-  const after = result.after
-  if (after.mode === Fa371RunMode.SingleDetection) return t('cameraControlUi.modeSingle')
-  if (after.mode === Fa371RunMode.IntelligentCruise) return t('cameraControlUi.modeCruise')
-  return after.raw === undefined ? t('cameraControlUi.valueUnavailable') : t('cameraControlUi.modeRawValue', { value: after.raw })
-})
-
 async function selectMode(next: 1 | -1): Promise<void> {
   if (busy.value || props.deviceId === '') return
   if (mode.value?.mode === next) return
@@ -187,11 +340,11 @@ async function selectMode(next: 1 | -1): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 应用模式（这台设备在做哪种应用：局部放电 / 气体泄漏 / 机械异响）
+// 检测模式（work_mode：局部放电 / 气体泄漏 / 机械异响）
 //
-// ⚠ 与上面那块「检测模式」只差一个词，但不是一回事：
-//   检测模式 = `GET`/`PUT /run_mode`（手册 §5.1.8，单次检测 / 智能巡航）；
-//   应用模式 = `GET`/`PUT /system`（**端点未文档化**，真机实测可读可写）。
+// ⚠ 与上面那块「运行方式」不是一回事：
+//   运行方式 = `GET`/`PUT /run_mode`（手册 §5.1.8，单次检测 / 智能巡航）；
+//   检测模式 = `GET`/`PUT /system`（`work_mode`，真机实测可读可写）。
 // 端点不在任何一份手册里（是设备自带 Web 界面的 bundle 里读出来的），所以这里
 // 每一步都按"实测接口"对待：读不到就**不渲染**控件，写完之后显示**重读值**，
 // 按钮 title 只陈述这一条事实（`appModeSourceHint`），不写成"已支持"。
@@ -227,14 +380,6 @@ function workModeText(raw: number | undefined): string {
   return key === undefined ? t('cameraControlUi.modeRawValue', { value: raw }) : t(key)
 }
 
-/** 读回来认不出的取值：只把原始数字摆出来，不猜它是不是机械异响。 */
-const workModeUnknown = computed(
-  () => workModeInfo.value !== null && workModeRaw.value !== undefined && workModeInfo.value.view.mode === undefined
-)
-
-/** 写完之后设备实际是什么 —— 显示的是重读值，不是请求值。 */
-const workModeReadBackText = computed(() => workModeText(workModeOutcome.value?.after.raw))
-
 /**
  * 「切换应用模式」的二次确认。
  *
@@ -267,6 +412,16 @@ const pendingWorkMode = ref<Fa371WorkModeValue | null>(null)
  * 取消（按钮 / Esc / 遮罩都不关，见 `:close-on-overlay="false"`）时把 `pending` 清空，
  * 一个字节都不发给设备。
  */
+function onWorkModeSelect(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (value === 1 || value === 2 || value === 3) requestWorkMode(value)
+}
+
+function onRunModeSelect(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (value === 1 || value === -1) void selectMode(value)
+}
+
 function requestWorkMode(next: Fa371WorkModeValue): void {
   if (busy.value || props.deviceId === '') return
   // 已经在这个模式上就什么都不做（与 `selectWorkMode` 里的守卫同一条理由）。
@@ -300,6 +455,7 @@ const pendingWorkModeText = computed(() =>
 
 async function selectWorkMode(next: Fa371WorkModeValue): Promise<void> {
   if (busy.value || props.deviceId === '') return
+  const deviceId = props.deviceId
   // 已经在这个模式上就什么都不做：重复写一次等于拿一个无操作去赌一次设备行为。
   if (workModeRaw.value === next) return
   busy.value = true
@@ -307,7 +463,7 @@ async function selectWorkMode(next: Fa371WorkModeValue): Promise<void> {
   outcome.value = ''
   workModeOutcome.value = null
   try {
-    const result = await callApi(() => window.api.cameraControl.writeWorkMode(props.deviceId, next))
+    const result = await callApi(() => window.api.cameraControl.writeWorkMode(deviceId, next))
     if (!result.success) {
       error.value = resultMessage(result)
       return
@@ -318,8 +474,138 @@ async function selectWorkMode(next: Fa371WorkModeValue): Promise<void> {
       : t('cameraControlUi.appModeRejected')
   } finally {
     busy.value = false
-    // 无论生效还是被忽略，都把设备当前状态重新读一遍（`after` 会覆盖读数）。
-    await load()
+    const readBack = workModeOutcome.value?.after.raw
+
+    // writeWorkMode() already performs PUT -> GET. Its `after` value is the authoritative camera
+    // fact for this Apply action; do not issue another work_mode GET here. That keeps the realtime
+    // state chain to: one observation on entry, then write-after-readback only on explicit Apply.
+    if (props.deviceId === deviceId && workModeOutcome.value && isConfirmedWorkMode(readBack)) {
+      workModeInfo.value = {
+        available: true,
+        view: workModeOutcome.value.after,
+        selectable: workModeInfo.value?.selectable ?? FA371_WORK_MODES
+      }
+      workModeLoadedDeviceId = deviceId
+      if (workModeOutcome.value.applied) {
+        emit('workModeChange', { deviceId, mode: readBack })
+        // 业主 2026-09-24：切到泄漏模式成功 → 自动展开泄漏计算参数（那是泄漏量/成本
+        // 口径的输入，手册把这些列为泄漏估算的必填上下文）。
+        if (readBack === 2) void openLeakageEditor()
+      } else {
+        // A rejected write never changes software configuration; its read-back is only a mismatch fact.
+        emit('workModeObserved', { deviceId, mode: readBack })
+      }
+      await load()
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 泄漏估算参数（业主 2026-09-24：局放 → 泄漏切换时要能填计算模板）
+//
+// 端点是手册内的 `/system/leakage`（§5.1.10/§5.1.11，V2.0 含 correction_rate）。
+// 行为：当前模式是泄漏时模式区块下面出现这一块；从别的模式**切到**泄漏成功时
+// 自动展开一次（参数是泄漏量/成本口径的输入，不切的时候没人需要天天看到它）。
+// 读打底 → 改草稿 → 保存（部分字段更新）→ 设备重读值回显 —— 与 run_mode 同一口径。
+// ---------------------------------------------------------------------------
+
+interface LeakageDraft {
+  correction_rate: number | undefined
+  cost_display: boolean
+  leakage_distance: number | undefined
+  leakage_unit: number | undefined
+  monetary_unit: number | undefined
+  value_of_gas: number | undefined
+  energy_cost: number | undefined
+  specific_power: number | undefined
+  working_hours: number | undefined
+}
+
+const leakageOpen = ref(false)
+const leakageBusy = ref(false)
+const leakageError = ref('')
+const leakageNotice = ref('')
+const leakageDraft = reactive<LeakageDraft>({
+  correction_rate: undefined,
+  cost_display: false,
+  leakage_distance: undefined,
+  leakage_unit: undefined,
+  monetary_unit: undefined,
+  value_of_gas: undefined,
+  energy_cost: undefined,
+  specific_power: undefined,
+  working_hours: undefined
+})
+
+/** 当前应用模式是不是泄漏（读回值是权威，见 selectWorkMode 的注释链）。 */
+const isLeakMode = computed(() => workModeRaw.value === 2)
+
+async function openLeakageEditor(): Promise<void> {
+  if (props.deviceId === '') return
+  leakageOpen.value = true
+  leakageError.value = ''
+  leakageNotice.value = ''
+  leakageBusy.value = true
+  const result = await callApi(() => window.api.cameraControl.readLeakage(props.deviceId))
+  leakageBusy.value = false
+  if (!result.success) {
+    leakageError.value = resultMessage(result)
+    return
+  }
+  const current = unwrap(result)
+  // 设备当前值打底：读不到的字段留空 = 不改它（保存时只发填了的字段）。
+  leakageDraft.correction_rate = current?.correctionRate
+  leakageDraft.cost_display = current?.costDisplay ?? false
+  leakageDraft.leakage_distance = current?.distanceM
+  leakageDraft.leakage_unit = current?.unit?.code
+  leakageDraft.monetary_unit = current?.monetaryUnit?.code
+  leakageDraft.value_of_gas = current?.valueOfGas
+  leakageDraft.energy_cost = current?.energyCost
+  leakageDraft.specific_power = current?.specificPower
+  leakageDraft.working_hours = current?.workingHours
+}
+
+async function saveLeakage(): Promise<void> {
+  if (busy.value || leakageBusy.value || props.deviceId === '') return
+  leakageBusy.value = true
+  leakageError.value = ''
+  leakageNotice.value = ''
+  try {
+    // 只发填了的字段（手册原文：需要配置的参数单独发；空 = 不动设备上那个字段）。
+    const patch: Record<string, number> = {}
+    if (leakageDraft.correction_rate !== undefined) patch.correction_rate = leakageDraft.correction_rate
+    if (leakageDraft.leakage_distance !== undefined) patch.leakage_distance = leakageDraft.leakage_distance
+    if (leakageDraft.leakage_unit !== undefined) patch.leakage_unit = leakageDraft.leakage_unit
+    if (leakageDraft.monetary_unit !== undefined) patch.monetary_unit = leakageDraft.monetary_unit
+    if (leakageDraft.value_of_gas !== undefined) patch.value_of_gas = leakageDraft.value_of_gas
+    if (leakageDraft.energy_cost !== undefined) patch.energy_cost = leakageDraft.energy_cost
+    if (leakageDraft.specific_power !== undefined) patch.specific_power = leakageDraft.specific_power
+    if (leakageDraft.working_hours !== undefined) patch.working_hours = leakageDraft.working_hours
+    patch.cost_display = leakageDraft.cost_display ? 1 : 0
+
+    const result = await callApi(() =>
+      window.api.cameraControl.writeLeakage(props.deviceId, patch)
+    )
+    if (!result.success) {
+      leakageError.value = resultMessage(result)
+      return
+    }
+    // 权威值回显：设备读回来的才算数（与其他写通道同一口径）。
+    const after = unwrap(result)?.after
+    if (after) {
+      leakageDraft.correction_rate = after.correctionRate
+      leakageDraft.cost_display = after.costDisplay ?? false
+      leakageDraft.leakage_distance = after.distanceM
+      leakageDraft.leakage_unit = after.unit?.code
+      leakageDraft.monetary_unit = after.monetaryUnit?.code
+      leakageDraft.value_of_gas = after.valueOfGas
+      leakageDraft.energy_cost = after.energyCost
+      leakageDraft.specific_power = after.specificPower
+      leakageDraft.working_hours = after.workingHours
+    }
+    leakageNotice.value = t('cameraControlUi.leakageSaved')
+  } finally {
+    leakageBusy.value = false
   }
 }
 
@@ -336,234 +622,186 @@ async function selectWorkMode(next: Fa371WorkModeValue): Promise<void> {
 // 切换应用模式不会顺带改写下面这些成像参数。
 // ---------------------------------------------------------------------------
 
-const PRESET_HINT_KEYS: Record<CameraModePresetId, string> = {
-  partial_discharge: 'cameraControlUi.presetHintPartialDischarge',
-  gas_leak: 'cameraControlUi.presetHintGasLeak',
-  mechanical: 'cameraControlUi.presetHintMechanical'
-}
-
-const PRESET_CITATION_KEYS: Record<CameraModePresetId, string> = {
-  partial_discharge: 'cameraControlUi.presetCitationPartialDischarge',
-  gas_leak: 'cameraControlUi.presetCitationGasLeak',
-  mechanical: 'cameraControlUi.presetCitationMechanical'
-}
-
 /** 设备当前的「频带 + 目标数量 + 阈值 + 命中预设」，全部来自一次真实读数。 */
 const presetView = computed(() => presetInfo.value?.view ?? null)
 
-const matchedPresetIds = computed(() => presetInfo.value?.matchedPresetIds ?? [])
+// ---------------------------------------------------------------------------
+// 实时监测页的手工成像参数
+//
+// 产品要求：应用模式只给“建议检测范围”，不能把频带锁死在预设值上。设备当前值仍
+// 由 readModePreset() 读取；保存时复用 cameraControl.restoreModeValues() 这条“按给定
+// 字段写回并重读”的通道。这个 API 名字历史上叫 restore，但服务端接受的是通用的
+// CameraModeRequestedValues，因此这里不新增第二套写接口。
+// ---------------------------------------------------------------------------
+const manualLowerKhz = ref<number | null>(null)
+const manualUpperKhz = ref<number | null>(null)
+const manualThreshold = ref<number | null>(null)
+const manualSettingsDirty = ref(false)
 
-/**
- * 当前频带。两侧都读到才画成 `20–40 kHz`；只读到一侧只显示那一个数。
- *
- * **不做单位换算**：手册的单位就是 kHz，转换只会在界面上制造第二个真相。
- */
-const currentBandText = computed(() => {
+function syncManualSettingsFromDevice(): void {
   const view = presetView.value
-  if (!view) return ''
-  const lower = view.lowerKhz
-  const upper = view.upperKhz
-  if (lower !== undefined && upper !== undefined) return `${lower}–${upper} kHz`
-  if (lower !== undefined) return `${lower} kHz`
-  if (upper !== undefined) return `${upper} kHz`
+  if (!view) return
+  manualLowerKhz.value = view.lowerKhz ?? null
+  manualUpperKhz.value = view.upperKhz ?? null
+  manualThreshold.value = view.energyThreshold ?? null
+  manualSettingsDirty.value = false
+}
+
+const suggestedBandText = computed(() => {
+  switch (workModeRaw.value) {
+    case 1:
+      return '20–40 kHz'
+    case 2:
+      return '25–45 kHz'
+    case 3:
+      // 手册给的是 2–50 kHz 搜索/起始指导；单次成像带宽仍受设备自身校验约束。
+      return t('cameraControlUi.suggestedMechanicalBand', { limit: CAMERA_BAND_MAX_WIDTH_KHZ })
+    default:
+      return '2–65 kHz'
+  }
+})
+
+const manualBandError = computed(() => {
+  const lower = manualLowerKhz.value
+  const upper = manualUpperKhz.value
+  if (lower === null || upper === null) return t('cameraControlUi.bandErrorMissing')
+  if (!Number.isFinite(lower) || !Number.isFinite(upper)) return t('cameraControlUi.bandErrorNumeric')
+  if (lower < 2 || upper > 65) return t('cameraControlUi.bandErrorRange')
+  if (lower >= upper) return t('cameraControlUi.bandErrorOrder')
+  if (upper - lower > CAMERA_BAND_MAX_WIDTH_KHZ) {
+    return t('cameraControlUi.bandErrorWidth', { limit: CAMERA_BAND_MAX_WIDTH_KHZ })
+  }
   return ''
 })
 
-const currentTargetsText = computed(() => presetView.value?.targetCount ?? null)
-
-/**
- * 成像阈值只**显示**，从不写入。
- *
- * 三个模式在手册里的推荐值都是「Set after observing ambient energy」
- * （`practical-guide.txt` 第 366–368 / 449–451 / 523–525 行），所以这里没有
- * 阈值控件，也不给预设编一个值 —— 只把设备现在报的数字摆出来给操作员对照。
- */
-const currentThresholdText = computed(() => presetView.value?.energyThreshold ?? null)
-
-const bandUnknownTitle = computed(() =>
-  presetView.value && currentBandText.value === '' ? t('cameraControlUi.presetNotRead') : ''
+const manualSettingsCanSave = computed(() =>
+  canWrite.value && !busy.value && manualSettingsDirty.value && manualBandError.value === '' && manualThreshold.value !== null
 )
 
-const presetDisabledTitle = computed(() => (canWrite.value ? '' : t('cameraControlUi.adminOnlyHint')))
+const manualFrequencyCanSave = computed(() =>
+  canWrite.value && !busy.value && manualSettingsDirty.value && manualBandError.value === ''
+)
 
-/**
- * 这个预设的频带**设备会直接拒绝**吗？
- *
- * 机械异响的手册推荐值是 2–50 kHz（宽度 48），而设备实测强制宽度 ≤20 kHz，
- * 所以写下去必然得到 `ret:400 Set acousic config error`。手册的值照抄不改
- * （改了就是替厂家编数字），但按钮必须禁用并说明原因 —— 让操作员点一个
- * 注定失败的按钮，比告诉他为什么不能点更糟。
- */
-function presetRejectedByDevice(id: CameraModePresetId): boolean {
-  return CAMERA_PRESETS_REJECTED_BY_DEVICE.includes(id)
+function markManualSettingsDirty(): void {
+  manualSettingsDirty.value = true
 }
 
-/** 禁用原因，写成"多宽 / 上限多少"，因为数字才是操作员需要的东西。 */
-function presetRejectedTitle(id: CameraModePresetId): string {
-  const band = CAMERA_MODE_PRESETS.find((preset) => preset.id === id)?.values.band
-  if (!band) return ''
-  return t('cameraControlUi.presetRejectedByDevice', {
-    width: band.upperKhz - band.lowerKhz,
-    limit: CAMERA_BAND_MAX_WIDTH_KHZ
-  })
-}
+const CAMERA_BAND_MIN_KHZ = 2
+const CAMERA_BAND_MAX_KHZ = 65
 
-function presetHint(id: CameraModePresetId): string {
-  return t(PRESET_HINT_KEYS[id])
-}
-
-function presetCitation(id: CameraModePresetId): string {
-  return t(PRESET_CITATION_KEYS[id])
-}
-
-function presetName(id: CameraModePresetId): string {
-  if (id === 'partial_discharge') return t('cameraControlUi.presetPartialDischarge')
-  if (id === 'gas_leak') return t('cameraControlUi.presetGasLeak')
-  return t('cameraControlUi.presetMechanical')
-}
-
-/** 设备现在是不是就是这个预设（读不到字段时服务判 `false`，不猜）。 */
-function presetIsCurrent(id: CameraModePresetId): boolean {
-  return matchedPresetIds.value.includes(id)
+function clampBandValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
 /**
- * 「已经在这个场景」只在**载入时**就成立、且此后没有被切走时才显示。
- *
- * 否则操作员点完按钮看到的还是同一句「已在此场景」，就分不清按钮到底有没有生效。
+ * Only two frequency inputs are exposed. When the operator edits the lower bound, keep that value
+ * authoritative and move the upper bound if needed. The camera accepts at most a 20 kHz span.
  */
-const presetAlreadyIds = computed(() => {
-  const current = new Set(matchedPresetIds.value)
-  return initialPresetIds.value.filter((id) => current.has(id))
-})
-
-function presetAlready(id: CameraModePresetId): boolean {
-  return presetAlreadyIds.value.includes(id)
-}
-
-/** 写完之后重新读到的频带（权威值），显示在结果那一行。 */
-const presetReadBackText = computed(() => {
-  const after = presetOutcome.value?.after
-  if (!after) return ''
-  const lower = after.lowerKhz
-  const upper = after.upperKhz
-  if (lower === undefined && upper === undefined) return t('cameraControlUi.presetNotRead')
-  if (lower !== undefined && upper !== undefined) return `${lower}–${upper} kHz`
-  return `${lower ?? upper} kHz`
-})
-
-function presetResultText(result: CameraModePresetWriteResult): string {
-  if (result.kind === 'restore') {
-    return result.applied
-      ? t('cameraControlUi.presetRestored')
-      : t('cameraControlUi.presetRestoreRejected')
+function onLowerFrequencyInput(): void {
+  const raw = manualLowerKhz.value
+  if (raw === null || !Number.isFinite(raw)) {
+    markManualSettingsDirty()
+    return
   }
-  return result.applied ? t('cameraControlUi.presetApplied') : t('cameraControlUi.presetRejected')
+  const lower = clampBandValue(raw, CAMERA_BAND_MIN_KHZ, CAMERA_BAND_MAX_KHZ - 1)
+  let upper = manualUpperKhz.value
+  if (upper === null || !Number.isFinite(upper)) upper = Math.min(CAMERA_BAND_MAX_KHZ, lower + CAMERA_BAND_MAX_WIDTH_KHZ)
+  upper = clampBandValue(upper, CAMERA_BAND_MIN_KHZ + 1, CAMERA_BAND_MAX_KHZ)
+  if (upper <= lower) upper = Math.min(CAMERA_BAND_MAX_KHZ, lower + 1)
+  if (upper - lower > CAMERA_BAND_MAX_WIDTH_KHZ) upper = lower + CAMERA_BAND_MAX_WIDTH_KHZ
+  manualLowerKhz.value = lower
+  manualUpperKhz.value = upper
+  markManualSettingsDirty()
 }
 
-/** 从一次写入/还原的返回里取出「这次改了哪些字段」，放弃所有非数值字段。 */
-function restorableValues(from: CameraModePresetWriteResult['before']): CameraModeRequestedValues {
-  return {
-    acoustic: {
-      ...(from.lowerKhz !== undefined ? { lowerKhz: from.lowerKhz } : {}),
-      ...(from.upperKhz !== undefined ? { upperKhz: from.upperKhz } : {}),
-      ...(from.sampleRateRaw !== undefined ? { sampleRateRaw: from.sampleRateRaw } : {})
-    },
-    imaging: {
-      ...(from.targetCount !== undefined ? { targetCount: from.targetCount } : {}),
-      ...(from.imagingSensitivity !== undefined
-        ? { imagingSensitivity: from.imagingSensitivity }
-        : {}),
-      ...(from.imagingEnhance !== undefined ? { imagingEnhance: from.imagingEnhance } : {}),
-      // 阈值：手册说现场看环境再定，所以预设不写；**还原**时才把设备原来的数字搬回去。
-      ...(from.energyThreshold !== undefined ? { energyThreshold: from.energyThreshold } : {})
-    }
+/** Same rule in the other direction: editing the upper bound moves the lower bound when needed. */
+function onUpperFrequencyInput(): void {
+  const raw = manualUpperKhz.value
+  if (raw === null || !Number.isFinite(raw)) {
+    markManualSettingsDirty()
+    return
   }
+  const upper = clampBandValue(raw, CAMERA_BAND_MIN_KHZ + 1, CAMERA_BAND_MAX_KHZ)
+  let lower = manualLowerKhz.value
+  if (lower === null || !Number.isFinite(lower)) lower = Math.max(CAMERA_BAND_MIN_KHZ, upper - CAMERA_BAND_MAX_WIDTH_KHZ)
+  lower = clampBandValue(lower, CAMERA_BAND_MIN_KHZ, CAMERA_BAND_MAX_KHZ - 1)
+  if (lower >= upper) lower = Math.max(CAMERA_BAND_MIN_KHZ, upper - 1)
+  if (upper - lower > CAMERA_BAND_MAX_WIDTH_KHZ) lower = upper - CAMERA_BAND_MAX_WIDTH_KHZ
+  manualLowerKhz.value = lower
+  manualUpperKhz.value = upper
+  markManualSettingsDirty()
 }
 
-/**
- * 一个还原请求值都没有时（两侧都没读到），不渲染还原按钮：
- * 发一个空请求只会浪费一次往返，服务也会以 VALIDATION_ERROR 拒绝。
- */
-function hasAnyValue(values: CameraModeRequestedValues): boolean {
-  return Object.keys(values.acoustic).length > 0 || Object.keys(values.imaging).length > 0
-}
+async function saveManualImagingSettings(): Promise<boolean> {
+  if (!manualSettingsCanSave.value || props.deviceId === '') return false
+  const lower = manualLowerKhz.value
+  const upper = manualUpperKhz.value
+  const threshold = manualThreshold.value
+  if (lower === null || upper === null || threshold === null) return false
 
-async function applyPreset(id: CameraModePresetId): Promise<void> {
-  if (busy.value || props.deviceId === '') return
   busy.value = true
   error.value = ''
   outcome.value = ''
-  presetOutcome.value = null
   try {
-    const result = await callApi(() => window.api.cameraControl.applyModePreset(props.deviceId, id))
+    const values: CameraModeRequestedValues = {
+      acoustic: { lowerKhz: lower, upperKhz: upper },
+      imaging: { energyThreshold: threshold }
+    }
+    const result = await callApi(() =>
+      window.api.cameraControl.restoreModeValues(props.deviceId, values)
+    )
     if (!result.success) {
       error.value = resultMessage(result)
-      return
+      return false
     }
     const write = unwrap(result)
-    if (!write) return
-    presetOutcome.value = write
-    // 「撤销」写回去的是**写之前读到的设备事实**，不是请求值 —— 请求值只说明我们
-    // 想要什么，不说明设备原来是什么。
-    presetRestorable.value = restorableValues(write.before)
-    outcome.value = presetResultText(write)
+    presetOutcome.value = write ?? null
+    outcome.value = write?.applied
+      ? t('cameraControlUi.imagingSettingsApplied')
+      : t('cameraControlUi.imagingSettingsRejected')
+    if (write?.applied) {
+      manualSettingsDirty.value = false
+      return true
+    }
+    return false
   } finally {
     busy.value = false
     await load()
   }
 }
 
-/**
- * 把当前场景**再写一遍**。
- *
- * 为什么需要它：设备可能应答 `ret:200` 却没有真的改（本设备有先例），这时重读的
- * 频带仍是旧值 —— 唯一的补救就是照预设再写一次。按钮只在「当前读数不是这个预设」
- * 时出现：读数已经是它的时候再写一遍等于拿一个无操作去赌一次设备行为。
- */
-const presetCanReapply = computed(() => {
-  const outcomeValue = presetOutcome.value
-  if (outcomeValue?.kind !== 'preset' || !outcomeValue.presetId) return false
-  if (outcomeValue.applied) return false
-  return !presetIsCurrent(outcomeValue.presetId)
-})
+/** Realtime Operation Mode owns frequency independently from Camera Settings. */
+async function saveManualFrequencyBand(): Promise<boolean> {
+  if (!manualFrequencyCanSave.value || props.deviceId === '') return false
+  const lower = manualLowerKhz.value
+  const upper = manualUpperKhz.value
+  if (lower === null || upper === null) return false
 
-async function reapplyPreset(): Promise<void> {
-  const id = presetOutcome.value?.presetId
-  if (id === undefined) return
-  await applyPreset(id)
-}
-
-/** 撤销：把写之前读到的值写回去。只在确实切过场景、且还有值可写时渲染。 */
-const presetCanRestore = computed(() => {
-  if (presetOutcome.value === null) return false
-  const values = presetRestorable.value
-  if (values === null || !hasAnyValue(values)) return false
-  if (matchedPresetIds.value.length === 0) return false
-  // 设备现在回到载入时那些预设中的某一个 → 已经没东西可撤了。
-  return !initialPresetIds.value.some(presetIsCurrent)
-})
-
-async function restorePreset(): Promise<void> {
-  const values = presetRestorable.value
-  if (busy.value || props.deviceId === '' || values === null) return
   busy.value = true
   error.value = ''
   outcome.value = ''
   try {
+    const values: CameraModeRequestedValues = {
+      acoustic: { lowerKhz: lower, upperKhz: upper },
+      imaging: {}
+    }
     const result = await callApi(() =>
       window.api.cameraControl.restoreModeValues(props.deviceId, values)
     )
     if (!result.success) {
       error.value = resultMessage(result)
-      return
+      return false
     }
     const write = unwrap(result)
-    if (!write) return
-    presetOutcome.value = write
-    // 还原值用完之后清掉：再点一次已经没有意义（设备已经在那个值上了）。
-    presetRestorable.value = null
-    outcome.value = presetResultText(write)
+    presetOutcome.value = write ?? null
+    outcome.value = write?.applied
+      ? t('cameraControlUi.imagingSettingsApplied')
+      : t('cameraControlUi.imagingSettingsRejected')
+    if (write?.applied) {
+      manualSettingsDirty.value = false
+      return true
+    }
+    return false
   } finally {
     busy.value = false
     await load()
@@ -949,11 +1187,16 @@ onMounted(() => {
     if (event.deviceId !== props.deviceId) return
     upgradeProgress.value = event
   })
+  startDetectStatusPolling()
 })
 
 onUnmounted(() => {
   unsubscribeUpgradeProgress?.()
   unsubscribeUpgradeProgress = null
+  if (detectStatusPollTimer !== null) {
+    window.clearInterval(detectStatusPollTimer)
+    detectStatusPollTimer = null
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -972,10 +1215,9 @@ async function load(): Promise<void> {
      * 拉三遍，而且"这次读的是哪几块"与"屏幕上画的是哪几块"会不一致 —— 一处改了另一处没改，
      * 排查时看起来像设备出了问题。
      */
-    const [modeResult, workModeResult, detectResult, enabledResult, listResult, maintenanceResult, presetResult] =
+    const [modeResult, detectResult, enabledResult, listResult, maintenanceResult, presetResult] =
       await Promise.all([
         wants('mode') ? callApi(() => window.api.cameraControl.readRunMode(deviceId)) : null,
-        wants('mode') ? callApi(() => window.api.cameraControl.readWorkMode(deviceId)) : null,
         wants('detect') ? callApi(() => window.api.cameraControl.readDetectStatus(deviceId)) : null,
         /**
          * 「启用中的策略」不只是告警策略那一块要的：**检测启停按钮的可用性依赖它**
@@ -996,9 +1238,9 @@ async function load(): Promise<void> {
       ])
 
     if (modeResult?.success) mode.value = unwrap(modeResult) ?? null
-    // 应用模式是**未文档化**端点：服务把"读不到"收成 `available:false`（而不是抛错），
-    // 这里照收即可，控件据此整块不渲染。真失败（比如设备离线）仍会进下面那份 failures。
-    if (workModeResult?.success) workModeInfo.value = unwrap(workModeResult) ?? null
+    // work_mode is intentionally NOT part of the ordinary refresh path.
+    // It is read once per selected device by refreshWorkMode(), then latched until the
+    // operator explicitly changes Detection Mode.
     if (detectResult?.success) detect.value = unwrap(detectResult) ?? null
     if (enabledResult?.success) enabledStrategies.value = unwrap(enabledResult) ?? null
     if (listResult?.success) {
@@ -1014,7 +1256,11 @@ async function load(): Promise<void> {
     if (presetResult?.success) {
       const read = unwrap(presetResult)
       presetInfo.value = read ?? null
-      if (read) initialPresetIds.value = read.matchedPresetIds
+      if (read) {
+        initialPresetIds.value = read.matchedPresetIds
+        // 只有设备读数刷新后才覆盖输入框，避免用户正在键入时被异步状态刷新打断。
+        if (!manualSettingsDirty.value) syncManualSettingsFromDevice()
+      }
     }
 
     // 读到的每一路失败都要说出来：静默的半张卡比一句错误更难查。
@@ -1022,7 +1268,6 @@ async function load(): Promise<void> {
     // 放进一个数组后 `resultMessage` 拿到的会是联合类型，推不出 T。
     const failures: string[] = []
     if (modeResult && !modeResult.success) failures.push(resultMessage(modeResult))
-    if (workModeResult && !workModeResult.success) failures.push(resultMessage(workModeResult))
     if (detectResult && !detectResult.success) failures.push(resultMessage(detectResult))
     if (enabledResult && !enabledResult.success) failures.push(resultMessage(enabledResult))
     if (listResult && !listResult.success) failures.push(resultMessage(listResult))
@@ -1034,7 +1279,10 @@ async function load(): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await refreshWorkMode(props.deviceId)
+  await load()
+})
 
 watch(
   () => props.deviceId,
@@ -1045,6 +1293,13 @@ watch(
     presetOutcome.value = null
     presetRestorable.value = null
     initialPresetIds.value = []
+    manualLowerKhz.value = null
+    manualUpperKhz.value = null
+    manualThreshold.value = null
+    manualSettingsDirty.value = false
+    detectionSettingsOpen.value = false
+    workModeLoadedDeviceId = ''
+    workModeInfo.value = null
     // 升级这一段的面板状态是**逐设备**的：换一台设备时上一位操作员选的包、
     // 上传结果与设备进度都不再属于这个面板。
     upgradePackage.value = null
@@ -1056,6 +1311,7 @@ watch(
     upgradeBusy.value = null
     outcome.value = ''
     error.value = ''
+    await refreshWorkMode(props.deviceId)
     await load()
   }
 )
@@ -1067,13 +1323,50 @@ watch(
     "这两块就是应当并排的面板"（不然就得靠组件的内部类名去猜）。它不带任何样式，
     只在这一个属性上起作用。
   -->
-  <div class="cctl camera-board__panel">
+  <div class="cctl camera-board__panel" :class="{ 'cctl--realtime': realtimeLayout }">
     <section class="card cctl__card">
-      <div class="section-header">
+      <div class="section-header cctl__top-header">
         <h3 class="section-title">{{ t('cameraControlUi.title') }}</h3>
-        <button type="button" class="btn btn--sm" :disabled="loading" @click="load">
-          {{ t('cameraControlUi.refresh') }}
-        </button>
+        <div class="cctl__header-actions">
+          <span
+            v-if="(alarmCount ?? 0) > 0"
+            class="cctl__alarm-badge"
+            data-camera-alarm-count
+            :title="t('cameraControlUi.activeRecentAlarms', { count: alarmCount ?? 0 })"
+            role="status"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M9 2.4 16 15H2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              <path d="M9 6.2v4.5M9 13.1v.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span>{{ alarmCount }}</span>
+          </span>
+          <button
+            v-if="realtimeLayout"
+            type="button"
+            class="cctl__icon-button"
+            :class="{ 'cctl__icon-button--active': detectionSettingsOpen }"
+            :title="t('cameraControlUi.settingsTitle')"
+            :aria-label="t('cameraControlUi.settingsTitle')"
+            :aria-expanded="detectionSettingsOpen"
+            @click="openDetectionSettings"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M7.7 2.3h2.6l.45 1.55c.35.14.68.33.98.56l1.55-.43 1.3 2.25-1.1 1.13c.05.36.05.73 0 1.1l1.1 1.13-1.3 2.25-1.55-.43c-.3.23-.63.42-.98.56l-.45 1.55H7.7l-.45-1.55a5.2 5.2 0 0 1-.98-.56l-1.55.43-1.3-2.25 1.1-1.13a4.1 4.1 0 0 1 0-1.1l-1.1-1.13 1.3-2.25 1.55.43c.3-.23.63-.42.98-.56L7.7 2.3Z" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/>
+              <circle cx="9" cy="7.95" r="1.85" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="cctl__icon-button"
+            :disabled="loading"
+            :title="t('cameraControlUi.refresh')"
+            :aria-label="t('cameraControlUi.refresh')"
+            @click="load"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M14.8 6.4A6 6 0 1 0 15 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14.8 3.4v3.4h-3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
       </div>
 
       <p v-if="error" class="alert alert--danger" role="alert">{{ error }}</p>
@@ -1099,161 +1392,265 @@ watch(
       <div class="cctl__board">
       <!-- ================= 检测 ================= -->
       <section v-if="wants('mode') || wants('preset') || wants('detect')" class="card cctl__card cctl__section">
-        <h4 class="cctl__label cctl__section-title">{{ t('cameraControlUi.modeTitle') }}</h4>
+        <h4 v-if="!realtimeLayout" class="cctl__label cctl__section-title">{{ t('cameraControlUi.detectionControlTitle') }}</h4>
 
-      <!-- ---- 检测模式（⑨ 搬到设备管理；第 24 条之后两处都能渲染） ------- -->
-      <div v-if="wants('mode')" class="cctl__row" data-camera-panel="mode">
-        <span class="cctl__label">{{ t('cameraControlUi.modeTitle') }}</span>
-        <div class="cctl__modes">
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--primary': modeValue === 1 }"
+        <!-- 检测模式（work_mode）：切换本身只改变 work_mode；频带/门限仅显示建议，不自动覆盖。 -->
+        <div v-if="wants('mode') && workModeAvailable && !realtimeLayout" class="cctl__field cctl__field--mode-settings">
+          <label class="cctl__field-label" for="camera-work-mode">{{ t('cameraControlUi.detectionModeLabel') }}</label>
+          <select
+            id="camera-work-mode"
+            class="select cctl__select"
+            :value="workModeRaw ?? ''"
             :disabled="busy || !canWrite"
-            :title="canWrite ? '' : t('cameraControlUi.adminOnlyHint')"
-            @click="selectMode(1)"
+            :title="canWrite ? t('cameraControlUi.appModeSourceHint') : t('cameraControlUi.adminOnlyHint')"
+            @change="onWorkModeSelect"
           >
-            {{ t('cameraControlUi.modeSingle') }}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            :class="{ 'btn--primary': modeValue === -1 }"
-            :disabled="busy || !canWrite"
-            :title="canWrite ? '' : t('cameraControlUi.adminOnlyHint')"
-            @click="selectMode(-1)"
-          >
-            {{ t('cameraControlUi.modeCruise') }}
-          </button>
-        </div>
-        <span v-if="modeUnrecognised" class="cctl__meta" :title="t('cameraControlUi.modeUnknownHint')">
-          {{ t('cameraControlUi.modeRawValue', { value: modeRawText }) }}
-        </span>
-      </div>
-      <p v-if="modeOutcome" class="cctl__meta" :class="{ 'cctl__meta--warn': !modeOutcome.applied }">
-        {{ t('cameraControlUi.modeReadBack', { value: modeReadBackText }) }}
-      </p>
+            <option v-for="value in workModeSelectable" :key="value" :value="value">
+              {{ workModeText(value) }}
+            </option>
+          </select>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.suggestedFrequencyRange', { range: suggestedBandText }) }}</p>
 
-      <!-- ---- 应用模式（这台设备在做哪种应用） -------------------------- -->
-      <!-- 整块由能力门控制：`/system` 未文档化，读不到就不渲染。它属于"检测模式"那一块。 -->
-      <template v-if="wants('mode') && workModeAvailable">
-        <div class="cctl__row">
-          <!-- title 只陈述一条事实：这个端点未见于设备手册。不写成"已支持"。 -->
-          <span class="cctl__label" :title="t('cameraControlUi.appModeSourceHint')">
-            {{ t('cameraControlUi.appModeTitle') }}
-          </span>
-          <div class="cctl__modes">
+          <!-- 泄漏计算参数（业主 2026-09-24）：当前是泄漏模式时出现；切到泄漏成功时自动展开一次。 -->
+          <div v-if="isLeakMode || leakageOpen" class="cctl__leakage">
             <button
-              v-for="value in workModeSelectable"
-              :key="value"
+              v-if="!leakageOpen"
               type="button"
               class="btn btn--sm"
-              :class="{ 'btn--primary': workModeRaw === value }"
               :disabled="busy || !canWrite"
-              :title="canWrite ? '' : t('cameraControlUi.adminOnlyHint')"
-              @click="requestWorkMode(value)"
+              @click="openLeakageEditor"
             >
-              {{ workModeText(value) }}
+              {{ t('cameraControlUi.leakageOpen') }}
             </button>
+            <div v-else class="cctl__leakage-form">
+              <span class="cctl__field-label">{{ t('cameraControlUi.leakageParamsTitle') }}</span>
+              <div class="cctl__leakage-grid">
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.leakageDistance') }}</span>
+                  <input v-model.number="leakageDraft.leakage_distance" class="input" type="number" min="1" max="50" step="0.1" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.leakageUnitLabel') }}</span>
+                  <select v-model.number="leakageDraft.leakage_unit" class="select" :disabled="leakageBusy || !canWrite">
+                    <option :value="0">l/min</option>
+                    <option :value="1">ml/s</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.monetaryUnitLabel') }}</span>
+                  <select v-model.number="leakageDraft.monetary_unit" class="select" :disabled="leakageBusy || !canWrite">
+                    <option :value="0">¥ CNY</option>
+                    <option :value="1">£ GBP</option>
+                    <option :value="2">$ USD</option>
+                    <option :value="3">€ EUR</option>
+                    <option :value="4">₽ RUB</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.valueOfGas') }}</span>
+                  <input v-model.number="leakageDraft.value_of_gas" class="input" type="number" step="0.01" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.energyCost') }}</span>
+                  <input v-model.number="leakageDraft.energy_cost" class="input" type="number" step="0.01" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.specificPower') }}</span>
+                  <input v-model.number="leakageDraft.specific_power" class="input" type="number" step="0.01" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.workingHours') }}</span>
+                  <input v-model.number="leakageDraft.working_hours" class="input" type="number" step="0.5" min="0" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{{ t('cameraControlUi.correctionRate') }}</span>
+                  <input v-model.number="leakageDraft.correction_rate" class="input" type="number" step="0.01" :disabled="leakageBusy || !canWrite" />
+                </label>
+                <label class="field checkbox-field">
+                  <input v-model="leakageDraft.cost_display" type="checkbox" :disabled="leakageBusy || !canWrite" />
+                  <span class="field-label">{{ t('cameraControlUi.costDisplay') }}</span>
+                </label>
+              </div>
+              <p v-if="leakageError" class="alert alert--danger" role="alert">{{ leakageError }}</p>
+              <p v-else-if="leakageNotice" class="alert alert--success" role="status">{{ leakageNotice }}</p>
+              <div class="btn-row">
+                <button type="button" class="btn btn--sm btn--primary" :disabled="leakageBusy || !canWrite" @click="saveLeakage">
+                  {{ t('cameraControlUi.leakageSave') }}
+                </button>
+                <button type="button" class="btn btn--sm" @click="leakageOpen = false">
+                  {{ t('cameraAlarmUi.cancel') }}
+                </button>
+              </div>
+            </div>
           </div>
-          <span
-            v-if="workModeRaw !== undefined"
-            class="cctl__meta"
-            :class="{ 'cctl__meta--warn': workModeUnknown }"
-            :title="workModeUnknown ? t('cameraControlUi.appModeUnknownHint') : ''"
+        </div>
+
+        <!-- 单次检测 / 智能巡航：保留设备原有 run_mode，但降为次级运行方式。 -->
+        <div v-if="wants('mode')" class="cctl__field" data-camera-panel="mode">
+          <label class="cctl__field-label" for="camera-run-mode">{{ t('cameraControlUi.operationLabel') }}</label>
+          <select
+            id="camera-run-mode"
+            class="select cctl__select"
+            :value="modeValue ?? ''"
+            :disabled="busy || !canWrite"
+            @change="onRunModeSelect"
           >
-            {{ t('cameraControlUi.appModeCurrent') }}: {{ workModeText(workModeRaw) }}
+            <option :value="1">{{ t('cameraControlUi.modeSingle') }}</option>
+            <option :value="-1">{{ t('cameraControlUi.modeCruise') }}</option>
+          </select>
+          <span v-if="modeUnrecognised" class="cctl__meta">
+            {{ t('cameraControlUi.modeRawValue', { value: modeRawText }) }}
           </span>
         </div>
-        <p
-          v-if="workModeOutcome"
-          class="cctl__meta"
-          :class="{ 'cctl__meta--warn': !workModeOutcome.applied }"
-        >
-          {{ t('cameraControlUi.modeReadBack', { value: workModeReadBackText }) }}
-        </p>
-      </template>
 
-      <!-- ---- 应用场景（应用模式预设） -------------------------------- -->
-      <div v-if="wants('preset')" class="cctl__row">
-        <span class="cctl__label">{{ t('cameraControlUi.presetTitle') }}</span>
-        <span class="cctl__meta" :title="bandUnknownTitle">
-          {{ t('cameraControlUi.presetCurrentBand') }}:
-          {{ currentBandText === '' ? t('cameraControlUi.presetNotRead') : currentBandText }}
-        </span>
-        <span class="cctl__meta" :title="t('cameraControlUi.presetTargetsUnchanged')">
-          {{ t('cameraControlUi.presetCurrentTargets') }}:
-          {{ currentTargetsText === null ? t('cameraControlUi.presetNotRead') : currentTargetsText }}
-        </span>
-        <span class="cctl__meta">
-          {{ t('cameraControlUi.presetCurrentThreshold') }}:
-          {{ currentThresholdText === null ? t('cameraControlUi.presetNotRead') : currentThresholdText }}
-        </span>
-      </div>
-      <div v-if="wants('preset')" class="cctl__presets">
-        <span
-          v-for="preset in CAMERA_MODE_PRESETS"
-          :key="preset.id"
-          :title="
-            presetRejectedByDevice(preset.id)
-              ? presetRejectedTitle(preset.id)
-              : presetCitation(preset.id)
-          "
-        >
+        <!-- Realtime layout: frequency and alarm configuration belong directly under
+             Operation Mode. They are deliberately not hidden in Camera Settings. -->
+        <div v-if="realtimeLayout && wants('preset')" class="cctl__field cctl__field--frequency-inline">
+          <span class="cctl__field-label">{{ t('cameraControlUi.frequencyBand') }}</span>
+          <div class="cctl__band-inputs">
+            <label>
+              <span class="sr-only">{{ t('cameraControlUi.lowerFrequency') }}</span>
+              <input
+                v-model.number="manualLowerKhz"
+                class="input cctl__number"
+                type="number"
+                min="2"
+                max="64"
+                step="1"
+                :disabled="busy || !canWrite"
+                @input="onLowerFrequencyInput"
+              />
+            </label>
+            <span class="cctl__range-separator">—</span>
+            <label>
+              <span class="sr-only">{{ t('cameraControlUi.upperFrequency') }}</span>
+              <input
+                v-model.number="manualUpperKhz"
+                class="input cctl__number"
+                type="number"
+                min="3"
+                max="65"
+                step="1"
+                :disabled="busy || !canWrite"
+                @input="onUpperFrequencyInput"
+              />
+            </label>
+            <span class="cctl__unit">kHz</span>
+          </div>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.recommendedForMode', { range: suggestedBandText }) }}</p>
+          <p v-if="manualBandError" class="cctl__field-error">{{ manualBandError }}</p>
+          <div class="cctl__settings-actions cctl__settings-actions--primary">
+            <button
+              type="button"
+              class="btn btn--sm btn--primary"
+              :disabled="!manualFrequencyCanSave"
+              @click="saveManualFrequencyBand"
+            >
+              {{ t('common.save') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              :disabled="busy || !manualSettingsDirty"
+              @click="syncManualSettingsFromDevice"
+            >
+              {{ t('common.cancel') }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="realtimeLayout" class="cctl__field cctl__alarm-config-field">
+          <span class="cctl__field-label">{{ t('cameraAlarmUi.title') }}</span>
+          <div class="cctl__alarm-config-actions">
+            <button type="button" class="btn btn--sm" :disabled="!canWrite" @click="openAlarmConfiguration('condition')">
+              {{ t('cameraAlarmUi.tabConditions') }}
+            </button>
+            <button type="button" class="btn btn--sm" :disabled="!canWrite" @click="openAlarmConfiguration('strategy')">
+              {{ t('cameraAlarmUi.tabStrategies') }}
+            </button>
+            <button type="button" class="btn btn--sm" :disabled="!canWrite" @click="openAlarmConfiguration('region')">
+              {{ t('cameraAlarmUi.tabRegions') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 手工频带：模式只提供建议，真正用于成像的上下限始终允许工程师输入。 -->
+        <div v-if="wants('preset') && !realtimeLayout" class="cctl__field">
+          <span class="cctl__field-label">{{ t('cameraControlUi.frequencyBand') }}</span>
+          <div class="cctl__band-inputs">
+            <label>
+              <span class="sr-only">{{ t('cameraControlUi.lowerFrequency') }}</span>
+              <input
+                v-model.number="manualLowerKhz"
+                class="input cctl__number"
+                type="number"
+                min="2"
+                max="65"
+                step="1"
+                :disabled="busy || !canWrite"
+                @input="onLowerFrequencyInput"
+              />
+            </label>
+            <span class="cctl__range-separator">—</span>
+            <label>
+              <span class="sr-only">{{ t('cameraControlUi.upperFrequency') }}</span>
+              <input
+                v-model.number="manualUpperKhz"
+                class="input cctl__number"
+                type="number"
+                min="2"
+                max="65"
+                step="1"
+                :disabled="busy || !canWrite"
+                @input="onUpperFrequencyInput"
+              />
+            </label>
+            <span class="cctl__unit">kHz</span>
+          </div>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.recommendedForMode', { range: suggestedBandText }) }}</p>
+          <p v-if="manualBandError" class="cctl__field-error">{{ manualBandError }}</p>
+        </div>
+
+        <!-- 成像门限：既可以键入，也可以通过步进键微调；它不是告警阈值。 -->
+        <div v-if="wants('preset') && !realtimeLayout" class="cctl__field">
+          <label class="cctl__field-label" for="camera-imaging-threshold">{{ t('cameraControlUi.imagingThreshold') }}</label>
+          <div class="cctl__threshold">
+            <input
+              id="camera-imaging-threshold"
+              v-model.number="manualThreshold"
+              class="input cctl__number cctl__number--threshold"
+              type="number"
+              step="1"
+              :disabled="busy || !canWrite"
+              @input="markManualSettingsDirty"
+            />
+            <span class="cctl__unit">dB</span>
+          </div>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.imagingThresholdHint') }}</p>
+        </div>
+
+        <div v-if="wants('preset') && !realtimeLayout" class="cctl__settings-actions cctl__settings-actions--primary">
+          <button
+            type="button"
+            class="btn btn--sm btn--primary"
+            :disabled="!manualSettingsCanSave"
+            @click="saveManualImagingSettings"
+          >
+            {{ t('cameraControlUi.apply') }}
+          </button>
           <button
             type="button"
             class="btn btn--sm"
-            :class="{ 'btn--primary': presetIsCurrent(preset.id) }"
-            :disabled="busy || !canWrite || presetRejectedByDevice(preset.id)"
-            @click="applyPreset(preset.id)"
+            :disabled="busy || !manualSettingsDirty"
+            @click="syncManualSettingsFromDevice"
           >
-            {{ presetHint(preset.id) }}
+            {{ t('common.reset') }}
           </button>
-          <span
-            v-if="presetRejectedByDevice(preset.id)"
-            class="cctl__meta cctl__meta--warn"
-          >
-            {{ t('cameraControlUi.presetRejectedBadge') }}
-          </span>
-          <span v-else-if="presetAlready(preset.id)" class="cctl__meta cctl__meta--ok">
-            {{ t('cameraControlUi.presetAlready') }}
-          </span>
-        </span>
-        <span v-if="presetCanRestore" :title="t('cameraControlUi.presetRestore')">
-          <button type="button" class="btn btn--sm" :disabled="busy || !canWrite" @click="restorePreset">
-            {{ t('cameraControlUi.presetRestore') }}
-          </button>
-        </span>
-        <span v-if="presetDisabledTitle" :title="presetDisabledTitle">
-          <button type="button" class="btn btn--sm" disabled>
-            {{ t('cameraControlUi.presetApply') }}
-          </button>
-        </span>
-      </div>
-      <p v-if="wants('preset')" class="cctl__meta">{{ t('cameraControlUi.adminOnlyHint') }}</p>
-      <p
-        v-if="wants('preset') && (presetAlreadyIds.length > 0 || presetOutcome)"
-        class="cctl__meta"
-        :class="{ 'cctl__meta--warn': presetOutcome !== null && !presetOutcome.applied }"
-      >
-        <template v-if="presetAlreadyIds.length > 0">
-          {{ t('cameraControlUi.presetAlready') }}:
-          {{ presetAlreadyIds.map(presetName).join(' · ') }}
-        </template>
-        <template v-if="presetOutcome">
-          {{ presetResultText(presetOutcome) }} ·
-          {{ t('cameraControlUi.presetReadBack', { band: presetReadBackText }) }}
-        </template>
-      </p>
-      <div v-if="wants('preset') && presetCanReapply" class="btn-row">
-        <button type="button" class="btn btn--sm" :disabled="busy || !canWrite" @click="reapplyPreset">
-          {{ t('cameraControlUi.presetApply') }}
-        </button>
-      </div>
+        </div>
 
       <!-- ---- 检测启停（**留在实时监测页**：它是看的时候要按的东西） ----- -->
       <template v-if="wants('detect')">
-      <div class="cctl__row">
+      <div class="cctl__row cctl__detect-state">
         <span class="cctl__label">{{ t('cameraControlUi.detectTitle') }}</span>
         <span
           class="badge"
@@ -1266,12 +1663,12 @@ watch(
           {{ t('cameraControlUi.detectRecord', { id: detectActionResult.detectId }) }}
         </span>
       </div>
-      <div class="btn-row">
+      <div class="btn-row cctl__detect-actions">
         <span :title="startDisabledReason">
           <button
             type="button"
             class="btn btn--sm btn--primary"
-            :disabled="busy || !canWrite || enabledIds.length === 0 || detecting"
+            :disabled="busy || !canWrite || detecting"
             @click="detectAction('turn_on')"
           >
             {{ t('cameraControlUi.detectStart') }}
@@ -1287,6 +1684,9 @@ watch(
           {{ t('cameraControlUi.detectStop') }}
         </button>
       </div>
+      <!-- 禁用原因必须**看得见**（2026-09-23 修复）：原来只挂在 title 提示里，
+           操作员看到的就是一颗没反应的灰按钮，"开始检测没起作用"的投诉正来自这里。 -->
+      <p v-if="startDisabledReason" class="cctl__meta" role="note">{{ startDisabledReason }}</p>
       </template>
       </section>
 
@@ -1469,6 +1869,64 @@ watch(
       </div>
     </section>
 
+    <!-- Realtime Camera Control settings: the gear opens a real modal, never an inline row. -->
+    <AppModal
+      v-if="realtimeLayout"
+      :model-value="detectionSettingsOpen"
+      :title="t('cameraControlUi.settingsTitle')"
+      width="460px"
+      @update:model-value="(open) => { if (!open) closeDetectionSettings() }"
+    >
+      <div class="cctl__settings-modal">
+        <div v-if="workModeAvailable" class="cctl__field">
+          <label class="cctl__field-label" for="camera-work-mode-modal">{{ t('cameraControlUi.detectionModeLabel') }}</label>
+          <select
+            id="camera-work-mode-modal"
+            v-model.number="settingsWorkModeDraft"
+            class="select cctl__select"
+            :disabled="busy || !canWrite"
+            :title="canWrite ? t('cameraControlUi.appModeSourceHint') : t('cameraControlUi.adminOnlyHint')"
+          >
+            <option v-for="value in workModeSelectable" :key="value" :value="value">
+              {{ workModeText(value) }}
+            </option>
+          </select>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.suggestedFrequencyRange', { range: suggestedBandText }) }}</p>
+        </div>
+        <p v-else class="cctl__meta">{{ t('cameraControlUi.detectionModeUnavailable') }}</p>
+
+        <div v-if="wants('preset')" class="cctl__field">
+          <label class="cctl__field-label" for="camera-imaging-threshold-modal">{{ t('cameraControlUi.imagingThreshold') }}</label>
+          <div class="cctl__threshold">
+            <input
+              id="camera-imaging-threshold-modal"
+              v-model.number="manualThreshold"
+              class="input cctl__number cctl__number--threshold"
+              type="number"
+              step="1"
+              :disabled="busy || !canWrite"
+              @input="markManualSettingsDirty"
+            />
+            <span class="cctl__unit">dB</span>
+          </div>
+          <p class="cctl__field-hint">{{ t('cameraControlUi.imagingThresholdHint') }}</p>
+        </div>
+
+      </div>
+
+      <template #footer>
+        <button type="button" class="btn" @click="closeDetectionSettings">{{ t('common.cancel') }}</button>
+        <button
+          type="button"
+          class="btn btn--primary"
+          :disabled="busy || !canWrite || settingsWorkModeDraft === null || manualBandError !== '' || manualThreshold === null"
+          @click="applyDetectionSettings"
+        >
+          {{ t('common.save') }}
+        </button>
+      </template>
+    </AppModal>
+
     <!-- 固件升级的二次确认：正文就是**后果**（会写什么、什么时候开始升级、不能做什么） -->
     <AppModal
       :model-value="confirmKind !== null"
@@ -1528,7 +1986,8 @@ watch(
       @update:model-value="cancelWorkMode"
     >
       <p class="alert alert--danger" role="alert">
-        {{ t('cameraControlUi.appModeConfirmBody') }}
+        Switching detection mode will delete/reset the current camera detection settings, including the
+        frequency band, imaging threshold, detection regions and mode-specific parameters. Continue?
       </p>
       <!-- 正文逐字是产品那句话，所以"切到哪个模式"另起一行，不塞进那句话里。 -->
       <p class="cctl__meta cctl__confirm-mode">
@@ -1663,5 +2122,232 @@ watch(
 
 .cctl__confirm-mode {
   margin-top: var(--space-2);
+}
+
+
+/* ---- Realtime control redesign ----------------------------------------- */
+.cctl__top-header {
+  align-items: center;
+}
+
+.cctl__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.cctl__alarm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #b42318;
+  background: #fff2f0;
+  border: 1px solid #fecdca;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cctl__alarm-badge svg,
+.cctl__icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cctl__icon-button {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+  cursor: pointer;
+}
+
+.cctl__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cctl__field:last-of-type {
+  border-bottom: 0;
+}
+
+.cctl__field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
+.cctl__select {
+  width: 100%;
+}
+
+.cctl__field-hint,
+.cctl__field-error {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.cctl__field-hint {
+  color: var(--color-text-secondary);
+}
+
+.cctl__field-error {
+  color: var(--color-danger, #b42318);
+}
+
+.cctl__band-inputs,
+.cctl__threshold,
+.cctl__settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cctl__number {
+  width: 92px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cctl__number--threshold {
+  width: 112px;
+}
+
+.cctl__range-separator,
+.cctl__unit {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.cctl__settings-actions {
+  padding-top: 2px;
+}
+
+.cctl__alarm-config-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cctl__alarm-config-actions .btn {
+  min-width: 0;
+  white-space: normal;
+}
+
+.cctl__icon-button--active {
+  color: var(--color-accent, #ff6a1a);
+  border-color: rgba(255, 106, 26, 0.42);
+  background: rgba(255, 106, 26, 0.08);
+}
+
+/* Realtime Monitoring: one operational card, not a card inside a card. */
+.cctl--realtime,
+.cctl--realtime > .cctl__card {
+  height: 100%;
+  min-height: 0;
+}
+
+.cctl--realtime > .cctl__card {
+  flex: 1 1 auto;
+}
+
+.cctl--realtime .cctl__board {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+}
+
+.cctl--realtime .cctl__section {
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cctl--realtime .cctl__field--mode-settings {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid rgba(255, 106, 26, 0.24);
+  border-radius: var(--radius-sm, 6px);
+  background: rgba(255, 106, 26, 0.04);
+}
+
+.cctl--realtime .cctl__settings-actions {
+  margin-bottom: var(--space-2);
+}
+
+
+.cctl--realtime .cctl__settings-actions--primary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.cctl--realtime .cctl__settings-actions--primary .btn {
+  min-height: 34px;
+  justify-content: center;
+}
+
+.cctl--realtime .cctl__detect-state {
+  margin-top: auto;
+  padding: var(--space-3) 0 var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.cctl--realtime .cctl__detect-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.cctl--realtime .cctl__detect-actions > span,
+.cctl--realtime .cctl__detect-actions .btn {
+  width: 100%;
+}
+
+.cctl--realtime .cctl__detect-actions .btn {
+  min-height: 36px;
+  justify-content: center;
+}
+
+
+/* 泄漏计算参数（业主 2026-09-24）：模式区块下面的紧凑表单。 */
+.cctl__leakage {
+  margin-top: var(--space-2);
+}
+
+.cctl__leakage-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.cctl__leakage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
 }
 </style>

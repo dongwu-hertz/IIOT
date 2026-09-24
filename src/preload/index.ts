@@ -18,9 +18,11 @@ import { IpcChannels, PushChannels } from '@shared/ipc/contract'
 import { FA371_STREAM_KINDS } from '@shared/domain/fa371-stream'
 import type {
   CameraAlarmConditionDraft,
+  CameraAlarmRegionMetadataInput,
   CameraAlarmConditionIdStyle,
   CameraAlarmDiagnosisKeyStyle,
   CameraAlarmStrategyDraft,
+  CameraLeakagePatch,
   CameraLiveStartInput,
   CameraModePresetId,
   CameraModeRequestedValues,
@@ -39,6 +41,7 @@ import type {
   Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
+  Fa371PrpdPreview,
   Fa371RunModeValue,
   Fa371StreamKind,
   Fa371StreamStatus,
@@ -100,6 +103,7 @@ import type { E2PtzPatch } from '@shared/domain/e2-ptz'
 const api: RendererApi = {
   app: {
     getInfo: () => ipcRenderer.invoke(IpcChannels.APP_GET_INFO),
+    setLocale: (locale: string) => ipcRenderer.invoke(IpcChannels.APP_SET_LOCALE, locale),
     openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.APP_OPEN_EXTERNAL, url),
     getPreferredLanguages: () =>
       ipcRenderer.invoke(IpcChannels.APP_GET_PREFERRED_LANGUAGES),
@@ -426,6 +430,14 @@ const api: RendererApi = {
       ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_RUN_MODE, deviceId, mode),
     readDetectStatus: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_READ_DETECT_STATUS, deviceId),
+    readScanArea: (deviceId: string) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_READ_SCAN_AREA, deviceId),
+    writeScanArea: (deviceId: string, area: import('@shared/domain/fa371').Fa371ScanArea) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_SCAN_AREA, deviceId, area),
+    readRegionMetadata: (deviceId: string) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_READ_REGION_METADATA, deviceId),
+    writeRegionMetadata: (deviceId: string, regions: CameraAlarmRegionMetadataInput[]) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_REGION_METADATA, deviceId, regions),
     turnOnDetect: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_TURN_ON_DETECT, deviceId),
     turnOffDetect: (deviceId: string) =>
@@ -460,7 +472,13 @@ const api: RendererApi = {
     readWorkMode: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_READ_WORK_MODE, deviceId),
     writeWorkMode: (deviceId: string, mode: Fa371WorkModeValue) =>
-      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_WORK_MODE, deviceId, mode)
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_WORK_MODE, deviceId, mode),
+    /** `GET /system/leakage`：泄漏估算参数当前值（局放→泄漏切换时模板打底用）。 */
+    readLeakage: (deviceId: string) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_READ_LEAKAGE, deviceId),
+    /** `PUT /system/leakage` 部分字段更新 + 重读（返回设备权威值）。 */
+    writeLeakage: (deviceId: string, patch: CameraLeakagePatch) =>
+      ipcRenderer.invoke(IpcChannels.CAMERA_CONTROL_WRITE_LEAKAGE, deviceId, patch)
   },
 
   /**
@@ -594,6 +612,9 @@ const onFa371Fft = (callback: (event: Fa371FftPreview) => void): Unsubscribe =>
 const onFa371Voiceprint = (callback: (event: Fa371VoiceprintPreview) => void): Unsubscribe =>
   subscribe(PushChannels.FA371_VOICEPRINT, callback)
 
+const onFa371Prpd = (callback: (event: Fa371PrpdPreview) => void): Unsubscribe =>
+  subscribe(PushChannels.FA371_PRPD, callback)
+
 const onFa371Energy = (callback: (event: Fa371EnergyPreview) => void): Unsubscribe =>
   subscribe(PushChannels.FA371_ENERGY, callback)
 
@@ -681,6 +702,7 @@ contextBridge.exposeInMainWorld('events', {
   onMonitorState,
   onFa371Fft,
   onFa371Voiceprint,
+  onFa371Prpd,
   onFa371Energy,
   onFa371Pcm,
   onFa371Infrared,

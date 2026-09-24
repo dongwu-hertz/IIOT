@@ -196,6 +196,7 @@ export function normaliseAlarmLinkageConfig(value: unknown): NormalisedLinkageCo
   const email = asRecord(source.email) ?? {}
   const runtime = asRecord(source.runtime) ?? {}
   const cooldown = asRecord(runtime.cooldown) ?? {}
+  const cameraPush = asRecord(source.cameraPush) ?? {}
 
   const config: AlarmLinkageConfig = {
     enabled: boolValue(source, 'enabled', defaults.enabled, 'enabled', issues),
@@ -366,6 +367,19 @@ export function normaliseAlarmLinkageConfig(value: unknown): NormalisedLinkageCo
           issues
         )
       }
+    },
+    cameraPush: {
+      enabled: boolValue(cameraPush, 'enabled', defaults.cameraPush.enabled, 'cameraPush.enabled', issues),
+      port: (() => {
+        const raw = cameraPush.port
+        if (raw === undefined) return defaults.cameraPush.port
+        const value = typeof raw === 'number' && Number.isInteger(raw) ? raw : Number.NaN
+        if (!Number.isInteger(value) || value < 1024 || value > 65535) {
+          issues.push('cameraPush.port')
+          return defaults.cameraPush.port
+        }
+        return value
+      })()
     }
   }
 
@@ -386,7 +400,8 @@ export function cloneDefaults(): AlarmLinkageConfig {
     popup: { ...defaults.popup },
     notices: { ...defaults.notices },
     email: { ...defaults.email },
-    runtime: { ...defaults.runtime, cooldown: { ...defaults.runtime.cooldown } }
+    runtime: { ...defaults.runtime, cooldown: { ...defaults.runtime.cooldown } },
+    cameraPush: { ...defaults.cameraPush }
   }
 }
 

@@ -17,13 +17,10 @@
  * 以为设备在反复掉线。所以对"我们亲眼见它在线的设备"保留 `offlineFailureThreshold`
  * （出厂 3）次失败才翻牌。
  *
- * 但那条理由的前提是**我们见过它在线**。一台本进程从未见它在线的设备没有可抖动的状态：
- * 它要么是刚添加的、要么上次会话就已经不在了。让它继续显示「未知」，只是把"我们还没打听到"
- * 当成一种状态 —— 而产品要求是「离线的设备直接显示离线」。
- *
- * 所以判据是**本进程是否亲眼见过它在线**（`observedOnline`），不是数据库里那个 `status`：
- * 数据库里的 `ONLINE` 可能是一次**旧会话**留下的历史，把它当成"刚才还在"会让每次重启之后
- * 每台设备都白等 3 × 5 秒才肯说离线。
+ * 启动阶段同样需要防抖。数据库中的设备可能在应用启动后的第一轮探测时遇到网卡初始化、
+ * 登录握手或相机服务短暂未就绪；如果第一次失败就翻成 OFFLINE，会造成“打包后所有设备都离线”
+ * 的假象。因此无论本进程是否已经观察到过 ONLINE，都统一达到 `offlineFailureThreshold` 后再翻牌。
+ * 任意一次成功仍立即恢复 ONLINE。
  */
 
 export interface OfflineVerdictInput {
@@ -43,7 +40,10 @@ export interface OfflineVerdictInput {
  * 这种靠巧合成立的判断。
  */
 export function shouldMarkOffline(input: OfflineVerdictInput): boolean {
-  if (!input.observedOnline) return true
+  // Startup must not turn every saved device OFFLINE because the very first probe
+  // races network/auth/service initialization. Use the configured debounce threshold
+  // for both newly observed and previously observed devices; any successful probe
+  // still recovers the device to ONLINE immediately.
   const threshold = Math.max(1, Math.floor(input.threshold))
   return input.consecutiveFailures >= threshold
 }

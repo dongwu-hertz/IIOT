@@ -98,6 +98,8 @@ function createFake(options: FakeOptions = {}): Fake {
   let imagingReadsDone = 0
 
   const operations: CameraControlOperations = {
+    getLeakageConfig: () => Promise.reject(new Error('unused')),
+    setLeakageConfig: () => Promise.reject(new Error('unused')),
     async getAcousticConfig() {
       const state = acousticReads[Math.min(acousticReadsDone, acousticReads.length - 1)]
       acousticReadsDone += 1
@@ -121,6 +123,13 @@ function createFake(options: FakeOptions = {}): Fake {
       return { run_mode: 1, ret: 200, msg: 'SUCCESS' }
     },
     async setRunMode() {
+      return { ret: 200, msg: 'SUCCESS' }
+    },
+    // 本用例不触碰检测区域；接口形状要求存在即可。
+    async getScanArea() {
+      return undefined as never
+    },
+    async setScanArea() {
       return { ret: 200, msg: 'SUCCESS' }
     },
     async getDetectStatus() {

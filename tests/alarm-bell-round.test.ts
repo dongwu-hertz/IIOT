@@ -75,24 +75,26 @@ const mapCode = stripComments(mapView)
 const adaptersCode = stripComments(read('src/renderer/src/lib/realtimeAdapters.ts'))
 
 describe('告警图标数的是**设备推来的告警**（业主 2026-09-19 第 2 条）', () => {
-  it('角标读设备告警的 total，而不是联动那一份', () => {
-    // 角标里的数与「面板里那个分区的 total」同一个来源。
+  it('角标 = 设备告警 + 相机联动告警两路未确认之和（2026-09-24 同步修复）', () => {
+    /*
+     * 口径更正：此前角标只数设备告警表的 total，相机告警（联动待处理）来了角标
+     * 一动不动——业主报的"铃铛与告警信息不同步"就是这个。两路不重叠（相机告警
+     * 不进告警表、盒子告警不进联动列表），相加不会重复计数；面板里两个分区都在，
+     * 数字与内容同源这条老规矩仍然成立。
+     */
     assert.match(
       panelCode,
-      /const bellCount = computed\(\(\) => deviceAlarmTotal\.value\)/,
-      '角标不是读设备告警的总数'
+      /const bellCount = computed\(\(\) => deviceAlarmTotal\.value \+ linkage\.unacknowledgedCount\)/,
+      '角标没有数两路未确认之和'
     )
     assert.match(
       panelTemplate,
       /v-if="bellCount > 0"[\s\S]{0,120}data-bell-count/,
       '角标没有稳定的探针钩子，或它不是由 bellCount 驱动的'
     )
-    // 联动那一份**不许**再出现在角标里（那会让一个数字配两份列表）。
-    assert.equal(
-      /alarm-badge__count[\s\S]{0,200}linkage\.unacknowledgedCount/.test(panelTemplate),
-      false,
-      '角标又回去数联动待处理项了'
-    )
+    // 高级告警红点（业主 2026-09-24）：未确认里有 3 级及以上就亮。
+    assert.match(panelCode, /hasHighLevelAlarm/, '没有高级告警红点的判定')
+    assert.match(panelTemplate, /data-bell-critical/, '红点没有探针钩子')
   })
 
   it('面板里真的有那一段列表，而且每一行能就地确认', () => {

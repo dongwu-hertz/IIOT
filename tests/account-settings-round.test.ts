@@ -476,7 +476,7 @@ describe('告警声音库（手册 §17.2.7）', () => {
     assert.ok(ALARM_SOUND_TYPE_KEYS.includes(DEFAULT_ALARM_SOUND_ID as never))
   })
 
-  it('两个提示音绑定（联动弹窗 / 设备推送，业主 20260921 批）：逐字段回落，缺省 关 + 未选择', () => {
+  it('两个提示音绑定（联动弹窗 / 设备推送，业主 20260921 批）：逐字段回落；2026-09-23 起弹窗音缺省为开', () => {
     // 正常输入原样保留。
     const { library, issues } = normaliseAlarmSoundLibrary({
       items: [],
@@ -486,7 +486,7 @@ describe('告警声音库（手册 §17.2.7）', () => {
     assert.deepEqual(library.popup, { enabled: true, soundId: 'motionDetection' })
     assert.deepEqual(library.push, { enabled: false, soundId: '' })
     assert.deepEqual(issues, [])
-    // 只给了壳的输入回落成「关 + 未选择」（缺省形状）。
+    // 只给了壳的输入回落成「关 + 未选择」（给了键就是用户动过，尊重它）。
     const empty = normaliseAlarmSoundLibrary({ items: [], popup: {}, push: {} })
     assert.deepEqual(empty.library.popup, { enabled: false, soundId: '' })
     assert.deepEqual(empty.library.push, { enabled: false, soundId: '' })
@@ -497,9 +497,10 @@ describe('告警声音库（手册 §17.2.7）', () => {
     })
     assert.deepEqual(dead.library.popup, { enabled: false, soundId: '' })
     assert.ok(dead.issues.includes('binding.soundId(unknown)'), '死 id 没有交回 issues')
-    // 旧数据没有这两个字段：库仍然完整合法（可选字段，不作废整库）。
+    // 旧数据没有这两个字段：popup 补「开 + 未选择」的新出厂默认（业主 2026-09-23：
+    // 告警默认弹窗+播放声音；soundId 空 = 内置蜂鸣），push 仍为缺省关。
     const legacy = normaliseAlarmSoundLibrary({ items: [] })
-    assert.equal(legacy.library.popup, undefined)
+    assert.deepEqual(legacy.library.popup, { enabled: true, soundId: '' })
     assert.equal(legacy.library.push, undefined)
   })
 

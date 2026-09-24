@@ -800,7 +800,7 @@ describe('③b 实时趋势置顶 + 其下四张图谱卡片 + 时间轴回放',
     assert.ok(option.includes('monitor.content.audio'), '声学波形没有读实时音频帧（或它的上次内容）')
     assert.ok(option.includes('?.waveform'), '声学波形没有画那一帧的包络')
     // 固定 ±1 量程：否则安静的帧会被自动缩放到和响的帧一样高。
-    assert.match(option, /min: -1,\s*\n\s*max: 1,/, '声学波形的纵轴不是固定 ±1')
+    assert.match(option, /min: -waveformYMax,\s*\n\s*max: waveformYMax,/, '声学波形的纵轴不是以 0 为中心的对称量程（2026-09-23：0 点固定在卡片中心）')
   })
 
   it('旧的并排规则 `.chart-columns` 连同死样式一起删掉了', () => {

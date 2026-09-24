@@ -88,6 +88,9 @@ async function detectSystemLocale(): Promise<AppLocale | undefined> {
 function apply(locale: AppLocale): void {
   current.value = locale
   i18n.global.locale.value = locale
+  // 同步给主进程（告警弹窗文案在那里渲染，见 `main/services/ui-locale.ts`）。
+  // 单向镜像、fire-and-forget：语言显示从来不依赖这次调用的结果。
+  void window.api?.app?.setLocale?.(locale)
   try {
     document.documentElement.lang = locale
   } catch {

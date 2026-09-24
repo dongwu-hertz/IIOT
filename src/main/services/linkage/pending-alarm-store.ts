@@ -55,6 +55,9 @@ export interface PendingAlarmInput {
   source: LinkageTriggerSourceKind
   alarmLevelRaw?: number
   strategyId?: number
+  /** 相机判定的检测模式与放电类型（2026-09-23；含义见 `LinkageAlarmSemantics`）。 */
+  detectMode?: number
+  dischargeTypeKey?: string
   metrics?: LinkageMetrics
 }
 
@@ -146,6 +149,12 @@ export class PendingAlarmStore extends EventEmitter {
       if (existing.strategyId === undefined && input.strategyId !== undefined) {
         existing.strategyId = input.strategyId
       }
+      if (existing.detectMode === undefined && input.detectMode !== undefined) {
+        existing.detectMode = input.detectMode
+      }
+      if (existing.dischargeTypeKey === undefined && input.dischargeTypeKey !== undefined) {
+        existing.dischargeTypeKey = input.dischargeTypeKey
+      }
       if (existing.metrics === undefined && input.metrics !== undefined) {
         existing.metrics = { ...input.metrics }
       }
@@ -166,6 +175,8 @@ export class PendingAlarmStore extends EventEmitter {
     }
     if (input.alarmLevelRaw !== undefined) record.alarmLevelRaw = input.alarmLevelRaw
     if (input.strategyId !== undefined) record.strategyId = input.strategyId
+    if (input.detectMode !== undefined) record.detectMode = input.detectMode
+    if (input.dischargeTypeKey !== undefined) record.dischargeTypeKey = input.dischargeTypeKey
     if (input.metrics !== undefined) record.metrics = { ...input.metrics }
 
     this.items.push(record)

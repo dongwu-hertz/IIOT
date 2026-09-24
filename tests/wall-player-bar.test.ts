@@ -10,7 +10,7 @@
  *
  *   1. **只剩六颗**，而且就是业主给的那六颗、那个顺序；四颗视图按钮确实搬进了右键菜单的
  *      「显示方式」（不是删掉 —— 第 10 批第 2 条要的四种视图仍然可达）；
- *   2. 音量**不是**常驻横滑杆：点按钮才弹出一张**水平细滑条卡片**（业主 2026-09-21 批：
+ *   2. 音量**不是**常驻横滑杆：点按钮才弹出一张滑条卡片（2026-09-21 批弹出式；2026-09-23 起**竖排**：
  *      出现在音量图标正上方、宽为格宽的 20%），而且"关掉这一格的声音"这件事仍然做得到
  *      （开关搬进了浮层，不是删掉）；
  *   3. 手填的第三方 RTSP 源**不是设备**：告警 / 切换录像 / 手动录像那三颗对它没有意义，
@@ -134,7 +134,7 @@ describe('播放器控制条：只有业主给的那六颗（第 12 批）', () 
   })
 })
 
-describe('音量：点一下弹出图标上方的水平细滑条卡片（2026-09-21 批）', () => {
+describe('音量：点一下弹出图标上方的竖向细滑条卡片（2026-09-21 批；2026-09-23 改竖排）', () => {
   it('滑杆不再常驻在控制条上，而是在一个浮层里', () => {
     assert.equal(/type="range"/.test(bar), false, '控制条上还有常驻滑杆')
     assert.match(wall, /const volumeOpenSlot = ref<number \| null>\(null\)/, '没有"哪一格的音量浮层开着"这个状态')
@@ -143,29 +143,27 @@ describe('音量：点一下弹出图标上方的水平细滑条卡片（2026-09
     assert.match(volumePop, /data-cell-volume\b/, '浮层里的滑杆没有探针钩子')
   })
 
-  it('滑杆是**水平**的细条卡片：贴在图标正上方、宽为格宽的 20%（76–180px）', () => {
+  it('滑杆是**竖向**的细条卡片：贴在图标正上方，滑杆在上、静音钮在下（业主 2026-09-23）', () => {
     const block = wall.slice(wall.indexOf('.camera-wall__volume-pop {'))
     const body = block.slice(0, block.indexOf('}'))
-    // 竖条那一套彻底拿掉：没有竖排书写模式，也没有上下方向的 cursor。
-    assert.equal(/writing-mode:\s*vertical/.test(wall), false, '滑杆又变成竖向了')
-    assert.equal(/cursor:\s*ns-resize/.test(wall), false, '还留着竖向拖动的光标')
+    // 竖排：纵向书写模式必须在，横向那套（20% 格宽）必须拿走。
+    assert.match(body, /flex-direction:\s*column;/, '浮层不是纵向排列')
     assert.match(body, /right:\s*8px;/, '卡片没有对齐这一格的右缘')
     assert.match(body, /bottom:\s*3[0-9]px;/, '卡片没有浮在控制条上方')
-    assert.match(body, /width:\s*20%;/, '宽度不是格宽的 20%')
-    assert.match(body, /min-width:\s*76px;/)
-    assert.match(body, /max-width:\s*180px;/)
     assert.match(body, /background:\s*#fff;/, '不是白底卡片')
     assert.match(body, /border:\s*1px solid var\(--color-border\);/)
     assert.match(body, /box-shadow:/)
-    // 轨道 4px 圆条、thumb 10px 圆点（WebKit 与 Gecko 两条伪元素都要在）。
+    assert.equal(/width:\s*20%;/.test(body), false, '还留着横向卡片的 20% 格宽')
     const slider = wall.slice(wall.indexOf('.camera-wall__volume-slider {'))
     const sliderBody = slider.slice(0, slider.indexOf('}'))
     assert.match(sliderBody, /appearance:\s*none;/)
+    assert.match(sliderBody, /writing-mode:\s*vertical-lr;/, '滑杆不是竖向书写模式')
+    assert.match(sliderBody, /direction:\s*rtl;/, '竖向滑杆没有让大值朝上（direction: rtl）')
+    assert.match(sliderBody, /height:\s*96px;/, '竖向滑杆的高度不是 96px')
     for (const pseudo of ['::-webkit-slider-runnable-track', '::-moz-range-track']) {
       const at = wall.indexOf(`.camera-wall__volume-slider${pseudo} {`)
       assert.ok(at >= 0, `缺 ${pseudo}`)
       const rule = wall.slice(at, wall.indexOf('}', at))
-      assert.match(rule, /height:\s*4px;/, `${pseudo} 轨道不是 4px`)
       assert.match(rule, /border-radius:\s*999px;/, `${pseudo} 轨道没有圆角`)
     }
     for (const pseudo of ['::-webkit-slider-thumb', '::-moz-range-thumb']) {

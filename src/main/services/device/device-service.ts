@@ -43,7 +43,7 @@ import { Fa371ApiClient } from './fa371/fa371-api-client'
 import { mapDetectLogs, mapVideoConfig } from './fa371/mappers'
 import type { Fa371DetectLog, Fa371VideoConfig } from '@shared/domain/fa371'
 import { cameraDeviceUid, cameraFallbackName, auscultationFallbackName, e2DeviceUid, e2FallbackUid } from './camera-identity'
-import { E2Client } from './e2/e2-client'
+import { E2Client, type E2BasicInfo } from './e2/e2-client'
 import { AuthStrategyResolver } from './auth-resolver'
 import { FetchHttpTransport, type HttpTransport } from './http-transport'
 import type { CredentialStore } from './credential-store'
@@ -56,7 +56,7 @@ import {
 } from './protocol/mappers'
 import type { DeviceRepository, ChannelRepository } from '../database/device-repository'
 import { AUSCULTATION_CHANNEL_COUNT } from '../database/device-repository'
-import { e2ChannelCountFromModel, type E2Variant } from '@shared/domain/e2'
+import { e2ChannelCountFromModel, E2_AIR_SONAR_CHANNEL_COUNT, type E2Variant } from '@shared/domain/e2'
 import { parseInstallation } from '@shared/domain/device-installation'
 import {
   MQTT_TELEMETRY_TOPIC,
@@ -133,6 +133,14 @@ export interface DeviceServiceOptions {
    */
   getIngestConfig?: () => IotIngestConfig
   /**
+   * 相机「实时流正在出帧」的在线证据（2026-09-23 抖动修复）。
+   *
+   * 晚绑定（`setCameraStreamEvidence`）：`Fa371StreamService` 的 resolver 依赖
+   * DeviceService，所以它在组合根里比 DeviceService 晚出生，只能在两边都建好
+   * 之后回插。没插时（测试）行为与从前完全一致：健康检查走 HTTP。
+   */
+  cameraStreamEvidence?: (deviceId: string) => boolean
+  /**
    * 设备**上线 / 离线**事件的落库（业主：事件中心把设备离线纳入时间线，schema v17）。
    *
    * 可选注入：测试里构造 `DeviceService` 大多不关心事件留存，不给就用一个**空实现**，
@@ -188,6 +196,16 @@ interface DeviceRuntime {
    * 就等于缓存会话 —— 每调用一次 new 一个，就会每调用一次重新登录。
    */
   e2Client?: E2Client
+  /**
+   * 建这个客户端时**传入的**基地址（回退端口之前的设备记录地址）。
+   *
+   * 复用判定必须拿它跟 `baseUrlFor(device)` 比，而不是 `currentBaseUrl`：
+   * 客户端登录时会按回退端口切换自己的 currentBaseUrl（80 → 8888 实测），
+   * 拿切换后的值去比设备记录的地址永远不相等 —— 那会让每次健康检查都重建
+   * 客户端、重新登录（2026-09-23 日志：同一台盒子每 5 秒登录一次），
+   * 页面的每次操作都被迫排在一次登录后面，这就是那一路的"莫名卡顿"。
+   */
+  e2ClientInputBaseUrl?: string
   consecutiveFailures: number
   /** Last observed status, to detect transitions worth emitting. */
   lastStatus: Device['status']
@@ -241,6 +259,8 @@ export class DeviceService extends EventEmitter {
   private readonly deviceStatusEvents?: DeviceServiceOptions['deviceStatusEvents']
   /** 保存 GIS 坐标后的回执（见 `DeviceServiceOptions.onGisCenter`）。 */
   private readonly onGisCenter?: (center: { latitude: number; longitude: number }) => void
+  /** 相机出帧在线证据（晚绑定，见 `DeviceServiceOptions.cameraStreamEvidence`）。 */
+  private cameraStreamEvidence?: (deviceId: string) => boolean
 
   constructor(options: DeviceServiceOptions) {
     super()
@@ -255,7 +275,16 @@ export class DeviceService extends EventEmitter {
     this.onIngestNeedChanged = options.syncIngest
     this.deviceStatusEvents = options.deviceStatusEvents
     this.onGisCenter = options.onGisCenter
+    this.cameraStreamEvidence = options.cameraStreamEvidence
     this.resolver = new AuthStrategyResolver(this.transport)
+  }
+
+  /**
+   * 组合根在 `Fa371StreamService` 建好之后的回插点（它比 DeviceService 晚出生，
+   * 因为它要靠 DeviceService 拿会话与地址）。插一次即可；重复调用以后来者为准。
+   */
+  setCameraStreamEvidence(probe: (deviceId: string) => boolean): void {
+    this.cameraStreamEvidence = probe
   }
 
   /**
@@ -316,6 +345,14 @@ export class DeviceService extends EventEmitter {
   // -------------------------------------------------------------------------
   // 推流秘钥（业主 2026-09-18 第 10 批第 5 条 / 2026-09-19 第 1 条）
   // -------------------------------------------------------------------------
+
+  /**
+   * 秘钥 → 设备（相机告警推送的接收端据此认领是哪台相机；规则与形状校验见
+   * `DeviceRepository.findByPushSecret`）。
+   */
+  deviceByPushSecret(secret: string): Device | undefined {
+    return this.devices.findByPushSecret(secret)
+  }
 
   /**
    * 这台设备的推流端点：秘钥 + 本机候选地址 + 两个端口。
@@ -648,7 +685,22 @@ export class DeviceService extends EventEmitter {
      * 那一代取端点）；那时 404 会照实报出来，而不是被伪装成"设备离线"。
      */
     await client.ensureVariant()
-    const basic = await client.getBasic()
+    /*
+     * 设备信息端点可能**根本不存在**（2026-09-22 真机：一台 SN-16 的 `/basic` 与
+     * `/get_device_basic_params` 都回 501 —— 这台固件没有设备信息接口）。那就按空信息
+     * 继续：身份退回按地址编（与声学相机的 minted 同一条先例），不让"加不进来"成为结果
+     * —— 登录与 `/system` 明明都通了，卡在一条设备没有的端点上说不通。
+     */
+    let basic: E2BasicInfo = {}
+    try {
+      basic = await client.getBasic()
+    } catch (error) {
+      if (error instanceof AppError && /没有这个端点/.test(error.message)) {
+        deviceLog().warn('听诊盒子族设备没有基本信息端点，身份按地址编制', { ip: input.ip })
+      } else {
+        throw error
+      }
+    }
 
     const latencyMs = Date.now() - started
     const equipNumber = basic.equipNumber?.trim()
@@ -675,7 +727,11 @@ export class DeviceService extends EventEmitter {
       // `name` 在这个形状里是必填的，而设备可能没起名 —— 那就交空串（"设备没给"），
       // 由界面显示它的兜底名；**不拿地址去冒充设备名**。
       name: name ?? '',
-      channelCount: e2ChannelCountFromModel(basic.devType) ?? AUSCULTATION_CHANNEL_COUNT
+      // 设备没给型号、但 `/system` 已判定是空气声呐时，通道数按手册的 16（SN-16 是 16 元阵列），
+      // 不退回听诊盒子的 1 —— 否则一台 16 通道设备在添加对话框里显示"通道数 1"。
+      channelCount:
+        e2ChannelCountFromModel(basic.devType) ??
+        (client.resolvedVariant === 'airSonar' ? E2_AIR_SONAR_CHANNEL_COUNT : AUSCULTATION_CHANNEL_COUNT)
     }
     if (basic.devVersion) info.firmwareVersion = basic.devVersion
     if (basic.webVersion) info.webVersion = basic.webVersion
@@ -1593,6 +1649,19 @@ export class DeviceService extends EventEmitter {
 
     try {
       if (device.kind === 'acousticCamera') {
+        /**
+         * 实时流正在出帧 = 比一次 HTTP 登录更强的在线证据（2026-09-23 抖动修复）。
+         *
+         * 现场日志：相机的嵌入式 HTTP 栈在「RTSP + 多路 WS 同时挂着」时会间歇性
+         * 不应答 `/login`（全天数千次认证超时），而数据通道照常推帧。只看 HTTP
+         * 会把一台正在推流的相机反复判离线——流被拆掉、页面报「流错误」、再重连，
+         * 这就是用户看到的"一直报实时流错误"循环。出帧证据在手时直接判在线，
+         * 不做这次 HTTP 探活；没在出帧（没开流/真断了）时才走原来的 HTTP 路径。
+         */
+        if (this.cameraStreamEvidence?.(device.id) === true) {
+          this.markOnline(device, runtime)
+          return
+        }
         // `GET /system/detect_status` is the camera's cheapest authenticated read
         // and it exists in every documented mode. `/get_devinfo` — which the box
         // path uses — does not exist on a camera at all, so reusing it here would
@@ -1686,7 +1755,10 @@ export class DeviceService extends EventEmitter {
    */
   e2ClientFor(device: Device): E2Client {
     const existing = this.runtime.get(device.id)
-    if (existing?.e2Client && existing.e2Client.currentBaseUrl === this.baseUrlFor(device)) {
+    // 复用判定拿「建客户端时传入的地址」比设备记录地址（字段注释解释了为什么不能
+    // 用 currentBaseUrl：登录的回退端口会让那次比较永远失败 → 每次调用都重新登录）。
+    const inputBaseUrl = normaliseBaseUrl(this.baseUrlFor(device))
+    if (existing?.e2Client && existing.e2ClientInputBaseUrl === inputBaseUrl) {
       return existing.e2Client
     }
     const credential = this.credentials.get(device.id)
@@ -1696,14 +1768,15 @@ export class DeviceService extends EventEmitter {
 
     const client = new E2Client({
       transport: this.transport,
-      baseUrl: normaliseBaseUrl(this.baseUrlFor(device)),
+      baseUrl: inputBaseUrl,
       credentials: credential,
       timeoutMs: this.getSettings().requestTimeoutMs
     })
 
     this.setRuntime(device.id, {
       ...(existing ?? { consecutiveFailures: 0, lastStatus: device.status, observedOnline: false }),
-      e2Client: client
+      e2Client: client,
+      e2ClientInputBaseUrl: inputBaseUrl
     })
     return client
   }

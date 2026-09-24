@@ -57,6 +57,8 @@ import {
   type Fa371MonitorState,
   type Fa371PcmFrame,
   type Fa371PcmPreview,
+  type Fa371PrpdFrame,
+  type Fa371PrpdPreview,
   type Fa371StreamKind,
   type Fa371StreamPreview,
   type Fa371StreamStatus,
@@ -216,6 +218,24 @@ export class Fa371StreamService extends EventEmitter {
       .map((id) => this.stateFor(id))
   }
 
+  /**
+   * 这台相机最近 `withinMs` 内有没有真的出过帧（任一路）。
+   *
+   * 用途：健康检查的「在线证据」。2026-09-23 的现场日志显示，相机的嵌入式 HTTP
+   * 栈在「RTSP 视频 + 多路 WebSocket 同时挂着」时会间歇性不应答 `/login`
+   * （全天数千次认证超时），而数据通道照常在推帧——只看 HTTP 会把一台正在
+   * 好好推流的相机反复判离线，流被拆掉再重连，就是用户看到的"实时流错误"循环。
+   * 正在出帧是比一次 HTTP 登录更强的活着的证据，所以健康检查优先用它。
+   */
+  hasRecentFrames(deviceId: string, withinMs = 10_000): boolean {
+    const session = this.sessions.get(deviceId)
+    if (!session) return false
+    const now = Date.now()
+    return session.client
+      .statusSnapshot()
+      .some((status) => status.lastFrameAt !== undefined && now - status.lastFrameAt <= withinMs)
+  }
+
   /** 释放：停掉全部设备并摘掉自己的监听。 */
   dispose(): void {
     if (this.disposed) return
@@ -305,6 +325,11 @@ export class Fa371StreamService extends EventEmitter {
       case 'voiceprintData':
         dispose = session.client.onFrame('voiceprintData', (frame: Fa371VoiceprintFrame) =>
           emit(toVoiceprintPreview(deviceId, frame, this.options.voiceprintPreview))
+        )
+        break
+      case 'prpdData':
+        dispose = session.client.onFrame('prpdData', (frame: Fa371PrpdFrame) =>
+          emit(toPrpdPreview(deviceId, frame))
         )
         break
       case 'energyData':
@@ -413,10 +438,8 @@ export class Fa371StreamService extends EventEmitter {
 /**
  * `/fftData`：整数谱线去掉字节包装即可，本身已是显示尺寸（实测 1024 点）。
  *
- * `binHz` **不在这里编造**：它需要设备的采样率，而实测这台相机没有任何可用的
- * HTTP 采样率接口（`GET /get_samplingrate` 返回 Web 界面的 HTML）。拿不到就留
- * `undefined`，界面按"第 N 根谱线"标注并说明频率轴未知——一个编造的 Hz 轴比
- * 没有轴更糟。
+ * `binHz` 优先使用设备报告的采样率；当前 V2.0 基线设备未提供可用 HTTP 采样率时，
+ * 使用项目已确认的 200 kHz 采样基线。这样历史趋势与实时频谱共用同一条频率轴口径。
  */
 export function toFftPreview(
   deviceId: string,
@@ -430,8 +453,11 @@ export function toFftPreview(
     bins: Array.from(frame.values),
     binCount: frame.binCount
   }
-  if (deviceSampleRate !== undefined && deviceSampleRate > 0 && frame.binCount > 0) {
-    preview.binHz = deviceSampleRate / 2 / frame.binCount
+  const sampleRate = deviceSampleRate !== undefined && deviceSampleRate > 0
+    ? deviceSampleRate
+    : FA371_PCM_SAMPLE_RATE_HZ
+  if (frame.binCount > 0) {
+    preview.binHz = sampleRate / 2 / frame.binCount
   }
   return preview
 }
@@ -524,6 +550,69 @@ export function toVoiceprintPreview(
   }
 }
 
+/**
+ * `/prpdData`：**实测（2026-09-23）是 JPEG 图像帧**——设备自己渲染好 PRPD 图推出来，
+ * 与 `/voiceprintData` 同一处理：原字节以 base64 过 IPC，渲染层丢给 `<img>`，
+ * 不做任何数值再解释（重画一遍只会画出解码器的假设，不是相机的图）。
+ * 数值候选（mock/测试）保留原来的运行时解释。
+ */
+export function toPrpdPreview(deviceId: string, frame: Fa371PrpdFrame): Fa371PrpdPreview {
+  if (frame.jpegBase64 !== undefined) {
+    return {
+      deviceId,
+      kind: 'prpdData',
+      timestamp: frame.receivedAt,
+      points: [],
+      rawCount: 0,
+      layout: 'jpeg-image',
+      jpegBase64: frame.jpegBase64
+    }
+  }
+  const values = Array.from(frame.values, (value) => Number(value))
+  const points: Array<[number, number]> = []
+  let layout: Fa371PrpdPreview['layout'] = 'indexed-amplitude'
+
+  if (values.length >= 4 && values.length % 2 === 0) {
+    const pairs = Math.min(64, values.length / 2)
+    let plausible = 0
+    let needsScale100 = 0
+    for (let index = 0; index < pairs; index += 1) {
+      const phase = values[index * 2] ?? 0
+      if (phase >= 0 && phase <= 360) plausible += 1
+      else if (phase >= 0 && phase <= 36_000) {
+        plausible += 1
+        needsScale100 += 1
+      }
+    }
+    if (pairs > 0 && plausible / pairs >= 0.75) {
+      layout = 'phase-amplitude-pairs'
+      const scale = needsScale100 / pairs > 0.5 ? 100 : 1
+      for (let index = 0; index + 1 < values.length; index += 2) {
+        const phase = (values[index] ?? 0) / scale
+        const amplitude = Math.abs(values[index + 1] ?? 0)
+        if (Number.isFinite(phase) && Number.isFinite(amplitude)) points.push([phase, amplitude])
+      }
+    }
+  }
+
+  if (points.length === 0) {
+    const denominator = Math.max(1, values.length - 1)
+    values.forEach((value, index) => {
+      const amplitude = Math.abs(value)
+      if (Number.isFinite(amplitude)) points.push([(index / denominator) * 360, amplitude])
+    })
+  }
+
+  return {
+    deviceId,
+    kind: 'prpdData',
+    timestamp: frame.receivedAt,
+    points,
+    rawCount: values.length,
+    layout
+  }
+}
+
 /** `/energyData`：最多 3 组目标点，本身极小，不抽稀。 */
 export function toEnergyPreview(deviceId: string, frame: Fa371EnergyFrame): Fa371EnergyPreview {
   return {
@@ -555,6 +644,7 @@ export function toPcmPreview(deviceId: string, frame: Fa371PcmFrame, buckets: nu
     peak: stats.peak,
     rms: stats.rms,
     waveform: extractWaveform(mono, buckets),
+    rawSamples: mono,
     sampleRate,
     channels: frame.channels,
     samples: mono.length,

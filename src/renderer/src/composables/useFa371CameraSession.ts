@@ -21,9 +21,31 @@
  * 该通道时它只是自己那一路 error，不影响其余五路 —— 红外浮层用「无数据 = —」回答。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
-import { FA371_ALL_STREAM_KINDS } from '@shared/domain/fa371-stream'
+import type { Fa371StreamKind } from '@shared/domain/fa371-stream'
 import { useFa371StreamStore } from '@renderer/stores/fa371Stream'
 import { useSessionStore } from '@renderer/stores/session'
+
+/**
+ * 这一页**真正会显示**的通道（2026-09-23「莫名卡顿」修复）。
+ *
+ * 此前这里开的是全部 7 路（`FA371_ALL_STREAM_KINDS`），但实时监测页的布局里：
+ *   - 声纹图 / 频谱 / 波形 = 本地 PCM 计算 → 只消费 `pcmData`；
+ *   - PRPD = `prpdData`（设备帧）+ `pcmData`（本地回退）；
+ *   - 红外浮层 = `infraredData`；检测日志 = `detectFeedback`（事件流，近乎零成本）。
+ * 而 `/voiceprintData`（实测 10 帧/s × ~45 KB 的 JPEG base64）、`/fftData`（10 帧/s）
+ * 与 `/energyData`（实测 30 帧/s）在这一页**没有任何显示消费方** —— 它们过 IPC 进
+ * store、每帧触发一次响应式写入（合计约 60 次/s、~1 MB/s 的桥流量），全部是无效功，
+ * 与同屏 <video> 解码抢主线程，就是"莫名卡顿"的来源。
+ *
+ * 设备声纹 JPEG / 设备 FFT / 能量点仍有需要时（Protocol Lab、旧版 GIS 模板）由
+ * 各自的入口显式 `start(kinds)` 打开 —— `start` 本来就接受显式通道集合。
+ */
+export const MONITOR_VIEW_STREAM_KINDS: readonly Fa371StreamKind[] = [
+  'pcmData',
+  'prpdData',
+  'detectFeedback',
+  'infraredData'
+]
 
 export function useFa371CameraSession(deviceId: Ref<string>, active: Ref<boolean>): void {
   const camera = useFa371StreamStore()
@@ -39,7 +61,7 @@ export function useFa371CameraSession(deviceId: Ref<string>, active: Ref<boolean
     if (!canStart.value || camera.isActive || busy.value) return
     busy.value = true
     try {
-      await camera.start([...FA371_ALL_STREAM_KINDS])
+      await camera.start([...MONITOR_VIEW_STREAM_KINDS])
     } finally {
       busy.value = false
     }

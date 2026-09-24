@@ -448,6 +448,14 @@ export const E2_AIR_SONAR_SNAPSHOT_COUNT = 3
 /** Air Sonar 的录音文件名**固定**是 `alarm.wav`（2023 版是 `audio_name` 给的时间戳名）。 */
 export const E2_AIR_SONAR_AUDIO_NAME = 'alarm.wav'
 
+/**
+ * Air Sonar（SN-16）的通道数 **16**（手册：16 元阵列、`/realtime_chan` 取值 1..16）。
+ *
+ * 用途只有一个：`/basic` 拿不到 `dev_type` 时（有固件根本没有这个端点，2026-09-22 实测）
+ * 给"已判定为 airSonar"的设备一个**有手册依据**的通道数，而不是退回听诊盒子的 1 通道。
+ */
+export const E2_AIR_SONAR_CHANNEL_COUNT = 16
+
 /** 手册让**客户端**每 50 秒给实时流的 WebSocket 发一次心跳（内容不限）。 */
 export const E2_STREAM_HEARTBEAT_SECONDS = 50
 

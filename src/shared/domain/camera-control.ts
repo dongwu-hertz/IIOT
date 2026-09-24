@@ -16,18 +16,20 @@
 import type {
   Fa371AlarmStrategy,
   Fa371DetectStatus,
+  Fa371LeakageConfig,
   Fa371RunModeConfig,
+  Fa371ScanArea,
   Fa371RunModeValue,
   Fa371WorkModeConfig,
   Fa371WorkModeValue
 } from './fa371'
 
 // ---------------------------------------------------------------------------
-// 检测模式（`GET`/`PUT /run_mode`）
+// 运行方式（`run_mode`：Single Detection / Smart Patrol）
 // ---------------------------------------------------------------------------
 
 /**
- * 一次「改检测模式」的完整结果。
+ * 一次「改运行方式」的完整结果。
  *
  * **为什么写完之后还要再读一遍**：本设备上 `PUT /alarm_strategy {Switch:1}`
  * 已被实测为应答 `ret:200` 却完全不生效（见 `docs/FA371-API-DELTA.md` §1）。
@@ -36,7 +38,7 @@ import type {
  * 为 `false` 时界面必须说「设备没有接受这次修改」，而不是把控件翻到请求值。
  */
 export interface CameraRunModeWriteResult {
-  /** 请求写入的模式。 */
+  /** 请求写入的运行方式。 */
   requested: Fa371RunModeValue
   /** 写之前设备的读数。 */
   before: Fa371RunModeConfig
@@ -49,12 +51,44 @@ export interface CameraRunModeWriteResult {
   applied: boolean
 }
 
+/**
+ * 泄漏估算参数的写结果（§5.1.11，业主 2026-09-24：局放→泄漏切换要填计算模板）。
+ * 部分字段更新，写完重读——`after` 是权威值（与 run_mode 同一口径）。
+ */
+export interface CameraLeakageWriteResult {
+  /** 这次写入的部分字段（原样回显）。 */
+  requested: CameraLeakagePatch
+  before: Fa371LeakageConfig
+  after: Fa371LeakageConfig
+}
+
+/**
+ * 泄漏估算参数的写入补丁（线上键名与 §5.1.11 一致；只带要改的字段）。
+ * 渲染层与主进程共用这一个定义（过 IPC 的就是它）。
+ */
+export interface CameraLeakagePatch {
+  /** V2.0 新增：现场校正系数。 */
+  correction_rate?: number
+  /** `0` 不展示 / `1` 展示泄漏成本。 */
+  cost_display?: number
+  /** 泄漏估算距离，1–50 米。 */
+  leakage_distance?: number
+  /** `0` = l/min，`1` = ml/s。 */
+  leakage_unit?: number
+  /** `0` ¥ / `1` £ / `2` $ / `3` € / `4` ₽。 */
+  monetary_unit?: number
+  value_of_gas?: number
+  energy_cost?: number
+  specific_power?: number
+  working_hours?: number
+}
+
 // ---------------------------------------------------------------------------
-// 应用模式（`GET` / `PUT /system`）—— 与"检测模式"是两件事
+// 检测模式（`work_mode`，`GET` / `PUT /system`）—— 与 run_mode 运行方式是两件事
 // ---------------------------------------------------------------------------
 //
-// ⚠ 名字警告：本文件上面那个 `CameraRunModeWriteResult` 是**检测模式**
-// （`/run_mode`，手册 §5.1.8：单次检测 / 智能巡航）；下面这个是**应用模式**
+// ⚠ 名字警告：本文件上面那个 `CameraRunModeWriteResult` 是**运行方式**
+// （`/run_mode`，手册 §5.1.8：单次检测 / 智能巡航）；下面这个是**检测模式**
 // （这台设备在做哪种应用：局部放电 / 气体泄漏 / 机械异响），端点 `/system`
 // **不在任何一份手册里**。两者只差一个词，看清楚再改。
 //
@@ -63,7 +97,7 @@ export interface CameraRunModeWriteResult {
 // 失败时操作员的下一步也不同。合并只会让"哪个是文档说的"变得不可读。
 
 /**
- * 一次「读应用模式」的结果。
+ * 一次「读检测模式（work_mode）」的结果。
  *
  * `available` 是**能力门**，不是装饰：`/system` 是未文档化端点，固件换一版就可能
  * 消失或不再回 `work_mode`。读不到时界面**不渲染**这个控件（而不是渲染一个点了
@@ -80,14 +114,14 @@ export interface CameraWorkModeRead {
    * 缺省），或者主进程那次读整体失败 —— 两种情况下这个控件都点不了。
    */
   available: boolean
-  /** 设备自报的应用模式（原始值 + 可能命中的枚举与稳定 label KEY）。 */
+  /** 设备自报的检测模式（原始值 + 可能命中的枚举与稳定 label KEY）。 */
   view: Fa371WorkModeConfig
   /** 可以写入的三个值，按界面顺序给出（`1`/`2`/`3`）。 */
   selectable: readonly Fa371WorkModeValue[]
 }
 
 /**
- * 一次「切换应用模式」的完整结果。
+ * 一次「切换检测模式（work_mode）」的完整结果。
  *
  * 与 `CameraRunModeWriteResult` 同一条规矩，理由在本设备上同样成立（而且更强）：
  * **写完之后必须再读一遍**。本设备实测过 `PUT /alarm_strategy {Switch:1}` 应答
@@ -103,7 +137,7 @@ export interface CameraWorkModeRead {
  * 副作用悄悄重写，是那种"当场看不出来、下次检测结果不对"的惊喜。
  */
 export interface CameraWorkModeWriteResult {
-  /** 请求写入的应用模式（`1`/`2`/`3`，实测过的三个值）。 */
+  /** 请求写入的检测模式（`1`/`2`/`3`，实测过的三个值）。 */
   requested: Fa371WorkModeValue
   /** 写之前设备的读数。 */
   before: Fa371WorkModeConfig
@@ -118,6 +152,80 @@ export interface CameraWorkModeWriteResult {
    * 悄悄算成成功。
    */
   applied: boolean
+}
+
+// ---------------------------------------------------------------------------
+// 检测区域（`GET` / `PUT /system/scan_area`）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一次检测区域写入的结果。
+ *
+ * `requested` 是渲染层在视频画面上绘制后换算出的设备坐标；`after` 是 PUT 之后
+ * 再次 GET 到的设备事实。与其它 FA371 写操作保持同一条规则：HTTP 成功不等于设备
+ * 已经采用配置，所以界面只用 `after` 作为最终显示，并通过 `applied` 明确告知结果。
+ */
+export interface CameraScanAreaWriteResult {
+  requested: Fa371ScanArea
+  before: Fa371ScanArea
+  after: Fa371ScanArea
+  applied: boolean
+}
+
+/**
+ * 软件侧的告警区域元数据。
+ *
+ * 相机 `/system/scan_area` 只保存矩形坐标与 draw_status，没有稳定 id / 名称；
+ * 因此编号与名称必须由桌面软件自己持久化。`id` 是稳定主键，`areaIndex` 只是
+ * 当前下发到相机数组里的顺序，删除中间一项后可以变化，二者绝不能混为一谈。
+ */
+export interface CameraAlarmRegionMetadata {
+  id: string
+  deviceId: string
+  /** 当前相机区域数组中的 0-based 顺序。 */
+  areaIndex: number
+  name: string
+  leftTopX: number
+  leftTopY: number
+  width: number
+  height: number
+  createdAt: number
+  updatedAt: number
+}
+
+/** 渲染层保存区域元数据时使用的输入；主进程补 deviceId / createdAt / updatedAt。 */
+export interface CameraAlarmRegionMetadataInput {
+  /** 已存在的区域带稳定 id；新区域可以省略，由主进程生成。 */
+  id?: string
+  areaIndex: number
+  name: string
+  leftTopX: number
+  leftTopY: number
+  width: number
+  height: number
+}
+
+/**
+ * 一个坐标点命中的本地区域。
+ *
+ * 这是给后续“告警记录显示区域名称”预留的纯函数：当设备告警能提供 pixelX/pixelY
+ * 时，事件链可以直接调用，不必再次复制矩形判断逻辑。多个区域重叠时返回面积最小
+ * 的那个（更具体的区域优先）。
+ */
+export function cameraAlarmRegionAtPoint(
+  regions: readonly CameraAlarmRegionMetadata[],
+  x: number,
+  y: number
+): CameraAlarmRegionMetadata | undefined {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
+  return regions
+    .filter((region) =>
+      x >= region.leftTopX &&
+      y >= region.leftTopY &&
+      x <= region.leftTopX + region.width &&
+      y <= region.leftTopY + region.height
+    )
+    .sort((a, b) => a.width * a.height - b.width * b.height)[0]
 }
 
 // ---------------------------------------------------------------------------

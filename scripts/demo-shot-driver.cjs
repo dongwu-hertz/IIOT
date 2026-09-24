@@ -3970,7 +3970,7 @@ async function run() {
   }
 
   const localeStates = {}
-  for (const code of ['zh-CN', 'en', 'es', 'tr']) {
+  for (const code of ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru']) {
     // Drive the real persistence path: the same storage key the composable reads
     // on startup. Reloading also proves the choice SURVIVES a restart, which is
     // half the feature.
@@ -3999,13 +3999,20 @@ async function run() {
     }
     // The release date is locale DATA, not copy: it must be formatted by Intl for
     // the active language, and must never still read as the Chinese form
-    // (year/month/day ideographs) once the interface is English, Spanish or
-    // Turkish. Regression guard for the shared Chinese-only date formatter that
-    // was removed, which rendered the same Chinese date in all four languages.
+    // (year/month/day ideographs) once the interface is English, Spanish,
+    // Turkish, Russian or Traditional Chinese… — except that LAST one: `Intl`
+    // formats a zh-TW date as `2026年9月21日` too, so 年月日 is correct there and
+    // zh-TW is exempt. Regression guard for the shared Chinese-only date formatter
+    // that was removed, which rendered the same Chinese date in all six languages.
     //
     // Checked on the WHOLE footer, because the date moved there with the version
     // when the sidebar footer was replaced by the page footer.
-    if (code !== 'zh-CN' && typeof state.footer === 'string' && /[\u5e74\u6708\u65e5]/.test(state.footer)) {
+    if (
+      code !== 'zh-CN' &&
+      code !== 'zh-TW' &&
+      typeof state.footer === 'string' &&
+      /[\u5e74\u6708\u65e5]/.test(state.footer)
+    ) {
       problems.push('release date rendered in Chinese for ' + code + ': ' + state.footer)
     }
     // The footer is where the product asked for the version and the copyright, so

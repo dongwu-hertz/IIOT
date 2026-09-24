@@ -30,6 +30,7 @@ import {
   parseRecipientList,
   linkageCooldownSlot,
   DEFAULT_ALARM_LINKAGE_CONFIG,
+  isLegacyDefaultAlarmLinkageConfig,
   LINKAGE_ACTION_KINDS,
   type AlarmLinkageConfig,
   type LinkageActionOutcome,
@@ -258,11 +259,24 @@ async function makeEngine(
 // ---------------------------------------------------------------------------
 
 describe('引擎：动作与开关', () => {
-  it('默认配置是关闭的，且邮件默认关闭', () => {
-    // 「装完就往外发邮件的应用是缺陷」——这条断言就是那句话。
-    assert.equal(DEFAULT_ALARM_LINKAGE_CONFIG.enabled, false)
+  it('默认配置：引擎默认开启（业主 2026-09-23），邮件仍默认关闭', () => {
+    // 「告警信息应该默认开启」与「装完就往外发邮件的应用是缺陷」——两条都在这句断言里。
+    assert.equal(DEFAULT_ALARM_LINKAGE_CONFIG.enabled, true)
     assert.equal(DEFAULT_ALARM_LINKAGE_CONFIG.actions.email, false)
     assert.equal(DEFAULT_ALARM_LINKAGE_CONFIG.email.host, '')
+  })
+
+  it('旧出厂默认（enabled:false 的整包落库）能被识别并升级，用户改过的不能', () => {
+    // 没碰过联动设置的老装：与旧默认逐字段相等 → 允许设置服务升级。
+    const legacy = { ...DEFAULT_ALARM_LINKAGE_CONFIG, enabled: false }
+    assert.equal(isLegacyDefaultAlarmLinkageConfig(legacy), true)
+    // 新默认本身不是「旧默认」。
+    assert.equal(isLegacyDefaultAlarmLinkageConfig(DEFAULT_ALARM_LINKAGE_CONFIG), false)
+    // 用户改过任何一格（哪怕只是一秒冷却）→ 尊重用户，不升级。
+    const touched = { ...legacy, popup: { ...legacy.popup, cooldownSeconds: 9 } }
+    assert.equal(isLegacyDefaultAlarmLinkageConfig(touched), false)
+    const touchedEmail = { ...legacy, email: { ...legacy.email, host: 'smtp.example.com' } }
+    assert.equal(isLegacyDefaultAlarmLinkageConfig(touchedEmail), false)
   })
 
   it('总开关关闭时一个动作都不跑，甚至不进去重表', async () => {
@@ -831,6 +845,36 @@ describe('轮询游标', () => {
     assert.equal(result.candidates.length, 1)
     assert.equal(result.candidates[0]?.identity.eventId, 'dev-1:2:200')
     assert.equal(result.fetched, 2)
+  })
+
+  it('推送源：相机的告警记录映射成同一个事件身份（与轮询/WS 去重契约一致）', async () => {
+    const { toPushCandidate } = await import('../src/main/services/linkage/camera-push-source')
+    const { mapDetectLog } = await import('../src/main/services/device/fa371/mappers')
+    // 2026-09-24 真机 /detect_logs 的实际字段形状（局放告警）。
+    const log = mapDetectLog({
+      id: 8,
+      start_time: 1790152618,
+      is_alarm: true,
+      alarm_level: 2,
+      alarm_strategy_id: 1,
+      detect_mode: 1,
+      discharge_type: 4,
+      last_alarm_db: 42.47,
+      last_alarm_df: 24218,
+      data_1: 0.0
+    })
+    const candidate = toPushCandidate({ id: 'cam-1', name: 'Acoustic Camera' }, log, 5000)
+    assert.ok(candidate)
+    assert.equal(candidate.source, 'push')
+    assert.equal(candidate.alarmFlag, true)
+    assert.equal(candidate.alarmLevelRaw, 2)
+    assert.equal(candidate.detectMode, 1)
+    assert.equal(candidate.dischargeTypeKey, 'discharge')
+    assert.equal(candidate.metrics?.alarmDb, 42.47)
+    // 局放记录里的 data_1=0 只是占位：泄漏量不得出现在局放告警上。
+    assert.equal(candidate.metrics?.leakVolume, undefined)
+    // 没有 id 的记录产不出事件（身份会撞车，宁可不报）。
+    assert.equal(toPushCandidate({ id: 'cam-1', name: 'C' }, mapDetectLog({}), 5000), undefined)
   })
 
   it('候选事件带上设备给的可选字段（等级、策略、指标）', async () => {

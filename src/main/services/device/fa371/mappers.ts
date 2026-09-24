@@ -565,6 +565,8 @@ export function mapLeakageConfig(dto: Fa371LeakageDto | undefined): Fa371Leakage
 
   const costDisplay = pickBoolean(source, ['cost_display'])
   if (costDisplay !== undefined) config.costDisplay = costDisplay
+  const correctionRate = pickNumber(source, ['correction_rate'])
+  if (correctionRate !== undefined) config.correctionRate = correctionRate
   const distance = pickNumber(source, ['leakage_distance'])
   if (distance !== undefined) config.distanceM = distance
 
@@ -747,9 +749,18 @@ export function mapCameraVersionInfo(
  * 返回体与 `/alarm_strategy` 同形，所以列表本身复用 `mapAlarmStrategyPage`；
  * 这里另外派生出 id 数组，让界面不必自己从 `enabled` 里筛。
  * 真机实测：没有任何策略启用时是空数组，而不是缺字段。
+ *
+ * **2026-09-23 真机修正**：这个端点的响应项**不一定带 `Switch` 字段**（那是
+ * `/alarm_strategy` 列表页的副本）。出现在 `/alarm_strategy_enable` 的响应里，
+ * 本身就意味着「启用中」——这是端点名字的语义。若仍要求 `enabled === true`，
+ * 真机会得到永远为空的 ids：「开始检测」被永久禁用，尽管设备上明明启用着策略
+ * （当天设备日志里 0 次 `/turn_on_detect` 就是这个症状）。
+ * 因此：带显式标记时以标记为准；缺标记时按「出现在该端点即启用」补 true。
  */
 export function mapEnabledStrategyView(dto: Fa371AlarmStrategyPageDto | undefined): CameraEnabledStrategyView {
-  const items = mapAlarmStrategyPage(dto).items
+  const items = mapAlarmStrategyPage(dto).items.map((item) =>
+    item.enabled === undefined ? { ...item, enabled: true } : item
+  )
   return { items, ids: enabledStrategyIds(items) }
 }
 
@@ -910,6 +921,22 @@ export function mapDetectLog(
   if (lastNc !== undefined) log.lastAlarmNc = lastNc
   const isAlarm = pickBoolean(source, ['is_alarm'])
   if (isAlarm !== undefined) log.isAlarm = isAlarm
+  // 放电类型（2026-09-23 真机实测出现；枚举缺 3，未知取值只留原始值不就近取整）。
+  const dischargeType = pickNumber(source, ['discharge_type'])
+  if (dischargeType !== undefined) {
+    log.dischargeType = dischargeType
+    const key = lookupKey(FA371_DISCHARGE_TYPE_KEYS, dischargeType)
+    if (key !== undefined) log.dischargeTypeKey = key
+  }
+  // 局放分类概率（2026-09-24 真机实测）：discharge_type=4 时真正的分类在这四个概率里。
+  const probabilityCorona = pickNumber(source, ['probability_corona'])
+  if (probabilityCorona !== undefined) log.probabilityCorona = probabilityCorona
+  const probabilityCreepage = pickNumber(source, ['probability_creepage'])
+  if (probabilityCreepage !== undefined) log.probabilityCreepage = probabilityCreepage
+  const probabilitySuspen = pickNumber(source, ['probability_suspen'])
+  if (probabilitySuspen !== undefined) log.probabilitySuspen = probabilitySuspen
+  const probabilityNoise = pickNumber(source, ['probability_noise'])
+  if (probabilityNoise !== undefined) log.probabilityNoise = probabilityNoise
   const ncFilePath = pickString(source, ['nc_file_path'])
   if (ncFilePath !== undefined) log.ncFilePath = ncFilePath
   const ncFft = pickString(source, ['nc_file_fft_photo_name'])

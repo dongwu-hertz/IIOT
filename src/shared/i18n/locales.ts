@@ -13,7 +13,7 @@
  * interface they cannot read.
  */
 
-export const LOCALES = ['zh-CN', 'en', 'es', 'tr'] as const
+export const LOCALES = ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru'] as const
 
 export type AppLocale = (typeof LOCALES)[number]
 
@@ -28,9 +28,11 @@ export interface LocaleDescriptor {
 
 export const LOCALE_DESCRIPTORS: readonly LocaleDescriptor[] = [
   { code: 'zh-CN', endonym: '简体中文', shortLabel: '中文' },
+  { code: 'zh-TW', endonym: '繁體中文', shortLabel: '繁中' },
   { code: 'en', endonym: 'English', shortLabel: 'EN' },
   { code: 'es', endonym: 'Español', shortLabel: 'ES' },
-  { code: 'tr', endonym: 'Türkçe', shortLabel: 'TR' }
+  { code: 'tr', endonym: 'Türkçe', shortLabel: 'TR' },
+  { code: 'ru', endonym: 'Русский', shortLabel: 'RU' }
 ]
 
 /**

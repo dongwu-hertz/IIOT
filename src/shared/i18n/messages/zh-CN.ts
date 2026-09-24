@@ -602,8 +602,41 @@ export const zhCN = {
    * live under `metrics` rather than here — otherwise the same acoustic quantity
    * would end up named twice and could drift.
    */
+  sonarUi: {
+    mapTitle: '设备位置',
+    noGis: '这台设备还没有 GIS 坐标（在设备管理里补安装位置）。',
+    currentSpl: '当前分贝',
+    azimuth: '当前方位指向',
+    playAudio: '播放最近录音',
+    stopAudio: '停止播放',
+    noAudio: '还没有可播放的录音',
+    latestAlarm: '最近一次告警',
+    noSnapshot: '这条告警没有抓图。',
+    alarmDirection: '告警方向',
+    alarmSpl: '分贝大小',
+    alarmType: '告警类型',
+    alarmTime: '告警时间',
+    noAlarms: '这台设备还没有告警记录。',
+    history: '历史告警'
+  },
   alarmsUi: {
     countSummary: '共 {total} 条记录，已选 {selected} 条',
+    metricBandEnergyRatio: '频带能量比',
+    detailDevice: '告警设备',
+    detailContent: '告警内容',
+    overviewStatus: '告警状态',
+    cameraEvidenceMissing: '这条告警没有取到抓帧图片。',
+    /** 全宽详情里的证据区标题与空态（业主 2026-09-26 第 4 条把详情改成整幅宽）。 */
+    cameraEvidenceLoading: '正在读取抓帧图片…',
+    cameraEvidenceNoVideo: '这条告警没有本机联动录像。',
+    cameraActionsTitle: '联动动作结果',
+    /** 深链 `?cameraAlarm=` 指向一条已经不在待处理列表里的告警时的如实说明。 */
+    cameraAlarmNotFound: '这条相机告警已经不在待处理列表里（可能已被确认并因超出保留上限被丢弃）。',
+    viewInEventCenter: '在事件中心查看完整证据',
+    cameraRowBadge: '相机',
+    cameraSectionTitle: '相机告警',
+    cameraSectionEmpty: '相机还没有推送过告警。',
+    cameraAlarmGeneric: '相机告警',
     bulkAcknowledge: '批量确认',
     bulkUnacknowledge: '取消确认',
     addSelectedToSamples: '加入样本库',
@@ -836,8 +869,9 @@ export const zhCN = {
      * （100 ms 一帧），与「播放」按钮听到的是同一份数据 —— 所以那句说明照这个写。
      */
     waveformSection: '声学波形',
-    waveformHint: '100 毫秒一帧的降采样包络（与播放听到的是同一份数据）',
     waveformAmplitude: '归一化幅度',
+    addToWall: '添加到视频墙',
+    onWall: '已在视频墙',
     waitingAudio: '等待音频帧…',
     /*
      * ③b 时间轴回放：只回放**本机**文件。
@@ -1652,7 +1686,6 @@ export const zhCN = {
     spectrumUnknownAxis: '设备未提供频率轴：横轴按谱线序号显示。',
     voiceprintPending: '该通道暂时没有声纹变化图；7 项特征读数在右栏。',
     waveformPending: '该设备暂未提供实时波形。',
-    prpdUnavailable: '现有设备接口未提供 PRPD 相位分辨数据；这里是明确的无数据状态。',
     pdProbability: '局放概率',
     pdProbabilityEmpty: '设备未提供局放类型概率。',
     leakAnalysis: '泄漏分析',
@@ -2546,6 +2579,18 @@ export const zhCN = {
    * distinct, honest fact rather than as a quiet measurement.
    */
   cameraStreamUi: {
+    detectMode: '检测模式值',
+    modePrpdTitle: 'PRPD',
+    modeLeakageTitle: '泄漏数据',
+    modeMechanicalTitle: '机械特征',
+    modeAnalysisTitle: '模式分析',
+    prpdPhase: '相位',
+    prpdAmplitude: '幅值',
+    prpdCount: '次数',
+    prpdPhaseAxis: '相位（°）',
+    modeDataStatus: '状态',
+    modeDataWaiting: '等待当前模式的特征数据。',
+    modeSelectHint: '请选择检测模式以显示对应的分析内容。',
     stop: '停止接收',
     startSpectrum: '接收频谱',
     startWaveform: '接收波形',
@@ -2657,6 +2702,8 @@ export const zhCN = {
     recordingBadge: '录制中 {time}',
     recordSaved: '录像已保存：时长 {duration}，大小 {size}，文件 {path}',
     recordWarning: '注意：{reason}',
+    snapshotSavedTitle: '抓图已保存',
+    recordSavedTitle: '录像已保存',
     snapshotSaved: '抓图已保存：{path}',
     openFolder: '打开所在文件夹',
     copyDone: '已复制 RTSP 地址（含设备口令，请勿外传）。',
@@ -2665,7 +2712,6 @@ export const zhCN = {
     overlayDevice: '设备：{name}',
     overlayStatus: '状态：{status}',
     overlayStream: '码流：{mode} · {address}',
-    fullscreenFailed: '无法进入全屏，请检查窗口权限。'
   },
 
   /**
@@ -2682,18 +2728,64 @@ export const zhCN = {
     /** 实时监测页那张「告警」卡片（与相机控制并排）的说明与出口。 */
     entryHint: '告警策略与告警条件在设备侧生效，这里只读取与修改它们。',
     noAlarms: '本机还没有这台相机的告警记录。',
+    /** 联动总开关关着时，「告警信息」卡片空态如实说明（相机告警只走联动引擎）。 */
+    linkageDisabledHint: '告警联动总开关未开启，相机检测到的告警不会出现在这里。请到「设置 → 告警联动」开启。',
     /** 监测页视频下方的「告警结果」卡标题（业主 20260921 批第三批第 5 条）。 */
     recentTitle: '告警信息',
     goAlarmList: '查看告警中心',
+    /**
+     * 「告警信息」表的统一标题格（业主 2026-09-26 第 1 条）。
+     *
+     * 时间是 `alarmsUi.columnTime`、等级是 `alarmsUi.columnSeverity`、类型是
+     * `alarmsUi.columnType`（与告警中心同一套列名，同一件事在软件里只有一个词），
+     * 这里只补这两列相机侧特有的读数：
+     *   · 声场强度 = 设备报的 `soundmapIntensity`（没有时退回 `last_alarm_db`）；
+     *   · 主频 = `last_alarm_df`（局放 / 机械模式才有意义，泄漏模式不显示）。
+     * 取值为空的那一格显示 `—`，不写 0。
+     */
+    columnIntensity: '声场强度',
+    columnMainFrequency: '主频',
+    /** 换页读数（行数由每页固定行数决定，见 `CAMERA_ALARM_PAGE_SIZE`）。 */
+    pageStatus: '第 {page} / {pages} 页',
+    /** 点一行 → 告警中心里这一条的详情（音频 / 视频 / 文件都在那边）。 */
+    openAlarmDetail: '在告警中心查看这条告警的详情',
     // `subtitle`（「设备 {name}：告警策略与告警条件（一条策略只关联一个条件）。」）
     // 已按产品要求删除：对话框里不再出现这句话，四种语言里的这一条也一并删掉，
     // 免得留一个没人渲染的死键。同一个约束仍然成立（策略只能绑一条条件），
     // 它以表单校验 `issueCondition` 的形式存在。
     tabStrategies: '告警策略',
     tabConditions: '告警条件',
+    tabRegions: '告警区域',
+    regionHint: '打开本页会先从相机读取当前告警区域。每个区域都有稳定编号和名称；保存时矩形写入相机，编号与名称保存到本机数据库。',
+    regionColX: 'X %',
+    regionColY: 'Y %',
+    regionColW: '宽 %',
+    regionColH: '高 %',
+    regionAdd: '添加区域',
+    regionDeleteSelected: '删除选中区域',
+    regionClearSelection: '取消选择',
+    regionEmpty: '尚未配置告警区域。',
+    regionClear: '清空',
+    regionSave: '保存区域',
+    regionReload: '从相机获取',
+    regionCleared: '已清空（尚未写入相机，保存后生效）。',
+    regionSaved: '告警区域已保存：矩形已写入相机，编号和名称已保存到本机。',
+    regionNotApplied: '相机应答成功，但读回的告警区域与本次设置不一致；已恢复显示相机实际区域。',
+    regionMetadataSaveFailed: '区域已写入相机，但编号/名称保存到本机失败：{reason}',
+    regionInvalid: '每个区域都必须有名称；X/Y/宽/高必须是 0–100 的百分比，且宽、高大于 0、不超出画面。',
+    regionVideoStart: '开启视频',
+    regionDraw: '框选区域',
+    regionDrawing: '框选中…',
+    regionDrawHint: '先开启视频，点「框选区域」后在画面上拖拽画出告警区域；也可以在下方表格里直接改数值。',
+    strategyEnable: '启用',
+    strategyDisable: '停用',
+    strategyEnableSaved: '启用状态已写入相机。',
+    regionColIndex: '编号',
+    regionColName: '名称',
+    regionDefaultName: '区域 {n}',
     // `refresh`（「刷新」）是**文字**按钮时代的键，现在那个控件只有一个图标，
     // 所以它的可访问名改成下面这一条（图标按钮必须靠 aria-label + title 才有名字）。
-    refreshIcon: '重新读取告警策略与告警条件',
+    refreshIcon: '重新读取告警策略、启用状态、告警条件与告警区域',
     loading: '正在读取告警配置…',
     empty: '设备没有返回任何记录。',
     newStrategy: '新建策略',
@@ -2701,6 +2793,7 @@ export const zhCN = {
     newCondition: '新建条件',
     editCondition: '编辑条件',
     save: '保存',
+    saveToCamera: '保存到相机',
     cancel: '取消',
     edit: '编辑',
     delete: '删除',
@@ -2733,7 +2826,8 @@ export const zhCN = {
     branchDecibel: '声压级（dB）',
     branchDominantFreq: '主频',
     branchComparison: '频谱比对',
-    branchDischarge: '放电（仅写入）',
+    branchDischarge: '放电诊断',
+    dischargeDiagnosisHint: 'dB、主频或频谱比对中的任一已启用异常条件可以先触发告警；放电类型在异常之后进行诊断，不再作为告警成立前必须匹配的条件。',
     operatorGt: '大于',
     operatorLt: '小于',
     operatorEq: '等于',
@@ -2751,23 +2845,15 @@ export const zhCN = {
     conditionHint: '设备只回传条件名称与 id；完整条件需要展开下面一栏查看。',
     selectCondition: '请选择条件',
     noConditions: '设备还没有告警条件：请先新建一条条件，再创建策略。',
-    diagnosisKeyLabel: '诊断说明键名',
-    diagnosisKeyDiagosisn: 'diagosisn（POST 手册原文）',
-    diagnosisKeyDiagnosis: 'diagnosis（PUT 手册原文）',
-    diagnosisKeyBoth: '两个键都发（探测用）',
     conditionIdStyleLabel: '条件修改的目标标识',
     conditionIdStyleId: '发 id（沿用策略的先例）',
     conditionIdStyleAlarmConditionId: '发 alarm_condition_id（读取侧拼写）',
     conditionIdStyleNone: '不发标识（照字段表字面）',
     unverified: '未验证',
-    ambiguityDiagnosisLabel: '诊断说明键名不一致',
-    ambiguityDiagnosisNote: '新建策略的字段表写 diagosisn（手册要求原样发送），修改策略写 diagnosis。设备是否两个都认、是否只认一个，手册未说明，因此这里是一个可选候选。',
     ambiguityConditionIdLabel: '修改条件时无法指定目标',
     ambiguityConditionIdNote: '修改告警条件的请求字段表里根本没有 id 字段，无法从手册得知要改哪一条。默认沿用修改策略的先例发 id，另两种发法保留为候选。',
     ambiguityLevelLabel: '告警等级两套取值',
     ambiguityLevelNote: '读取侧字段表写 0~3，写入侧写 1~4。本软件不做静默偏移：界面上的 1~4 原样发出，读回来的值原样显示，因此读到一个 0 时它没有对应的等级名称。',
-    ambiguitySwitchLabel: '没有启用/停用策略的接口',
-    ambiguitySwitchNote: 'Switch 只出现在读取接口，开放接口里没有任何启用/停用策略的端点；而已启用的策略按手册不能被修改。因此这里只能显示启用状态，不能切换。',
     ambiguityDischargeLabel: '放电判据只在写入侧存在',
     ambiguityDischargeNote: '放电开关、逻辑与类型只出现在新增/修改条件的字段表里，读取接口不回传它们；放电类型枚举还缺了 3。写入后读不回来是手册如此，不是本软件漏读。',
     ambiguityUnitsLabel: '阈值单位与范围未说明',
@@ -2784,12 +2870,13 @@ export const zhCN = {
     issueInterval: '间隔时间必须是不小于 0 的整数',
     issueTimes: '序号必须是不小于 0 的整数',
     issueConditionName: '条件名称不能为空（不超过 64 个字符）',
-    issueNoBranch: '四个判据至少要打开一个，否则这条条件不会参与判定',
+    issueNoBranch: '请至少启用一个声学异常判据：dB、主频或频谱比对。',
     issueSimilarity: '噪声相似度必须为 0~1',
     issueDischargeType: '放电类型只定义了 0/1/2/4（手册缺 3）',
     savedStrategy: '策略已下发，列表已刷新。',
     savedCondition: '条件已下发，列表已刷新。',
     deleted: '删除请求已下发，列表已刷新。',
+    deletedConditionAfterDisable: '已先停用关联且正在启用的告警策略，然后删除该告警条件。',
     missingId: '该记录的 id 无法解析为整数，无法修改或删除（读取侧 id 可能是字符串，见规格 §8.3 C21）。',
     adminOnly: '新建、修改与删除告警配置需要管理员账户。'
   },
@@ -2833,9 +2920,48 @@ export const zhCN = {
    * 只说一句事实：**该端点未见于设备手册** —— 不说"已支持"，因为它是实测接口。
    */
   cameraControlUi: {
+    settingsTitle: '相机控制设置',
+    detectionControlTitle: '检测控制',
+    detectionModeLabel: '检测模式',
+    leakageOpen: '泄漏计算参数',
+    leakageParamsTitle: '泄漏计算参数（写入相机 /system/leakage）',
+    leakageDistance: '估算距离（米）',
+    leakageUnitLabel: '泄漏单位',
+    monetaryUnitLabel: '货币单位',
+    valueOfGas: '气体价值',
+    energyCost: '能耗成本',
+    specificPower: '比功率',
+    workingHours: '工作时长',
+    correctionRate: '现场校正系数',
+    costDisplay: '显示泄漏成本',
+    leakageSave: '保存泄漏参数',
+    leakageSaved: '泄漏计算参数已保存（以设备读回值为准）',
+    operationLabel: '运行方式',
+    frequencyBand: '频率范围',
+    lowerFrequency: '频率下限',
+    upperFrequency: '频率上限',
+    suggestedFrequencyRange: '建议频率范围：{range}',
+    recommendedForMode: '当前模式建议：{range}',
+    imagingThreshold: '成像阈值',
+    imagingThresholdHint: '建议从当前现场背景声级开始调整；-30 dB 仅作为调试起始值。',
+    apply: '应用',
+    detectionModeUnavailable: '当前相机固件未提供检测模式（work_mode）。',
+    activeRecentAlarms: '未确认告警 {count} 条（与右上角告警图标同一口径）',
+    suggestedMechanicalBand: '2-50 kHz 搜索范围 · 当前成像带宽 <= {limit} kHz',
+    bandErrorMissing: '请输入频率下限和上限。',
+    bandErrorNumeric: '频率上下限必须为数字。',
+    bandErrorRange: '频率范围必须位于 2-65 kHz。',
+    bandErrorOrder: '频率上限必须大于频率下限。',
+    bandErrorWidth: '当前设备的有效成像带宽不能超过 {limit} kHz。',
+    imagingSettingsApplied: '成像频带和阈值已生效。',
+    imagingSettingsRejected: '设备已应答，但写后读回值与请求值不一致。',
+    modeMismatchTitle: '检测模式不一致',
+    modeMismatchMessage: '实时监测当前设置为“{configured}”，但相机当前检测模式为“{actual}”。请在“相机控制设置”中确认或修改检测模式。',
+    modeMismatchConfigured: '当前设置',
+    modeMismatchCamera: '相机模式',
     title: '相机控制',
     refresh: '刷新',
-    modeTitle: '检测模式',
+    modeTitle: '运行方式',
     modeSingle: '单次检测',
     modeCruise: '智能巡航',
     modeUnknownHint: '设备返回的取值手册没有定义：1 = 单次检测，-1 = 智能巡航。',
@@ -2843,13 +2969,13 @@ export const zhCN = {
     modeReadBack: '设备当前：{value}',
     modeApplied: '已生效',
     modeRejected: '设备应答成功但没有生效',
-    appModeTitle: '应用模式',
+    appModeTitle: '检测模式',
     appModeCurrent: '设备当前',
     appModePartialDischarge: '局部放电',
     appModeGasLeak: '气体泄漏',
     appModeMechanical: '机械异响',
     appModeUnknownHint: '设备返回的取值不在实测过的三个之内（1 = 局部放电，2 = 气体泄漏，3 = 机械异响）。',
-    appModeSourceHint: '端点未见于设备手册，切换只写应用模式一项。',
+    appModeSourceHint: '该端点未见于设备手册；切换时只写检测模式 work_mode。',
     appModeApplied: '已生效',
     appModeRejected: '设备应答成功但没有生效',
     /*
@@ -2862,7 +2988,7 @@ export const zhCN = {
      * 详细的来路记在 `CameraControlPanel.vue` 里 `pendingWorkMode` 上面的注释。
      * 要改这句话，先改产品的要求，不要拿它反推设备行为。
      */
-    appModeConfirmTitle: '切换应用模式',
+    appModeConfirmTitle: '切换检测模式',
     /**
      * 产品指定的原话，逐字照发。
      *
@@ -2985,13 +3111,12 @@ export const zhCN = {
   },
 
   cameraWallUi: {
-    title: '实时视频墙',
     layoutGroup: '分屏档位',
     layoutLabel: '{count} 分屏',
     pickDevice: '选择相机',
     // 浮层里一台可选的相机都没有时的那一行（其它格已经把它们都占了）。
     viewPlay: '播放',
-    viewTimedomain: '1 秒时域图',
+    viewTimedomain: '时域图',
     viewSpectrum: '频域图',
     viewSpectrogram: '时频谱图',
     viewWaiting: '等待数据…',
@@ -3061,7 +3186,6 @@ export const zhCN = {
     exitFullscreen: '退出全屏',
     audioOn: '开启声音',
     audioOff: '关闭声音',
-    audioBadge: '正在出声',
     // 控制条上那颗音量按钮自己的名字（点它才弹出竖条）。
     volume: '音量',
     // 竖条滑杆的名字：业主说的"音量大小"，上下拖动调节。
@@ -3089,7 +3213,6 @@ export const zhCN = {
      *                   `CameraCellPicker.vue`）。
      */
     limitNotice: '同时直播上限为 {max} 路，当前 {active} 路。再开一路会超过上限，请先停掉另一格。',
-    limitSummary: '同时直播 {active} / {max} 路',
     layoutShrunk: '分屏档位变小，{count} 个画面格的直播已停止。'
   },
   /**
@@ -3120,15 +3243,22 @@ export const zhCN = {
    * 正是为了不引入 `@`。
    */
   linkage: {
+    popupTitle: '告警联动',
+    popupInfo: '{device} 触发提示级告警（等级 {level}）',
+    popupWarning: '{device} 触发告警（等级 {level}）',
+    popupCritical: '{device} 触发严重告警（等级 {level}）！',
     title: '告警联动',
     enabled: '启用告警联动',
 
     sourceSection: '触发源',
     pollInterval: '轮询间隔（秒）',
     useDetectFeedback: '启用检测反馈流加速器',
+    cameraPushEnabled: '接收相机主动推送的告警（HTTP）',
+    cameraPushPort: '推送接收端口',
     minAlarmLevel: '最低告警等级',
     sourcePoll: '轮询检测日志',
     sourceWebsocket: '检测反馈流',
+    sourcePush: '相机推送',
     sourceRunning: '运行中',
     sourceStopped: '已停止',
     sourceLastPoll: '最近一次轮询',
@@ -3205,8 +3335,17 @@ export const zhCN = {
     pendingAcknowledged: '已确认',
     pendingDropped: '有 {count} 条更早的告警因超出保留上限被丢弃',
     pendingLevel: '等级',
+    metricIntensity: '声场强度 {value} dB',
+    metricDf: '主频 {value} Hz',
+    metricVolume: '泄漏量 {value}',
+    metricLeakCost: '泄漏价格 {value}',
+    dischargeType: {
+      corona: '电晕放电',
+      suspension: '悬浮放电',
+      surface: '沿面放电',
+      discharge: '放电'
+    },
     pendingStrategy: '策略',
-    pendingMetrics: '声场强度 {intensity}，泄漏量 {volume}',
     pendingNoActions: '本次没有执行任何动作',
     pendingEngineOff: '告警联动当前是关闭的',
     pendingShow: '显示待处理告警',
@@ -3375,6 +3514,7 @@ export const zhCN = {
       related: '关联',
       activity: '活动'
     },
+    colIndex: '序号',
     overviewStatus: '状态',
     overviewFirstDetected: '首次探测',
     overviewLastDetected: '最后探测',

@@ -94,6 +94,7 @@ import {
   type Fa371RunModeWriteDto,
   type Fa371ScanAreaDto,
   type Fa371ScanAreaWriteDto,
+  type Fa371PushConfigDto,
   type Fa371StrategyDiagnosisKeyId,
   type Fa371SystemDto,
   type Fa371SystemTimeDto,
@@ -132,6 +133,8 @@ export const FA371_ENDPOINTS = {
   runMode: '/run_mode',
   leakage: '/system/leakage',
   scanArea: '/system/scan_area',
+  /** `/push_config`（手册未列端点；2026-09-24 真机实测读写均为此路径）。 */
+  pushConfig: '/push_config',
   turnOnDetect: '/turn_on_detect',
   turnOffDetect: '/turn_off_detect',
   /** §5.1.16：手册 URL 行给的是 `/system/detect_status`（以 Request method and URL 行为准）。 */
@@ -612,6 +615,22 @@ export class Fa371ApiClient {
     return this.call<Fa371AckDto>(FA371_ENDPOINTS.scanArea, 'PUT', body, options)
   }
 
+  /**
+   * `GET /push_config`（手册未列端点；2026-09-24 真机实测）。
+   * 相机主动 HTTP 推送的开关与地址；四个字段原样读回，语义见 `Fa371PushConfig`。
+   */
+  getPushConfig(options: Fa371CallOptions = {}): Promise<Fa371PushConfigDto> {
+    return this.call<Fa371PushConfigDto>(FA371_ENDPOINTS.pushConfig, 'GET', undefined, options)
+  }
+
+  /**
+   * `PUT /push_config`：整写四个字段（实测接受部分更新，但整写才是可读的语义）。
+   * 写后读回验证由调用方（联动服务的 `applyCameraPush`）负责。
+   */
+  setPushConfig(body: Fa371PushConfigDto, options: Fa371CallOptions = {}): Promise<Fa371AckDto> {
+    return this.call<Fa371AckDto>(FA371_ENDPOINTS.pushConfig, 'PUT', body, options)
+  }
+
   // -------------------------------------------------------------------------
   // 检测任务（§5.1.14 – §5.1.16）
   // -------------------------------------------------------------------------
@@ -941,8 +960,35 @@ export class Fa371ApiClient {
     ids: readonly number[],
     options: Fa371CallOptions = {}
   ): Promise<Fa371AckDto> {
-    const payload = this.buildIdListBody(ids, 'alarm_condition')
-    return this.call<Fa371AckDto>(FA371_ENDPOINTS.alarmCondition, 'DELETE', payload, options)
+    // §5.1.29 documents only "integer[]" and omits the request-field name. Firmware
+    // variants in the field therefore accept different shapes. Try the configured
+    // candidate first, then the two documented alternatives, but ONLY when the camera
+    // actually answered with a business error. Network/auth/time-out failures must not
+    // be multiplied into three DELETE attempts.
+    this.buildIdListBody(ids, 'alarm_condition') // validates the ids once
+    const candidates = [
+      this.idListBody,
+      ...FA371_ID_LIST_BODY_CANDIDATES.filter((candidate) => candidate.id !== this.idListBody.id)
+    ]
+    let lastDeviceError: AppError | undefined
+    for (const candidate of candidates) {
+      try {
+        return await this.call<Fa371AckDto>(
+          FA371_ENDPOINTS.alarmCondition,
+          'DELETE',
+          candidate.build(ids),
+          options
+        )
+      } catch (error) {
+        const appError = AppError.from(error)
+        if (appError.code !== ErrorCodes.DEVICE_ERROR) throw appError
+        lastDeviceError = appError
+        deviceLog().info('FA371 alarm-condition delete body rejected; trying next candidate', {
+          bodyStyle: candidate.id
+        })
+      }
+    }
+    throw lastDeviceError ?? new AppError(ErrorCodes.DEVICE_ERROR, '设备拒绝删除告警条件')
   }
 
   // -------------------------------------------------------------------------
@@ -1217,11 +1263,23 @@ export class Fa371ApiClient {
 
     deviceLog().warn('FA371 所有认证方式均失败', { baseUrl: this.baseUrl, attempts })
 
+    /**
+     * 2026-09-24「在线但提示认证失败」修复：传输层失败（超时/不可达）与凭据被拒
+     * 是两件不同的事，文案必须分开。此前不管原因都说「Token 携带方式均被拒绝」，
+     * 界面据此提示「检查用户名与密码」——而真实原因是相机 HTTP 栈在高负载下
+     * 不应答（实测：流媒体跑满时 /login 超时），凭据是对的，那句话把现场带去了
+     * 错误的方向。
+     */
+    const transportError =
+      lastError !== undefined &&
+      (lastError.code === ErrorCodes.NETWORK_ERROR ||
+        lastError.code === ErrorCodes.TIMEOUT ||
+        lastError.code === ErrorCodes.DEVICE_OFFLINE)
     throw new AppError(
-      lastError?.code === ErrorCodes.NETWORK_ERROR || lastError?.code === ErrorCodes.TIMEOUT
-        ? lastError.code
-        : ErrorCodes.AUTH_FAILED,
-      '认证失败：所有 Token 携带方式均被设备拒绝',
+      transportError ? (lastError as AppError).code : ErrorCodes.AUTH_FAILED,
+      transportError
+        ? `设备暂时无响应：${(lastError as AppError).message}`
+        : '认证失败：所有 Token 携带方式均被设备拒绝',
       attempts.join(' | ')
     )
   }

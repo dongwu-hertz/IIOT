@@ -49,6 +49,8 @@ import { zhCN } from '../src/shared/i18n/messages/zh-CN'
 import { en } from '../src/shared/i18n/messages/en'
 import { es } from '../src/shared/i18n/messages/es'
 import { tr } from '../src/shared/i18n/messages/tr'
+import { ru } from '../src/shared/i18n/messages/ru'
+import { zhTW } from '../src/shared/i18n/messages/zh-TW'
 import { LOCALES } from '../src/shared/i18n/locales'
 
 const projectRoot = path.resolve(__dirname, '..', '..')
@@ -455,9 +457,11 @@ describe('界面与四语言守卫', () => {
   it('四语言的地图设置键齐全：预置、授权边界、模板、key、时区与全部错误', () => {
     const catalogues: Record<string, Record<string, unknown>> = {
       'zh-CN': zhCN.settingsUi as unknown as Record<string, unknown>,
+      'zh-TW': zhTW.settingsUi as unknown as Record<string, unknown>,
       en: en.settingsUi as unknown as Record<string, unknown>,
       es: es.settingsUi as unknown as Record<string, unknown>,
-      tr: tr.settingsUi as unknown as Record<string, unknown>
+      tr: tr.settingsUi as unknown as Record<string, unknown>,
+      ru: ru.settingsUi as unknown as Record<string, unknown>
     }
     const keys = [
       'mapGroupService',

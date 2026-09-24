@@ -99,18 +99,15 @@ const session = useSessionStore()
  */
 const TABS = [
   { id: 'general', labelKey: 'settingsUi.tabGeneral' },
+  { id: 'storage', labelKey: 'settingsUi.tabStorage' },
   { id: 'integration', labelKey: 'settingsUi.tabIntegration' },
-  /*
-   * GIS 服务库自己的页签（业主 20260921 批：地图卡里不再展示服务库细节，
-   * 库挪到这一页；「应用」仍 = 抄进 mapTiles 并打开开关）。
-   */
-  { id: 'gis', labelKey: 'settingsUi.tabGisServices' },
   { id: 'alarm', labelKey: 'settingsUi.tabAlarm' },
   { id: 'account', labelKey: 'settingsUi.tabAccount' },
   { id: 'about', labelKey: 'settingsUi.tabAbout' }
 ] as const
 type SettingsTab = (typeof TABS)[number]['id']
 const activeTab = ref<SettingsTab>('general')
+const integrationPane = ref<'email' | 'maps' | 'ai'>('email')
 
 /** 账号页签里的改密对话框（与侧栏账户菜单是同一个组件）。 */
 const changePasswordOpen = ref(false)
@@ -1095,7 +1092,8 @@ async function confirmRestore(): Promise<void> {
         不是装饰：屏幕阅读器要能说出"这是几个页签中的第几个、当前选中哪个"。
         读屏名称用**这一页的标题**（`app.nav.settings`，与路由 meta 同一个键）。
       -->
-      <nav class="settings-tabs" role="tablist" :aria-label="t('app.nav.settings')">
+      <div class="settings-layout">
+        <nav class="settings-sidebar" role="tablist" :aria-label="t('app.nav.settings')">
         <button
           v-for="tab in TABS"
           :key="tab.id"
@@ -1109,16 +1107,22 @@ async function confirmRestore(): Promise<void> {
         >
           {{ t(tab.labelKey) }}
         </button>
-      </nav>
+        </nav>
 
+        <div class="settings-content">
       <!--
         常规（业主 20260921 批）：原 语言 / 存储 / 视频 / 缓存 四页合并成一页，
         紧凑双列小卡（每张 = 标题 + 控件，gap 8–12px），删掉各块原有的大留白。
       -->
-      <section v-if="activeTab === 'general'" class="card settings-panel" role="tabpanel" data-tab-panel="general">
+      <section v-if="activeTab === 'general' || activeTab === 'storage'" class="card settings-panel settings-panel--quiet" role="tabpanel" :data-tab-panel="activeTab">
+        <div class="settings-panel__save-state" aria-live="polite">
+          <span v-if="settings.saving" class="settings-save-state settings-save-state--saving">{{ t('common.saving') }}</span>
+          <span v-else-if="formError" class="settings-save-state settings-save-state--error">⚠ {{ t('settingsUi.saveFailed') }}</span>
+          <span v-else class="settings-save-state settings-save-state--saved">✓ Saved</span>
+        </div>
         <div class="mini-grid">
           <!-- 语言：唯一一条改了立刻生效、而且不需要保存的设置 -->
-          <div class="mini-card" data-mini-card="language">
+          <div v-if="activeTab === 'general'" class="mini-card" data-mini-card="language">
             <span class="mini-card__title">{{ t('settingsUi.tabLanguage') }}</span>
             <div class="settings-language">
               <LanguageSelect />
@@ -1126,7 +1130,7 @@ async function confirmRestore(): Promise<void> {
           </div>
 
           <!-- 存储：位置 / 保留 / 最小剩余 + 磁盘占用读数 -->
-          <div class="mini-card" data-mini-card="storage">
+          <div v-if="activeTab === 'storage'" class="mini-card" data-mini-card="storage">
             <span class="mini-card__title">{{ t('settingsUi.tabStorage') }}</span>
             <div class="field">
               <span class="field-label">{{ t('settingsUi.storagePath') }}</span>
@@ -1192,7 +1196,7 @@ async function confirmRestore(): Promise<void> {
           </div>
 
           <!-- 视频：开机自动起播 -->
-          <div class="mini-card" data-mini-card="video">
+          <div v-if="activeTab === 'general'" class="mini-card" data-mini-card="video">
             <span class="mini-card__title">{{ t('settingsUi.tabVideo') }}</span>
             <div class="field">
               <span class="field-label">{{ t('settingsUi.liveSection') }}</span>
@@ -1220,7 +1224,7 @@ async function confirmRestore(): Promise<void> {
             "多久问一次设备、几次不通算离线、一次请求等多久"，缓冲决定"告警前后各留
             多久、环形缓冲开多大"（缓冲必须不小于 告警前 + 告警后，校验在 `validate()`）。
           -->
-          <div class="mini-card" data-mini-card="cache">
+          <div v-if="activeTab === 'storage'" class="mini-card" data-mini-card="cache">
             <span class="mini-card__title">{{ t('settingsUi.cacheCardTitle') }}</span>
             <div class="form-grid">
               <label class="field">
@@ -1319,9 +1323,14 @@ async function confirmRestore(): Promise<void> {
         三块都是"本机对外接什么服务"，合成一页之后不必在多个页签之间来回跳。
       -->
       <template v-if="activeTab === 'integration'">
+        <div class="integration-switcher" role="tablist" aria-label="Integration category">
+          <button type="button" class="integration-switcher__button" :class="{ 'integration-switcher__button--active': integrationPane === 'email' }" @click="integrationPane = 'email'">Email</button>
+          <button type="button" class="integration-switcher__button" :class="{ 'integration-switcher__button--active': integrationPane === 'maps' }" @click="integrationPane = 'maps'">Maps & GIS</button>
+          <button type="button" class="integration-switcher__button" :class="{ 'integration-switcher__button--active': integrationPane === 'ai' }" @click="integrationPane = 'ai'">AI</button>
+        </div>
         <!-- 邮箱卡：完整 SMTP 配置（服务器/端口/SSL/账号/密码/发件人/测试发送）。
              组件自带紧凑表单与「发送测试邮件」，版式随组件走；数据仍只发 alarmLinkage 一个键。 -->
-        <EmailSettingsSection />
+        <EmailSettingsSection v-if="integrationPane === 'email'" />
 
         <!--
           地图卡：瓦片服务选择（预置单选，OSM 默认排第一；自定义 API；本地缓存地图）
@@ -1329,7 +1338,12 @@ async function confirmRestore(): Promise<void> {
           GIS 服务库细节与中心点参数**不在这一页**（服务库在「GIS 服务」页签；
           中心点由设备 GIS 坐标自动写入）。
         -->
-        <section class="card settings-panel" role="tabpanel" data-tab-panel="map" data-map-card>
+        <section v-if="integrationPane === 'maps'" class="card settings-panel settings-panel--quiet" role="tabpanel" data-tab-panel="map" data-map-card>
+        <div class="settings-panel__save-state" aria-live="polite">
+          <span v-if="settings.saving" class="settings-save-state settings-save-state--saving">{{ t('common.saving') }}</span>
+          <span v-else-if="formError" class="settings-save-state settings-save-state--error">⚠ {{ t('settingsUi.saveFailed') }}</span>
+          <span v-else class="settings-save-state settings-save-state--saved">✓ Saved</span>
+        </div>
           <div class="settings-group">
             <span class="settings-group__title">{{ t('settingsUi.mapGroupService') }}</span>
             <label class="toggle">
@@ -1529,7 +1543,12 @@ async function confirmRestore(): Promise<void> {
           AI 卡：厂家预置按钮 + 命名服务列表（单选启用）+ 内联添加/编辑。
           密钥输入框留空 = 不改动已存密钥；只显示"已保存/未保存"，永不回显。
         -->
-        <section class="card settings-panel" role="tabpanel" data-tab-panel="ai">
+        <section v-if="integrationPane === 'ai'" class="card settings-panel settings-panel--quiet" role="tabpanel" data-tab-panel="ai">
+        <div class="settings-panel__save-state" aria-live="polite">
+          <span v-if="settings.saving" class="settings-save-state settings-save-state--saving">{{ t('common.saving') }}</span>
+          <span v-else-if="formError" class="settings-save-state settings-save-state--error">⚠ {{ t('settingsUi.saveFailed') }}</span>
+          <span v-else class="settings-save-state settings-save-state--saved">✓ Saved</span>
+        </div>
           <div class="settings-group">
             <span class="settings-group__title" data-ai-service-group>{{ t('settingsUi.aiServiceGroup') }}</span>
             <p class="muted settings-hint">{{ t('settingsUi.aiServiceHint') }}</p>
@@ -1649,7 +1668,7 @@ async function confirmRestore(): Promise<void> {
         GIS 服务库（业主追加：设置里「添加 GIS 服务」；20260921 批起在自己的页签）。
         命名保存多份服务、一键应用；「应用」= 抄进「集成 → 地图」的当前配置并打开开关。
       -->
-      <section v-if="activeTab === 'gis'" class="card settings-panel" role="tabpanel" data-tab-panel="gis">
+      <section v-if="activeTab === 'integration' && integrationPane === 'maps'" class="card settings-panel settings-panel--quiet" role="tabpanel" data-tab-panel="gis">
         <div class="settings-group">
           <span class="settings-group__title" data-map-service-group>{{ t('settingsUi.mapServiceGroup') }}</span>
           <p class="muted settings-hint">{{ t('settingsUi.mapServiceHint') }}</p>
@@ -1938,6 +1957,9 @@ async function confirmRestore(): Promise<void> {
           </button>
         </div>
       </section>
+
+        </div>
+      </div>
     </template>
 
     <!--
@@ -2361,5 +2383,181 @@ async function confirmRestore(): Promise<void> {
   color: var(--color-success, #2e7d32);
 }
 
+
+
+/* --------------------------------------------------------------------------
+ * 2026-09 settings shell: quiet system settings, not a dashboard.
+ * Left side = category navigation; right side = editing surface.
+ * -------------------------------------------------------------------------- */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.settings-sidebar {
+  position: sticky;
+  top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+}
+
+.settings-sidebar .settings-tab {
+  width: 100%;
+  min-height: 36px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-sidebar .settings-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.settings-sidebar .settings-tab--active {
+  position: relative;
+  background: color-mix(in srgb, var(--color-primary, #ff6a1a) 8%, var(--color-bg));
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.settings-sidebar .settings-tab--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-primary, #ff6a1a);
+}
+
+.settings-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.settings-panel__save-state {
+  min-height: 20px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin: -2px 0 6px;
+  padding: 0 2px;
+}
+
+.settings-save-state {
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+}
+
+.settings-save-state--saved { color: var(--color-success, #2f855a); }
+.settings-save-state--error { color: var(--color-danger, #d64545); }
+
+.settings-panel--quiet {
+  box-shadow: none;
+}
+
+.settings-panel--quiet .mini-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.settings-panel--quiet .mini-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 14px 0;
+}
+
+.settings-panel--quiet .mini-card + .mini-card {
+  border-top: 1px solid var(--color-border);
+}
+
+.settings-panel--quiet .mini-card__title {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-panel--quiet .settings-group {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.integration-switcher {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-bg-subtle);
+}
+
+.integration-switcher__button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.integration-switcher__button:hover {
+  color: var(--color-text);
+}
+
+.integration-switcher__button--active {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
+}
+
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidebar {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .settings-sidebar .settings-tab {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .settings-sidebar .settings-tab--active::before {
+    left: 9px;
+    right: 9px;
+    top: auto;
+    bottom: 2px;
+    width: auto;
+    height: 2px;
+  }
+}
 </style>
 

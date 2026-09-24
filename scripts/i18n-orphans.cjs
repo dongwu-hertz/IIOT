@@ -43,7 +43,7 @@ const ts = require('typescript')
 
 const ROOT = path.resolve(__dirname, '..')
 const MESSAGES_DIR = path.join(ROOT, 'src', 'shared', 'i18n', 'messages')
-const LOCALES = ['zh-CN', 'en', 'es', 'tr']
+const LOCALES = ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru']
 const SCAN_ROOT = path.join(ROOT, 'src')
 /**
  * 测试目录：**单独**扫一遍。

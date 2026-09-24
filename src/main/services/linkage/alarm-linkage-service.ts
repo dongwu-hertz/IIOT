@@ -8,13 +8,15 @@
  *   3. 给 IPC 层提供 `status / pending / acknowledge / testEmail` 四个能力；
  *   4. 在待处理列表变化时把快照推给渲染层（「提示」能在导航后仍然可见的实现点）。
  *
- * 四个动作全部**默认关闭**（`AlarmLinkageConfig.enabled = false`），
- * 因此在用户主动打开之前，这个服务建好之后不产生任何网络、磁盘或窗口动作。
+ * 引擎**默认开启**（业主 2026-09-23：相机告警默认弹窗 + 提示音），四个本地动作
+ * （录像/弹窗/提示）随之默认可用；**邮件仍然默认关闭**——装完就往外发邮件是缺陷。
+ * 用户在设置页关掉总开关后，保存的值优先于出厂默认。
  */
 
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
+import type { BrowserWindow } from 'electron'
 import type {
   LinkageEngineStatus,
   LinkageTestEmailInput,
@@ -23,11 +25,13 @@ import type {
 } from '@shared/domain/alarm-linkage'
 import { parseRecipientList } from '@shared/domain/alarm-linkage'
 import { AppError, ErrorCodes } from '@shared/errors'
-import { appLog } from '../logging/logger'
+import { appLog, deviceLog } from '../logging/logger'
 import { AlarmLinkageEngine, type LinkageTriggerSource } from './alarm-linkage-engine'
 import { DetectLogsPollSource, type PollCursorStore, type DetectLogsPollSourceOptions } from './detect-logs-poll-source'
 import { DetectFeedbackTriggerSource, type DetectFeedbackEventSource, type DetectFeedbackSourceOptions } from './detect-feedback-source'
 import { PendingAlarmStore } from './pending-alarm-store'
+import { CameraPushAlarmSource } from './camera-push-source'
+import { listLocalAddresses } from '../ingest/local-addresses'
 import { FilePollCursorStore } from './poll-cursor-store'
 import { SmtpClient, explainSmtpFailure } from './smtp-client'
 import {
@@ -93,6 +97,7 @@ export class AlarmLinkageService extends EventEmitter {
   private readonly engine: AlarmLinkageEngine
   private readonly pollSource: LinkageTriggerSource
   private readonly feedbackSource: LinkageTriggerSource
+  private readonly pushSource: CameraPushAlarmSource
   private readonly cursors: PollCursorStore
   private readonly recorder: LinkageRecorder
   private readonly popup: LinkagePopupSink
@@ -102,6 +107,13 @@ export class AlarmLinkageService extends EventEmitter {
   private readonly unsubscribeSettings: () => void
   private readonly unsubscribeDevices: () => void
   private readonly unsubscribePending: () => void
+  /** 主窗口位置的晚绑定来源（`setMainWindowProvider`；弹窗定位用，见 `anchorBounds`）。 */
+  private mainWindowProvider?: () => BrowserWindow | undefined
+
+  /** 弹窗要贴在主窗口所在那块屏（多屏工位）：主进程在窗口建好之后注入一次。 */
+  setMainWindowProvider(provider: () => BrowserWindow | undefined): void {
+    this.mainWindowProvider = provider
+  }
 
   constructor(options: AlarmLinkageServiceOptions) {
     super()
@@ -127,7 +139,14 @@ export class AlarmLinkageService extends EventEmitter {
       options.popup ??
       new ElectronPopupSink({
         maxStack: () => options.settings.get().alarmLinkage.popup.maxStack,
-        renderHtml: renderPopupHtml
+        renderHtml: renderPopupHtml,
+        // 主窗口的位置晚绑定（弹窗弹出时才读）：服务建好的时候窗口可能还没建。
+        anchorBounds: () => this.mainWindowProvider?.()?.getBounds(),
+        // 用户点 × 手动关掉 = 这条告警算处理过（业主 2026-09-23：「直到用户处理，
+        // 或手动关闭告警弹窗」）；确认动作会顺带把提示音循环停掉。
+        onManualClose: (popupId) => {
+          this.acknowledge([popupId])
+        }
       })
 
     this.frameCapture =
@@ -198,6 +217,19 @@ export class AlarmLinkageService extends EventEmitter {
       ? options.createFeedbackSource(feedbackOptions)
       : new DetectFeedbackTriggerSource(feedbackOptions)
 
+    /**
+     * 触发源 3：相机主动 HTTP 推送（手册「Alarm push」；`/push_config` 实测 2026-09-24）。
+     * 监听由这个源自己持有（默认关，设置页「相机告警推送」打开才监听）；
+     * 打开时 `applyCameraPush()` 把各相机的 push_url 写到本机监听地址（写后读回）。
+     */
+    this.pushSource = new CameraPushAlarmSource({
+      devices: () =>
+        options.devices.list().map((device) => ({ id: device.id, name: device.name, kind: device.kind })),
+      resolveDeviceBySecret: (secret) => options.devices.deviceByPushSecret(secret),
+      port: () => options.settings.get().alarmLinkage.cameraPush.port,
+      enabled: () => options.settings.get().alarmLinkage.cameraPush.enabled
+    })
+
     // 待处理列表的任何变化都推一次快照；`main/index.ts` 转发到渲染层。
     this.unsubscribePending = this.pending.onChange((snapshot) => this.emit('pending', snapshot))
     options.settings.on('changed', this.handleSettingsChanged)
@@ -217,13 +249,15 @@ export class AlarmLinkageService extends EventEmitter {
     void this.pending.load()
     this.engine.registerSource(this.pollSource)
     this.engine.registerSource(this.feedbackSource)
+    this.engine.registerSource(this.pushSource)
     this.engine.applyConfig()
+    void this.applyCameraPush()
     const config = this.options.settings.get().alarmLinkage
     appLog().info('告警联动服务已就绪', {
       enabled: config.enabled,
       pollIntervalSeconds: config.pollIntervalSeconds,
       actions: config.actions,
-      sources: [this.pollSource.kind, this.feedbackSource.kind]
+      sources: [this.pollSource.kind, this.feedbackSource.kind, this.pushSource.kind]
     })
   }
 
@@ -347,10 +381,104 @@ export class AlarmLinkageService extends EventEmitter {
 
   private readonly handleSettingsChanged = (): void => {
     this.engine.applyConfig()
+    void this.applyCameraPush()
   }
 
   private readonly handleDevicesChanged = (): void => {
     this.engine.restartSources()
+    void this.applyCameraPush()
+  }
+
+  // ---------------------------------------------------------------------------
+  // 相机主动推送（「Alarm push」）的配置面：开关变化 / 设备增删时把各相机的
+  // push_url 对齐到本机监听地址，写后读回验证（与其他设备写同一条规矩）。
+  // ---------------------------------------------------------------------------
+
+  /** 并发闸：设置连点两次不会有两个写流程同时在跑。 */
+  private applyingCameraPush = false
+  /** 我们写入过推送地址的相机（deviceId → 写进去的 URL）：关开关时只回退这些。 */
+  private readonly cameraPushUrls = new Map<string, string>()
+
+  private async applyCameraPush(): Promise<void> {
+    if (this.applyingCameraPush) return
+    this.applyingCameraPush = true
+    try {
+      const config = this.options.settings.get().alarmLinkage
+      const active = config.enabled && config.cameraPush.enabled
+      // 监听的开合跟开关走（source.start 幂等；stop 只在开着时有动作）。
+      if (active) this.pushSource.start()
+      else this.pushSource.stop()
+
+      const cameras = this.options.devices.list().filter((device) => device.kind === 'acousticCamera')
+      for (const device of cameras) {
+        if (active) await this.enableCameraPush(device.id, config.cameraPush.port)
+        else if (this.cameraPushUrls.has(device.id)) await this.disableCameraPush(device.id)
+      }
+    } finally {
+      this.applyingCameraPush = false
+    }
+  }
+
+  private async enableCameraPush(deviceId: string, port: number): Promise<void> {
+    try {
+      // 秘钥幂等（已有就返回已有的；没有就当场生成，写库+读回核对）。
+      const endpoint = this.options.devices.ingestEndpoint(deviceId)
+      const host = listLocalAddresses()[0]?.address
+      if (!host) {
+        deviceLog().warn('FA371 告警推送：本机没有可用的局域网地址，暂不写入相机', { deviceId })
+        return
+      }
+      const url = `http://${host}:${port}/fa371-alarm/${endpoint.secret}`
+      if (this.cameraPushUrls.get(deviceId) === url) return
+
+      const client = this.options.devices.cameraAlarmOperations(deviceId)
+      const current = await client.getPushConfig()
+      await client.setPushConfig({
+        push_enable: 1,
+        push_url: url,
+        // inter_* 一组语义手册未说明：原样保留设备上的值，不动它。
+        inter_push_enable: current.inter_push_enable,
+        inter_push_url: current.inter_push_url
+      })
+      // 读回验证：设备认了这个地址才记成"已配置"。
+      const after = await client.getPushConfig()
+      if (after.push_enable === 1 && after.push_url === url) {
+        this.cameraPushUrls.set(deviceId, url)
+        deviceLog().info('FA371 告警推送已指向本机', { deviceId, url })
+      } else {
+        deviceLog().warn('FA371 告警推送写入后读回不一致', {
+          deviceId,
+          wrote: url,
+          readBack: after.push_url ?? null,
+          readBackEnable: after.push_enable ?? null
+        })
+      }
+    } catch (error) {
+      deviceLog().warn('FA371 告警推送配置写入失败', {
+        deviceId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private async disableCameraPush(deviceId: string): Promise<void> {
+    this.cameraPushUrls.delete(deviceId)
+    try {
+      const client = this.options.devices.cameraAlarmOperations(deviceId)
+      const current = await client.getPushConfig()
+      await client.setPushConfig({
+        push_enable: 0,
+        push_url: '',
+        inter_push_enable: current.inter_push_enable,
+        inter_push_url: current.inter_push_url
+      })
+      deviceLog().info('FA371 告警推送已在相机侧关闭', { deviceId })
+    } catch (error) {
+      deviceLog().warn('FA371 告警推送关闭失败（相机侧可能仍指向本机）', {
+        deviceId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   /** 读存储根内的一帧（附件）。路径越界由 `StorageService.resolve` 拦住。 */

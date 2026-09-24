@@ -7,7 +7,12 @@
  * streams are the part of this camera that carries the leak/PD signal, so they need
  * a surface somewhere on the same page.
  *
- * WHAT EACH SECTION REFUSES TO DO
+ * 2026-09-22 REAL-TIME ANALYSIS SOURCE
+ *   voiceprint / spectrum / audio are now drawn from ONE local 200 kHz raw PCM stream.
+ *   The section API stays unchanged so MonitorView_UI_Final can keep its current layout/lifecycle.
+ *   /fftData and /voiceprintData remain in the store for protocol/debug compatibility only.
+ *
+ * LEGACY CHANNEL NOTES (kept for compatibility/debug context)
  *   /voiceprintData  the device's own rendered JPEG (MEASURED 2026-09-15:
  *                    600x400 JFIF, ~45 kB, 10 fps). If the payload is NOT a JPEG
  *                    (i.e. a numeric decode candidate such as the mock), it is
@@ -49,23 +54,26 @@ import { EMPTY_VALUE, formatBytes, formatNumber } from '@renderer/lib/format'
 import { EnvelopePlayer } from '@renderer/lib/envelopePlayer'
 import AudioLevelMeter from '@renderer/components/AudioLevelMeter.vue'
 import EChart from '@renderer/components/EChart.vue'
+import RealtimeAcousticCharts from '@renderer/components/RealtimeAcousticCharts.vue'
 
 /**
  * 可取的子卡（业主 2026-09-21 第三批：能量点已删，不再是可选项）。
  * 不传 `sections` = 全部 —— 保持「一整块面板」的旧手感（含状态行）。
  */
-export type CameraAcousticSection = 'voiceprint' | 'spectrum' | 'audio' | 'detect'
+export type CameraAcousticSection = 'voiceprint' | 'spectrum' | 'audio' | 'detect' | 'mode'
 
-const ALL_SECTIONS: readonly CameraAcousticSection[] = ['voiceprint', 'spectrum', 'audio', 'detect']
+const ALL_SECTIONS: readonly CameraAcousticSection[] = ['voiceprint', 'spectrum', 'audio', 'detect', 'mode']
 
 const props = withDefaults(
   defineProps<{
     /** 只渲染这几块（不传＝全部，旧手感）。见 `CameraAcousticSection`。 */
     sections?: readonly CameraAcousticSection[]
-    /** 渲染顶部那一行会话状态（状态徽标 + 「停止接收」）。多份实例同屏时只开一份。 */
+    /** 兼容旧页面。实时监测页不再显示“接收中 / 停止接收”这类传输层控件。 */
     showStatus?: boolean
+    /** 1=局放，2=气体泄漏，3=机械异响。用于模式专属分析卡切换。 */
+    workMode?: number
   }>(),
-  { showStatus: true }
+  { showStatus: false }
 )
 
 const emit = defineEmits<{
@@ -81,6 +89,10 @@ const busy = ref(false)
 const audioEnabled = ref(false)
 const audioError = ref('')
 const voiceprintCanvas = ref<HTMLCanvasElement | null>(null)
+
+/** Shared display range for the realtime FFT and spectrogram. */
+const analysisMaxKHz = ref<30 | 50 | 65 | 100>(65)
+const analysisFrequencyOptions = [30, 50, 65, 100] as const
 
 const activeSections = computed<readonly CameraAcousticSection[]>(
   () => props.sections ?? ALL_SECTIONS
@@ -206,94 +218,14 @@ const sessionError = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
-// /fftData — spectrum
-// ---------------------------------------------------------------------------
-
-/**
- * Line chart of the integer FFT lines.
- *
- * The x axis is `index` when the device never reported a sample rate — which is
- * the case on this hardware — and `index * binHz` when it did. Labelling lines
- * as Hz without a sample rate would turn a real peak into "line 8".
- */
-const fftOption = computed<EChartsCoreOption>(() => {
-  const frame = camera.fft
-  const bins = frame?.bins ?? []
-  const binHz = frame?.binHz
-  const points = bins.map((value, index) => [binHz ? index * binHz : index, value])
-  return {
-    animation: false,
-    grid: { left: 60, right: 16, top: 20, bottom: 32 },
-    tooltip: { trigger: 'axis' },
-    xAxis: {
-      type: 'value',
-      name: binHz ? 'Hz' : t('cameraStreamUi.fftLineAxis'),
-      nameTextStyle: { color: '#6B7280', fontSize: 10 },
-      axisLine: { lineStyle: { color: '#E5E7EB' } },
-      axisLabel: { color: '#6B7280', fontSize: 10 }
-    },
-    yAxis: {
-      type: 'value',
-      name: t('cameraStreamUi.fftAmplitudeAxis'),
-      nameTextStyle: { color: '#6B7280', fontSize: 10 },
-      axisLine: { show: false },
-      axisLabel: { color: '#6B7280', fontSize: 10 },
-      splitLine: { lineStyle: { color: '#F1F1F2' } }
-    },
-    series: [
-      {
-        type: 'line',
-        showSymbol: false,
-        sampling: 'lttb',
-        data: points,
-        lineStyle: { width: 1.1, color: '#4338CA' },
-        itemStyle: { color: '#4338CA' }
-      }
-    ]
-  }
-})
-
-const fftAxisHint = computed(() => {
-  const frame = camera.fft
-  if (!frame) return ''
-  if (frame.binHz) {
-    return t('cameraStreamUi.fftAxisFromDevice', {
-      lines: frame.binCount,
-      hz: formatNumber(frame.binHz, 1)
-    })
-  }
-  return t('cameraStreamUi.fftAxisUnknown', { lines: frame.binCount })
-})
-
-// ---------------------------------------------------------------------------
 // /voiceprintData — JPEG image, or a numeric magnitude matrix (numeric candidate)
 // ---------------------------------------------------------------------------
-
-const voiceprintDataUrl = computed(() => {
-  const frame = camera.voiceprint
-  if (!frame?.jpegBase64) return ''
-  return `data:image/jpeg;base64,${frame.jpegBase64}`
-})
 
 const voiceprintIsMatrix = computed(() => {
   const frame = camera.voiceprint
   return Boolean(
     frame && !frame.jpegBase64 && frame.width > 0 && frame.height > 0 && frame.cells.length > 0
   )
-})
-
-const voiceprintMeta = computed(() => {
-  const frame = camera.voiceprint
-  if (!frame) return ''
-  if (frame.jpegBase64) return t('cameraStreamUi.voiceprintJpegMeta', { bytes: frame.jpegBytes ?? 0 })
-  if (frame.width > 0) {
-    return t('cameraStreamUi.voiceprintMatrixMeta', {
-      width: frame.width,
-      height: frame.height,
-      decimation: frame.decimation
-    })
-  }
-  return ''
 })
 
 /**
@@ -344,40 +276,6 @@ watch(
 // ---------------------------------------------------------------------------
 // /pcmData — envelope, level meter and audible playback
 // ---------------------------------------------------------------------------
-
-/**
- * Rolling envelope across the kept frames.
- *
- * This is the DECIMATED envelope (512 points per 100 ms frame), so it shows
- * rhythm and presence, not waveform detail. The caption says so rather than
- * implying a fidelity it does not have.
- */
-const pcmOption = computed<EChartsCoreOption>(() => {
-  const points: number[] = []
-  for (const frame of camera.pcmEnvelopes) points.push(...frame.waveform)
-  return {
-    animation: false,
-    grid: { left: 40, right: 12, top: 12, bottom: 18 },
-    xAxis: { type: 'category', show: false, data: points.map((_, index) => index) },
-    yAxis: {
-      type: 'value',
-      min: -1,
-      max: 1,
-      axisLabel: { color: '#6B7280', fontSize: 10 },
-      splitLine: { lineStyle: { color: '#F1F1F2' } }
-    },
-    series: [
-      {
-        type: 'line',
-        showSymbol: false,
-        data: points,
-        lineStyle: { width: 1, color: '#0F766E' },
-        itemStyle: { color: '#0F766E' },
-        areaStyle: { color: '#0F766E', opacity: 0.1 }
-      }
-    ]
-  }
-})
 
 const pcmMeta = computed(() => {
   const frame = camera.pcm
@@ -477,6 +375,321 @@ const detectRows = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
+// Mode-specific analysis: PRPD / Leakage / Mechanical
+//
+// PRPD 优先显示**设备自己渲染的图**：实测（2026-09-23，局放检测开启后）
+// `/prpdData` 推的是 JPEG 图像帧（约 21–25 kB、约 2 帧/s），与 `/voiceprintData`
+// 同一形态。设备图在时直接 `<img>` 显示；数值候选（mock）与本地脉冲推算
+// 只是设备不推图时的兜底。
+// ---------------------------------------------------------------------------
+const cameraDynamic = camera as unknown as Record<string, unknown>
+
+function candidateObject(...names: string[]): Record<string, unknown> | null {
+  for (const name of names) {
+    const value = cameraDynamic[name]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return null
+}
+
+const PRPD_ROLLING_WINDOW_MS = 15_000
+/**
+ * PRPD 重绘节流间隔（2026-09-22「PRPD 不断刷新」修复）。
+ *
+ * 之前每收到一帧 /prpdData 就做两件事：对 15 秒滚动窗全量重算密度，并把整份 option
+ * 以 notMerge 方式塞给 EChart —— 坐标轴、markLine、画布整体重建一次。设备推多快，
+ * 图就整体闪着重画多快，这就是"PRPD 不断刷新"的直接来源。
+ *
+ * 现在：收帧照收（普通数组追加，O(1)），但**图表刷新最多每 500 ms 一次**；
+ * 配合 EChart 的 mergeUpdates，刷新只做数据替换、不再推倒坐标轴与画布。
+ */
+const PRPD_MIN_REDRAW_MS = 500
+/** 滚动窗点数硬上限：超出时从最旧的帧开始丢。脉冲检测下正常远低于它，这是保险丝。 */
+const PRPD_POINT_CAP = 8_000
+
+/** 非响应式滚动窗：只被下面的 computed 在重绘时刻读取，不参与逐帧依赖追踪。 */
+interface PrpdFrameEntry {
+  timestamp: number
+  points: Array<[number, number]>
+  /** 'device' = /prpdData 实帧；'local' = PCM 本地脉冲提取（见文件下方回退说明）。 */
+  source: 'device' | 'local'
+}
+let prpdFrames: PrpdFrameEntry[] = []
+const prpdRevision = ref(0)
+let prpdRedrawTimer: ReturnType<typeof setTimeout> | undefined
+let prpdLastRedrawAt = 0
+
+/**
+ * Y 轴上限的滞回值（2026-09-23「PRPD 窗口不稳定」修复的一部分）：
+ * 大脉冲进来时立刻跟上（否则点被裁掉看不见），脉冲随滚动窗离开后**每次重绘 ×0.92
+ * 缓慢回落**——坐标轴不随每一批点的最大值来回跳，画面才稳。
+ */
+let prpdYAxisMax = 1
+
+/** 当前图谱是否在使用本地推算数据（用于如实标注，见模板里的 prpdLocalNote）。 */
+const prpdLocalActive = ref(false)
+
+/**
+ * 设备渲染好的 PRPD 图（实测 2026-09-23：局放检测开启后 /prpdData 推 JPEG，
+ * 约 2 帧/s）。有设备图就显示设备图——本地脉冲推算与散点图只是它不推图时的兜底。
+ */
+const prpdDeviceImage = computed(() => {
+  const jpeg = camera.prpd?.jpegBase64
+  return jpeg ? `data:image/jpeg;base64,${jpeg}` : ''
+})
+function prpdRedraw(): void {
+  prpdRedrawTimer = undefined
+  prpdLastRedrawAt = Date.now()
+  const cutoff = prpdLastRedrawAt - PRPD_ROLLING_WINDOW_MS
+  prpdFrames = prpdFrames.filter((entry) => entry.timestamp >= cutoff)
+  // 点数保险丝：从最旧的帧开始丢，直到总数回到上限内。
+  let total = 0
+  for (const entry of prpdFrames) total += entry.points.length
+  while (total > PRPD_POINT_CAP && prpdFrames.length > 0) {
+    total -= prpdFrames.shift()?.points.length ?? 0
+  }
+  let maxAmplitude = 0
+  for (const entry of prpdFrames) {
+    for (const point of entry.points) {
+      if (point[1] > maxAmplitude) maxAmplitude = point[1]
+    }
+  }
+  const target = Math.max(maxAmplitude * 1.15, 1e-6)
+  prpdYAxisMax = target > prpdYAxisMax ? target : Math.max(target, prpdYAxisMax * 0.92)
+  prpdRevision.value += 1
+}
+
+function schedulePrpdRedraw(): void {
+  if (prpdRedrawTimer !== undefined) return
+  const wait = Math.max(0, PRPD_MIN_REDRAW_MS - (Date.now() - prpdLastRedrawAt))
+  prpdRedrawTimer = setTimeout(prpdRedraw, wait)
+}
+
+watch(
+  () => camera.prpd?.timestamp,
+  (timestamp) => {
+    const frame = camera.prpd
+    if (!frame || timestamp === undefined || frame.points.length === 0) return
+    // 设备真的开始推 /prpdData：立即切回设备数据，本地推算点全部丢弃，两套不混。
+    if (prpdLocalActive.value) {
+      prpdFrames = prpdFrames.filter((entry) => entry.source !== 'local')
+      prpdLocalActive.value = false
+    }
+    prpdFrames.push({
+      timestamp: Number(timestamp),
+      points: frame.points.map((point) => [point[0], point[1]] as [number, number]),
+      source: 'device'
+    })
+    if (Date.now() - prpdLastRedrawAt >= PRPD_MIN_REDRAW_MS) prpdRedraw()
+    else schedulePrpdRedraw()
+  },
+  { immediate: true }
+)
+
+/**
+ * 本地 PRPD 回退（业主 2026-09-22 第 3 条「PRPD 图谱还是没有显示」，
+ * 2026-09-23 重做：「整个界面都铺满了、换个方式」）。
+ *
+ * 背景：/prpdData 在真机上**从未推过帧**（2026-09-15 两次实测窗口均 0 帧；手册只
+ * 确认通道存在，不保证有数据），接收路径再怎么修也不会有图。而 /pcmData 是实测
+ * 每秒 10 帧、带完整原始样本的稳定通道。
+ *
+ * 旧做法为什么铺满：它把每个采样点的 |幅值| 按相位均匀点画——声学信号的**噪声底
+ * 是连续的**，于是 360° 的每一度都被噪声点覆盖，整张图看起来像一块实心色斑，
+ * 这既不是设备数据，也不是局放图谱该有的样子。
+ *
+ * 新做法 = 局放检测的标准思路：**只画脉冲**。放电在物理上表现为显著高于连续噪声底
+ * 的短促脉冲，且与工频相位锁定；连续泄漏/背景噪声不产生这种脉冲，图就应该是
+ * 接近空的——空图在这里是如实，不是故障。
+ *   - 阈值 = 噪声底（帧 rms 的慢速 EMA，时间常数约 1 s）× 3；
+ *   - 只收**局部峰值**，同一脉冲的多个邻峰在 0.5 ms 合并窗内只留最高的一针；
+ *   - 相位 = 本地采样时间轴按 50 Hz 工频折叠——**不是**电网过零同步，绝对相位角
+ *     会随电网频偏缓慢漂移，但聚簇的相对位置（电晕/悬浮的两簇结构）不受影响；
+ *   - 与设备数据**互斥**：设备一旦真的推 /prpdData，立即切回设备帧并丢弃本地点。
+ */
+const PRPD_LOCAL_PHASE_HZ = 50
+/** 脉冲判定阈值倍数：帧内 |样本| 必须显著高于噪声底才算放电脉冲。 */
+const PRPD_LOCAL_THRESHOLD_RATIO = 3
+/** 同一脉冲的邻峰合并窗口（秒）：200 kHz 下 0.5 ms ≈ 100 个采样点。 */
+const PRPD_LOCAL_MERGE_SECONDS = 0.0005
+/** 单帧最多入图的脉冲数：超出说明阈值被击穿（强干扰），只留最前的，不让图被刷爆。 */
+const PRPD_LOCAL_MAX_PULSES_PER_FRAME = 24
+/** 噪声底的慢速 EMA（α=0.1）：突发不会把阈值瞬间顶高，环境变化又能跟上。 */
+let localNoiseFloor = 0
+let localPrpdRate = 0
+let localPrpdSampleCounter = 0
+
+watch(
+  () => camera.pcm?.timestamp,
+  (timestamp) => {
+    const frame = camera.pcm
+    if (!frame || timestamp === undefined) return
+    // 设备数据在手：本地推算完全让位（数值帧进了滚动窗，或设备在推渲染好的 JPEG 图）。
+    if (prpdDeviceImage.value) return
+    if (prpdFrames.some((entry) => entry.source === 'device')) return
+    const raw = frame.rawSamples
+    if (!raw || raw.length < 256) return
+    const rate = frame.sampleRate > 0 ? Math.round(frame.sampleRate) : 200_000
+    if (rate !== localPrpdRate) {
+      localPrpdRate = rate
+      localPrpdSampleCounter = 0
+    }
+
+    const frameRms = frame.rms > 0 ? frame.rms : 0
+    localNoiseFloor = localNoiseFloor === 0 ? frameRms : localNoiseFloor * 0.9 + frameRms * 0.1
+    const threshold = Math.max(localNoiseFloor * PRPD_LOCAL_THRESHOLD_RATIO, 1e-9)
+    const mergeGap = Math.max(4, Math.round(rate * PRPD_LOCAL_MERGE_SECONDS))
+
+    const points: Array<[number, number]> = []
+    let lastPulseIndex = -mergeGap
+    const phaseOf = (index: number): number =>
+      ((((localPrpdSampleCounter + index) / rate) * PRPD_LOCAL_PHASE_HZ) % 1) * 360
+    for (let index = 1; index < raw.length - 1 && points.length < PRPD_LOCAL_MAX_PULSES_PER_FRAME; index += 1) {
+      const amplitude = Math.abs(raw[index] ?? 0)
+      if (amplitude < threshold) continue
+      // 只收局部峰值：一个脉冲的上升沿/下降沿不重复计点。
+      if (amplitude < Math.abs(raw[index - 1] ?? 0) || amplitude < Math.abs(raw[index + 1] ?? 0)) continue
+      if (index - lastPulseIndex < mergeGap) {
+        // 合并窗内更高的峰替换上一针（同一脉冲只留最高的那一针）。
+        const lastPoint = points[points.length - 1]
+        if (lastPoint && amplitude > lastPoint[1]) {
+          lastPoint[0] = phaseOf(index)
+          lastPoint[1] = amplitude
+          lastPulseIndex = index
+        }
+        continue
+      }
+      points.push([phaseOf(index), amplitude])
+      lastPulseIndex = index
+    }
+    // 全局采样计数器按整帧推进：无论这一帧有没有脉冲入图，相位轴都保持连续。
+    localPrpdSampleCounter += raw.length
+
+    if (points.length === 0) return
+    prpdLocalActive.value = true
+    prpdFrames.push({ timestamp: Number(timestamp), points, source: 'local' })
+    if (Date.now() - prpdLastRedrawAt >= PRPD_MIN_REDRAW_MS) prpdRedraw()
+    else schedulePrpdRedraw()
+  }
+)
+
+/** 换相机：上一台的滚动窗/相位计数/噪声底/轴滞回都不带进下一台（store 清缓冲，这里清本地推算状态）。 */
+watch(
+  () => camera.deviceId,
+  () => {
+    prpdFrames = []
+    prpdLocalActive.value = false
+    localPrpdRate = 0
+    localPrpdSampleCounter = 0
+    localNoiseFloor = 0
+    prpdYAxisMax = 1
+  }
+)
+
+/**
+ * PRPD 画的是**脉冲点本身**（相位 × 幅值），不再做密度分箱。
+ *
+ * 2026-09-23 之前这里把 15 秒滚动窗按 5°×幅值格分箱、按箱内点数决定点的大小——
+ * 那是"铺满"的另一半原因：噪声点在每个格里都攒得出计数，斑点越滚越大。
+ * 脉冲检测之后点数本来就可控（每帧 ≤24 针），直接画原始点才是 PRPD 的标准形态：
+ * 放电聚簇会自己显现，不需要密度编码替它说话。
+ *
+ * 只在 `prpdRevision`（≥500 ms 一次）变化时重算，不在每帧重算。
+ */
+const prpdScatterData = computed<Array<[number, number]>>(() => {
+  void prpdRevision.value
+  return prpdFrames.flatMap((frame) => frame.points)
+})
+
+const prpdOption = computed<EChartsCoreOption>(() => ({
+  animation: false,
+  grid: { left: 54, right: 22, top: 22, bottom: 38 },
+  tooltip: {
+    trigger: 'item',
+    formatter: (params: unknown) => {
+      const value = (params as { value?: unknown })?.value
+      if (!Array.isArray(value)) return ''
+      const phase = Number(value[0])
+      const amplitude = Number(value[1])
+      return `${t('cameraStreamUi.prpdPhase')}: ${formatNumber(phase, 1)}°<br/>${t('cameraStreamUi.prpdAmplitude')}: ${formatNumber(amplitude, 2)}`
+    }
+  },
+  xAxis: {
+    type: 'value',
+    min: 0,
+    max: 360,
+    interval: 90,
+    name: t('cameraStreamUi.prpdPhaseAxis'),
+    axisLabel: { color: '#6B7280', fontSize: 10 },
+    splitLine: { lineStyle: { color: '#ECEEF1' } }
+  },
+  yAxis: {
+    type: 'value',
+    min: 0,
+    // 滞回上限（`prpdYAxisMax` 在 prpdRedraw 里维护）：进来的脉冲立刻顶开，
+    // 离开的脉冲缓慢回落——轴不随单批点抖动，这是"窗口稳定"的那一半。
+    max: prpdYAxisMax,
+    name: t('cameraStreamUi.prpdAmplitude'),
+    axisLabel: { color: '#6B7280', fontSize: 10 },
+    splitLine: { lineStyle: { color: '#F1F1F2' } }
+  },
+  series: [
+    {
+      type: 'scatter',
+      data: prpdScatterData.value,
+      symbolSize: 4,
+      itemStyle: { color: 'rgba(194, 65, 12, 0.62)' },
+      markLine: {
+        silent: true,
+        symbol: ['none', 'none'],
+        lineStyle: { type: 'dashed', width: 1, opacity: 0.55 },
+        label: { show: false },
+        data: [{ xAxis: 90 }, { xAxis: 180 }, { xAxis: 270 }]
+      }
+    }
+  ]
+}))
+
+function flattenFeatureRows(payload: Record<string, unknown> | null): Array<{ key: string; label: string; value: string }> {
+  if (!payload) return []
+  const rows: Array<{ key: string; label: string; value: string }> = []
+  const skip = new Set(['timestamp', 'time', 'raw', 'deviceId'])
+  for (const [key, value] of Object.entries(payload)) {
+    if (skip.has(key) || value === null || value === undefined || typeof value === 'object') continue
+    if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean') continue
+    const label = key
+      .replace(/_/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/^./, (char) => char.toUpperCase())
+    rows.push({ key, label, value: typeof value === 'number' ? formatNumber(value, 2) : String(value) })
+  }
+  return rows.slice(0, 12)
+}
+
+const featureRows = computed(() => {
+  const payload = candidateObject('feature', 'features', 'featureData', 'featureFrame')
+  const rows = flattenFeatureRows(payload)
+  if (props.workMode === 2) {
+    const priority = /leak|rate|cost|distance|spl|pressure|frequency|freq/i
+    return rows.slice().sort((a, b) => Number(priority.test(b.key)) - Number(priority.test(a.key)))
+  }
+  if (props.workMode === 3) {
+    const priority = /kurt|crest|peak|spectral|frequency|freq|rms/i
+    return rows.slice().sort((a, b) => Number(priority.test(b.key)) - Number(priority.test(a.key)))
+  }
+  return rows
+})
+
+const modeTitle = computed(() => {
+  if (props.workMode === 1) return t('cameraStreamUi.modePrpdTitle')
+  if (props.workMode === 2) return t('cameraStreamUi.modeLeakageTitle')
+  if (props.workMode === 3) return t('cameraStreamUi.modeMechanicalTitle')
+  return t('cameraStreamUi.modeAnalysisTitle')
+})
+
+// ---------------------------------------------------------------------------
 // Lifecycle — playback only. The STREAM session is owned by the page through
 // `useFa371CameraSession()`; this component never starts or stops it.
 // ---------------------------------------------------------------------------
@@ -484,6 +697,8 @@ const detectRows = computed(() => {
 onBeforeUnmount(() => {
   // The envelope player's AudioContext does not die with the component: close it.
   void player.close()
+  // 挂起的 PRPD 重绘定时器同样不能留给下一个页面。
+  if (prpdRedrawTimer !== undefined) clearTimeout(prpdRedrawTimer)
 })
 </script>
 
@@ -525,61 +740,57 @@ onBeforeUnmount(() => {
       </p>
     </div>
 
-    <!-- ---- 1. voiceprint image ---------------------------------------- -->
-    <section v-if="wants('voiceprint')" class="card acam__panel">
-      <div class="section-header">
+    <!-- ---- 1. spectrogram ------------------------------------------------ -->
+    <section v-if="wants('voiceprint')" class="card acam__panel acam__panel--analysis" data-analysis-source="local-stft-200khz">
+      <div class="section-header acam__analysis-header">
         <h3 class="section-title">{{ t('cameraStreamUi.voiceprintTitle') }}</h3>
-        <span :class="phaseClass('voiceprintData')">{{ phaseLabel('voiceprintData') }}</span>
+        <div class="acam__analysis-actions">
+          <select v-model.number="analysisMaxKHz" class="select acam__range-select" aria-label="Spectrogram frequency range">
+            <option v-for="value in analysisFrequencyOptions" :key="`spectrogram-${value}`" :value="value">0–{{ value }} kHz</option>
+          </select>
+          <span :class="phaseClass('pcmData')">{{ phaseLabel('pcmData') }}</span>
+        </div>
       </div>
-      <span class="muted acam__meta">{{ phaseMeta('voiceprintData') }}</span>
-      <p v-if="layoutWarning('voiceprintData')" class="alert alert--warning" role="status">
-        {{ layoutWarning('voiceprintData') }}
-      </p>
-
-      <div
-        v-if="phase('voiceprintData') === 'live' && voiceprintDataUrl"
-        class="acam__stage acam__stage--ratio"
-      >
-        <img class="acam__image" :src="voiceprintDataUrl" :alt="t('cameraStreamUi.voiceprintAlt')" />
-      </div>
-      <div
-        v-else-if="phase('voiceprintData') === 'live' && voiceprintIsMatrix"
-        class="acam__stage acam__stage--ratio"
-      >
-        <canvas ref="voiceprintCanvas" class="acam__canvas"></canvas>
-      </div>
-      <div v-else class="acam__empty acam__stage--ratio">
-        <span>{{ emptyHint('voiceprintData') }}</span>
-      </div>
-      <p v-if="voiceprintMeta" class="muted acam__meta">{{ voiceprintMeta }}</p>
+      <RealtimeAcousticCharts
+        :sections="['spectrogram']"
+        :sample-rate="200000"
+        :fft-len="4096"
+        :max-frequency-k-hz="analysisMaxKHz"
+        :spectrogram-seconds="6"
+        :spectrogram-preload-ms="800"
+        embedded
+        compact
+      />
     </section>
 
-    <!-- ---- 2. FFT spectrum -------------------------------------------- -->
-    <section v-if="wants('spectrum')" class="card acam__panel">
-      <div class="section-header">
+    <!-- ---- 2. frequency domain ----------------------------------------- -->
+    <section v-if="wants('spectrum')" class="card acam__panel acam__panel--analysis" data-analysis-source="local-fft-200khz">
+      <div class="section-header acam__analysis-header">
         <h3 class="section-title">{{ t('cameraStreamUi.fftTitle') }}</h3>
-        <span :class="phaseClass('fftData')">{{ phaseLabel('fftData') }}</span>
+        <div class="acam__analysis-actions">
+          <select v-model.number="analysisMaxKHz" class="select acam__range-select" aria-label="Spectrum frequency range">
+            <option v-for="value in analysisFrequencyOptions" :key="`spectrum-${value}`" :value="value">0–{{ value }} kHz</option>
+          </select>
+          <span :class="phaseClass('pcmData')">{{ phaseLabel('pcmData') }}</span>
+        </div>
       </div>
-      <span class="muted acam__meta">{{ phaseMeta('fftData') }}</span>
-      <p v-if="layoutWarning('fftData')" class="alert alert--warning" role="status">
-        {{ layoutWarning('fftData') }}
-      </p>
-      <div
-        v-if="phase('fftData') === 'live'"
-        class="acam__scope acam__stage--ratio"
-      >
-        <EChart :option="fftOption" height="100%" />
-      </div>
-      <div v-else class="acam__empty acam__stage--ratio">
-        <span>{{ emptyHint('fftData') }}</span>
-      </div>
-      <p v-if="fftAxisHint" class="muted acam__meta">{{ fftAxisHint }}</p>
+      <RealtimeAcousticCharts
+        :sections="['frequency']"
+        :sample-rate="200000"
+        :fft-len="4096"
+        :max-frequency-k-hz="analysisMaxKHz"
+        embedded
+        compact
+      />
     </section>
 
     <!-- ---- 3. live audio (时域波形图) ---------------------------------- -->
     <section v-if="wants('audio')" class="card acam__panel">
       <div class="section-header">
-        <h3 class="section-title">{{ t('cameraStreamUi.audioTitle') }}</h3>
+        <div>
+          <h3 class="section-title">{{ t('cameraStreamUi.audioTitle') }}</h3>
+          <span class="muted acam__meta">200 kHz PCM · Time Domain</span>
+        </div>
         <span :class="phaseClass('pcmData')">{{ phaseLabel('pcmData') }}</span>
       </div>
       <span class="muted acam__meta">{{ phaseMeta('pcmData') }}</span>
@@ -600,11 +811,16 @@ onBeforeUnmount(() => {
         <span v-if="audioError" class="alert alert--danger acam__meta" role="alert">{{ audioError }}</span>
       </div>
 
-      <div v-if="phase('pcmData') === 'live'" class="acam__scope acam__stage--ratio">
-        <EChart :option="pcmOption" height="100%" />
-      </div>
-      <div v-else class="acam__empty acam__stage--ratio">
-        <span>{{ emptyHint('pcmData') }}</span>
+      <div class="acam__time-local" data-analysis-source="local-time-200khz">
+        <RealtimeAcousticCharts
+          :sections="['time']"
+          :sample-rate="200000"
+          :fft-len="4096"
+          :max-frequency-k-hz="65"
+          :time-window-seconds="1"
+          embedded
+          compact
+        />
       </div>
 
       <AudioLevelMeter
@@ -652,6 +868,47 @@ onBeforeUnmount(() => {
       </ul>
       <div v-else class="acam__empty acam__empty--short">
         <span>{{ emptyHint('detectFeedback') }}</span>
+      </div>
+    </section>
+
+    <!-- ---- 5. mode-specific analysis ---------------------------------- -->
+    <section v-if="wants('mode')" class="card acam__panel acam__mode-panel">
+      <div class="section-header">
+        <h3 class="section-title">{{ modeTitle }}</h3>
+        <span v-if="workMode === 1" :class="phaseClass('prpdData')">{{ phaseLabel('prpdData') }}</span>
+      </div>
+
+      <div v-if="workMode === 1" class="acam__mode-stage acam__stage--ratio">
+        <!--
+          设备在推渲染好的 PRPD 图（JPEG）时直接显示它 —— 这是相机自己的图谱，
+          不是我们推算的。设备不推图时回落到散点图（数值帧 / 本地脉冲检测）。
+          两条路共用同一个 16:9 舞台，切换时布局不跳。
+        -->
+        <img
+          v-if="prpdDeviceImage"
+          :src="prpdDeviceImage"
+          class="acam__prpd-image"
+          alt="PRPD"
+          data-prpd-source="device-jpeg"
+        />
+        <EChart v-else :option="prpdOption" height="100%" merge-updates />
+      </div>
+
+      <dl v-else-if="workMode === 2 || workMode === 3" class="acam__feature-grid">
+        <template v-if="featureRows.length > 0">
+          <template v-for="row in featureRows" :key="row.key">
+            <dt>{{ row.label }}</dt>
+            <dd>{{ row.value }}</dd>
+          </template>
+        </template>
+        <template v-else>
+          <dt>{{ t('cameraStreamUi.modeDataStatus') }}</dt>
+          <dd>{{ t('cameraStreamUi.modeDataWaiting') }}</dd>
+        </template>
+      </dl>
+
+      <div v-else class="acam__empty acam__empty--short">
+        <span>{{ t('cameraStreamUi.modeSelectHint') }}</span>
       </div>
     </section>
   </div>
@@ -794,4 +1051,97 @@ onBeforeUnmount(() => {
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
+
+
+.acam__mode-stage {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  overflow: hidden;
+}
+
+/* 设备渲染好的 PRPD 图：铺满同一个 16:9 舞台，保持纵横比不变形。 */
+.acam__prpd-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0b1020;
+}
+
+.acam__mode-empty {
+  height: 100%;
+}
+
+.acam__local-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-tertiary);
+}
+
+.acam__feature-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr);
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  overflow: hidden;
+}
+
+.acam__feature-grid dt,
+.acam__feature-grid dd {
+  margin: 0;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 11.5px;
+}
+
+.acam__feature-grid dt {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+}
+
+.acam__feature-grid dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.acam__feature-grid > :nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+
+
+.acam__analysis-header {
+  align-items: center;
+}
+
+.acam__analysis-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.acam__range-select {
+  width: auto;
+  min-width: 104px;
+  height: 28px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 11px;
+}
+
+/* Realtime monitoring asked for roughly twice the previous chart height. */
+.acam__panel--analysis :deep(.rac__chart),
+.acam__panel--analysis :deep(.rac__preparing) {
+  min-height: 420px;
+  height: 420px;
+}
+
+
+.acam__time-local {
+  min-width: 0;
+}
+
 </style>

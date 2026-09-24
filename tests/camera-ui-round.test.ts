@@ -77,9 +77,8 @@ const monitorCode = stripComments(monitor)
 // A. 告警配置对话框：删提示、三个控件一行、最右刷新图标
 // ---------------------------------------------------------------------------
 
-describe('A. 相机告警配置对话框：一行工具栏 + 最右刷新图标', () => {
+describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标', () => {
   const toolbar = between(alarm, '<div class="toolbar">', '</div>\n\n    <p v-if="loading"', '工具栏')
-  const tabs = between(toolbar, '<div class="tabs" role="tablist">', '</div>', '视图切换器')
 
   it('那一行提示（subtitle）已经从模板里消失', () => {
     assert.equal(
@@ -95,46 +94,45 @@ describe('A. 相机告警配置对话框：一行工具栏 + 最右刷新图标'
     )
   })
 
-  it('告警策略 / 告警条件 / 新建告警 在**同一行**里（切换器 + 一个新建按钮）', () => {
-    const tabStrategies = toolbar.indexOf("t('cameraAlarmUi.tabStrategies')")
-    const tabConditions = toolbar.indexOf("t('cameraAlarmUi.tabConditions')")
-    const newStrategy = toolbar.indexOf("t('cameraAlarmUi.newStrategy')")
-    const newCondition = toolbar.indexOf("t('cameraAlarmUi.newCondition')")
-    assert.ok(tabStrategies >= 0, '工具栏里没有「告警策略」')
-    assert.ok(tabConditions > tabStrategies, '「告警条件」不在「告警策略」之后')
-    assert.ok(newStrategy > tabConditions, '「新建策略」不在两个页签之后（不在同一行）')
-    assert.ok(newCondition > newStrategy, '「新建条件」不在「新建策略」之后（不在同一行）')
+  it('告警策略 / 告警调节(条件) / 告警区域 同页展示，不再分页（2026-09-23 第 4 条）', () => {
+    // 页签切换器整体移除：页面里一个 tablist 都不剩。
+    assert.equal(count(alarm, /role="tablist"/), 0, '同页化之后不应再有页签切换器')
+    assert.equal(count(alarm, /role="tab"/), 0, '同页化之后不应再有 role=tab')
+    // 三个区块各自有 section 容器；标题复用原 tabStrategies/tabConditions/tabRegions 键。
+    for (const section of ['strategies', 'conditions', 'regions']) {
+      assert.ok(alarm.includes(`data-section="${section}"`), `缺少 ${section} 区块`)
+    }
+    assert.ok(alarm.includes("t('cameraAlarmUi.tabStrategies')"), '「告警策略」区块标题不见了')
+    assert.ok(alarm.includes("t('cameraAlarmUi.tabConditions')"), '「告警条件」区块标题不见了')
+    assert.ok(alarm.includes("t('cameraAlarmUi.tabRegions')"), '「告警区域」区块标题不见了')
 
-    // 两个页签是同一个 `role=tablist` 的两个 tab：这一行的语义就是**视图切换器**。
-    assert.equal(count(tabs, /role="tab"/), 2, '视图切换器不是两个 role=tab')
-    assert.equal(count(tabs, /role="tablist"/), 1, '视图切换器不是恰好一个 tablist')
-    // 新建按钮是**一个**（`v-if` / `v-else` 两个分支，按当前视图取文案），不是两个并排。
-    assert.equal(count(toolbar, /@click="startNewStrategy"/), 1, '工具栏里的「新建策略」不是恰好一个')
-    assert.equal(count(toolbar, /@click="startNewCondition"/), 1, '工具栏里的「新建条件」不是恰好一个')
-    assert.match(toolbar, /v-if="tab === 'strategies'"/, '新建按钮没有跟随当前视图')
-    assert.match(toolbar, /v-else/, '新建按钮缺少另一个视图的分支')
-
-    // 两个页签原来各自的「新建」按钮行必须已经撤销（否则一行里会出现两个新建）。
+    // 各区块自己的「新建」按钮，各恰好一个（跟随所在区块，不再有 v-if 分支互斥）。
+    assert.equal(count(alarm, /@click="startNewStrategy"/), 1, '「新建策略」不是恰好一个')
+    assert.equal(count(alarm, /@click="startNewCondition"/), 1, '「新建条件」不是恰好一个')
     assert.equal(
       count(alarm, /newStrategy/),
       2,
-      '「新建策略」的出现次数不是 2（工具栏按钮 + 策略表单标题）'
+      '「新建策略」的出现次数不是 2（区块头部按钮 + 策略表单标题）'
     )
     assert.equal(
       count(alarm, /newCondition/),
       2,
-      '「新建条件」的出现次数不是 2（工具栏按钮 + 条件表单标题）'
+      '「新建条件」的出现次数不是 2（区块头部按钮 + 条件表单标题）'
     )
-    assert.equal(
-      /<div class="btn-row">\s*<button[^>]*@click="startNewStrategy"/.test(alarm),
-      false,
-      '策略页里还留着一个独立的「新建策略」按钮行'
-    )
-    assert.equal(
-      /<div class="btn-row">\s*<button[^>]*@click="startNewCondition"/.test(alarm),
-      false,
-      '条件页里还留着一个独立的「新建条件」按钮行'
-    )
+  })
+
+  it('策略行上有启用/停用按钮（2026-09-23 第 1 条），判定走 readEnabledStrategy', () => {
+    assert.ok(alarm.includes('toggleStrategyEnabled'), '策略表里没有启用/停用动作')
+    assert.ok(alarm.includes('strategyIsEnabled'), '启用状态没有按 readEnabledStrategy 的读数判定')
+    assert.ok(alarm.includes("t('cameraAlarmUi.strategyEnable')"), '缺少「启用」文案键')
+    assert.ok(alarm.includes('setStrategyEnabled'), '没有接上 PUT /alarm_strategy_enable')
+  })
+
+  it('区域表格有编号和名称两列（2026-09-23 第 3 条），并带从相机获取与清除', () => {
+    assert.ok(alarm.includes("t('cameraAlarmUi.regionColIndex')"), '区域表缺少「编号」列')
+    assert.ok(alarm.includes("t('cameraAlarmUi.regionColName')"), '区域表缺少「名称」列')
+    assert.ok(alarm.includes('clearRegions'), '缺少清除区域的动作')
+    assert.ok(alarm.includes('loadRegions'), '缺少从相机获取区域的动作')
   })
 
   it('刷新是一个只有图标的按钮，名字由 aria-label 与 title 同时给出', () => {
@@ -160,14 +158,18 @@ describe('A. 相机告警配置对话框：一行工具栏 + 最右刷新图标'
     assert.equal(/<img|<use|xlink:href/.test(toolbar), false, '工具栏引用了外部图标资源')
   })
 
-  it('图标刷新**真的回设备重读**（同一个 load()，而不是重新渲染内存里的旧数据）', () => {
+  it('图标刷新**真的回设备重读**（reloadAll → 策略/条件/区域四份数据，而不是重新渲染内存里的旧数据）', () => {
     const refreshTag = between(
       toolbar,
       'class="btn btn--sm btn--icon toolbar__refresh"',
       '</button>',
       '刷新按钮'
     )
-    assert.match(refreshTag, /@click="load"/, '刷新按钮没有调用 load()')
+    assert.match(refreshTag, /@click="reloadAll"/, '刷新按钮没有调用 reloadAll()')
+    const reloadAll = between(alarm, 'async function reloadAll(): Promise<void> {', '\n}', 'reloadAll()')
+    assert.match(reloadAll, /load\(\)/, 'reloadAll() 没有重读策略与条件')
+    assert.match(reloadAll, /loadEnabledStrategies\(\)/, 'reloadAll() 没有重读启用状态')
+    assert.match(reloadAll, /loadRegions\(\)/, 'reloadAll() 没有重读告警区域')
     const load = between(alarm, 'async function load(): Promise<void> {', '\n}\n', 'load()')
     assert.match(
       load,
@@ -704,26 +706,40 @@ describe('相机界面这一轮的目录条目', () => {
     )
   })
 
-  it('㉔ 告警信息就地列出来，取数与告警记录页同源', () => {
+  it('㉔ 告警信息就地列出来，相机分支读联动待处理列表（2026-09-23 改口径）', () => {
     assert.ok(monitor.includes('data-camera-alarms'), '相机页没有告警信息那一块')
     assert.ok(monitor.includes('data-camera-alarms-empty'), '没有"这台相机还没有告警"的空态')
     /*
-     * 这一次查询现在**两种机型共用**（第 13 批第 3 条要给每一路通道标"是否告警"，
-     * 它读的是同一份 `alarms.query`），条数也从写死的 10 改成具名常量
-     * `DEVICE_ALARM_SAMPLE`（50）：采样窗口是界面上要说明的事实，不该是一个藏在
-     * IPC 调用里的字面量。所以断言改成"按这台设备查 + 条数来自那个常量"。
+     * 口径更正（2026-09-23）：相机告警**不在**本地 `alarms` 表里 —— 那张表只被
+     * 听诊盒子（AE08/IoT）的告警写入；相机的局放告警走联动引擎（/detect_logs 轮询
+     * → PendingAlarmStore）。此前卡片读 `alarms.query`，对相机注定永远为空，这就是
+     * "相机在告警、卡片一条都没有"的 bug。现在相机分支读联动引擎的待处理镜像
+     * （`useAlarmLinkageStore`，AppShell 常驻订阅推送），按当前设备过滤、时间倒序。
+     *
+     * `alarms.query` 那一次查询**仍然存在**：它服务声纹设备的每通道「是否告警」列
+     * （第 13 批第 3 条），条数仍来自具名常量 `DEVICE_ALARM_SAMPLE`。
      */
     assert.match(
       monitor,
+      /useAlarmLinkageStore/,
+      '相机告警信息不再读联动待处理列表（相机会永远显示空）'
+    )
+    assert.match(
+      monitor,
+      /linkage\.pending\s*\.filter\(\(item\) => item\.deviceId === selectedDeviceId\.value\)/,
+      '联动告警没有按当前设备过滤（那会显示别的相机的告警）'
+    )
+    assert.match(
+      monitor,
       /window\.api\.alarms\.query\(\{ deviceId, limit: DEVICE_ALARM_SAMPLE \}\)/,
-      '告警信息不是按这台设备查的（那会显示别的相机的告警）'
+      '声纹分支的每通道告警查询不在了（那是另一处功能的数据源）'
     )
     assert.match(
       monitor,
       /const DEVICE_ALARM_SAMPLE = \d+/,
       'DEVICE_ALARM_SAMPLE 不是一个具名常量（读它的地方会各写一个数字）'
     )
-    // 换设备要重新读：否则列表还是上一台的。
+    // 换设备要重新读：否则声纹分支的列表还是上一台的。
     const switchBlock = monitor.slice(monitor.indexOf('watch(selectedDeviceId'))
     assert.match(
       switchBlock.slice(0, 3000),
@@ -735,6 +751,12 @@ describe('相机界面这一轮的目录条目', () => {
       monitor,
       /if \(selectedDeviceId\.value !== deviceId\) return/,
       '告警信息的回包没有做"还是不是这一台"的守卫'
+    )
+    // 联动总开关关着时，空态要如实说出来（否则操作员分不清"没告警"与"功能没开"）。
+    assert.match(
+      monitor,
+      /cameraAlarmUi\.linkageDisabledHint/,
+      '联动总开关关闭时的空态没有说明原因'
     )
   })
 

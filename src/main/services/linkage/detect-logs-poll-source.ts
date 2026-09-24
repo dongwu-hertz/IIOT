@@ -41,6 +41,7 @@
 import type { Device } from '@shared/domain/models'
 import type { Fa371DetectLog } from '@shared/domain/fa371'
 import { linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
+import { resolveDischargeTypeKey } from '@shared/domain/fa371'
 import type { Fa371ApiClient } from '../device/fa371/fa371-api-client'
 import { appLog, deviceLog } from '../logging/logger'
 import type { LinkageCandidate, LinkageTriggerSource } from './alarm-linkage-engine'
@@ -243,10 +244,20 @@ export function toCandidate(
   if (log.isAlarm !== undefined) candidate.alarmFlag = log.isAlarm
   if (log.alarmLevelRaw !== undefined) candidate.alarmLevelRaw = log.alarmLevelRaw
   if (log.alarmStrategyId !== undefined) candidate.strategyId = log.alarmStrategyId
+  // 相机自己的判定语义（2026-09-23 真机字段实测）：模式与放电类型如实携带。
+  // 放电分类的最终口径：概率字段优先于笼统的 discharge_type=4（`resolveDischargeTypeKey`）。
+  // 泄漏量/泄漏价格（data_1/data_2）在局放/机械记录里只是占位零值——模式**明确不是
+  // 泄漏**时不携带；模式未知（老固件可能不回 detect_mode）则保留，不丢真实数据。
+  if (log.detectMode !== undefined) candidate.detectMode = log.detectMode
+  const dischargeTypeKey = resolveDischargeTypeKey(log)
+  if (dischargeTypeKey !== undefined) candidate.dischargeTypeKey = dischargeTypeKey
 
-  const metrics: { soundmapIntensity?: number; leakVolume?: number } = {}
+  const metrics: { soundmapIntensity?: number; leakVolume?: number; leakCost?: number; alarmDb?: number; alarmDf?: number } = {}
   if (log.soundmapIntensity !== undefined) metrics.soundmapIntensity = log.soundmapIntensity
-  if (log.leakVolume !== undefined) metrics.leakVolume = log.leakVolume
+  if (log.leakVolume !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakVolume = log.leakVolume
+  if (log.leakCost !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakCost = log.leakCost
+  if (log.lastAlarmDb !== undefined) metrics.alarmDb = log.lastAlarmDb
+  if (log.lastAlarmDf !== undefined) metrics.alarmDf = log.lastAlarmDf
   if (Object.keys(metrics).length > 0) candidate.metrics = metrics
 
   return candidate

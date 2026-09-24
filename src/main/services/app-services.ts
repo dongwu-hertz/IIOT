@@ -15,6 +15,7 @@ import path from 'node:path'
 import { existsSync } from 'node:fs'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 import type { RealtimeFeature } from '@shared/domain/models'
+import type { Fa371StreamPreview } from '@shared/domain/fa371-stream'
 
 import { openDatabase, SCHEMA_VERSION } from './database/schema'
 import {
@@ -25,6 +26,7 @@ import { AlarmRepository, RecordingRepository } from './database/alarm-repositor
 import { DeviceStatusEventRepository } from './database/device-status-event-repository'
 import { EventStatusRepository } from './database/event-status-repository'
 import { IncidentRepository } from './database/incident-repository'
+import { CameraAlarmRegionRepository } from './database/camera-alarm-region-repository'
 import { SampleRepository } from './database/sample-repository'
 import { SampleLibraryService } from './sample/sample-library-service'
 import { SampleLabelService } from './sample/sample-label-service'
@@ -70,6 +72,7 @@ import { TileCacheService } from './map/tile-cache-service'
 import { TelemetryIntake } from './ingest/telemetry-intake'
 import { listLocalAddresses } from './ingest/local-addresses'
 import { appLog, initLogging, storageLog } from './logging/logger'
+import { formatPopupTime, renderLinkagePopupText } from './ui-locale'
 
 /** Default storage root. Windows users are expected to move this to a data disk. */
 function defaultStorageRoot(): string {
@@ -314,6 +317,8 @@ export async function initServices(): Promise<AppServices> {
   const channelRepo = new ChannelRepository(db)
   const alarmRepo = new AlarmRepository(db)
   const recordingRepo = new RecordingRepository(db)
+  // Stable alarm-region ids/names live locally; the camera stores geometry only.
+  const cameraAlarmRegionRepo = new CameraAlarmRegionRepository(db)
   /** 设备上线 / 离线事件（schema v17，业主：事件中心把设备离线纳入时间线）。 */
   const deviceStatusEventRepo = new DeviceStatusEventRepository(db)
   /** 处置工作流（状态 + Activity，schema v13）：事件中心自己的两张表。 */
@@ -714,6 +719,12 @@ export async function initServices(): Promise<AppServices> {
   })
 
   /**
+   * 相机健康检查的「出帧即在线」证据（2026-09-23 抖动修复）：流服务比
+   * DeviceService 晚出生，所以在这里回插。详见 `checkOne` 的相机分支。
+   */
+  deviceService.setCameraStreamEvidence((deviceId) => fa371Streams.hasRecentFrames(deviceId))
+
+  /**
    * Camera LIVE VIDEO (manual §5.1.6): RTSP in, fragmented MP4 over loopback out.
    *
    * The resolver reads the RTSP address from `GET /system/video` through
@@ -780,7 +791,8 @@ export async function initServices(): Promise<AppServices> {
    */
   const cameraControl = new CameraControlService({
     clientFor: (deviceId) => deviceService.cameraAlarmOperations(deviceId),
-    isOnline: (deviceId) => deviceService.get(deviceId).status === 'ONLINE'
+    isOnline: (deviceId) => deviceService.get(deviceId).status === 'ONLINE',
+    regionMetadata: cameraAlarmRegionRepo
   })
 
   /**
@@ -820,9 +832,10 @@ export async function initServices(): Promise<AppServices> {
     resolveSource: (deviceId) => cameraLive.currentSource(deviceId),
     streamEvents: fa371Streams,
     text: (key, params) => {
-      // 目录键 + 设备名 + 时刻；不含任何中文句子，所以不会在英语界面上
-      // 冒出一句中文。
-      return [key, params.device, params.time].filter((part) => part && part !== '').join(' · ')
+      // 2026-09-23：弹窗文案真的来自共享消息目录（此前弹窗上显示的是目录键名）。
+      // 语言 = 渲染层上报的界面语言（`ui-locale.ts`）；时刻从 ISO 转成可读格式。
+      const time = params.time ? formatPopupTime(params.time) : ''
+      return renderLinkagePopupText(key, { ...params, time })
     }
   })
 
@@ -944,6 +957,66 @@ export async function initServices(): Promise<AppServices> {
       // Never let a trend-write problem surface as a stream failure.
       appLog().warn('Trend append failed', {
         deviceId: event.deviceId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    }
+  })
+
+  /**
+   * Acoustic-camera history. FA371 does not emit the acoustic-box `feature` event,
+   * so its history used to remain empty even while realtime monitoring was active.
+   * Persist lightweight features from the device FFT preview at 1 Hz per camera.
+   *
+   * Only values that are genuinely derivable from the spectrum are written:
+   * dominant frequency and 2–65 kHz band-energy ratio. Relative FFT magnitude is
+   * NOT calibrated SPL, so all unsupported metrics are stored as NaN.
+   */
+  const fa371TrendLastAt = new Map<string, number>()
+  fa371Streams.on('preview', (preview: Fa371StreamPreview) => {
+    if (preview.kind !== 'fftData') return
+    const lastAt = fa371TrendLastAt.get(preview.deviceId) ?? 0
+    if (preview.timestamp - lastAt < 1_000) return
+
+    try {
+      const bins = preview.bins
+      const binHz = preview.binHz
+      if (!binHz || binHz <= 0 || bins.length === 0) return
+
+      let peakIndex = 0
+      let peakMagnitude = -1
+      let totalEnergy = 0
+      let analysisBandEnergy = 0
+      for (let index = 0; index < bins.length; index += 1) {
+        const magnitude = Math.abs(Number(bins[index] ?? 0))
+        if (magnitude > peakMagnitude) {
+          peakMagnitude = magnitude
+          peakIndex = index
+        }
+        const energy = magnitude * magnitude
+        totalEnergy += energy
+        const frequencyHz = index * binHz
+        if (frequencyHz >= 2_000 && frequencyHz <= 65_000) analysisBandEnergy += energy
+      }
+
+      const device = deviceRepo.findById(preview.deviceId)
+      const deviceUid = device?.deviceUid ?? preview.deviceId
+      const feature: RealtimeFeature = {
+        deviceId: preview.deviceId,
+        channelId: 0,
+        timestamp: preview.timestamp,
+        spl: Number.NaN,
+        mainFrequency: peakIndex * binHz,
+        smoothness: Number.NaN,
+        bandEnergyRatio: totalEnergy > 0 ? analysisBandEnergy / totalEnergy : Number.NaN,
+        oddEvenHarmonicRatio: Number.NaN,
+        spectralComplexity: Number.NaN,
+        fingerprintVariation: Number.NaN
+      }
+      trends.append(deviceUid, feature)
+      fa371TrendLastAt.set(preview.deviceId, preview.timestamp)
+    } catch (error) {
+      appLog().warn('FA371 trend append failed', {
+        deviceId: preview.deviceId,
         reason: error instanceof Error ? error.message : String(error)
       })
     }

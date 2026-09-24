@@ -386,6 +386,8 @@ export interface Fa371WorkModeWriteDto {
 export interface Fa371LeakageDto {
   /** `0` 不展示 / `1` 展示。 */
   cost_display?: number | string
+  /** V2.0 新增：泄漏估算的现场校正系数（手册「Leakage correction factor」）。 */
+  correction_rate?: number | string
   /** 泄漏估算距离，范围 `[1~50]` 米。 */
   leakage_distance?: number | string
   /** `0` = l/min，`1` = ml/s。 */
@@ -411,6 +413,8 @@ export interface Fa371LeakageDto {
  * 它们是否可由客户端设置（还是设备回显）手册未说明（§8.3 C8）。
  */
 export interface Fa371LeakageWriteDto {
+  /** V2.0 新增：现场校正系数。 */
+  correction_rate?: number
   cost_display?: number
   leakage_distance?: number
   leakage_unit?: number
@@ -448,6 +452,20 @@ export interface Fa371ScanAreaDto {
   areas?: Fa371ScanAreaItemDto[]
   /** `1` 中心聚焦 / `2` 框选。 */
   center_focus?: number | string
+  ret?: number
+  msg?: string
+  [key: string]: unknown
+}
+
+/**
+ * `/push_config`（手册未列端点；2026-09-24 真机实测读回形状）。
+ * 读与写同一个形状（实测 PUT 接受这四个键并返回 `{ret:200}`）。
+ */
+export interface Fa371PushConfigDto {
+  push_enable?: number
+  push_url?: string
+  inter_push_enable?: number
+  inter_push_url?: string
   ret?: number
   msg?: string
   [key: string]: unknown

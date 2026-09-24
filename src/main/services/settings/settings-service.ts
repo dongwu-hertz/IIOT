@@ -23,6 +23,7 @@ import {
   cloneDefaults,
   normaliseAlarmLinkageConfig
 } from './alarm-linkage-config'
+import { isLegacyDefaultAlarmLinkageConfig } from '@shared/domain/alarm-linkage'
 import {
   defaultAlarmSoundLibrary,
   normaliseAlarmSoundLibrary,
@@ -72,7 +73,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   /**
    * 告警联动（产品要求「录像，弹窗，提示以及邮件触发」）。
    *
-   * **默认关闭**，且邮件默认关闭：装完就往外发邮件的应用是缺陷。
+   * **引擎默认开启**（业主 2026-09-23：相机告警应默认弹窗+提示音），
+   * 邮件仍然默认关闭：装完就往外发邮件的应用是缺陷。
+   * 老装里「未自定义过的旧默认」由 VALIDATORS 里的迁移逻辑识别并升级。
    * 归一化规则集中在 `./alarm-linkage-config`，本文件只负责持久化。
    */
   alarmLinkage: cloneDefaults(),
@@ -215,6 +218,16 @@ const VALIDATORS: {
       appLog().warn('告警联动配置存在非法字段，已回落到默认值', { fields: issues })
     }
     if (smtpPassword !== undefined) pendingSecret.password = smtpPassword
+    /**
+     * 2026-09-23 默认值翻转为「引擎默认开启」后，老装里可能躺着一份
+     * 「用户从未碰过联动设置、但 enabled:false 已随整包持久化落库」的记录。
+     * 与旧出厂默认逐字段相等的配置升级到新默认；用户改过的任何字段都会让
+     * 它不再相等，从而被原样保留（见 `isLegacyDefaultAlarmLinkageConfig`）。
+     */
+    if (isLegacyDefaultAlarmLinkageConfig(config)) {
+      appLog().info('告警联动配置为旧出厂默认（用户未自定义），已升级为新默认（引擎默认开启）')
+      return cloneDefaults()
+    }
     return config
   },
   /**

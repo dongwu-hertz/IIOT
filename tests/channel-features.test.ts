@@ -31,12 +31,16 @@ import { zhCN } from '../src/shared/i18n/messages/zh-CN'
 import { en } from '../src/shared/i18n/messages/en'
 import { es } from '../src/shared/i18n/messages/es'
 import { tr } from '../src/shared/i18n/messages/tr'
+import { ru } from '../src/shared/i18n/messages/ru'
+import { zhTW } from '../src/shared/i18n/messages/zh-TW'
 
 const CATALOGUES: Record<string, Record<string, unknown>> = {
   'zh-CN': zhCN as unknown as Record<string, unknown>,
+  'zh-TW': zhTW as unknown as Record<string, unknown>,
   en: en as unknown as Record<string, unknown>,
   es: es as unknown as Record<string, unknown>,
-  tr: tr as unknown as Record<string, unknown>
+  tr: tr as unknown as Record<string, unknown>,
+  ru: ru as unknown as Record<string, unknown>
 }
 
 function messageAt(locale: string, key: string): unknown {

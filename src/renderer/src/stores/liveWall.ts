@@ -270,6 +270,25 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     return { ok: result.changed, movedFrom: result.movedFrom, evicted: result.evicted }
   }
 
+  /**
+   * 放进第一个空格；墙满了就进轮询队列，**不覆盖任何一格**（业主 2026-09-24：
+   * 「打开预览看到视频时，应该能直接添加进视频墙」——监测页的入口调它）。
+   *
+   * 已经在墙上（任意视图）时不重复放：`slotForDevice` 先查一遍。
+   */
+  function placeDeviceAuto(deviceId: string): { ok: boolean; queued: boolean; already: boolean } {
+    if (slotForDevice(deviceId) >= 0) return { ok: true, queued: false, already: true }
+    const emptyIndex = model.value.slots.findIndex((slot) => slot === null)
+    if (emptyIndex >= 0) {
+      const result = placeDevice(emptyIndex, deviceId)
+      return { ok: result.ok, queued: false, already: false }
+    }
+    const next = enqueueWallItem(model.value, deviceId, 'play')
+    const queued = next !== model.value
+    model.value = next
+    return { ok: queued, queued, already: false }
+  }
+
   // -------------------------------------------------------------------------
   // 手填的第三方 RTSP 源（业主 2026-09-19 第 3 条）
   // -------------------------------------------------------------------------
@@ -622,6 +641,7 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     setNotice,
     clearRefusal,
     placeDevice,
+    placeDeviceAuto,
     addManualSource,
     updateManualSource,
     removeManualSource,

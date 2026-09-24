@@ -37,6 +37,7 @@ import type {
   Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
+  Fa371PrpdPreview,
   Fa371StreamKind,
   Fa371StreamStatus,
   Fa371VoiceprintPreview
@@ -100,6 +101,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
 
   const fft = ref<Fa371FftPreview | null>(null)
   const voiceprint = ref<Fa371VoiceprintPreview | null>(null)
+  const prpd = ref<Fa371PrpdPreview | null>(null)
   const energy = ref<Fa371EnergyPreview | null>(null)
   /** 声温成像仪红外温度（/inrared_data），只在明确订阅时才有值。 */
   const infrared = ref<Fa371InfraredPreview | null>(null)
@@ -115,6 +117,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
   const frameCounts = ref<Record<Fa371StreamKind, number>>({
     fftData: 0,
     voiceprintData: 0,
+    prpdData: 0,
     energyData: 0,
     pcmData: 0,
     detectFeedback: 0,
@@ -195,15 +198,23 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     if (target.value.length > limit) target.value.splice(0, target.value.length - limit)
   }
 
+  /**
+   * 帧到达记账。
+   *
+   * 刻意**不**在这里 bump `now`：它驱动的是 `channelPhase` 的 stale 判定，而页面上
+   * 有 1 s 的 `touchClock` 定时器在推这个时钟 —— 每帧都改 `now` 等于让 7 路 × 10 帧/s
+   * 的到达事件各触发一次全局重渲染（2026-09-22 视频卡顿修复的一部分）。stale 阈值为 3 s，
+   * 1 s 粒度的心跳完全跟得上"断流 → 标 stale"的时序。
+   */
   function markArrival(kind: Fa371StreamKind): void {
     frameCounts.value[kind] += 1
     lastFrameAt.value[kind] = Date.now()
-    now.value = Date.now()
   }
 
   function clearBuffers(): void {
     fft.value = null
     voiceprint.value = null
+    prpd.value = null
     energy.value = null
     infrared.value = null
     pcm.value = null
@@ -215,6 +226,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     frameCounts.value = {
       fftData: 0,
       voiceprintData: 0,
+      prpdData: 0,
       energyData: 0,
       pcmData: 0,
       detectFeedback: 0,
@@ -250,6 +262,12 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     markArrival('voiceprintData')
   }
 
+  function handlePrpd(preview: Fa371PrpdPreview): void {
+    if (!belongs(preview.deviceId)) return
+    prpd.value = preview
+    markArrival('prpdData')
+  }
+
   function handleEnergy(preview: Fa371EnergyPreview): void {
     if (!belongs(preview.deviceId)) return
     energy.value = preview
@@ -266,7 +284,10 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     if (!belongs(preview.deviceId)) return
     pcm.value = preview
     // The rolling trace is bounded: 100 envelopes x 512 numbers ≈ 10 s of scope.
-    pushCapped(pcmEnvelopes, preview, FA371_PCM_ENVELOPE_LIMIT)
+    // 存进滚动缓冲前剥掉 rawSamples（整帧原始 PCM，200 kHz 下约 80 KB/帧）：
+    // 缓冲的消费方只需要 512 点包络与 peak/rms 元数据，而之前 100 份带原始帧的
+    // 预览 ≈ 8 MB 常驻 + 每次 push 的结构化克隆开销，是纯浪费（2026-09-22 卡顿修复）。
+    pushCapped(pcmEnvelopes, { ...preview, rawSamples: new Float32Array(0) }, FA371_PCM_ENVELOPE_LIMIT)
     markArrival('pcmData')
   }
 
@@ -312,6 +333,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     unsubscribers.push(
       events.onFa371Fft(handleFft),
       events.onFa371Voiceprint(handleVoiceprint),
+      events.onFa371Prpd(handlePrpd),
       events.onFa371Energy(handleEnergy),
       events.onFa371Infrared(handleInfrared),
       events.onFa371Pcm(handlePcm),
@@ -463,6 +485,7 @@ export const useFa371StreamStore = defineStore('fa371Stream', () => {
     // buffers
     fft,
     voiceprint,
+    prpd,
     energy,
     infrared,
     pcm,

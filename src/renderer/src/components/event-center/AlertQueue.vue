@@ -144,15 +144,18 @@ function move(delta: number): void {
               @change="toggleAll(($event.target as HTMLInputElement).checked)"
             />
           </th>
+          <!-- 业主 2026-09-23 告警事件字段：序号 / 时间 / 类型 / 设备 / 详情 / 处理。 -->
+          <th>{{ t('eventsUi.colIndex') }}</th>
           <th>{{ t('alarmsUi.columnTime') }}</th>
           <th>{{ t('eventsUi.filterSeverity') }}</th>
           <th>{{ t('eventsUi.detailKind') }}</th>
+          <th>{{ t('eventsUi.detailDevice') }}</th>
           <th>{{ t('eventsUi.overviewStatus') }}</th>
           <th class="alert-table__expand-head" aria-hidden="true"></th>
         </tr>
       </thead>
       <tbody>
-        <template v-for="alert in alerts" :key="alert.id">
+        <template v-for="(alert, index) in alerts" :key="alert.id">
           <tr
             class="alert-table__row is-clickable"
             :class="{ 'alert-table__row--active': alert.id === selectedId }"
@@ -169,6 +172,8 @@ function move(delta: number): void {
                 "
               />
             </td>
+            <!-- 序号 = 当前页内的行号（1 起）：只是阅读定位，不是持久 id。 -->
+            <td class="nowrap muted">{{ index + 1 }}</td>
             <td class="nowrap">
               <!--
                 时间是展开钮：点一下展开 / 收起行内详情（再点画行 = 打开详情抽屉）。
@@ -216,6 +221,8 @@ function move(delta: number): void {
                 {{ t('eventsUi.occurrenceCount', { count: alert.occurrenceCount }) }}
               </span>
             </td>
+            <!-- 告警设备（业主 2026-09-23）：原来只在展开详情里，提到列上来。 -->
+            <td><span class="muted">{{ alert.deviceName }}</span></td>
             <td>
               <span :class="statusBadgeClass(alert)">{{ statusText(alert) }}</span>
             </td>
@@ -250,7 +257,7 @@ function move(delta: number): void {
             简单 v-if：这块内容一屏只展开一行，不需要过渡动画的重量。
           -->
           <tr v-if="expandedId === alert.id" class="alert-table__detail">
-            <td colspan="6">
+            <td colspan="8">
               <div class="alert-detail">
                 <div class="alert-detail__card">
                   <div class="alert-detail__label">{{ t('eventsUi.detailKind') }}</div>

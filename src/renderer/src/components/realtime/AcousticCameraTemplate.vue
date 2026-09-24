@@ -322,10 +322,8 @@ watch(
       </nav>
 
       <div class="ac__canvas">
-        <!-- PRPD：设备接口没有相位分辨数据；不能用 Spectrum 冒充。 -->
-        <p v-if="activeTab === 'prpd'" class="ac__nodata" data-realtime-prpd-empty>
-          {{ t('realtimeUi.prpdUnavailable') }}
-        </p>
+        <!-- PRPD empty state intentionally has no explanatory copy. -->
+        <div v-if="activeTab === 'prpd'" class="ac__nodata" data-realtime-prpd-empty></div>
 
         <template v-else>
           <div class="ac__stream-bar">

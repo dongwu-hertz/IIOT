@@ -872,3 +872,192 @@ describe('E2 客户端：手册路径 404 时退到设备真正有的那条（�
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// 分端口设备（2026-09-22 真机形状：API 在 8888，nginx 在 80）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一台**端口分裂**的 SN-16（真机 192.168.110.234 的形状）：
+ *   - **api 端口**（真机 8888）：`/login` 只在这里；`/system`、`/alarm_log_all`、`/alarm_log`
+ *     正常；**不实现的端点回 501 空正文**（`/basic`、`/get_device_basic_params`、
+ *     `/get_all_alarms`、`/saving_alarm_file`、`/alarm_files`、`/static_file/*`）。
+ *   - **web 端口**（真机 80 的 nginx）：`/login` 回 **404 HTML**（这是当初 `INVALID_RESPONSE`
+ *     的来源）；`/system` 与日志接口有反代；`/static_file/<路径>` 只有这里有文件。
+ * 测试里两台假服务都监听随机端口，靠 `portPair` 告诉客户端"这一对端口相当于 80/8888"。
+ */
+async function startSplitPortSonar(): Promise<{
+  webBase: string
+  apiBase: string
+  portPair: { web: number; api: number }
+  counts: Map<string, number>
+  fileBytes: Buffer
+  close(): Promise<void>
+}> {
+  const counts = new Map<string, number>()
+  const fileBytes = Buffer.from('RIFF0000WAVE', 'ascii')
+  const SYSTEM = { cam_enable: false, cur_realtime_channel: 1, db_limit: 60, samplerate: 20000 }
+  const LOGS = {
+    logs_count: 1,
+    logs: [
+      {
+        id: 55288,
+        time: '2026-09-18_16-00-44',
+        db_value: 65.37294,
+        tde_ratio: 31.842154,
+        fde_ratio: 0.9789469,
+        horizontal: 96,
+        vertical: 30,
+        saving_path: '20260918_160044/',
+        files_status: 1
+      }
+    ]
+  }
+
+  const listen = (handler: http.RequestListener): Promise<{ server: http.Server; port: number }> =>
+    new Promise((resolve) => {
+      const server = http.createServer(handler)
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address()
+        resolve({ server, port: typeof address === 'object' && address !== null ? address.port : 0 })
+      })
+    })
+
+  const count = (port: number, path: string): void => {
+    const key = `${port}${path}`
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  const json = (response: http.ServerResponse, status: number, payload: unknown): void => {
+    response.writeHead(status, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(payload))
+  }
+  const html404 = (response: http.ServerResponse): void => {
+    response.writeHead(404, { 'content-type': 'text/html' })
+    response.end('<html><head><title>404 Not Found</title></head></html>')
+  }
+
+  // web 端口（nginx 角色）：不反代 /login；反代 /system 与日志；静态文件只在这里。
+  const web = await listen((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    count(webPort, `${request.method} ${url.pathname}`)
+    if (url.pathname === '/system') return json(response, 200, SYSTEM)
+    if (url.pathname === '/alarm_log_all' || url.pathname === '/alarm_log') {
+      return json(response, 200, LOGS)
+    }
+    if (url.pathname === '/static_file/20260918_160044/alarm.wav') {
+      response.writeHead(200, { 'content-type': 'application/octet-stream' })
+      response.end(fileBytes)
+      return
+    }
+    html404(response)
+  })
+  const webPort = web.port
+
+  // api 端口（8888 角色）：登录在这里；不实现的端点一律 501 空正文。
+  const api = await listen((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    count(apiPort, `${request.method} ${url.pathname}`)
+    if (url.pathname === '/login') return json(response, 200, { token: 'split-token' })
+    if ((request.headers.authorization ?? '') !== 'Bearer split-token') {
+      return json(response, 401, { msg: 'unauthorized' })
+    }
+    if (url.pathname === '/system') return json(response, 200, SYSTEM)
+    if (url.pathname === '/alarm_log_all' || url.pathname === '/alarm_log') {
+      return json(response, 200, LOGS)
+    }
+    // 这台固件对不实现的端点回 501（不是 404）—— 回退链必须认得它。
+    response.writeHead(501)
+    response.end()
+  })
+  const apiPort = api.port
+
+  return {
+    webBase: `http://127.0.0.1:${webPort}`,
+    apiBase: `http://127.0.0.1:${apiPort}`,
+    portPair: { web: webPort, api: apiPort },
+    counts,
+    fileBytes,
+    close: () =>
+      Promise.all([
+        new Promise<void>((resolve) => web.server.close(() => resolve())),
+        new Promise<void>((resolve) => api.server.close(() => resolve()))
+      ]).then(() => undefined)
+  }
+}
+
+describe('E2 客户端：分端口设备（登录只在 API 端口，2026-09-22 真机形状）', () => {
+  function clientFor(base: string, portPair: { web: number; api: number }): E2Client {
+    return new E2Client({
+      transport: new FetchHttpTransport(3_000),
+      baseUrl: base,
+      credentials: { username: 'admin', password: 'x' },
+      timeoutMs: 3_000,
+      portPair
+    })
+  }
+
+  it('网页端口的 /login 回 404 ⇒ 自动回退到 API 端口并切换基地址（不再报 INVALID_RESPONSE）', async () => {
+    const device = await startSplitPortSonar()
+    try {
+      const client = clientFor(device.webBase, device.portPair)
+      const token = await client.login()
+      assert.equal(token, 'split-token')
+      assert.equal(client.currentBaseUrl, device.apiBase)
+      assert.equal(device.counts.get(`${device.portPair.web}POST /login`), 1, '网页端口只试一次')
+      assert.equal(device.counts.get(`${device.portPair.api}POST /login`), 1)
+    } finally {
+      await device.close()
+    }
+  })
+
+  it('501 也触发换代回退：日志退到 /alarm_log_all；基本信息全 501 时报"没有这个端点"', async () => {
+    const device = await startSplitPortSonar()
+    try {
+      const client = clientFor(device.webBase, device.portPair)
+      await client.getSystem()
+      assert.equal(client.resolvedVariant, 'airSonar')
+
+      await assert.rejects(() => client.getBasic(), /没有这个端点/)
+
+      const page = await client.listAlarmLogs({ colCount: 5 })
+      assert.equal(page.logs.length, 1)
+      assert.equal(page.logs[0]?.savingPath, '20260918_160044/')
+      // 手册那条 501 过、换 2023 版那条成功；而且文件名按 Air Sonar 的固定名补上。
+      assert.equal(device.counts.get(`${device.portPair.api}GET /get_all_alarms`), 1)
+      assert.equal(device.counts.get(`${device.portPair.api}GET /alarm_log_all`), 1)
+      assert.equal(page.logs[0]?.audioName, 'alarm.wav')
+    } finally {
+      await device.close()
+    }
+  })
+
+  it('静态文件只在网页端口：下载跨端口成功，并记住赢家的基地址', async () => {
+    const device = await startSplitPortSonar()
+    try {
+      const client = clientFor(device.webBase, device.portPair)
+      await client.getSystem()
+
+      const downloaded = await client.downloadAlarmFile({
+        savingPath: '20260918_160044/',
+        fileName: 'alarm.wav'
+      })
+      assert.deepEqual([...downloaded], [...device.fileBytes])
+
+      // 第二轮：已确认静态路径 + 已确认基地址，不再挨个试 501 的那些。
+      await client.downloadAlarmFile({ savingPath: '20260918_160044/', fileName: 'alarm.wav' })
+
+      const api = device.portPair.api
+      const web = device.portPair.web
+      assert.equal(device.counts.get(`${api}GET /saving_alarm_file`), 1, '手册那条只该试一次')
+      assert.equal(device.counts.get(`${api}GET /alarm_files`), 1, '另一代那条只该试一次')
+      assert.equal(
+        device.counts.get(`${api}GET /static_file/20260918_160044/alarm.wav`),
+        1,
+        'API 端口上的静态路径只该试一次（它是 501）'
+      )
+      assert.equal(device.counts.get(`${web}GET /static_file/20260918_160044/alarm.wav`), 2)
+    } finally {
+      await device.close()
+    }
+  })
+})

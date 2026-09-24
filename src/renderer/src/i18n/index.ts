@@ -26,9 +26,11 @@ import { createI18n } from 'vue-i18n'
 import { DEFAULT_LOCALE, type AppLocale } from '@shared/i18n/locales'
 import type { MessageSchema } from '@shared/i18n/schema'
 import { zhCN } from '@shared/i18n/messages/zh-CN'
+import { zhTW } from '@shared/i18n/messages/zh-TW'
 import { en } from '@shared/i18n/messages/en'
 import { es } from '@shared/i18n/messages/es'
 import { tr } from '@shared/i18n/messages/tr'
+import { ru } from '@shared/i18n/messages/ru'
 
 /**
  * Teach vue-i18n this project's catalogue shape.
@@ -52,9 +54,11 @@ export const i18n = createI18n({
   fallbackLocale: DEFAULT_LOCALE,
   messages: {
     'zh-CN': zhCN,
+    'zh-TW': zhTW,
     en,
     es,
-    tr
+    tr,
+    ru
   },
   /**
    * Missing translations are prevented by types and by a test that compares the

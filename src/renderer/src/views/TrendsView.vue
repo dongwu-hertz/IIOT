@@ -34,7 +34,7 @@ import type { EChartsCoreOption } from 'echarts/core'
 import type { TrendMetric } from '@shared/ipc/contract'
 import { CHANNEL_COUNT, type AlarmEvent } from '@shared/domain/models'
 import { trendAxisRange, trendAxisRangeText, trendDataZoom, trendZoomBurstExceeded, trendZoomIndexRange, trendZoomIsIdentity, trendZoomShouldRecord, trendZoomWindow } from '@shared/domain/trend'
-import { TREND_GRANULARITY_OPTIONS, granularityKeyForSeconds } from '@shared/domain/trend-granularity'
+import { TREND_GRANULARITY_OPTIONS } from '@shared/domain/trend-granularity'
 import {
   buildTrendCsv,
   trendCsvFileName,
@@ -191,26 +191,15 @@ const autoBucketText = computed(() => {
   return formatBucketSeconds(seconds)
 })
 
-/**
- * 「自动」这一档时，主进程挑中的桶宽正好等于界面上的某一档 —— 就把那一档也标一下
- * （`title` 里说"自动挑的就是这一档"），让"自动"与手动那六档之间的关系看得见。
- * 挑中的桶宽不在那六档里（例如 15 秒）时给 `null`，界面上不加任何标记。
- */
-const autoBucketKey = computed(() =>
-  trends.granularity === 'auto' ? granularityKeyForSeconds(trends.series?.bucketSeconds) : null
-)
-
-/** 颗粒度按钮的悬停说明；自动那一档顺带把实际桶宽写进去。 */
-function granularityHint(option: { key: string; seconds: number | null }): string {
-  if (option.key === 'auto') {
-    return autoBucketText.value
-      ? t('granularity.autoHint', { bucket: autoBucketText.value })
-      : t('granularity.autoLabel')
-  }
-  return t('granularity.fixedHint')
-}
-
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
+
+/** Acoustic cameras currently persist the two metrics that can be derived honestly from FFT data. */
+const CAMERA_TREND_METRICS = new Set<TrendMetric>(['mainFrequency', 'bandEnergyRatio'])
+const availableMetricOrder = computed<TrendMetric[]>(() =>
+  selectedDevice.value?.kind === 'acousticCamera'
+    ? metricOrder.value.filter((key) => CAMERA_TREND_METRICS.has(key))
+    : metricOrder.value
+)
 
 /**
  * 这一页的形态（业主 20260921：**三种设备三种页面**）：
@@ -224,18 +213,6 @@ const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
  * 只有"通道有没有"分叉，分叉点全在这一个判据上。
  */
 const isMultiChannel = computed(() => selectedDevice.value?.kind === 'acousticBox')
-
-/**
- * 机型标签（页头那一枚徽标）：与设备表同一个来源 —— `domain.deviceKind.*`，
- * `pushDevice` 走 `devicesUi.kindPushDevice`（DevicesView 的 `kindLabel` 同款分支）。
- */
-const deviceKindLabel = computed(() => {
-  const device = selectedDevice.value
-  if (!device) return ''
-  return device.kind === 'pushDevice'
-    ? t('devicesUi.kindPushDevice')
-    : t(`domain.deviceKind.${device.kind}`)
-})
 
 /** 历史查询用的通道项：带上状态，未启用/未知都要在文字里标出来。 */
 interface ChannelOption {
@@ -645,6 +622,78 @@ const AXIS_LINE = '#E5E7EB'
 const SPLIT_LINE = '#F1F1F2'
 const TEXT_SECONDARY = '#6B7280'
 
+
+/**
+ * Alarm event markers rendered directly on every historical trend chart.
+ *
+ * The alarm query already follows the exact device + queried time window of the
+ * charts, so the marker layer deliberately consumes `rangeAlarms` rather than
+ * making another request.  Markers are vertical time lines: the chart is still
+ * about the measured signal, while alarms act as evidence anchors on that same
+ * time axis.
+ */
+function alarmMarkerColor(alarm: AlarmEvent): string {
+  if (alarm.severity === 'critical') return '#D64545'
+  if (alarm.severity === 'warning') return '#D97706'
+  if (alarm.severity === 'info') return '#3B82F6'
+  return '#6B7280'
+}
+
+function escapeAlarmTooltip(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function alarmMarkerTooltip(params: unknown): string {
+  const payload = params as { data?: { name?: unknown } }
+  const id = typeof payload.data?.name === 'string' ? payload.data.name : ''
+  const alarm = rangeAlarms.value.find((item) => item.id === id)
+  if (!alarm) return ''
+
+  const rows = [
+    `<div style="font-weight:600">⚠ ${escapeAlarmTooltip(eventSeverityLabel(alarm.severity))}</div>`,
+    escapeAlarmTooltip(formatDateTime(alarm.timestamp)),
+    escapeAlarmTooltip(rangeAlarmTitle(alarm))
+  ]
+  if (alarm.spl !== undefined) rows.push(`SPL: ${alarm.spl.toFixed(1)} dB`)
+  if (alarm.mainFrequency !== undefined) rows.push(`Frequency: ${alarm.mainFrequency.toFixed(0)} Hz`)
+  return rows.join('<br/>')
+}
+
+function alarmMarkLine() {
+  if (rangeAlarms.value.length === 0) return undefined
+  return {
+    silent: false,
+    symbol: ['none', 'circle'],
+    symbolSize: [0, 7],
+    label: { show: false },
+    tooltip: { show: true, formatter: alarmMarkerTooltip },
+    data: rangeAlarms.value.map((alarm) => {
+      const selected = alarm.id === selectedRangeAlarmId.value
+      const color = alarmMarkerColor(alarm)
+      return {
+        // Keep the stable alarm id in `name`: ECharts returns it in click events,
+        // which lets the marker select the matching row in the master/detail pane.
+        name: alarm.id,
+        xAxis: alarm.timestamp,
+        lineStyle: {
+          color,
+          width: selected ? 2.2 : 1.2,
+          opacity: selected ? 0.95 : 0.55,
+          type: 'dashed'
+        },
+        emphasis: {
+          lineStyle: { color, width: 2.4, opacity: 1 }
+        }
+      }
+    })
+  }
+}
+
 /**
  * 一个量一张图。**每条可见通道一条线**，颜色来自 `trendChannelColor`（与图例同一个来源），
  * 全部落在**同一根坐标轴**上 —— 这正是业主那句"用不同颜色的折线将多个通道的信号显示在
@@ -719,7 +768,7 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
       },
       splitLine: { lineStyle: { color: SPLIT_LINE } }
     },
-    series: bundle.lines.map((line) => ({
+    series: bundle.lines.map((line, lineIndex) => ({
       name: line.name,
       type: 'line',
       // Symbols are only drawn on a series short enough that an isolated
@@ -731,7 +780,11 @@ function chartOptionFor(bundle: TrendChartBundle): EChartsCoreOption {
       // 时间轴上每一点是 `[时间戳, 值]`；`null` 仍然是缺口（不画成 0）。
       data: bundle.timestamps.map((stamp, index) => [stamp, line.values[index] ?? null]),
       lineStyle: { width: 1.6, color: line.color },
-      itemStyle: { color: line.color }
+      itemStyle: { color: line.color },
+      // Alarm markers belong to the chart, not to an individual channel. Attach
+      // them to the first series only so an 8-channel plot does not draw the same
+      // event line eight times.
+      ...(lineIndex === 0 ? { markLine: alarmMarkLine() } : {})
     }))
   }
 }
@@ -810,7 +863,8 @@ const fallbackOption = computed<EChartsCoreOption>(() => {
         // 时间轴：`[时间戳, 值]`（缺口仍然是 null）。
         data: rows.map((row) => [row.timestamp, row.value]),
         lineStyle: { width: 1.6, color: trendChannelColor(0) },
-        itemStyle: { color: trendChannelColor(0) }
+        itemStyle: { color: trendChannelColor(0) },
+        markLine: alarmMarkLine()
       }
     ]
   }
@@ -1095,6 +1149,19 @@ function printCharts(): void {
   window.print()
 }
 
+/** Full-screen one metric card without changing chart state or query state. */
+async function toggleChartFullscreen(event: MouseEvent): Promise<void> {
+  const button = event.currentTarget as HTMLElement | null
+  const card = button?.closest<HTMLElement>('.metric-chart')
+  if (!card) return
+  try {
+    if (document.fullscreenElement === card) await document.exitFullscreen()
+    else await card.requestFullscreen()
+  } catch (error) {
+    console.warn('[trends] fullscreen failed', error)
+  }
+}
+
 
 const chartPlaceholder = computed(() => {
   if (trends.series !== null) return ''
@@ -1148,6 +1215,32 @@ function applyCustomRange(): void {
  * 那张表，从这里改它，两边会在同一组字段上互相覆盖。
  */
 const rangeAlarms = ref<AlarmEvent[]>([])
+/** 当前在历史趋势页右侧详情面板中查看的告警。 */
+const selectedRangeAlarmId = ref<string | null>(null)
+const selectedRangeAlarm = computed(() =>
+  rangeAlarms.value.find((alarm) => alarm.id === selectedRangeAlarmId.value) ?? rangeAlarms.value[0] ?? null
+)
+
+function selectRangeAlarm(id: string): void {
+  selectedRangeAlarmId.value = id
+}
+
+
+interface TrendChartClickEvent {
+  componentType: string
+  name?: string
+  data?: unknown
+}
+
+/** Clicking an alarm marker selects the same alarm in the master/detail list below. */
+function onTrendChartClick(event: TrendChartClickEvent): void {
+  if (event.componentType !== 'markLine') return
+  const data = event.data as { name?: unknown } | undefined
+  const id = typeof data?.name === 'string' ? data.name : typeof event.name === 'string' ? event.name : ''
+  if (!id || !rangeAlarms.value.some((alarm) => alarm.id === id)) return
+  selectRangeAlarm(id)
+}
+
 const rangeAlarmsLoading = ref(false)
 /** 查询失败时的那句原文；空串 = 没有失败（家规：失败不留哑）。 */
 const rangeAlarmsError = ref('')
@@ -1185,6 +1278,9 @@ async function loadRangeAlarms(): Promise<void> {
   }
   rangeAlarmsError.value = ''
   rangeAlarms.value = unwrap(result)?.items ?? []
+  if (!rangeAlarms.value.some((alarm) => alarm.id === selectedRangeAlarmId.value)) {
+    selectedRangeAlarmId.value = rangeAlarms.value[0]?.id ?? null
+  }
 }
 
 /**
@@ -1226,6 +1322,15 @@ watch(selectedDeviceId, (id) => {
   notice.value = ''
   devices.select(id)
   void devices.loadChannels(id)
+
+  // FA371 camera history is sourced from its FFT stream. Do not default the page
+  // to SPL: relative spectrum magnitude is not calibrated sound pressure.
+  const target = devices.byId(id)
+  if (target?.kind === 'acousticCamera') {
+    trends.metric = 'mainFrequency'
+    trends.metrics = ['mainFrequency', 'bandEnergyRatio']
+  }
+
   void trends.load(id)
   void router.replace({ path: '/trends', query: { ...route.query, device: id } })
 })
@@ -1271,29 +1376,15 @@ watch(
 </script>
 
 <template>
-  <div class="page">
-    <!--
-      这一页**没有页头**：外层框架的标题栏已经写了「历史趋势」。设备下拉按业主 20260921
-      的要求搬进顶栏那一格（照 MonitorView 的 `Teleport` 先例，含 `.topbar-device` 样式）；
-      「立即落盘」那一颗按钮同一批删掉（store 的 `flush()` 与 IPC 保留，设置页仍在用）。
-    -->
-
+  <div class="page trends-page">
     <p v-if="notice" class="alert alert--success" role="status">{{ notice }}</p>
     <p v-if="trends.error" class="alert alert--danger" role="alert">{{ trends.error }}</p>
 
-    <EmptyState
-      v-if="hasNoDevice"
-      :title="t('trendsUi.noDeviceTitle')"
-    >
+    <EmptyState v-if="hasNoDevice" :title="t('trendsUi.noDeviceTitle')">
       <RouterLink class="btn btn--primary" to="/devices">{{ t('trendsUi.goToDevices') }}</RouterLink>
     </EmptyState>
 
     <template v-else>
-      <!--
-        设备下拉**不在筛选栏里**：它被投到顶栏那一格（`#topbar-page-slot`），
-        写法与样式照 MonitorView（业主 20260921：设备选择搬进标题栏）。
-        `scoped` 样式对 Teleport 出去的内容仍然生效（Vue 给它们带上同一个 scope 属性）。
-      -->
       <Teleport to="#topbar-page-slot">
         <label class="field topbar-device">
           <select
@@ -1309,23 +1400,10 @@ watch(
         </label>
       </Teleport>
 
-      <section class="card">
-        <div class="filter-bar">
-          <!--
-            通道选择：**筛选栏的第一项**（业主 2026-09-19：通道贴着设备；20260921 设备
-            搬去顶栏之后它就是这一行的开头）。
-
-            这一块原来在图右侧占掉一列（第 13 批第 4 条「右侧列出 8 或 2 个通道」），
-            于是图只能拿到剩下的宽度；业主现在要的是**图占满**，所以通道回到筛选栏这一行。
-            只有声纹设备（`isMultiChannel`）渲染这一块：相机 / 声呐走单线趋势页，没有通道。
-            第 4 条那几件事一件没少：
-              · 一颗 chip 一条通道（CH1…CH8，设备几个就是几个）；
-              · **无数据灰显**、**有数据可勾选**（判据都是 `hasData`，见 `channelCheckboxDisabled`）；
-              · 可**重命名**（写设备，`/set_passageway` 的 `dchName`）；
-              · 每颗 chip 只带颜色点 + 通道名（色点与图上那条线同源；读数与自定义名括号
-                按 20260921 删掉）。
-          -->
-          <div v-if="channelRows.length > 0" class="field field--channels" data-trend-channels>
+      <!-- Compact analysis toolbar: channels + metrics on the first line; time controls on the second. -->
+      <section class="card trend-toolbar">
+        <div class="trend-toolbar__row trend-toolbar__row--selectors">
+          <div v-if="channelRows.length > 0" class="field field--channels trend-toolbar__field" data-trend-channels>
             <span class="field-label">{{ t('trendsUi.channelPanelTitle') }}</span>
             <div class="chip-row channel-chip-row">
               <span
@@ -1350,9 +1428,7 @@ watch(
                     @change="toggleChannelRow(row)"
                   />
                   <span class="channel-chip__dot" :style="{ background: row.color }" aria-hidden="true"></span>
-                  <span class="channel-chip__name">
-                    {{ row.name ? row.name : channelLabel(row.index) }}
-                  </span>
+                  <span class="channel-chip__name">{{ row.name ? row.name : channelLabel(row.index) }}</span>
                 </label>
                 <button
                   type="button"
@@ -1365,63 +1441,17 @@ watch(
                   ✎
                 </button>
               </span>
-              <button
-                type="button"
-                class="chip chip--selectable"
-                data-channel-show-all
-                @click="trends.showAllChannels()"
-              >
+              <button type="button" class="chip chip--selectable" data-channel-show-all @click="trends.showAllChannels()">
                 {{ t('trendsUi.channelShowAll') }}
               </button>
             </div>
-            <span class="field-hint" data-channel-panel-summary>
-              {{ t('trendsUi.channelPanelSummary', { withData: channelsWithData, total: channelRows.length }) }}
-            </span>
-            <!-- 改名：一次只改一路（写设备要"读回全部通道 → 合并 → 写回"）。 -->
-            <form
-              v-if="renamingChannel !== null"
-              class="channel-rename-form"
-              data-trend-channel-rename-form
-              @submit.prevent="submitChannelRename"
-            >
-              <input
-                v-model="renameText"
-                class="input channel-rename-form__input"
-                type="text"
-                :maxlength="CHANNEL_NAME_MAX_LENGTH"
-                :placeholder="t('trendsUi.channelRenamePlaceholder')"
-                data-trend-channel-rename-input
-                @keydown.esc="cancelChannelRename"
-              />
-              <button type="submit" class="btn btn--sm btn--primary" :disabled="renameBusy">
-                {{ t('common.save') }}
-              </button>
-              <button type="button" class="btn btn--sm" @click="cancelChannelRename">
-                {{ t('common.cancel') }}
-              </button>
-            </form>
-            <p v-if="renameProblem" class="alert alert--danger" role="alert" data-trend-rename-error>
-              {{ renameProblem }}
-            </p>
-            <p v-if="renameNotice" class="alert alert--success" role="status" data-trend-rename-notice>
-              {{ renameNotice }}
-            </p>
           </div>
 
-          <!--
-            量可以**多选**：选中的量各画一张图（见 `chartBundles` 与文件头）。
-            最后一个量点不掉，满 4 个之后其余的会置灰 —— 两个上限都在 store 里判，
-            这里只把它画出来（第二处判断迟早与第一处不一致）。
-
-            chips 的**视觉顺序 = `metricOrder`**，拖动一颗 chip 重排的是图自上而下的顺序
-            （业主 20260921）。拖拽只是增强：它们仍然是普通按钮，Tab 聚焦、空格/回车
-            切换选中都不受影响；顺序只活在本次会话（不持久化，见 `metricOrder` 的注释）。
-          -->
-          <div class="field field--metrics">
+          <div class="field field--metrics trend-toolbar__field trend-toolbar__field--metrics">
             <span class="field-label">{{ t('trendsUi.filterMetric') }}</span>
             <div class="chip-row" data-metric-picker>
               <button
-                v-for="key in metricOrder"
+                v-for="key in availableMetricOrder"
                 :key="key"
                 type="button"
                 class="chip chip--selectable metric-chip"
@@ -1432,13 +1462,9 @@ watch(
                 :data-metric-toggle="key"
                 :aria-pressed="trends.isMetricSelected(key)"
                 draggable="true"
-                :disabled="
-                  !trends.isMetricSelected(key) &&
-                  trends.metrics.length >= TREND_METRIC_MAX_SELECTED
-                "
+                :disabled="!trends.isMetricSelected(key) && trends.metrics.length >= TREND_METRIC_MAX_SELECTED"
                 :title="
-                  !trends.isMetricSelected(key) &&
-                  trends.metrics.length >= TREND_METRIC_MAX_SELECTED
+                  !trends.isMetricSelected(key) && trends.metrics.length >= TREND_METRIC_MAX_SELECTED
                     ? t('trendsUi.metricLimit', { count: TREND_METRIC_MAX_SELECTED })
                     : t('trendsUi.metricDragHint')
                 "
@@ -1451,99 +1477,33 @@ watch(
                 {{ trendMetricLabel(key) }}
               </button>
             </div>
-            <span v-if="trends.metrics.length > 1" class="field-hint">
-              {{ t('trendsUi.metricMultiHint', { count: trends.metrics.length }) }}
-            </span>
-          </div>
-
-          <!--
-            **起始 / 结束时间**：业主 2026-09-19 最新一条要它「放在指标的右侧」——
-            它和指标一样是查询条件（"查哪一段时间、哪些量"），本来就在筛选栏这一行里，
-            现在只是从下面那一排挪到指标后面。只有选了「自定义」那一档才出现。
-          -->
-          <div v-if="trends.range === 'custom'" class="field field--range" data-trend-custom-range>
-            <span class="field-label">{{ t('trendsUi.filterRangeLabel') }}</span>
-            <div class="custom-range">
-              <label class="field">
-                <span class="field-label">{{ t('trendsUi.filterFrom') }}</span>
-                <input
-                  v-model="customFromText"
-                  class="input"
-                  type="datetime-local"
-                  data-trend-range-from
-                  @input="applyCustomRange"
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">{{ t('trendsUi.filterTo') }}</span>
-                <input
-                  v-model="customToText"
-                  class="input"
-                  type="datetime-local"
-                  data-trend-range-to
-                  @input="applyCustomRange"
-                />
-              </label>
-              <span v-if="customRangeIncomplete" class="field-hint">
-                {{ t('trendsUi.incompleteRange') }}
-              </span>
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      <!--
-        趋势曲线卡片：**整幅宽**（业主最新一条：「趋势图还是占右侧区域的 100%」）。
-        原来它被 `.trends-body` 分成"图 | 通道列"两栏，图只能拿到剩下的宽度；
-        通道搬回筛选栏之后这里只剩一张卡片，宽度自然就是 100%。
-      -->
-      <section class="chart-panel card">
-        <div class="section-header">
-          <h3 class="section-title">{{ t('trendsUi.chartTitle') }}</h3>
-          <!--
-            机型徽标（业主 20260921：页头显示机型标签）：同一台设备切过去，多通道 / 单线
-            两种形态靠它一眼区分。标签复用设备表那一套键（`domain.deviceKind.*`）。
-          -->
-          <span v-if="deviceKindLabel" class="badge kind-badge" data-trend-kind-badge>
-            {{ deviceKindLabel }}
-          </span>
-          <!--
-            「设备IP · 通道 · 时间」那一行**删掉了**（业主 2026-09-19 最新一条：
-            「把现在的趋势框中设备IP，通道，时间这个内容移除」）。
-            这三样东西现在分别在：设备下拉（顶栏那一格）、通道选择（筛选栏里那一排）、
-            时间范围预设（下面那一排 + 缩放的提示行）—— 同一个信息只在**能改它的那个控件**上说一次。
-          -->
-          <div class="btn-row chart-actions">
-            <button
-              type="button"
-              class="btn btn--sm"
-              :disabled="exporting || trends.queriedFrom === null"
-              data-trend-export
-              :title="t('trendsUi.exportHint')"
-              @click="exportCsv"
-            >
-              {{ exporting ? t('trendsUi.exporting') : t('trendsUi.exportCsv') }}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-trend-print
-              :title="t('trendsUi.printHint')"
-              @click="printCharts"
-            >
-              {{ t('trendsUi.print') }}
-            </button>
           </div>
         </div>
 
-        <!--
-          **时间范围预设 + 时间颗粒度**：业主 2026-09-19 最新一条要它们
-          「放在趋势曲线这个卡片中」—— 它们回答的是"这张图画的是哪一段、每一格多大"，
-          与图放在一起比放在筛选栏更贴（筛选栏回答的是"看哪台设备的哪些量"）。
-        -->
-        <div class="chart-range-bar">
-          <div class="chip-row">
+        <form
+          v-if="renamingChannel !== null"
+          class="channel-rename-form trend-toolbar__rename"
+          data-trend-channel-rename-form
+          @submit.prevent="submitChannelRename"
+        >
+          <input
+            v-model="renameText"
+            class="input channel-rename-form__input"
+            type="text"
+            :maxlength="CHANNEL_NAME_MAX_LENGTH"
+            :placeholder="t('trendsUi.channelRenamePlaceholder')"
+            data-trend-channel-rename-input
+            @keydown.esc="cancelChannelRename"
+          />
+          <button type="submit" class="btn btn--sm btn--primary" :disabled="renameBusy">{{ t('common.save') }}</button>
+          <button type="button" class="btn btn--sm" @click="cancelChannelRename">{{ t('common.cancel') }}</button>
+        </form>
+        <p v-if="renameProblem" class="alert alert--danger" role="alert" data-trend-rename-error>{{ renameProblem }}</p>
+        <p v-if="renameNotice" class="alert alert--success" role="status" data-trend-rename-notice>{{ renameNotice }}</p>
+
+        <div class="trend-toolbar__row trend-toolbar__row--time">
+          <span class="field-label trend-toolbar__label">{{ t('trendsUi.filterRangeLabel') }}</span>
+          <div class="chip-row trend-range-presets">
             <button
               v-for="preset in TREND_RANGE_OPTIONS"
               :key="preset.key"
@@ -1557,162 +1517,149 @@ watch(
             </button>
           </div>
 
-          <div class="chip-row granularity-row" data-trend-granularity>
+          <div v-if="trends.range === 'custom'" class="custom-range trend-toolbar__custom" data-trend-custom-range>
+            <label class="trend-inline-field">
+              <span class="sr-only">{{ t('trendsUi.filterFrom') }}</span>
+              <input v-model="customFromText" class="input" type="datetime-local" data-trend-range-from @input="applyCustomRange" />
+            </label>
+            <span class="trend-range-arrow" aria-hidden="true">→</span>
+            <label class="trend-inline-field">
+              <span class="sr-only">{{ t('trendsUi.filterTo') }}</span>
+              <input v-model="customToText" class="input" type="datetime-local" data-trend-range-to @input="applyCustomRange" />
+            </label>
+          </div>
+          <span v-if="customRangeIncomplete" class="field-hint">{{ t('trendsUi.incompleteRange') }}</span>
+
+          <label class="trend-resolution">
             <span class="field-label">{{ t('trendsUi.granularityLabel') }}</span>
+            <select v-model="granularitySelection" class="select" data-trend-granularity>
+              <option v-for="option in TREND_GRANULARITY_OPTIONS" :key="option.key" :value="option.key">
+                {{ t(option.labelKey) }}{{ option.key === 'auto' && autoBucketText ? ` (${autoBucketText})` : '' }}
+              </option>
+            </select>
+          </label>
+
+          <div class="trend-toolbar__actions">
             <button
-              v-for="option in TREND_GRANULARITY_OPTIONS"
-              :key="option.key"
               type="button"
-              class="chip chip--selectable"
-              :class="{
-                'chip--accent': trends.granularity === option.key,
-                'chip--auto-hint': autoBucketKey === option.key
-              }"
-              :data-trend-granularity-option="option.key"
-              :aria-pressed="trends.granularity === option.key"
-              :title="granularityHint(option)"
-              @click="granularitySelection = option.key"
+              class="trend-icon-btn"
+              :disabled="exporting || trends.queriedFrom === null"
+              data-trend-export
+              :aria-label="t('trendsUi.exportCsv')"
+              :title="t('trendsUi.exportHint')"
+              @click="exportCsv"
             >
-              {{ t(option.labelKey) }}
-              <template v-if="option.key === 'auto' && autoBucketText">
-                （{{ autoBucketText }}）
-              </template>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 15.5h12" /></svg>
+            </button>
+            <button
+              type="button"
+              class="trend-icon-btn"
+              data-trend-print
+              :aria-label="t('trendsUi.print')"
+              :title="t('trendsUi.printHint')"
+              @click="printCharts"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 7V3.5h8V7M6 14.5v2h8v-5H6v3Zm-2-6h12a1.5 1.5 0 0 1 1.5 1.5v3H14M6 13H2.5v-3A1.5 1.5 0 0 1 4 8.5Z" /></svg>
             </button>
           </div>
         </div>
+      </section>
 
-        <p v-if="exportNotice" class="alert alert--success" role="status" data-trend-export-notice>
-          {{ exportNotice }}
-        </p>
-        <p v-if="exportError" class="alert alert--danger" role="alert" data-trend-export-error>
-          {{ exportError }}
-        </p>
+      <p v-if="exportNotice" class="alert alert--success" role="status" data-trend-export-notice>{{ exportNotice }}</p>
+      <p v-if="exportError" class="alert alert--danger" role="alert" data-trend-export-error>{{ exportError }}</p>
 
-        <!--
-          缩放提示（第 6 条）：放大之后图上**看不出来**自己在哪一段 —— 一张只画了三分钟的图
-          与一张画了三十天的图长得一模一样。所以放大时写明"当前显示第 a–b 个点 / 共 n 点
-          （某时刻 ~ 某时刻）"，并给一个「重置缩放」。
-        -->
-        <div v-if="zoomHint" class="zoom-bar" data-trend-zoom-bar>
-          <span class="muted" data-trend-zoom-hint>{{ zoomHint }}</span>
-          <button type="button" class="btn btn--sm" data-trend-zoom-reset @click="resetZoom">
-            {{ t('trendsUi.zoomReset') }}
-          </button>
-        </div>
+      <div v-if="zoomHint" class="zoom-bar trend-zoom-bar" data-trend-zoom-bar>
+        <span class="muted" data-trend-zoom-hint>{{ zoomHint }}</span>
+        <button type="button" class="btn btn--sm" data-trend-zoom-reset @click="resetZoom">{{ t('trendsUi.zoomReset') }}</button>
+      </div>
 
-        <p v-if="trends.series?.truncated" class="alert alert--warning" role="status">
-          {{ t('trendsUi.truncated', { count: trends.points.length }) }}
-        </p>
+      <p v-if="trends.series?.truncated" class="alert alert--warning" role="status">
+        {{ t('trendsUi.truncated', { count: trends.points.length }) }}
+      </p>
 
-        <EmptyState
-          v-if="noDeviceSelected"
-          :title="t('trendsUi.noDeviceSelectedTitle')"
-        />
+      <section class="trend-stage" data-trend-stage>
+        <EmptyState v-if="noDeviceSelected" :title="t('trendsUi.noDeviceSelectedTitle')" />
 
-        <EmptyState
-          v-else-if="trends.deviceHasNoHistory"
-          :title="t('trendsUi.noHistoryTitle')"
-        >
+        <EmptyState v-else-if="trends.deviceHasNoHistory" :title="t('trendsUi.noHistoryTitle')">
           <RouterLink class="btn btn--primary" to="/monitor">{{ t('trendsUi.goToMonitor') }}</RouterLink>
         </EmptyState>
 
-        <EmptyState
-          v-else-if="rangeEmptyForChannels"
-          :title="t('trendsUi.emptyRangeTitle')"
-        >
-          <!--
-            跳到"库里有数据的那个范围"（第 25 轮加的；`useCoverageRange()` 会**同时**把预设
-            切成"自定义"并写进两个边界）。第 33 轮给它加了探针钩子：
-            · 它是**业主真的会点**的一个按钮（"这一段没有数据、跳到有数据的那一段"）；
-            · 它落到的状态（`range='custom'` + 两个边界都有值）与"手填两个时间"是**同一个状态** ——
-              第 32 轮定位到的那个卡死就发生在这个状态上，所以它是那条路径的**另一个入口**；
-            · 它也是探针唯一能拿到"真的有读数"的那一屏的办法（默认预设是最近 1 小时，
-              而这台设备最后一次上报在几天前）—— 没有它，"声压级 Y 轴 0–100"与
-              "多条通道画在同一根轴上"这两条断言永远跑不到。
-          -->
-          <button
-            v-if="coverageText"
-            type="button"
-            class="btn"
-            data-trend-use-coverage
-            @click="useCoverageRange"
-          >
+        <EmptyState v-else-if="rangeEmptyForChannels" :title="t('trendsUi.emptyRangeTitle')">
+          <button v-if="coverageText" type="button" class="btn" data-trend-use-coverage @click="useCoverageRange">
             {{ t('trendsUi.coverageAvailable', { range: coverageText }) }}
           </button>
         </EmptyState>
 
-        <!--
-          一个选中的量一张图（业主追加要求："同时显示"）。每张图里是**所有可见通道**的折线，
-          颜色与图例同一个来源。原来那种"一条聚合线"只在设备没返回通道表时用（`fallbackOption`）。
-        -->
-        <template v-else-if="trends.visibleChannelIds.length > 0">
-          <div
+        <div v-else-if="trends.visibleChannelIds.length > 0" class="trend-chart-grid">
+          <article
             v-for="bundle in chartBundles"
             :key="bundle.metric"
-            class="metric-chart"
+            class="card metric-chart"
             :data-metric-chart="bundle.metric"
             :data-y-range="trendAxisRangeText(bundle.metric)"
           >
-            <div class="section-header">
-              <h4 class="section-title">{{ trendMetricLabel(bundle.metric) }}</h4>
-              <span class="muted chart-hint">
-                {{ trendAxisName(bundle.metric, trends.aggregation) }} ·
-                {{ t('trendsUi.channelLines', { count: bundle.lines.length }) }}
-              </span>
+            <div class="metric-chart__header">
+              <div class="metric-chart__title-wrap">
+                <h4 class="section-title">{{ trendMetricLabel(bundle.metric) }}</h4>
+                <span class="muted chart-hint">
+                  {{ trendAxisName(bundle.metric, trends.aggregation) }} · {{ t('trendsUi.channelLines', { count: bundle.lines.length }) }}
+                </span>
+              </div>
+              <div class="metric-chart__actions">
+                <button
+                  type="button"
+                  class="trend-icon-btn trend-icon-btn--compact"
+                  :aria-label="t('cameraNvrUi.menuFullscreen')"
+                  :title="t('cameraNvrUi.menuFullscreen')"
+                  @click="toggleChartFullscreen($event)"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 3.5h-4v4M12.5 3.5h4v4M7.5 16.5h-4v-4M12.5 16.5h4v-4" /></svg>
+                </button>
+                <button
+                  type="button"
+                  class="trend-icon-btn trend-icon-btn--compact"
+                  :disabled="exporting || trends.queriedFrom === null"
+                  :aria-label="t('trendsUi.exportCsv')"
+                  :title="t('trendsUi.exportHint')"
+                  @click="exportCsv"
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 15.5h12" /></svg>
+                </button>
+              </div>
             </div>
-            <!--
-              这一张图上一条非空值都没有时给一句空态，而不是画一根空轴 ——
-              空轴看起来像"图上什么都没有"，而实事是"这个量在这段时间里没有读数"。
-            -->
-            <p v-if="!bundle.hasValue" class="muted" :data-metric-empty="bundle.metric">
+
+            <p v-if="!bundle.hasValue" class="muted metric-chart__empty" :data-metric-empty="bundle.metric">
               {{ t('trendsUi.metricNoData') }}
             </p>
-            <!--
-              `:ref` 用内联箭头是**必须**的（多张图要按量区分），但 `setChartRef` 只往一个
-              **普通对象**里写（不是 `ref`）—— 理由见 `chartInstances` 那段注释：
-              patch 期间写响应式 ref 会把这条更新自己排回队列，整页就永远刷不完。
-            -->
             <EChart
               v-else
               :ref="(instance) => setChartRef(bundle.metric, instance)"
               :option="chartOptions[bundle.metric] ?? chartOptionFor(bundle)"
-              height="320px"
+              height="280px"
               :placeholder="chartPlaceholder"
               @datazoom="(window) => onChartZoom(bundle.metric, window)"
+              @chartclick="onTrendChartClick"
             />
+          </article>
+        </div>
+
+        <article v-else class="card metric-chart metric-chart--single">
+          <div class="metric-chart__header">
+            <h4 class="section-title">{{ t('trendsUi.chartTitle') }}</h4>
           </div>
-        </template>
-
-        <EChart
-          v-else
-          :ref="setFallbackChartRef"
-          :option="fallbackOption"
-          height="360px"
-          :placeholder="chartPlaceholder"
-          @datazoom="(window) => onChartZoom('fallback', window)"
-        />
-
-        <!--
-          曲线下方那一行诊断（返回点数 / 原始行数 / 聚合桶大小 / 扫描文件 / 耗时 / 压缩比 /
-          本次查询条数）**删掉了**（业主 2026-09-19 最新一条：「曲线下方的返回点数，这些内容移除」）。
-
-          这一行在第 26 轮是被**特意保留**的（当时业主只说删四张卡片），现在点名要删 ——
-          冲突按最新一条处理。没有因此变哑的两件事：
-            · 图被截断时那张 `truncated` 提示**留着**（它是报警，不是读数）；
-            · "这张图有多细"由上面的时间颗粒度那一排回答（「自动（5 分钟）」就是把桶宽写在按钮上）。
-          "点一下通道不重新查库"这件事从前是靠这一行里的「本次查询条数」量的，
-          现在改由**源码守卫**（`toggleChannel` 里没有 `query()`）与探针的
-          「点一下之后图上的点数/刻度不变」来保证 —— 见 `tests/trend-channels.test.ts`。
-        -->
+          <EChart
+            :ref="setFallbackChartRef"
+            :option="fallbackOption"
+            height="320px"
+            :placeholder="chartPlaceholder"
+            @datazoom="(window) => onChartZoom('fallback', window)"
+            @chartclick="onTrendChartClick"
+          />
+        </article>
       </section>
 
-      <!--
-        时间段告警（业主 20260921）：**图上这一段**里报过的告警，最多 50 条。
-        点一行跳到告警中心、设备筛选已经带好（AlarmsView 认地址栏的 `?device=`）。
-        范围与设备随趋势查询走（`queriedFrom/To` 变了就重查，见 `loadRangeAlarms`），
-        不另设筛选；查询失败把那句原文写在卡里，不静默。
-      -->
-      <section class="card range-alarms" data-trend-range-alarms>
+      <!-- Alarm analysis uses the exact same queried device/time range as the charts. -->
+      <section class="card range-alarms range-alarms--workspace" data-trend-range-alarms>
         <div class="section-header">
           <h3 class="section-title">{{ t('trendsUi.rangeAlarmsTitle') }}</h3>
           <span v-if="rangeAlarms.length > 0" class="muted chart-hint" data-trend-range-alarms-count>
@@ -1720,54 +1667,58 @@ watch(
           </span>
         </div>
 
-        <p
-          v-if="rangeAlarmsError"
-          class="alert alert--danger"
-          role="alert"
-          data-trend-range-alarms-error
-        >
-          {{ rangeAlarmsError }}
-        </p>
-        <p
-          v-else-if="rangeAlarmsLoading"
-          class="muted"
-          data-trend-range-alarms-loading
-        >
-          {{ t('alarmsUi.loading') }}
-        </p>
-        <!-- 空态复用告警中心那一句：这一段里没有告警，就是「没有符合条件的告警记录」。 -->
-        <p
-          v-else-if="rangeAlarms.length === 0"
-          class="muted"
-          data-trend-range-alarms-empty
-        >
-          {{ t('alarmsUi.empty') }}
-        </p>
+        <p v-if="rangeAlarmsError" class="alert alert--danger" role="alert" data-trend-range-alarms-error>{{ rangeAlarmsError }}</p>
+        <p v-else-if="rangeAlarmsLoading" class="muted" data-trend-range-alarms-loading>{{ t('alarmsUi.loading') }}</p>
+        <p v-else-if="rangeAlarms.length === 0" class="muted" data-trend-range-alarms-empty>{{ t('alarmsUi.empty') }}</p>
 
-        <ul v-else class="range-alarm-list">
-          <li v-for="alarm in rangeAlarms" :key="alarm.id">
-            <RouterLink
-              class="range-alarm-row"
-              :to="{ path: '/alarms', query: { device: selectedDeviceId } }"
+        <div v-else class="range-alarm-workspace">
+          <div class="range-alarm-master" role="list">
+            <button
+              v-for="alarm in rangeAlarms"
+              :key="alarm.id"
+              type="button"
+              class="range-alarm-item"
+              :class="{ 'range-alarm-item--active': selectedRangeAlarm?.id === alarm.id }"
               :data-trend-range-alarm="alarm.id"
+              @click="selectRangeAlarm(alarm.id)"
             >
-              <span class="nowrap range-alarm-row__time">{{ formatDateTime(alarm.timestamp) }}</span>
-              <span class="badge" :class="`badge--severity-${alarm.severity}`">
-                {{ eventSeverityLabel(alarm.severity) }}
+              <span class="range-alarm-item__top">
+                <span class="nowrap range-alarm-row__time">{{ formatDateTime(alarm.timestamp) }}</span>
+                <span class="badge" :class="`badge--severity-${alarm.severity}`">{{ eventSeverityLabel(alarm.severity) }}</span>
               </span>
-              <!-- 标题一行截断，悬停看全文（`title`）。 -->
-              <span class="range-alarm-row__title" :title="rangeAlarmTitle(alarm)">
-                {{ rangeAlarmTitle(alarm) }}
+              <span class="range-alarm-row__title" :title="rangeAlarmTitle(alarm)">{{ rangeAlarmTitle(alarm) }}</span>
+            </button>
+          </div>
+
+          <div v-if="selectedRangeAlarm" class="range-alarm-detail">
+            <div class="range-alarm-detail__head">
+              <div>
+                <h4 class="range-alarm-detail__title">{{ rangeAlarmTitle(selectedRangeAlarm) }}</h4>
+                <p class="muted range-alarm-detail__time">{{ formatDateTime(selectedRangeAlarm.timestamp) }}</p>
+              </div>
+              <span class="badge" :class="`badge--severity-${selectedRangeAlarm.severity}`">
+                {{ eventSeverityLabel(selectedRangeAlarm.severity) }}
               </span>
-              <span
-                class="badge"
-                :class="alarm.acknowledged ? 'badge--success' : 'badge--warning'"
-              >
-                {{ alarm.acknowledged ? t('alarmsUi.ackAcknowledged') : t('alarmsUi.ackUnacknowledged') }}
+            </div>
+
+            <div class="range-alarm-detail__facts">
+              <span v-if="selectedRangeAlarm.spl !== undefined" class="trend-fact">{{ selectedRangeAlarm.spl.toFixed(1) }} dB</span>
+              <span v-if="selectedRangeAlarm.mainFrequency !== undefined" class="trend-fact">{{ selectedRangeAlarm.mainFrequency.toFixed(0) }} Hz</span>
+              <span class="trend-fact">{{ channelLabel(selectedRangeAlarm.channelId) }}</span>
+              <span class="trend-fact" :class="selectedRangeAlarm.acknowledged ? 'trend-fact--ok' : ''">
+                {{ selectedRangeAlarm.acknowledged ? t('alarmsUi.ackAcknowledged') : t('alarmsUi.ackUnacknowledged') }}
               </span>
-            </RouterLink>
-          </li>
-        </ul>
+            </div>
+
+            <p v-if="selectedRangeAlarm.note" class="range-alarm-detail__note">{{ selectedRangeAlarm.note }}</p>
+
+            <div class="range-alarm-detail__actions">
+              <RouterLink class="btn btn--sm" :to="{ path: '/alarms', query: { device: selectedDeviceId } }">
+                {{ t('common.viewAll') }}
+              </RouterLink>
+            </div>
+          </div>
+        </div>
       </section>
     </template>
   </div>
@@ -2081,5 +2032,374 @@ watch(
 .badge--severity-unknown {
   background: color-mix(in srgb, currentColor 12%, transparent);
   opacity: 0.75;
+}
+
+
+/* -------------------------------------------------------------------------
+ * 2026-09-21 historical trend workspace refresh
+ * ---------------------------------------------------------------------- */
+.trends-page {
+  --trend-gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--trend-gap);
+}
+
+.trend-toolbar {
+  padding: var(--space-3);
+}
+
+.trend-toolbar__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.trend-toolbar__row + .trend-toolbar__row {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.trend-toolbar__row--selectors {
+  align-items: flex-start;
+}
+
+.trend-toolbar__field {
+  min-width: 0;
+}
+
+.trend-toolbar__field--metrics {
+  flex: 1 1 auto;
+}
+
+.field--channels {
+  flex: 0 1 auto;
+}
+
+.trend-toolbar__row--time {
+  flex-wrap: wrap;
+}
+
+.trend-toolbar__label {
+  flex: none;
+}
+
+.trend-range-presets {
+  flex: none;
+}
+
+.trend-toolbar__custom {
+  flex: 0 1 auto;
+}
+
+.trend-inline-field {
+  min-width: 0;
+}
+
+.trend-inline-field .input {
+  width: 170px;
+}
+
+.trend-range-arrow {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.trend-resolution {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.trend-resolution .select {
+  width: auto;
+  min-width: 132px;
+}
+
+.trend-toolbar__actions,
+.metric-chart__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trend-icon-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.trend-icon-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.trend-icon-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.trend-icon-btn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-icon-btn--compact {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.trend-toolbar__rename {
+  margin-top: var(--space-2);
+  max-width: 520px;
+}
+
+.trend-zoom-bar {
+  margin: 0;
+  min-height: 32px;
+  padding: 0 var(--space-1);
+}
+
+
+.trend-stage {
+  min-width: 0;
+}
+
+.trend-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--trend-gap);
+}
+
+.metric-chart {
+  min-width: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+}
+
+.metric-chart:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  padding: 24px;
+  background: var(--color-bg);
+}
+
+.metric-chart:fullscreen :deep(.chart) {
+  height: calc(100vh - 90px) !important;
+}
+
+.metric-chart__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 32px;
+  margin-bottom: var(--space-1);
+}
+
+.metric-chart__title-wrap {
+  min-width: 0;
+}
+
+.metric-chart__title-wrap .section-title {
+  margin: 0;
+}
+
+.metric-chart__empty {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+}
+
+.metric-chart--single {
+  width: 100%;
+}
+
+.range-alarms--workspace {
+  padding: var(--space-3);
+}
+
+.range-alarm-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, 34%) minmax(0, 1fr);
+  min-height: 260px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.range-alarm-master {
+  min-width: 0;
+  max-height: 360px;
+  overflow: auto;
+  border-right: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg-page) 45%, var(--color-bg));
+}
+
+.range-alarm-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.range-alarm-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.range-alarm-item--active {
+  background: color-mix(in srgb, var(--color-accent, #ff6a1a) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-accent, #ff6a1a);
+}
+
+.range-alarm-item__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.range-alarm-detail {
+  min-width: 0;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.range-alarm-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.range-alarm-detail__title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.range-alarm-detail__time,
+.range-alarm-detail__note {
+  margin: 0;
+}
+
+.range-alarm-detail__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trend-fact {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-page);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-fact--ok {
+  color: var(--color-success);
+}
+
+.range-alarm-detail__actions {
+  margin-top: auto;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 1180px) {
+  .trend-chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trend-resolution {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .trend-toolbar__row--selectors {
+    flex-direction: column;
+  }
+
+  .field--channels,
+  .trend-toolbar__field--metrics {
+    width: 100%;
+  }
+
+  .range-alarm-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .range-alarm-master {
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+}
+
+
+.trend-chart-grid .metric-chart + .metric-chart {
+  margin-top: 0;
+}
+
+@media print {
+  .trend-toolbar,
+  .trend-zoom-bar,
+  .range-alarms--workspace {
+    display: none !important;
+  }
+
+  .trend-chart-grid {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .card.metric-chart {
+    display: block !important;
+    break-inside: avoid;
+    box-shadow: none;
+  }
 }
 </style>

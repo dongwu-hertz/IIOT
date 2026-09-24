@@ -398,9 +398,11 @@ async function run() {
   const EXPECT = {
     en: { tab: 'AI services', group: 'AI services', gis: 'GIS services' },
     es: { tab: 'Servicios de IA', group: 'Servicios de IA', gis: 'Servicios GIS' },
-    tr: { tab: 'YZ hizmetleri', group: 'YZ hizmetleri', gis: 'GIS hizmetleri' }
+    tr: { tab: 'YZ hizmetleri', group: 'YZ hizmetleri', gis: 'GIS hizmetleri' },
+    ru: { tab: 'AI-сервисы', group: 'AI-сервисы', gis: 'GIS-сервисы' },
+    'zh-TW': { tab: 'AI 服務', group: 'AI 服務', gis: 'GIS 服務' }
   }
-  for (const lang of ['en', 'es', 'tr']) {
+  for (const lang of ['en', 'es', 'tr', 'ru', 'zh-TW']) {
     // 与 demo-shot-driver 同一套切法：先写存储，再由主进程侧重载。
     await win.webContents.executeJavaScript(
       'window.localStorage.setItem("hertzinno.locale", ' + JSON.stringify(lang) + '); true'

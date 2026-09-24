@@ -41,6 +41,7 @@ import { deviceLog } from '../services/logging/logger'
 export const FA371_PUSH_CHANNELS: Readonly<Record<Fa371StreamKind, string>> = {
   fftData: PushChannels.FA371_FFT,
   voiceprintData: PushChannels.FA371_VOICEPRINT,
+  prpdData: PushChannels.FA371_PRPD,
   energyData: PushChannels.FA371_ENERGY,
   pcmData: PushChannels.FA371_PCM,
   infraredData: PushChannels.FA371_INFRARED,

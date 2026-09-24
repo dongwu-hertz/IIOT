@@ -30,7 +30,6 @@ import {
   fromDateTimeLocalValue
 } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
-import AppModal from '@renderer/components/AppModal.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 
 const RECORDING_PAGE_SIZE = 50
@@ -63,12 +62,10 @@ const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 
-/** Recording currently loaded in the player panel; '' keeps the modal closed. */
+/** Currently selected recording in the master-detail workspace. */
 const playingId = ref('')
-const playerOpen = ref(false)
 
-/** 视频录像用自己的弹窗：`<video>` 直接吃回环 HTTP 地址。 */
-const videoOpen = ref(false)
+/** Video preview uses the existing loopback HTTP URL so Range seeking keeps working. */
 const videoUrl = ref('')
 const videoError = ref('')
 const videoTitle = ref('')
@@ -137,12 +134,24 @@ async function load(): Promise<void> {
     error.value = resultMessage(result)
     items.value = []
     total.value = 0
+    playingId.value = ''
+    videoUrl.value = ''
     return
   }
   error.value = ''
   const page: RecordingPage | undefined = unwrap(result)
   items.value = page?.items ?? []
   total.value = page?.total ?? 0
+
+  // Keep the selected item when it is still in the page; otherwise select the first
+  // visible recording so the right-hand preview never looks disconnected from the list.
+  if (!items.value.some((item) => item.id === playingId.value)) {
+    playingId.value = ''
+    videoUrl.value = ''
+    videoError.value = ''
+    const first = items.value[0]
+    if (first) await openPlayer(first)
+  }
 }
 
 /** Any filter change restarts from the first page. */
@@ -229,15 +238,15 @@ async function addToSamples(recording: Recording): Promise<void> {
  * 拿不到地址时**明说无法播放**，而不是打开一个永远空着的播放器。
  */
 async function openPlayer(recording: Recording): Promise<void> {
-  if (!isVideoRecording(recording)) {
-    playingId.value = recording.id
-    playerOpen.value = true
-    return
-  }
+  playingId.value = recording.id
   videoTitle.value = formatDateTime(recording.startTime)
   videoUrl.value = ''
   videoError.value = ''
-  videoOpen.value = true
+
+  // Audio is loaded on demand by RecordingPlayer. Video needs the loopback URL
+  // immediately so the inline preview can seek with HTTP Range requests.
+  if (!isVideoRecording(recording)) return
+
   const result = await callApi(() => window.api.cameraNvr.videoUrl(recording.id))
   if (!result.success) {
     videoError.value = resultMessage(result)
@@ -247,18 +256,14 @@ async function openPlayer(recording: Recording): Promise<void> {
   if (videoUrl.value === '') videoError.value = t('recordingsUi.videoUnavailable')
 }
 
-function closeVideo(): void {
-  videoOpen.value = false
-  // 先卸载 <video>（它会释放回环连接），再清地址。
-  videoUrl.value = ''
-  videoError.value = ''
-}
-
-function closePlayer(): void {
-  playerOpen.value = false
-  // Clear the id only after the modal is gone so the player unmounts (and
-  // revokes its object URL) instead of flickering through an empty state.
-  playingId.value = ''
+async function exportRecording(recording: Recording): Promise<void> {
+  const result = await callApi(() => window.api.recordings.export(recording.id))
+  if (!result.success) {
+    notice.value = resultMessage(result)
+    return
+  }
+  const saved = unwrap(result)
+  if (saved) notice.value = t('alarmsUi.downloadDone', { path: saved.path })
 }
 
 /** A recording is local only when the metadata carries a stored relative path. */
@@ -297,22 +302,13 @@ watch(
 </script>
 
 <template>
-  <div class="page">
-    <!--
-      这一页**没有页头**（业主 2026-09-16）：
-        - 「共 N 个录音文件」删掉 —— 列表本身就是那个数字；
-        - 「同步设备录音」与「刷新」两个按钮删掉 —— 刷新在顶栏已经有了（只有一个刷新入口），
-          而这一页要变成**存储**页（按日期查看与回放），不是一个"导入录音"的工作台。
-      ⚠️ 注意：「同步设备录音」原本是**设备录音库**唯一的界面入口。删掉之后这个能力在界面上
-      没有落点了（主进程那条 `recording:sync-device` 通道仍在）。这一条要在存储页成型时
-      一并决定它去哪 —— 见 docs/Ivms4200-UX-REFERENCE.md §15.21。
-    -->
-
+  <div class="page recordings-page">
     <p v-if="error" class="alert alert--danger" role="alert">{{ error }}</p>
     <p v-else-if="notice" class="alert alert--success" role="status">{{ notice }}</p>
 
-    <section class="card">
-      <div class="filter-bar">
+    <!-- Compact filter bar. The media library should reach the list quickly, not spend the first screen on controls. -->
+    <section class="card recordings-filters">
+      <div class="recordings-filter-grid">
         <label class="field">
           <span class="field-label">{{ t('alarmsUi.filterDevice') }}</span>
           <select v-model="filters.deviceId" class="select">
@@ -329,7 +325,6 @@ watch(
             <option value="">{{ t('alarmsUi.filterAllChannels') }}</option>
             <option v-for="channel in channelOptions" :key="channel.index" :value="channel.index">
               {{ channelLabel(channel.index) }}<template v-if="channel.name">（{{ channel.name }}）</template>
-              <!-- 未启用的通道照样可以查历史（录音已经存在），但要看得出来它现在没开。 -->
               <template v-if="channel.state !== 'enabled'">（{{ t(channelStateLabelKey(channel.state)) }}）</template>
             </option>
           </select>
@@ -355,145 +350,484 @@ watch(
           <input v-model="filters.to" class="input" type="datetime-local" />
         </label>
 
-        <button type="button" class="btn" @click="reset">{{ t('common.reset') }}</button>
+        <div class="recordings-filter-actions">
+          <button type="button" class="btn btn--sm" @click="reset">{{ t('common.reset') }}</button>
+        </div>
       </div>
     </section>
 
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>{{ t('recordingsUi.columnStart') }}</th>
-            <th>{{ t('recordingsUi.columnDevice') }}</th>
-            <th>{{ t('recordingsUi.columnChannel') }}</th>
-            <th>{{ t('recordingsUi.columnType') }}</th>
-            <th>{{ t('recordingsUi.columnDuration') }}</th>
-            <th>{{ t('recordingsUi.columnSampleRate') }}</th>
-            <th>{{ t('recordingsUi.columnFormat') }}</th>
-            <th>{{ t('recordingsUi.columnSize') }}</th>
-            <th>{{ t('recordingsUi.columnDownloaded') }}</th>
-            <th class="col-play">{{ t('recordingsUi.columnPlay') }}</th>
-            <th>{{ t('recordingsUi.columnSample') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="items.length === 0">
-            <td colspan="11" class="table-empty">
-              {{ loading ? t('alarmsUi.loading') : t('recordingsUi.empty') }}
-            </td>
-          </tr>
-          <tr v-for="recording in items" :key="recording.id">
-            <td class="nowrap">{{ formatDateTime(recording.startTime) }}</td>
-            <td class="nowrap">{{ devices.nameById(recording.deviceId) }}</td>
-            <td class="nowrap">{{ channelLabel(recording.channelId) }}</td>
-            <td class="nowrap">{{ recordingTypeLabel(recording.recordingType) }}</td>
-            <td class="nowrap">{{ formatDuration(recording.durationMs) }}</td>
-            <td class="nowrap">{{ sampleRateLabel(recording) }}</td>
-            <td class="nowrap">{{ formatLabel(recording) }}</td>
-            <td class="nowrap">{{ formatBytes(recording.fileSize) }}</td>
-            <td class="nowrap">
-              <span
-                class="badge"
-                :class="isDownloaded(recording) ? 'badge--success' : 'badge--warning'"
-                :title="recording.relativePath || undefined"
-              >
-                {{ isDownloaded(recording) ? t('recordingsUi.downloaded') : t('recordingsUi.notDownloaded') }}
-              </span>
-            </td>
-            <td>
-              <!-- `playback.load` downloads on demand, so this stays enabled for
-                   rows that are not local yet: the first play is the download. -->
+    <div class="recordings-workspace">
+      <!-- Master list -->
+      <section class="card recordings-master">
+        <header class="recordings-master__head">
+          <div>
+            <h3 class="section-title">{{ t('recordingsUi.playerTitle') }}</h3>
+            <p class="muted recordings-master__count">
+              {{ t('alarmsUi.pagerRange', { from: offset + 1, to: offset + items.length, total }) }}
+            </p>
+          </div>
+        </header>
+
+        <div class="recording-list" role="list">
+          <div v-if="items.length === 0" class="recording-list__empty">
+            {{ loading ? t('alarmsUi.loading') : t('recordingsUi.empty') }}
+          </div>
+
+          <article
+            v-for="recording in items"
+            :key="recording.id"
+            class="recording-row"
+            :class="{ 'recording-row--active': playingId === recording.id }"
+            role="listitem"
+            tabindex="0"
+            @click="openPlayer(recording)"
+            @keydown.enter="openPlayer(recording)"
+          >
+            <div class="recording-row__icon" :class="{ 'recording-row__icon--video': isVideoRecording(recording) }" aria-hidden="true">
+              <svg v-if="isVideoRecording(recording)" width="16" height="16" viewBox="0 0 16 16">
+                <rect x="2.5" y="4" width="8.5" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M11 6.2l2.5-1.5v6.6L11 9.8z" fill="currentColor"/>
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 16 16">
+                <path d="M3 9V7m2 5V4m2 9V3m2 8V5m2 4V7m2 1V6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+            </div>
+
+            <div class="recording-row__body">
+              <div class="recording-row__top">
+                <strong>{{ formatDateTime(recording.startTime) }}</strong>
+                <span class="recording-row__duration">{{ formatDuration(recording.durationMs) }}</span>
+              </div>
+              <div class="recording-row__meta">
+                <span>{{ devices.nameById(recording.deviceId) }}</span>
+                <span>·</span>
+                <span>{{ channelLabel(recording.channelId) }}</span>
+                <span>·</span>
+                <span>{{ recordingTypeLabel(recording.recordingType) }}</span>
+              </div>
+              <div class="recording-row__bottom">
+                <span class="chip chip--tiny">{{ formatLabel(recording) }}</span>
+                <span v-if="recording.fileSize !== undefined" class="muted">{{ formatBytes(recording.fileSize) }}</span>
+                <span class="recording-local-state" :class="isDownloaded(recording) ? 'recording-local-state--local' : 'recording-local-state--remote'">
+                  <svg v-if="isDownloaded(recording)" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3 8.5l3 3L13 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M5.2 12.5H4.5A2.5 2.5 0 014 7.55 4 4 0 0111.6 6.2 3 3 0 0112 12.2h-1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                  </svg>
+                  {{ isDownloaded(recording) ? t('recordingsUi.downloaded') : t('recordingsUi.notDownloaded') }}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              class="btn btn--sm btn--icon recording-row__play"
+              :aria-label="t('recordingsUi.playLabel', { time: formatDateTime(recording.startTime) })"
+              :title="isDownloaded(recording) ? t('recordingsUi.playLocal') : t('recordingsUi.playRemote')"
+              @click.stop="openPlayer(recording)"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3l9 5-9 5z" fill="currentColor" /></svg>
+            </button>
+          </article>
+        </div>
+
+        <div class="pager recordings-master__pager">
+          <span class="muted">
+            {{ t('alarmsUi.pagerRange', { from: offset + 1, to: offset + items.length, total }) }}
+          </span>
+          <div class="btn-row">
+            <button type="button" class="btn btn--sm" :disabled="!canPrev" @click="goToPage(offset - RECORDING_PAGE_SIZE)">
+              {{ t('alarmsUi.prevPage') }}
+            </button>
+            <button type="button" class="btn btn--sm" :disabled="!canNext" @click="goToPage(offset + RECORDING_PAGE_SIZE)">
+              {{ t('alarmsUi.nextPage') }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Preview / metadata -->
+      <section class="card recordings-preview">
+        <template v-if="playingRecording">
+          <header class="recordings-preview__head">
+            <div>
+              <h3 class="section-title">{{ playerTitle }}</h3>
+              <p class="muted recordings-preview__sub">
+                {{ devices.nameById(playingRecording.deviceId) }} · {{ channelLabel(playingRecording.channelId) }} · {{ recordingTypeLabel(playingRecording.recordingType) }}
+              </p>
+            </div>
+            <div class="btn-row recordings-preview__actions">
               <button
                 type="button"
                 class="btn btn--sm btn--icon"
-                :aria-label="t('recordingsUi.playLabel', { time: formatDateTime(recording.startTime) })"
-                :title="isDownloaded(recording) ? t('recordingsUi.playLocal') : t('recordingsUi.playRemote')"
-                @click="openPlayer(recording)"
+                :title="t('alarmsUi.menuDownload')"
+                @click="exportRecording(playingRecording)"
               >
-                <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M4 3l9 5-9 5z" fill="currentColor" />
+                <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
-            </td>
-            <td class="nowrap">
               <button
                 type="button"
                 class="btn btn--sm"
-                :disabled="sampleBusyId === recording.id"
+                :disabled="sampleBusyId === playingRecording.id"
                 :title="t('recordingsUi.sampleHint')"
-                @click="addToSamples(recording)"
+                @click="addToSamples(playingRecording)"
               >
                 {{ t('recordingsUi.addToSamples') }}
               </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+              <RouterLink
+                v-if="playingRecording.recordingType === 'alarm'"
+                class="btn btn--sm"
+                :to="{ path: '/alarms', query: { device: playingRecording.deviceId } }"
+              >
+                {{ t('alarmsUi.detailTitle') }}
+              </RouterLink>
+            </div>
+          </header>
+
+          <div class="recordings-preview__scroll">
+            <div v-if="isVideoRecording(playingRecording)" class="video-preview-shell">
+              <video v-if="videoUrl" class="video-player" :src="videoUrl" controls autoplay></video>
+              <p v-else-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
+              <p v-else class="muted" role="status">{{ t('recordingsUi.videoLoading') }}</p>
+            </div>
+
+            <RecordingPlayer v-else :recording-id="playingRecording.id" />
+
+            <section class="recording-facts">
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnStart') }}</span>
+                <strong>{{ formatDateTime(playingRecording.startTime) }}</strong>
+              </div>
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnDuration') }}</span>
+                <strong>{{ formatDuration(playingRecording.durationMs) }}</strong>
+              </div>
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnFormat') }}</span>
+                <strong>{{ formatLabel(playingRecording) }}</strong>
+              </div>
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnSampleRate') }}</span>
+                <strong>{{ sampleRateLabel(playingRecording) }}</strong>
+              </div>
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnSize') }}</span>
+                <strong>{{ formatBytes(playingRecording.fileSize) }}</strong>
+              </div>
+              <div class="recording-fact">
+                <span class="recording-fact__label">{{ t('recordingsUi.columnDownloaded') }}</span>
+                <strong>{{ isDownloaded(playingRecording) ? t('recordingsUi.downloaded') : t('recordingsUi.notDownloaded') }}</strong>
+              </div>
+            </section>
+
+            <section class="recording-path">
+              <span class="field-label">{{ t('recordingsUi.columnDevice') }}</span>
+              <span>{{ devices.nameById(playingRecording.deviceId) }}</span>
+              <span class="muted">·</span>
+              <span>{{ channelLabel(playingRecording.channelId) }}</span>
+              <span class="muted">·</span>
+              <span>{{ recordingTypeLabel(playingRecording.recordingType) }}</span>
+            </section>
+          </div>
+        </template>
+
+        <div v-else class="recordings-preview__empty">
+          <div class="recordings-preview__empty-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24"><path d="M5 12h2m2-5v10m3-13v16m3-11v6m3-4v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <strong>{{ t('recordingsUi.playerTitle') }}</strong>
+          <span class="muted">{{ loading ? t('alarmsUi.loading') : t('recordingsUi.empty') }}</span>
+        </div>
+      </section>
     </div>
-
-    <div class="pager">
-      <span class="muted">
-        {{
-          t('alarmsUi.pagerRange', {
-            from: offset + 1,
-            to: offset + items.length,
-            total
-          })
-        }}
-      </span>
-      <div class="btn-row">
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="!canPrev"
-          @click="goToPage(offset - RECORDING_PAGE_SIZE)"
-        >
-          {{ t('alarmsUi.prevPage') }}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          :disabled="!canNext"
-          @click="goToPage(offset + RECORDING_PAGE_SIZE)"
-        >
-          {{ t('alarmsUi.nextPage') }}
-        </button>
-      </div>
-    </div>
-
-    <!--
-      The player is mounted inside the modal and therefore unmounts when the
-      modal closes, which is what revokes its object URL and frees the several MB
-      of audio it holds. `auto-load` starts playback as soon as it mounts.
-    -->
-    <AppModal v-model="playerOpen" :title="playerTitle" width="560px" @close="closePlayer">
-      <RecordingPlayer v-if="playingId" :recording-id="playingId" auto-load />
-    </AppModal>
-
-    <!--
-      * 视频录像（手动录像的 MP4）走自己的弹窗：主进程给一个本机回环地址，
-      * `<video>` 直接拉字节流（支持 Range 拖动）。拿不到地址时**明说**不能播放，
-      * 而不是给一个永远空着的播放器 —— 这是「0 Hz / WAV 的视频行」那条缺陷的收尾。
-    -->
-    <AppModal v-model="videoOpen" :title="t('recordingsUi.videoPlayerTitle')" width="760px" @close="closeVideo">
-      <p class="muted">{{ videoTitle }}</p>
-      <video v-if="videoUrl" class="video-player" :src="videoUrl" controls autoplay></video>
-      <p v-else-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
-      <p v-else class="muted" role="status">{{ t('recordingsUi.videoLoading') }}</p>
-    </AppModal>
   </div>
 </template>
 
 <style scoped>
+.recordings-page {
+  gap: var(--space-3);
+}
+
+.recordings-filters {
+  padding: 10px 12px;
+}
+
+.recordings-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 0.9fr) minmax(190px, 1.1fr) minmax(190px, 1.1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.recordings-filter-grid .field {
+  min-width: 0;
+  gap: 4px;
+}
+
+.recordings-filter-grid .field-label {
+  font-size: 11px;
+}
+
+.recordings-filter-grid .select,
+.recordings-filter-grid .input {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height-sm);
+}
+
+.recordings-filter-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
+.recordings-workspace {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.9fr) minmax(500px, 1.1fr);
+  gap: var(--space-3);
+  align-items: start;
+  min-height: 0;
+}
+
+.recordings-master,
+.recordings-preview {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.recordings-master__head,
+.recordings-preview__head {
+  min-height: 58px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.recordings-master__count,
+.recordings-preview__sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+}
+
+.recording-list {
+  max-height: min(68vh, 760px);
+  overflow-y: auto;
+}
+
+.recording-list__empty {
+  padding: 42px 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+}
+
+.recording-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 30px;
+  gap: 9px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms ease;
+}
+
+.recording-row:hover,
+.recording-row:focus-visible {
+  background: var(--color-bg-hover);
+}
+
+.recording-row--active {
+  background: var(--color-accent-soft);
+}
+
+.recording-row__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-accent, #ff6a1a) 10%, transparent);
+  color: var(--color-accent, #ff6a1a);
+}
+
+.recording-row__icon--video {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+}
+
+.recording-row__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recording-row__top,
+.recording-row__meta,
+.recording-row__bottom {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.recording-row__top {
+  justify-content: space-between;
+  font-size: 12.5px;
+}
+
+.recording-row__duration,
+.recording-row__meta,
+.recording-row__bottom {
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+}
+
+.recording-row__duration {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-row__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-row__bottom {
+  flex-wrap: wrap;
+}
+
+.recording-local-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.recording-local-state--local { color: var(--color-success); }
+.recording-local-state--remote { color: var(--color-text-secondary); }
+
+.recording-row__play {
+  opacity: 0.7;
+}
+
+.recording-row:hover .recording-row__play,
+.recording-row--active .recording-row__play {
+  opacity: 1;
+}
+
+.recordings-master__pager {
+  padding: 9px 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.recordings-preview {
+  position: sticky;
+  top: var(--space-3);
+  max-height: calc(100vh - 112px);
+  display: flex;
+  flex-direction: column;
+}
+
+.recordings-preview__actions {
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.recordings-preview__scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-preview-shell {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #000;
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+}
+
 .video-player {
   width: 100%;
-  max-height: 60vh;
+  max-height: 54vh;
+  display: block;
   background: #000;
-  border-radius: var(--radius-md);
 }
-.col-play {
-  width: 62px;
+
+.recording-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.recording-fact {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recording-fact__label {
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+}
+
+.recording-fact strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.recording-path {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.recordings-preview__empty {
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
   text-align: center;
+}
+
+.recordings-preview__empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--color-bg-subtle);
+  margin-bottom: 4px;
 }
 
 .pager {
@@ -504,8 +838,44 @@ watch(
   font-size: 12px;
 }
 
-.player-note {
-  margin-top: var(--space-3);
-  font-size: 11.5px;
+@media (max-width: 1280px) {
+  .recordings-filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .recordings-workspace {
+    grid-template-columns: minmax(360px, 0.82fr) minmax(460px, 1.18fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .recordings-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recordings-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .recordings-preview {
+    position: static;
+    max-height: none;
+  }
+
+  .recording-list {
+    max-height: 520px;
+  }
+}
+
+@media (max-width: 640px) {
+  .recordings-filter-grid,
+  .recording-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .recordings-preview__head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

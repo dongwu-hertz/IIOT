@@ -27,8 +27,10 @@ import type {
   AppSettings,
   CameraAlarmConditionDraft,
   CameraAlarmConditionIdStyle,
+  CameraAlarmRegionMetadataInput,
   CameraAlarmDiagnosisKeyStyle,
   CameraAlarmStrategyDraft,
+  CameraLeakagePatch,
   CameraLiveStartInput,
   CameraLiveState,
   CameraModePresetId,
@@ -42,6 +44,7 @@ import type {
   EventStatusChangeInput,
   Fa371MonitorState,
   Fa371RunModeValue,
+  Fa371ScanArea,
   Fa371StreamKind,
   Fa371StreamSubscription,
   Fa371WorkModeValue,
@@ -94,6 +97,7 @@ import type { RememberLoginInput } from '@shared/domain/auth'
 import { isSampleLabelDimension, isSampleLabelSource, type SampleLabelSource } from '@shared/domain/sample-library'
 import { getServices } from '../services/app-services'
 import { appLog, deviceLog } from '../services/logging/logger'
+import { setUiLocale } from '../services/ui-locale'
 import { normaliseBaseUrl } from '../services/device/device-api-client'
 import { listLocalAddresses } from '../services/ingest/local-addresses'
 
@@ -298,6 +302,13 @@ export function registerIpcHandlers(): void {
   // -------------------------------------------------------------------------
   // App
   // -------------------------------------------------------------------------
+
+  ipcMain.handle(IpcChannels.APP_SET_LOCALE, (_event, locale: unknown): Promise<DeviceResult<void>> =>
+    toResult(async () => {
+      // 界面语言的单向镜像（渲染层是权威）：主进程只用它渲染告警弹窗文案。
+      setUiLocale(typeof locale === 'string' ? locale : '')
+    })
+  )
 
   ipcMain.handle(IpcChannels.APP_GET_INFO, (): Promise<DeviceResult<AppInfo>> =>
     toResult(async () => {
@@ -2073,6 +2084,55 @@ export function registerIpcHandlers(): void {
     })
   )
 
+  ipcMain.handle(IpcChannels.CAMERA_CONTROL_READ_SCAN_AREA, (_event, deviceId: string) =>
+    toResult(async () => {
+      requireCameraDeviceId(deviceId)
+      return getServices().cameraControl.readScanArea(deviceId)
+    })
+  )
+
+  ipcMain.handle(
+    IpcChannels.CAMERA_CONTROL_WRITE_SCAN_AREA,
+    (_event, deviceId: string, area: Fa371ScanArea) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('controlCameras')
+        requireCameraDeviceId(deviceId)
+        const result = await getServices().cameraControl.writeScanArea(deviceId, area)
+        appLog().warn('Camera detection area written', {
+          deviceId,
+          applied: result.applied,
+          areaCount: result.after.areas.length,
+          by: actor()
+        })
+        return result
+      })
+  )
+
+  ipcMain.handle(IpcChannels.CAMERA_CONTROL_READ_REGION_METADATA, (_event, deviceId: string) =>
+    toResult(async () => {
+      requireCameraDeviceId(deviceId)
+      return getServices().cameraControl.readRegionMetadata(deviceId)
+    })
+  )
+
+  ipcMain.handle(
+    IpcChannels.CAMERA_CONTROL_WRITE_REGION_METADATA,
+    (_event, deviceId: string, regions: CameraAlarmRegionMetadataInput[]) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('controlCameras')
+        requireCameraDeviceId(deviceId)
+        const saved = getServices().cameraControl.writeRegionMetadata(deviceId, regions)
+        appLog().warn('Camera alarm region metadata written', {
+          deviceId,
+          areaCount: saved.length,
+          by: actor()
+        })
+        return saved
+      })
+  )
+
   ipcMain.handle(IpcChannels.CAMERA_CONTROL_TURN_ON_DETECT, (_event, deviceId: string) =>
     toResult(async () => {
       requireAdministrator()
@@ -2242,6 +2302,35 @@ export function registerIpcHandlers(): void {
           applied: result.applied,
           readBack: result.after.raw,
           before: result.before.raw,
+          by: actor()
+        })
+        return result
+      })
+  )
+
+  // -------------------------------------------------------------------------
+  // 泄漏估算参数（§5.1.10/§5.1.11，业主 2026-09-24：局放→泄漏切换要填计算模板）。
+  // 读公开；写要管理员（它直接参与泄漏量/成本的计算口径），并写审计日志。
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle(IpcChannels.CAMERA_CONTROL_READ_LEAKAGE, (_event, deviceId: string) =>
+    toResult(async () => {
+      requireCameraDeviceId(deviceId)
+      return getServices().cameraControl.readLeakage(deviceId)
+    })
+  )
+
+  ipcMain.handle(
+    IpcChannels.CAMERA_CONTROL_WRITE_LEAKAGE,
+    (_event, deviceId: string, patch: CameraLeakagePatch) =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('controlCameras')
+        requireCameraDeviceId(deviceId)
+        const result = await getServices().cameraControl.writeLeakage(deviceId, patch)
+        appLog().warn('Camera leakage estimation settings written', {
+          deviceId,
+          fields: Object.keys(patch),
           by: actor()
         })
         return result

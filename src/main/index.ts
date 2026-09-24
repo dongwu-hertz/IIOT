@@ -19,7 +19,7 @@ import { initServices } from './services/app-services'
 import { registerIpcHandlers } from './ipc/handlers'
 import { appLog } from './services/logging/logger'
 import { probeFfmpeg } from './services/media/ffmpeg'
-import { registerLinkagePopupScheme } from './services/linkage/linkage-actions'
+import { registerLinkagePopupScheme, LINKAGE_POPUP_SCHEME } from './services/linkage/linkage-actions'
 import { DEVICE_STATUS_CHANNEL, PushChannels } from '@shared/ipc/contract'
 import type { PendingAlarmSnapshot } from '@shared/ipc/contract'
 import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
@@ -120,6 +120,11 @@ function configureSession(): void {
       (!!process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL)) ||
       url.startsWith('data:') ||
       url.startsWith('blob:') ||
+      // 告警联动弹窗（2026-09-23「弹窗失败 ERR_BLOCKED_BY_CLIENT」修复）：
+      // 弹窗窗口共享 defaultSession，它的自定义协议此前不在白名单里，加载被这里
+      // 整个拦掉。这个协议的处理器只回主进程内存里的静态 HTML 字符串
+      // （`protocol.handle` 在 ElectronPopupSink 构造时注册），不放行任何文件或网络。
+      url.startsWith(`${LINKAGE_POPUP_SCHEME}://`) ||
       isCameraLiveStreamUrl(url) ||
       isOnlineTileImage
 
@@ -478,7 +483,7 @@ async function verifyStatusPushToRenderer(window: BrowserWindow): Promise<void> 
 }
 
 /**
- * Prove that all four languages actually reach the screen in a PACKAGED build.
+ * Prove that every language actually reaches the screen in a PACKAGED build.
  *
  * WHY THIS IS NOT COVERED BY THE UNIT TESTS
  * The catalogue tests prove the four files are complete and internally
@@ -555,7 +560,7 @@ async function verifyLocales(window: BrowserWindow): Promise<void> {
 
   const states: Record<string, { nav: string | null; version: string | null; footer: string | null; copyright: string | null; htmlLang: string }> = {}
   try {
-    for (const code of ['zh-CN', 'en', 'es', 'tr']) {
+    for (const code of ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru']) {
       await window.webContents.executeJavaScript(
         `window.localStorage.setItem('hertzinno.locale', ${JSON.stringify(code)}); true`
       )
@@ -647,6 +652,9 @@ if (!gotTheLock) {
       const services = await initServices()
       configureSession()
       registerIpcHandlers()
+
+      // 告警弹窗要贴在主窗口所在那块屏（多屏工位）；窗口还没建时弹窗回落到主屏。
+      services.linkage.setMainWindowProvider(() => mainWindow)
 
       // Forward device reachability changes to the renderer so the UI reflects
       // the monitor without polling.

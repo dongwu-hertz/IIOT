@@ -112,7 +112,8 @@ import type {
   E2PtzUpdateOutcome
 } from '../domain/e2-ptz'
 /*
- * E2 回调（SN-16 ealtime_value）的形状与解析都在 domain/e2-callback.ts。
+ * E2 回调（SN-16 
+ealtime_value）的形状与解析都在 domain/e2-callback.ts。
  * 契约层只把它带出去：渲染层订阅推送、设备面板显示状态，用的都是同一份类型。
  */
 import type {
@@ -194,6 +195,14 @@ export interface LoginOutcome {
 export const IpcChannels = {
   // App / settings
   APP_GET_INFO: 'app:get-info',
+  /**
+   * 渲染层上报当前界面语言（2026-09-23 告警弹窗文案修复）。
+   *
+   * 主进程需要它的唯一场景：联动弹窗的文案要在主进程渲染（弹窗窗口不加载应用
+   * shell，拿不到 vue-i18n）。语言的唯一权威仍是渲染层（`useLocale`），这里是
+   * 单向镜像；切换语言时会再报一次。
+   */
+  APP_SET_LOCALE: 'app:set-locale',
   /**
    * Operating-system UI languages, most preferred first.
    *
@@ -557,6 +566,10 @@ otify_url / is_send_realtime_value。
   CAMERA_CONTROL_READ_RUN_MODE: 'camera-control:read-run-mode',
   CAMERA_CONTROL_WRITE_RUN_MODE: 'camera-control:write-run-mode',
   CAMERA_CONTROL_READ_DETECT_STATUS: 'camera-control:read-detect-status',
+  CAMERA_CONTROL_READ_SCAN_AREA: 'camera-control:read-scan-area',
+  CAMERA_CONTROL_WRITE_SCAN_AREA: 'camera-control:write-scan-area',
+  CAMERA_CONTROL_READ_REGION_METADATA: 'camera-control:read-region-metadata',
+  CAMERA_CONTROL_WRITE_REGION_METADATA: 'camera-control:write-region-metadata',
   CAMERA_CONTROL_TURN_ON_DETECT: 'camera-control:turn-on-detect',
   CAMERA_CONTROL_TURN_OFF_DETECT: 'camera-control:turn-off-detect',
   CAMERA_CONTROL_READ_ENABLED_STRATEGY: 'camera-control:read-enabled-strategy',
@@ -594,6 +607,9 @@ otify_url / is_send_realtime_value。
    */
   CAMERA_CONTROL_READ_WORK_MODE: 'camera-control:read-work-mode',
   CAMERA_CONTROL_WRITE_WORK_MODE: 'camera-control:write-work-mode',
+  /** `GET/PUT /system/leakage`：泄漏估算参数（局放→泄漏切换时的计算模板，2026-09-24）。 */
+  CAMERA_CONTROL_READ_LEAKAGE: 'camera-control:read-leakage',
+  CAMERA_CONTROL_WRITE_LEAKAGE: 'camera-control:write-leakage',
 
   /**
    * 相机**固件升级**（设备自带 Web 界面用的那条 HTTP 路）。
@@ -767,6 +783,7 @@ export const PushChannels = {
    */
   FA371_FFT: 'fa371-stream:fft',
   FA371_VOICEPRINT: 'fa371-stream:voiceprint',
+  FA371_PRPD: 'fa371-stream:prpd',
   FA371_ENERGY: 'fa371-stream:energy',
   FA371_PCM: 'fa371-stream:pcm',
   /** 声温成像仪红外温度（手册 §5.3.6）。 */
@@ -810,7 +827,8 @@ export const PushChannels = {
    */
   CAMERA_UPGRADE_PROGRESS: 'camera-upgrade:upload-progress',
   /**
-   * SN-16 每秒 ealtime_value（设备 POST 到 
+   * SN-16 每秒 
+ealtime_value（设备 POST 到 
 otify_url）。
    *
    * 与其它遥测推送同一条理由：数据由主进程 HTTP 监听接收，渲染层只订阅；
@@ -1132,6 +1150,7 @@ export type {
   Fa371InfraredPreview,
   Fa371MonitorState,
   Fa371PcmPreview,
+  Fa371PrpdPreview,
   Fa371StreamKind,
   Fa371StreamPreview,
   Fa371StreamStatus,
@@ -1206,12 +1225,14 @@ export type {
   Fa371AlarmCondition,
   Fa371AlarmStrategy,
   Fa371DetectStatus,
+  Fa371LeakageConfig,
   Fa371RunModeConfig,
   Fa371RunModeValue,
+  Fa371ScanArea,
   Fa371WorkModeConfig,
   Fa371WorkModeValue
 } from '../domain/fa371'
-import type { Fa371AlarmCondition, Fa371AlarmStrategy } from '../domain/fa371'
+import type { Fa371AlarmCondition, Fa371AlarmStrategy, Fa371LeakageConfig, Fa371ScanArea } from '../domain/fa371'
 
 /**
  * 相机控制与维护的类型。
@@ -1223,13 +1244,18 @@ import type { Fa371AlarmCondition, Fa371AlarmStrategy } from '../domain/fa371'
 export type {
   CameraDetectAction,
   CameraDetectActionResult,
+  CameraAlarmRegionMetadata,
+  CameraAlarmRegionMetadataInput,
   CameraEnabledStrategyView,
+  CameraLeakagePatch,
+  CameraLeakageWriteResult,
   CameraMaintenanceFeature,
   CameraMaintenanceFeatureId,
   CameraMaintenanceInfo,
   CameraMaintenanceReasonKey,
   CameraMaintenanceSourceId,
   CameraRunModeWriteResult,
+  CameraScanAreaWriteResult,
   CameraStrategyEnableResult,
   CameraVersionInfo,
   CameraWorkModeRead,
@@ -1237,9 +1263,14 @@ export type {
 } from '../domain/camera-control'
 import type {
   CameraDetectActionResult,
+  CameraAlarmRegionMetadata,
+  CameraAlarmRegionMetadataInput,
   CameraEnabledStrategyView,
+  CameraLeakagePatch,
+  CameraLeakageWriteResult,
   CameraMaintenanceInfo,
   CameraRunModeWriteResult,
+  CameraScanAreaWriteResult,
   CameraStrategyEnableResult,
   CameraWorkModeRead,
   CameraWorkModeWriteResult
@@ -2013,6 +2044,8 @@ export interface SampleTrainingReport {
 export interface RendererApi {
   app: {
     getInfo(): Promise<DeviceResult<AppInfo>>
+    /** 上报当前界面语言（主进程的告警弹窗文案要用，见 `ui-locale.ts`）。 */
+    setLocale(locale: string): Promise<DeviceResult<void>>
     /** Opens a web/mail link in the system handler; only http(s)/mailto allowed. */
     openExternal(url: string): Promise<DeviceResult<void>>
     /**
@@ -2566,6 +2599,17 @@ export interface RendererApi {
     ): Promise<DeviceResult<CameraRunModeWriteResult>>
     /** `GET /system/detect_status`。 */
     readDetectStatus(deviceId: string): Promise<DeviceResult<Fa371DetectStatus>>
+    /** `GET /system/scan_area`：读取设备检测/告警区域。 */
+    readScanArea(deviceId: string): Promise<DeviceResult<Fa371ScanArea>>
+    /** `PUT /system/scan_area` + 重读：写入画面上的检测/告警区域。 */
+    writeScanArea(deviceId: string, area: Fa371ScanArea): Promise<DeviceResult<CameraScanAreaWriteResult>>
+    /** 本机 SQLite：读取该相机告警区域的稳定 id / 编号 / 名称元数据。 */
+    readRegionMetadata(deviceId: string): Promise<DeviceResult<CameraAlarmRegionMetadata[]>>
+    /** 本机 SQLite：设备区域写后读回成功后，保存与之对应的区域元数据快照。 */
+    writeRegionMetadata(
+      deviceId: string,
+      regions: CameraAlarmRegionMetadataInput[]
+    ): Promise<DeviceResult<CameraAlarmRegionMetadata[]>>
     /** `POST /turn_on_detect` + 重读状态。设备无可用策略时以带 `msg` 的失败返回。 */
     turnOnDetect(deviceId: string): Promise<DeviceResult<CameraDetectActionResult>>
     /** `POST /turn_off_detect` + 重读状态。 */
@@ -2657,6 +2701,18 @@ export interface RendererApi {
       deviceId: string,
       mode: Fa371WorkModeValue
     ): Promise<DeviceResult<CameraWorkModeWriteResult>>
+
+    /**
+     * `GET /system/leakage`（§5.1.10）：泄漏估算参数的当前值。
+     * 局放→泄漏切换时，计算模板拿它打底（2026-09-24）。
+     */
+    readLeakage(deviceId: string): Promise<DeviceResult<Fa371LeakageConfig>>
+    /**
+     * `PUT /system/leakage`（§5.1.11）部分字段更新 + **重读**：返回写前/写后的读数，
+     * `after` 是权威值（与 writeWorkMode 同一口径）。写要管理员（它直接参与泄漏量
+     * 与成本的计算口径）。
+     */
+    writeLeakage(deviceId: string, patch: CameraLeakagePatch): Promise<DeviceResult<CameraLeakageWriteResult>>
   }
 
   /**
@@ -2909,14 +2965,16 @@ export interface RendererEvents {
   onMonitorState: EventSubscription<MonitorState>
 
   // -- FA371 acoustic camera (manual §5.2) ----------------------------------
-  // All five carry DECIMATED previews; the raw frames stay in the main process.
+  // Camera realtime previews. PCM now also carries the complete Float32 frame for local DSP.
   // `/fftData` — 512 integer spectrum lines, five times per second.
   onFa371Fft: EventSubscription<import('../domain/fa371-stream').Fa371FftPreview>
   // `/voiceprintData` — the decimated magnitude matrix.
   onFa371Voiceprint: EventSubscription<import('../domain/fa371-stream').Fa371VoiceprintPreview>
+  // `/prpdData` — device PRPD payload mapped to phase/amplitude points.
+  onFa371Prpd: EventSubscription<import('../domain/fa371-stream').Fa371PrpdPreview>
   // `/energyData` — up to three target points (energy + pixel + two angles).
   onFa371Energy: EventSubscription<import('../domain/fa371-stream').Fa371EnergyPreview>
-  // `/pcmData` — a 512-point envelope plus peak/rms, never 48000 samples.
+  // `/pcmData` — preview envelope + peak/rms + complete raw Float32 frame.
   onFa371Pcm: EventSubscription<import('../domain/fa371-stream').Fa371PcmPreview>
   // /inrared_data — 4 float32 temperature fields (manual 5.3.6).
   onFa371Infrared: EventSubscription<import('../domain/fa371-stream').Fa371InfraredPreview>
