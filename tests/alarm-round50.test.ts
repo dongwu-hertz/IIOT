@@ -139,21 +139,47 @@ describe('① 声相机「告警信息」：统一标题格 + 五列 + 等高 + 
     }
   })
 
+  it('标题格上的字就是业主列的那五个（中文逐字对）', () => {
+    /*
+     * 这一条是**真窗口探针**抓出来的：业主原话写的是「时间， 告警等级， 告警类型，
+     * 声场强度， 主频」，而当时那一列读的是 `alarmsUi.columnSeverity`（中文是「等级」）——
+     * 表里印出来的是「等级」，与他要的字面差两个字。
+     * 探针第一次跑报的就是「告警表的标题格里没有「告警等级」」（见 KK.1）。
+     */
+    assert.equal(String(messageAt('zh-CN', 'alarmsUi.columnSeverity')), '告警等级')
+    assert.equal(String(messageAt('zh-CN', 'alarmsUi.columnTime')), '时间')
+    assert.equal(String(messageAt('zh-CN', 'alarmsUi.columnType')), '告警类型')
+    assert.equal(String(messageAt('zh-CN', 'cameraAlarmUi.columnIntensity')), '声场强度')
+    assert.equal(String(messageAt('zh-CN', 'cameraAlarmUi.columnMainFrequency')), '主频')
+    // 繁体那一本同一档口径（「告警等級」），免得两种中文在同一个表头上分叉。
+    assert.equal(String(messageAt('zh-TW', 'alarmsUi.columnSeverity')), '告警等級')
+  })
+
   it('每一行都渲染那五格，缺值写「—」而不是 0', () => {
     const body = slice(table, '<tbody>', '</tbody>', '表体')
     assert.match(body, /v-for="alarm in pagedCameraAlarms"/, '表体没有按页渲染')
     assert.match(body, /formatDateTime\(alarm\.at\)/, '时间那一格没有格式化')
     assert.match(body, /linkageSeverityOf\(alarm\)/, '等级那一格没有分档')
     assert.match(body, /cameraAlarmTypeText\(alarm\)/, '类型那一格没有走统一取证')
-    assert.match(body, /linkageIntensityText\(t, alarm\)/, '声场强度那一格没有走统一取值')
-    assert.match(body, /linkageFrequencyText\(t, alarm\)/, '主频那一格没有走统一取值')
+    /*
+     * 后两格走 **value** 版（只给"数值 + 单位"），不是 text 版：
+     * 表头已经写了列名，格子里再写一遍「声场强度 60 dB」就是表头与格子说同一件事两遍。
+     * 真窗口探针第一次量到的就是那个形状（见 docs/UI-VERIFY.md KK.1）。
+     */
+    assert.match(body, /linkageIntensityValue\(alarm\)/, '声场强度那一格没有走统一取值')
+    assert.match(body, /linkageFrequencyValue\(alarm\)/, '主频那一格没有走统一取值')
+    assert.equal(
+      /linkageIntensityText\(t, alarm\)/.test(body),
+      false,
+      '声场强度那一格又用回带字段名的 text 版（表头已经有列名了）'
+    )
     // 缺失值一律 `—`：设备没报这个量不等于它是 0（仓库里最反对的那种假话）。
     assert.equal(
-      /linkageIntensityText\(t, alarm\) \|\| '—'/.test(body),
+      /linkageIntensityValue\(alarm\) \|\| '—'/.test(body),
       true,
       '声场强度缺值没有写 —'
     )
-    assert.equal(/linkageFrequencyText\(t, alarm\) \|\| '—'/.test(body), true, '主频缺值没有写 —')
+    assert.equal(/linkageFrequencyValue\(alarm\) \|\| '—'/.test(body), true, '主频缺值没有写 —')
   })
 
   it('换页由「每页固定行数」算出来，页码在设备切换时归零', () => {
@@ -176,13 +202,29 @@ describe('① 声相机「告警信息」：统一标题格 + 五列 + 等高 + 
     assert.match(monitorView, /v-if="cameraAlarmPages > 1"/, '只有一页时也渲染换页控件')
   })
 
-  it('告警卡与左侧 PRPD 等高：网格是 stretch，不是 start', () => {
+  it('告警卡与左侧 PRPD 等高：网格是 stretch，**而且左边那一格真的会填满行高**', () => {
     const grid = block(monitorView, '.camera-realtime-grid {', '实时网格')
     assert.match(grid, /align-items: stretch/, '实时网格不是 stretch —— 告警卡不会与 PRPD 等高')
     assert.equal(/align-items: start/.test(grid), false, '实时网格仍是 start，等高那一半没生效')
     // 告警卡自己必须是可撑开的列容器，否则 stretch 到的高度里面填不满。
     const card = block(monitorView, '.camera-alarm-history-card {', '告警卡')
     assert.match(card, /display: flex/, '告警卡不是 flex 列 —— 撑开的高度里内容铺不满')
+    /*
+     * `stretch` 只保证**网格项**一样高。左边那一格是 `CameraAcousticPanel` 的根 `.acam`
+     * （一个 flex 列，里面才是那张 16:9 的 PRPD 卡）—— 实测（真窗口探针）：告警行把行高
+     * 撑到 436px 时，PRPD 那张卡仍然是内容高 387px，两者底部差 49px（正好一条分页栏）。
+     * 所以必须让那一格**吃掉剩下的高度**，这一条断言就是钉住这件事。
+     */
+    assert.match(
+      monitorView,
+      /\.camera-realtime-grid :deep\(\.acam__mode-panel\) \{\s*flex: 1 1 auto;/,
+      'PRPD 那张卡没有吃掉行高剩下的部分 —— 一有告警"等高"就不成立了'
+    )
+    assert.match(
+      monitorView,
+      /\.camera-realtime-grid :deep\(\.acam__mode-panel \.acam__stage--ratio\) \{\s*flex: 1 1 auto;/,
+      'PRPD 的 16:9 舞台没有吸收多出来的高度'
+    )
   })
 
   it('间距与设备管理一致：板子不再叠一层内边距，卡片间隙仍是 --space-4', () => {

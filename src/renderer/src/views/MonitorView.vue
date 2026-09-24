@@ -70,8 +70,8 @@ import { useCameraWallStore } from '@renderer/stores/liveWall'
 import {
   linkageDetectModeText,
   linkageDischargeText,
-  linkageFrequencyText,
-  linkageIntensityText,
+  linkageFrequencyValue,
+  linkageIntensityValue,
   linkageSeverityOf
 } from '@renderer/lib/linkageText'
 import type { PendingAlarmRecord } from '@shared/ipc/contract'
@@ -3094,8 +3094,8 @@ const sessionLabel = computed(() => {
                       </td>
                       <td class="camera-alarm-table__type">{{ cameraAlarmTypeText(alarm) }}</td>
                       <!-- `—` = 设备这一次没有报这个量；绝不写 0（那会被读成"测到了 0"）。 -->
-                      <td class="camera-alarm-table__num">{{ linkageIntensityText(t, alarm) || '—' }}</td>
-                      <td class="camera-alarm-table__num">{{ linkageFrequencyText(t, alarm) || '—' }}</td>
+                      <td class="camera-alarm-table__num">{{ linkageIntensityValue(alarm) || '—' }}</td>
+                      <td class="camera-alarm-table__num">{{ linkageFrequencyValue(alarm) || '—' }}</td>
                       <td class="camera-alarm-table__action">
                         <span v-if="!alarm.acknowledged" class="camera-alarm-table__unack" aria-hidden="true"></span>
                       </td>
@@ -5474,6 +5474,34 @@ const sessionLabel = computed(() => {
  * 与 `.devices-table` 同一套视觉口径（表头一条细底边、行间一条分隔线、数字列等宽字体），
  * 因为业主对"卡片间距与边距要和设备管理一致"的要求说的就是这个页面的表格观感。
  */
+/*
+ * 「告警卡与左侧 PRPD 等高」的另一半（业主 2026-09-26 第 1 条）。
+ *
+ * `.camera-realtime-grid` 的 `stretch` 只保证**网格项**一样高；而左边那一格是
+ * `CameraAcousticPanel` 的根 `.acam`（一个 flex 列，里面是那张 16:9 的 PRPD 卡）。
+ * 实测（`scripts/verify-round50.cjs` 的真窗口探针）：告警行多到把行高撑到 436px 时，
+ * PRPD 那张卡**仍然是内容高 387px** —— 于是"等高"只在没有告警时成立，
+ * 一有告警两者底部就差 49px（正好一条分页栏的高度）。
+ *
+ * 修法：让 PRPD 那张卡**吃掉这一格剩下的高度**（`.acam__mode-panel` 是第三张卡的类名，
+ * 只在这一支上出现）。`min-height: 0` + `flex: 1` 让它在行高由告警卡决定时也填满，
+ * 而里面的 16:9 舞台用 `flex: 1 1 auto` 吸收多出来的高度（图本身 `object-fit: contain`，
+ * 不会被拉变形 —— 多出来的那一段是黑边，不是拉伸）。
+ */
+.camera-realtime-grid :deep(.acam) {
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-realtime-grid :deep(.acam__mode-panel) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.camera-realtime-grid :deep(.acam__mode-panel .acam__stage--ratio) {
+  flex: 1 1 auto;
+  min-height: 240px;
+}
 .camera-alarm-table {
   width: 100%;
   border-collapse: collapse;

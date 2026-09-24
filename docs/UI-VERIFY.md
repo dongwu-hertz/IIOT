@@ -4150,39 +4150,58 @@ ffmpeg 段）在测试内部 `spawnSync` 起子进程，被本机拒绝（`EPERM
 
 **仍未验证的那一半**：
 
-- **没有在真窗口里走过一次**：这条通道（渲染层推 → 主进程闸门）只有单测与源码守卫，
-  没有"打开告警中心，让一台相机真报警，看那个置顶窗口确实不弹"的现场证据 ——
-  原因与本段其他几条相同（本机 Electron 起不到窗口）。
+- 真窗口里已经量过：`.modal / [role=dialog]` 计数 **0**（那个 640px 的小详情页确实没了）、
+  详情占满整幅宽、点行有详情、点击跳转带着那一条的身份（见 KK.6 的表）。
+- **"操作员看告警中心时那个置顶提示窗口不弹"这一条仍然是单测 + 源码守卫**：探针量的是
+  页面里没有小弹窗，而置顶窗口是**另一个 BrowserWindow**，不在页面 DOM 里 —— 要证明它没弹，
+  得在告警到达的那一刻数 `BrowserWindow.getAllWindows()`，本轮的时间用在了别处，没有量。
   下一台正常 Windows 桌面上验这一条的办法：进告警中心 → 触发一次相机告警 →
-  确认右上/右下角**没有**新的置顶窗口，同时那条告警出现在列表里、动作结果里写着
+  数一下窗口数没有增加，同时那条告警出现在列表里、动作结果里写着
   「操作员正在查看告警中心，不再弹出提示窗口」。
 - 所以第 5 条这一轮的状态是：**点行看详情 ✅ / 声音与提示的打扰 ✅ / 置顶弹窗窗口 ✅（代码与单测）/
   真窗口现场 ✗（本机做不到）**。
 
 ### KK.6 这一轮的验证数字
 
+**真窗口验证（2026-09-24，本轮补齐）**：`node scripts/verify-round50.cjs --with-data` → **`problems : 0`**。
+这是第 40 轮以来第一次在真窗口里量到这五条，量到的都是 DOM 事实：
+
+| 项 | 真窗口实测 |
+|---|---|
+| 标题格 | `["时间","告警等级","告警类型","声场强度","主频","查看详情"]` |
+| 行与列 | `rowCount: 8`（每页固定 8 行）；首行 `["2026/9/24 15:17","等级 4","悬浮放电","60 dB","12000 Hz",""]` |
+| 换页 | `第 1 / 2 页`、第一页「上一页」禁用；点「下一页」→ `第 2 / 2 页`、**行真的换了**（2 行） |
+| 等高 | 告警卡与 PRPD 面板 `top/bottom` 完全相同：`1262 / 1698`（两者都是 436px） |
+| 间距 | `.camera-board` padding = `0px`、`.page` gap = `20px`、`.app-content` padding = `2.4px` |
+| 角标口径 | 相机角标 `10` = 顶栏铃铛 `10`（同一批未确认告警），tooltip「未确认告警 10 条（与右上角告警图标同一口径）」 |
+| 跳转 | 点告警行 → `#/alarms?device=…&cameraAlarm=…`，**那一条的详情已打开**（标题「悬浮放电」） |
+| 详情全宽 | 工作区只有一列（`1179.21px`）；详情宽 1179px、位于列表下方（列表底 823 < 详情顶 835） |
+| 小的详情弹窗 | `.modal / [role=dialog]` 计数 **0** |
+| 证据 | 详情分区 `["告警视频","告警抓图","联动动作结果"]`（相机告警）；盒子告警那一支是 `["录音回放","备注"]` |
+
+> 做法：探针用**一次性 profile**（复制真库、清空用户表），登录出厂管理员后，
+> 经**真实的推送链路**注入 10 条相机告警（`devices.rotatePushSecret` 取秘钥 →
+> `settings.update` 打开相机推送 → 主进程 POST `/fa371-alarm/<秘钥>`），
+> 再逐项量上面那些事实。真库只被**复制**，没有被写过一个字节。
+
+**静态与单测**：
+
 | 项 | 结果 |
 |---|---|
+| `npm run build`（真构建，本轮起可用） | **exit 0**（三段全过：`out/main` 2.28 MB、preload、renderer） |
 | `tsc --noEmit -p tsconfig.node.json` | **0 错** |
 | `vue-tsc --noEmit -p tsconfig.web.json` | **0 错** |
 | `node scripts/i18n-progress.cjs` | 用户可见硬编码中文 **0**（exit 0） |
-| `node scripts/build-check.cjs` | 3 段 · **通过 3 / 失败 0** |
-| 新增守卫 `tests/alarm-round50.test.ts` | **25 / 25 通过**（五条要求逐条钉住，含主进程那半边） |
-| `alarm-center-round` | **11 / 11 通过**（其中 4 条陈旧守卫按新实现改写，见 KK.7） |
-| 全量（`npm run test:inproc`） | 112 个文件 · **2330 通过 / 89 失败 / 0 崩溃** |
+| `node scripts/build-check.cjs` | 模板编译 **78 个 `.vue` 全过**；renderer / preload 真构建 **✔**；main 那一段是本工具自己的已知差异（见 KK.9） |
+| 新增守卫 `tests/alarm-round50.test.ts` | **26 / 26 通过** |
+| `alarm-center-round` / `alarm-linkage` | **11 / 11**、**84 / 84** |
+| 全量（`npm run test:inproc`） | 112 个文件 · **2355 通过 / 73 红 / 0 崩溃** |
 
-**那 89 条红里有 85 条与本轮无关**：它们是第 47–49 轮"只改不测"留下的陈旧守卫
-（相机墙 / 趋势 / 地图 / 设置页签 / 声呐等，`i18n-progress` 那 8 条与 `recovery-code`、
-`rtsp-stream`、`camera-nvr` 的若干条是本机不许起子进程导致的，见 JJ.4）。
-逐文件清单在 `.test-build/tap/*.tap`（本轮的 4 条在 KK.7 里说明）。
-
-另外两条**在告警这一块附近、但不是本轮引入的**，一并记账免得被当成这五条没做完：
-
-- `tests/realtime-monitor.test.ts` 的「PRPD 空态不再说明接口未提供」：第 47 轮按要求把
-  PRPD 的等待说明文字从声学面板与实时模板里删掉了，这条断言还锚在 `realtimeUi.prpdUnavailable`
-  上（那个词条现在也成了孤儿键）。
-- `tests/alarm-severity-ui.test.ts` 的「徽标的类名是按等级拼出来的」：断的是徽标类名的拼法，
-  与这一轮改的列/跳转/布局无关。
+> 73 条红分布在 28 个文件里，最大几处是 `camera-ui-round`(9)、`ptz-map-round`(9)、
+> `map-status-round`(7)、`camera-autoplay`(5)、`fa371-ws`(5)——都是第 47–49 轮"只改不测"
+> 留下的陈旧守卫，与本轮无关。**注意**：上一轮记的是"89 条红"，本机拿到完整文件权限之后
+> 其中 16 条自己变绿了（它们是 `i18n-progress` / `recovery-code` / ffmpeg 那几条 —— 需要起
+> 子进程，之前被沙箱拒掉）。也就是说那 16 条从来不是产品缺陷，是环境。
 
 ### KK.7 顺手修掉的三处**陈旧守卫**（第 48 轮只改不测留下的）
 
@@ -4204,16 +4223,30 @@ ffmpeg 段）在测试内部 `spawnSync` 起子进程，被本机拒绝（`EPERM
 
 ### KK.8 仍未验证（不能按已验证验收）
 
-1. **一张截图都没出**：本机 Electron 的 Chromium 沙箱仍然拒绝把缓存目录授权给渲染进程
-   （`Failed to grant sandbox access to cache directory`），窗口起不来 —— 与第 40、41 轮同一条限制。
-   所以"统一标题格看起来对不对 / 换页手感 / 告警卡与 PRPD 是不是真的齐平"**只有源码与单测证据**。
-   下一台正常 Windows 桌面上跑 `node scripts/demo-shot.cjs --route /map`（相机那一屏）与
-   `--route /alarms` 复验。本轮**已经给探针留好了钩子**：`data-camera-alarm-count`（角标）、
-   `data-camera-alarm-pager` / `data-camera-alarm-page`（换页）、`data-alarm-detail`（全宽详情）、
-   `data-camera-alarm="<eventId>"`（行）。
-2. **`alarms` 与 `cameraAlarm` 两条深链只在单测里走过**：真实窗口里"点一行 → 告警中心打开这一条"
-   没有跑过（同一条沙箱限制）。
-3. **置顶弹窗窗口在告警中心仍然会弹**（KK.5 的"没做"那一半）。
-4. 测试全量里其余 **85 条红**与本轮无关（第 47–49 轮"只改不测"留下的陈旧守卫，
-   涉及相机墙 / 趋势 / 地图 / 设置页签 / 声呐等），这一轮只修了与告警中心直接相关的 4 条
-   （KK.7）。逐文件的红清单在 `.test-build/tap/*.tap`。
+1. **"置顶提示窗口在告警中心不弹"只有单测与源码守卫**（见 KK.5 最后一段）：探针能量页面里的
+   小弹窗（`.modal` 计数 0），但那个置顶窗口是**另一个 BrowserWindow**，不在页面 DOM 里。
+2. 测试全量里其余 **73 条红**与本轮无关（第 47–49 轮"只改不测"留下的陈旧守卫，
+   涉及相机墙 / 趋势 / 地图 / 设置页签 / 声呐等，最大几处见 KK.6 的注），
+   这一轮只修了与告警中心直接相关的 4 条（KK.7）。逐文件的红清单在 `.test-build/tap/*.tap`。
+   其中两条就在告警附近：`tests/realtime-monitor.test.ts` 的「PRPD 空态不再说明接口未提供」
+   （第 47 轮按要求删掉了那段说明文字，断言还锚在 `realtimeUi.prpdUnavailable` 上，
+   那个词条现在也成了孤儿键）与 `tests/alarm-severity-ui.test.ts` 的「徽标类名按等级拼」。
+3. `cameraStreamUi.detectTitle` 与 `linkage.enabledOn/Off` 在**六本目录里都没有** ——
+   界面上那两处显示裸 key。早前轮次留下，不属于这五条，没有顺手改。
+
+### KK.9 本轮的两处**工具性**发现（都不是产品缺陷，但值得记）
+
+1. **`npm run build` 抓到了一个所有静态闸门都放过去的真缺陷。**
+   我在改 `AlarmsView.vue` 的模板时多留了一个 `<template v-if>`，Vue 编译器报
+   `Element is missing end tag`。而当时能跑的每一道闸门都是绿的：`vue-tsc` 不看模板结构、
+   单测只做源码字符串断言、`build-check.cjs` 当时代替构建的那一步又不编译 `.vue` ——
+   模板是 `.vue` 的半条命，**一道闸门都没看它**。
+   现在 `build-check.cjs` 多了一段 `checkTemplates()`：用 `@vue/compiler-sfc` 逐个编译
+   `.vue` 的模板（进程内，约 1 秒，78 个文件），模板层面的错从此在构建之前就报出来。
+2. **`build-check.cjs` 的 `main` 段仍会报一条假失败**（本工具自己的已知差异，不是产品问题）：
+   `"randomUUID" is not exported by "__vite-browser-external"`。
+   原因是这个脚本为了绕开 esbuild 子进程**没有**用 `electron-vite`，而少掉的那一层里
+   包含它对主进程 `node:*` 内置模块的外部化；`npm run build` 同一份源码是 **exit 0**。
+   试过 `rollupOptions.external` 与 `ssr: true` 都没消掉，所以这里如实记着：
+   **看到 `main` 这一段红时，先跑一次 `npm run build` 再下结论。**
+   （本机现在 `npm run build` 可用，所以这条的优先级已经很低。）

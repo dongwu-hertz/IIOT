@@ -1064,7 +1064,6 @@ function openDevice(deviceId: string): void {
         </template>
 
         <template v-else-if="detail">
-        <template v-if="detail">
           <header class="alarm-detail__head">
             <div class="alarm-detail__title-group">
               <div class="alarm-detail__eyebrow">

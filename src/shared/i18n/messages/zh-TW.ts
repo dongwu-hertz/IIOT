@@ -636,7 +636,7 @@ export const zhTW: MessageSchema = {
     moreFilters: '更多篩選',
     hideMoreFilters: '收起更多篩選',
     moreFiltersActive: '更多篩選（{count} 項生效）',
-    columnSeverity: '等級',
+    columnSeverity: '告警等級',
     severitySectionTitle: '告警等級',
     noteSectionTitle: '備註',
     noteEmpty: '還沒有備註',

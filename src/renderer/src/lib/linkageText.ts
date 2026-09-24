@@ -72,6 +72,30 @@ export function linkageFrequencyText(t: Translate, record: PendingAlarmRecord): 
   return t('linkage.metricDf', { value: Math.round(value) })
 }
 
+/**
+ * 只要**数值 + 单位**，不带"声场强度"这几个字。
+ *
+ * 为什么单独一条：实时监测页那张告警表已经有了**表头**（列名就是「声场强度」「主频」），
+ * 格子里再写一遍列名就成了"声场强度 60 dB" —— 表头与格子说同一件事，两遍。
+ * 真窗口探针第一次量到的就是那个形状（`firstRowCells: ["…","…","…","声场强度 60 dB","主频 12000 Hz"]`）。
+ *
+ * 铃铛面板那种**没有表头**的一行说明仍然用 `linkageIntensityText()`（写明字段名才对），
+ * 两者共用同一份取值规则，只是要不要带标签不同。
+ */
+export function linkageIntensityValue(record: PendingAlarmRecord): string {
+  const value = record.metrics?.soundmapIntensity ?? record.metrics?.alarmDb
+  return value === undefined ? '' : `${shortNumber(value)} dB`
+}
+
+/** 主频的数值 + 单位（模式取舍与 `linkageFrequencyText()` 完全一致）。 */
+export function linkageFrequencyValue(record: PendingAlarmRecord): string {
+  const value = record.metrics?.alarmDf
+  if (value === undefined) return ''
+  const mode = record.detectMode
+  if (mode !== undefined && mode !== 1 && mode !== 3) return ''
+  return `${Math.round(value)} Hz`
+}
+
 /** 放电类型文案；未知取值不显示（宁缺毋假）。 */
 export function linkageDischargeText(t: Translate, record: PendingAlarmRecord): string {
   return record.dischargeTypeKey ? t(`linkage.dischargeType.${record.dischargeTypeKey}`) : ''

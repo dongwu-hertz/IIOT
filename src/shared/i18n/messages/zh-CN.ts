@@ -705,7 +705,7 @@ export const zhCN = {
     moreFilters: '更多筛选',
     hideMoreFilters: '收起更多筛选',
     moreFiltersActive: '更多筛选（{count} 项生效）',
-    columnSeverity: '等级',
+    columnSeverity: '告警等级',
     severitySectionTitle: '告警等级',
     noteSectionTitle: '备注',
     noteEmpty: '还没有备注',

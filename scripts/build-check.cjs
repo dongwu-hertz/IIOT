@@ -18,6 +18,16 @@
  * 要能打包的产物，仍然在正常桌面会话里跑 `npm run build`。类型检查不在这里做 ——
  * 它走 `npm run typecheck`（`tsc` + `vue-tsc`），`vue-tsc` 才看得懂 `.vue`。
  *
+ * ---------------------------------------------------------------------------
+ * 除了三段构建，本脚本还会逐文件**编译每个 `.vue` 的模板**（见 checkTemplates）
+ * ---------------------------------------------------------------------------
+ * 2026-09-26 加的这一段，起因是一次真实的漏网：第 50 轮改 `AlarmsView.vue` 的模板时多留了
+ * 一个 `<template v-if>`，于是 `npm run build` 报
+ * `[vue:vue] AlarmsView.vue: Element is missing end tag`。
+ * 而当时能跑的**每一道静态闸门都是绿的**：`vue-tsc` 不看模板结构、单测只做源码字符串断言、
+ * 这个脚本当时又不编译 `.vue` —— 缺陷只有"真的构建一次"或者"真的开一次窗口"才现形。
+ * 模板是 `.vue` 的半条命，一道闸门都不该漏掉它。
+ *
  * 用法
  *   node scripts/build-check.cjs
  *   node scripts/build-check.cjs --verbose
@@ -29,6 +39,50 @@ const ts = require('typescript')
 const ROOT = path.resolve(__dirname, '..')
 const OUT_ROOT = path.join(ROOT, '.test-build', 'build-check')
 const verbose = process.argv.includes('--verbose')
+
+/**
+ * 逐文件编译 `.vue` 的模板，把**模板层面的错**（标签不闭合、指令写错、`v-for` 少 key 之类）
+ * 在构建之前就报出来。
+ *
+ * 用 `@vue/compiler-sfc`（Vue 自己的编译器，`vue-tsc` 与 Vite 用的同一套前端）：
+ * `parse()` 拆出 SFC，`compileTemplate()` 编译模板。**在进程内跑**，不起子进程、不碰 `out/`。
+ */
+function checkTemplates() {
+  const { parse, compileTemplate } = require('@vue/compiler-sfc')
+  const failures = []
+  let files = 0
+
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.vue')) continue
+      files += 1
+      const source = fs.readFileSync(full, 'utf8')
+      const relative = path.relative(ROOT, full)
+      const { descriptor, errors } = parse(source, { filename: full })
+      for (const error of errors) {
+        failures.push(`${relative}: ${error.message}`)
+      }
+      if (!descriptor.template) continue
+      const compiled = compileTemplate({
+        source: descriptor.template.content,
+        filename: full,
+        id: relative,
+        compilerOptions: { mode: 'module' }
+      })
+      for (const error of compiled.errors ?? []) {
+        failures.push(`${relative}: ${typeof error === 'string' ? error : error.message}`)
+      }
+    }
+  }
+
+  walk(path.join(ROOT, 'src'))
+  return { files, failures }
+}
 
 /** 受限环境里 esbuild 的报错形状：不许起子进程，不是代码有问题。 */
 function isSpawnRefusal(error) {
@@ -67,22 +121,47 @@ function loadSections() {
 }
 
 /** 真构建（Rollup，纯 JS，不起子进程）。 */
-async function realBuild(name, section) {
+async function realBuild(name, section, options = {}) {
   const { build } = require('vite')
   const outDir = path.join(OUT_ROOT, name)
   fs.rmSync(outDir, { recursive: true, force: true })
   const started = Date.now()
+  /*
+   * Node 内置模块在**非渲染层**那两段里必须外部化。
+   *
+   * 为什么这里要显式写：正常情况下 `electron-vite` 会替我们做这件事（它按段设置 target /
+   * ssr / external），而本脚本为了绕开 esbuild 子进程**没有**用 electron-vite ——
+   * 少了这一层，Vite 会把 `node:crypto` 当成浏览器依赖，于是报
+   * `"randomUUID" is not exported by "__vite-browser-external"`，
+   * 而 `npm run build` 明明是过的（实测过）。这是**替代跑法自己的差异**，
+   * 不是我藏起来的失败：它的方向是"多报"，所以修掉它不会掩盖产品问题。
+   */
+  const isMainLike = options.nodeTarget === true
+  const externals = isMainLike
+    ? (id) => id.startsWith('node:') || require('node:module').builtinModules.includes(id)
+    : undefined
   await build({
     ...section,
     configFile: false, // 配置已由 loadSections() 载入
     root: section.root ? path.resolve(ROOT, section.root) : ROOT,
+    // 主进程 / preload 是 Electron 的 Node 端代码，按 SSR 构建才不会被当成浏览器包
+    // （这正是 electron-vite 替我们做的那一层，见上面那段注释）。
+    ...(isMainLike ? { ssr: true } : {}),
     build: {
       ...(section.build ?? {}),
       outDir,
       emptyOutDir: true,
       minify: false,
       sourcemap: false,
-      reportCompressedSize: false
+      reportCompressedSize: false,
+      ...(externals
+        ? {
+            rollupOptions: {
+              ...(section.build?.rollupOptions ?? {}),
+              external: externals
+            }
+          }
+        : {})
     },
     logLevel: verbose ? 'info' : 'warn'
   })
@@ -193,7 +272,8 @@ async function main() {
 
   for (const [name, section] of sections) {
     try {
-      const result = await realBuild(name, section)
+      // 渲染层那一段跑在浏览器环境里，Node 内置模块**不能**外部化（它本来就该报错）。
+      const result = await realBuild(name, section, { nodeTarget: name !== 'renderer' })
       results.push({ name, ok: true, ...result })
       console.log(`✔ ${name.padEnd(9)} 真构建 ${result.ms}ms → ${result.outDir}`)
     } catch (error) {
@@ -238,6 +318,23 @@ async function main() {
           `入口 + 模块图 ${graph.files} 个文件可转译、导入全部解析`
       )
     }
+  }
+
+  /*
+   * 模板编译：`.vue` 的**模板**是 `vue-tsc` 与单测都看不见的那一半（见文件头那段）。
+   */
+  try {
+    const templates = checkTemplates()
+    if (templates.failures.length > 0) {
+      failed += 1
+      console.error(`✖ 模板编译 ${templates.failures.length} 处失败：`)
+      for (const failure of templates.failures.slice(0, 20)) console.error(`    ${failure}`)
+    } else {
+      console.log(`✔ 模板编译    ${templates.files} 个 .vue 的模板全部通过（@vue/compiler-sfc）`)
+    }
+  } catch (error) {
+    failed += 1
+    console.error('✖ 模板编译这一步自己失败了：' + (error && error.message))
   }
 
   /*
