@@ -289,7 +289,7 @@ async function injectCameraAlarms(win, count = 10) {
     }
   }
   await sleep(2000)
-  return { ok: accepted > 0, accepted, port: enabled.port }
+  return { ok: accepted > 0, accepted, port: enabled.port, secret }
 }
 
 /** ② 相机控制面板上那个角标（未确认口径）。 */
@@ -378,6 +378,102 @@ async function probeJumpToCenter(win) {
   )
 }
 
+/** 数窗口：置顶提示窗口也是 BrowserWindow，所以在主进程里数得出来。 */
+function windowCount() {
+  return BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed()).length
+}
+
+/** 等窗口数涨到至少 `want`（最多等 `timeoutMs`）。返回最终窗口数。 */
+async function waitForWindowCount(want, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs
+  let seen = windowCount()
+  while (seen < want && Date.now() < deadline) {
+    await sleep(400)
+    seen = windowCount()
+  }
+  return seen
+}
+
+/** 从主进程推一条告警（不碰渲染层状态）。返回是否被接收。 */
+async function pushOneAlarm(secret, port, index) {
+  const payload = {
+    id: 910000 + index,
+    is_alarm: true,
+    alarm_level: 4,
+    alarm_strategy_id: 1,
+    detect_mode: 1,
+    discharge_type: 1,
+    // 每条事件身份都不同（id 与 start_time 一起进 identity），所以不会被去重掉。
+    start_time: Math.floor(Date.now() / 1000) - index * 60,
+    soundmap_intensity: 70 + index,
+    last_alarm_db: 71 + index,
+    last_alarm_df: 13000 + index * 11,
+    status: 1
+  }
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/fa371-alarm/${secret}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    return response.ok
+  } catch (error) {
+    problems.push('推送一条告警失败：' + (error && error.message))
+    return false
+  }
+}
+
+/**
+ * 第 5 条里"弹窗"两个字的**真窗口**验证（业主：告警中心里不该再被弹窗打扰）。
+ *
+ * 为什么必须单独量：那个置顶提示窗口是**另一个 BrowserWindow**，不在页面 DOM 里 ——
+ * "页面里没有小弹窗"（`.modal` 计数 0）证明不了它。
+ *
+ * 两支，缺一不可：
+ *   ① **正对照**：不在告警中心时推一条告警 → 窗口数**必须**增加。
+ *      没有这一支，"告警中心里没增加"可能只是因为弹窗功能压根没工作（假阴性）。
+ *   ② **被抑制**：进告警中心后推一条告警 → 窗口数**不许**增加，同时那一条要出现在列表里
+ *      （"不弹"不等于"告警丢了"）。
+ *
+ * 计数口径：取**基线快照**而不是"差值必须为 0 的绝对值" —— 提示窗口 15 秒自动消失，
+ * 期间它自己会关掉，所以只能比"有没有**新增**"，不能比总数不变。
+ */
+async function probePopupSuppression(win, secret, port, options) {
+  const before = await evalIn(
+    win,
+    '抑制前基线',
+    '(() => {' +
+      'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+      'return JSON.stringify({' +
+      '  rows: document.querySelectorAll(".alarm-row").length,' +
+      '  hash: location.hash,' +
+      '  hasAlarmDetail: !!document.querySelector("[data-alarm-detail]")' +
+      '});' +
+      '})()',
+    20_000
+  )
+
+  const windowsBefore = windowCount()
+  const sent = await pushOneAlarm(secret, port, options.index)
+  // 引擎是推送到达即刻处理的（同步路径），但给它一点余量再数。
+  await sleep(3500)
+  const windowsAfter = windowCount()
+  await sleep(1500)
+
+  const after = await evalIn(
+    win,
+    '抑制后读数',
+    '(async () => {' +
+      'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+      'await wait(500);' +
+      'return JSON.stringify({ rows: document.querySelectorAll(".alarm-row").length });' +
+      '})()',
+    20_000
+  )
+
+  return { before, after, windowsBefore, windowsAfter, sent, delta: windowsAfter - windowsBefore }
+}
+
 async function run(win) {
   fs.mkdirSync(OUT, { recursive: true })
 
@@ -390,6 +486,12 @@ async function run(win) {
   }
   await sleep(1500)
 
+  /*
+   * 注入结果在下面被两处用（告警表那一段、置顶弹窗那一段），所以在**函数作用域**里声明：
+   * 写成 `const` 在 `if` 块里会让后面那段拿不到（第一次跑就是 `injected is not defined`）。
+   */
+  let injected = { ok: false, reason: 'not-run' }
+
   // ---- ① 实时监测页：切到相机，注入告警，量告警信息表 ----
   await goto(win, '/monitor')
   const picked = await selectCamera(win)
@@ -397,7 +499,7 @@ async function run(win) {
   if (!picked || picked.ok !== true) {
     problems.push('切不到相机设备（告警信息表就无从量起）：' + JSON.stringify(picked))
   } else {
-    const injected = await injectCameraAlarms(win)
+    injected = await injectCameraAlarms(win)
     log('inject       : ' + JSON.stringify(injected))
     if (!injected || injected.ok !== true) {
       problems.push(
@@ -541,6 +643,49 @@ async function run(win) {
     if (!center.detailSections || center.detailSections.length === 0) {
       problems.push('详情面板里一个证据分区都没有：' + JSON.stringify(center.detailSections))
     }
+  }
+
+  // ---- ⑤c 置顶弹窗：正对照 + 告警中心里被抑制 ----
+  if (injected && injected.ok === true && typeof injected.secret === 'string') {
+    // ① 正对照：不在告警中心时推一条，窗口数必须增加（否则下面的"没增加"说明不了任何事）。
+    await goto(win, '/monitor')
+    await selectCamera(win)
+    await sleep(1200)
+    const control = await probePopupSuppression(win, injected.secret, injected.port, { index: 1 })
+    log('popup control: ' + JSON.stringify(control))
+    if (!control.sent) {
+      problems.push('正对照那一条告警没有被推送接口接收（这一条验不成）')
+    } else if (control.delta < 1) {
+      problems.push(
+        '正对照失败：不在告警中心时推了一条告警，却没有弹出提示窗口（窗口数 ' +
+          control.windowsBefore + ' → ' + control.windowsAfter +
+          '）—— 那样"告警中心里没弹"就证明不了抑制生效'
+      )
+    }
+
+    // ② 被抑制：进告警中心之后再推一条，窗口数不许增加，但那一条要进列表。
+    await goto(win, '/alarms')
+    await sleep(1500)
+    const suppressed = await probePopupSuppression(win, injected.secret, injected.port, { index: 2 })
+    log('popup suppress: ' + JSON.stringify(suppressed))
+    if (!suppressed.sent) {
+      problems.push('被抑制那一组没能把告警推进来')
+    } else {
+      if (suppressed.delta > 0) {
+        problems.push(
+          '告警中心里还是弹了置顶提示窗口（窗口数 ' + suppressed.windowsBefore + ' → ' +
+            suppressed.windowsAfter + '）—— 第 5 条那一半没生效'
+        )
+      }
+      if (suppressed.after.rows <= suppressed.before.rows) {
+        problems.push(
+          '被抑制的那条告警没有进列表（' + suppressed.before.rows + ' → ' + suppressed.after.rows +
+            '）—— "不弹"变成了"告警丢了"，那是更严重的问题'
+        )
+      }
+    }
+  } else {
+    problems.push('没有秘钥/端口，置顶弹窗那一条（正对照 + 抑制）没验到')
   }
 
   // 截图留档：相机那一页与告警中心各一张（人眼核对用）。
