@@ -37,6 +37,8 @@
     "verify:packaged": "node scripts/verify-packaged.cjs",
     "verify:fa371": "node scripts/verify-fa371.cjs",
     "verify:remember": "node scripts/remember-login-proof.cjs",
+    "verify:pages": "node scripts/verify-page.cjs --all --with-data",
+    "verify:round50": "node scripts/verify-round50.cjs --with-data",
     "pack:dir": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "dist:win:offline": "npm run build && electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs",

@@ -53,6 +53,7 @@ function parseArgs(argv) {
     texts: [],
     wait: '',
     select: '',
+    all: false,
     withData: false,
     keepOpen: false
   }
@@ -64,6 +65,7 @@ function parseArgs(argv) {
     else if (key === '--text') args.texts.push(argv[++i] ?? '')
     else if (key === '--wait') args.wait = argv[++i] ?? ''
     else if (key === '--select') args.select = argv[++i] ?? ''
+    else if (key === '--all') args.all = true
     else if (key === '--with-data') args.withData = true
     else if (key === '--keep-open') args.keepOpen = true
   }
@@ -71,8 +73,9 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2))
-if (args.route === '') {
-  console.error('[page] 需要 --route <path>（例如 --route /monitor）')
+const wantsAll = args.all === true
+if (args.route === '' && !wantsAll) {
+  console.error('[page] 需要 --route <path>（例如 --route /monitor），或者用 --all 跑全部路由')
   process.exit(2)
 }
 if (!fs.existsSync(mainEntry)) {
@@ -150,6 +153,7 @@ const child = spawnSync(electronBinary, [wrapper, '--user-data-dir=' + userDataD
       texts: args.texts,
       wait: args.wait,
       select: args.select,
+      all: wantsAll,
       keepOpen: args.keepOpen
     })
   },

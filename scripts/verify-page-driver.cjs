@@ -155,6 +155,74 @@ async function selectDevice(win, name) {
   )
 }
 
+/** 页面事实：每一条路由都能量到的那些东西（`--all` 用来一次看完全部页面）。 */
+async function pageFacts(win) {
+  return await evalIn(
+    win,
+    '页面事实',
+    '(() => {' +
+      'const text = (el) => (el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : "");' +
+      'const page = document.querySelector(".app-content .page");' +
+      'return JSON.stringify({' +
+      '  hash: location.hash,' +
+      '  empty: !!document.querySelector(".app-content .empty-state, .app-content [class*=empty]"),' +
+      '  login: !!document.querySelector(".app-content .login"),' +
+      '  cards: document.querySelectorAll(".app-content .card").length,' +
+      '  headings: [...document.querySelectorAll(".app-content h2, .app-content h3, .app-content h4")]' +
+      '    .map(text).filter((s) => s !== "").slice(0, 8),' +
+      '  tables: document.querySelectorAll(".app-content table").length,' +
+      '  alerts: [...document.querySelectorAll(".alert--danger")].map(text).slice(0, 2),' +
+      '  textLength: (page ? (page.textContent || "") : "").length,' +
+      '  firstTag: (function(){ const el = page;' +
+      '    return el && el.firstElementChild ? el.firstElementChild.className : null; })()' +
+      '});' +
+      '})()',
+    20_000
+  )
+}
+
+/** 所有路由（与 `router/index.ts` 一一对应；`/devices/:id` 需要设备 id，`--all` 里跳过）。 */
+const ALL_ROUTES = [
+  '/',
+  '/map',
+  '/devices',
+  '/monitor',
+  '/alarms',
+  '/events',
+  '/recordings',
+  '/samples',
+  '/trends',
+  '/settings',
+  '/protocol-lab'
+]
+
+async function runAll(win) {
+  const rows = []
+  for (const route of ALL_ROUTES) {
+    await goto(win, route)
+    await waitFor(win, '.app-content .page', 15_000)
+    await sleep(1500)
+    const facts = await pageFacts(win)
+    rows.push({ route, ...(facts ?? {}) })
+    log(
+      'route ' + route.padEnd(14) + ' cards=' + String(facts?.cards ?? '?').padEnd(3) +
+        ' tables=' + String(facts?.tables ?? '?').padEnd(3) +
+        ' text=' + String(facts?.textLength ?? '?').padEnd(6) +
+        ' first=' + String(facts?.firstTag ?? '?') +
+        (facts && Array.isArray(facts.alerts) && facts.alerts.length > 0 ? '  ⚠ 有错误横幅' : '')
+    )
+    if (facts && facts.login === true) failures.push(route + '：落在登录页而不是这一页（会话没建立）')
+    if (facts && facts.textLength === 0) failures.push(route + '：页面正文是空的（一个字符都没有）')
+    if (facts && Array.isArray(facts.alerts) && facts.alerts.length > 0) {
+      log('  ~ ' + route + ' 的错误横幅：' + JSON.stringify(facts.alerts))
+    }
+    if (facts && Array.isArray(facts.headings) && facts.headings.length > 0) {
+      log('  · ' + route + ' 的标题：' + JSON.stringify(facts.headings))
+    }
+  }
+  return rows
+}
+
 async function run(win) {
   const session = await signIn(win)
   log('sign in      : ' + JSON.stringify(session))
@@ -163,6 +231,11 @@ async function run(win) {
     return
   }
   await sleep(1200)
+
+  if (JOB.all === true) {
+    await runAll(win)
+    return
+  }
 
   await goto(win, JOB.route)
   const waitSelector = JOB.wait || '.app-content .page'
