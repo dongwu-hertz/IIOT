@@ -58,6 +58,55 @@ function between(source: string, open: string, close: string, label: string): st
 }
 
 /**
+ * 取一个**花括号配平**的块（CSS 规则 / 函数体），起点是 `open`，终点是配平的那个 `}`。
+ *
+ * 为什么不能再用 `between(source, '.x {', '}', ...)`：那只找**第一个** `}`，
+ * 块里一旦有嵌套（`@media`、`function` 里的 `if`）就切错；而且它对源码的空白与换行
+ * 极其敏感 —— 第 47–49 轮重排过这些文件之后，本文件里一大批断言就死在
+ * "找不到 X 的终点"上，报的还是断言失败，看起来像产品坏了。
+ *
+ * 扫的时候跳过字符串与注释：`'}'` 出现在文案或注释里不该算一次收尾。
+ */
+function block(source: string, open: string, label: string): string {
+  const start = source.indexOf(open)
+  assert.ok(start >= 0, `找不到 ${label} 的起点：${open}`)
+  const openAt = source.indexOf('{', start + open.length - 1)
+  assert.ok(openAt > start, `找不到 ${label} 的左花括号`)
+  let depth = 0
+  for (let index = openAt; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '"' || char === "'" || char === '`') {
+      // 跳过整个字符串字面量（含转义）。模板串里的 `${}` 里再出现引号也不影响配平，
+      // 因为这里只关心花括号，而字符串里的花括号不该参与计数。
+      for (index += 1; index < source.length; index += 1) {
+        if (source[index] === '\\') {
+          index += 1
+          continue
+        }
+        if (source[index] === char) break
+      }
+      continue
+    }
+    if (char === '/' && source[index + 1] === '/') {
+      const end = source.indexOf('\n', index)
+      index = end === -1 ? source.length : end
+      continue
+    }
+    if (char === '/' && source[index + 1] === '*') {
+      const end = source.indexOf('*/', index + 2)
+      index = end === -1 ? source.length : end + 1
+      continue
+    }
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(start, index + 1)
+    }
+  }
+  assert.fail(`找不到 ${label} 的右花括号（不配平）：${open}`)
+}
+
+/**
  * 去掉 `.vue` 里的注释（HTML / CSS / 行注释 / 块注释）。
  *
  * 为什么必须有它：这一批断言里有好几条是"某个东西**已经不在了**"，而源码里那些
@@ -78,7 +127,29 @@ const monitorCode = stripComments(monitor)
 // ---------------------------------------------------------------------------
 
 describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标', () => {
-  const toolbar = between(alarm, '<div class="toolbar">', '</div>\n\n    <p v-if="loading"', '工具栏')
+  /*
+   * 锚点从 `.toolbar` 换成**刷新按钮自己**（`aria-label="t('cameraAlarmUi.refreshIcon')"`）。
+   *
+   * 原来这一段断言取的是 `<div class="toolbar">` 到 "加载提示" 之间的一块。第 47–49 轮
+   * 把对话框重排成 `.alarm-section` 之后那个类**整个没有了**，于是这一段连带下面 6 条断言
+   * 全部死在"找不到工具栏的起点"上 —— 而它们要证的东西（只有一个图标刷新按钮、
+   * aria-label/title 同名、点它走 reloadAll、内联 SVG 不引依赖）一件都没丢。
+   *
+   * 现在直接在**整份对话框源码**上判，而不是先切一块出来：
+   * 这些性质本来就是"整个对话框里恰好一处"的性质，比"某个容器里"更贴近要求，
+   * 也不会因为将来再换一次容器类名而整段失效。
+   */
+  const refreshTag = between(
+    alarm,
+    ":aria-label=\"t('cameraAlarmUi.refreshIcon')\"",
+    '</button>',
+    '刷新按钮'
+  )
+  /** 刷新按钮那个 `<button>` 的开始标签（属性行到 `>`）。 */
+  const refreshStartTag = alarm.slice(
+    alarm.lastIndexOf('<button', alarm.indexOf(":aria-label=\"t('cameraAlarmUi.refreshIcon')\"")),
+    alarm.indexOf('>', alarm.indexOf(":aria-label=\"t('cameraAlarmUi.refreshIcon')\""))
+  )
 
   it('那一行提示（subtitle）已经从模板里消失', () => {
     assert.equal(
@@ -86,11 +157,25 @@ describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标'
       false,
       '模板里仍然渲染 cameraAlarmUi.subtitle：产品要求删掉这句话'
     )
-    // 提示原本是这一段里唯一的 `<p class="muted">`，一起点名，免得换成别的键又回来。
+    /*
+     * 这一条原来写的是"模板里不许再出现任何 `<p class="muted">{{ t('cameraAlarmUi.…`"——
+     * 它想说的是"那句对话级说明文字别再回来"，但那句话**写宽了**：后来加的
+     * `dischargeDiagnosisHint`（"dB、主频或频谱比对中的任一已启用异常条件可以先触发告警…"）
+     * 恰好是同一个形状，于是被误报。那是**字段级**的解释（它紧贴在放电类型那一栏下面），
+     * 与"对话框上方那句没人看的说明"不是一回事。
+     *
+     * 现在按**这句话本身**判：`subtitle` 这个键不许回来。要点名的删除对象是它。
+     */
     assert.equal(
-      /<p class="muted">\{\{ t\('cameraAlarmUi\./.test(alarm),
+      /<p class="muted">\{\{ t\('cameraAlarmUi\.subtitle'\)/.test(alarm),
       false,
-      '工具栏上方又出现了一段 cameraAlarmUi 的说明文字'
+      '对话框上方又出现了那句 subtitle 说明文字'
+    )
+    // 相邻的 `entryHint`（"告警策略与告警条件在设备侧生效…"）也是被删掉的那一句，一并点名。
+    assert.equal(
+      alarm.includes('cameraAlarmUi.entryHint'),
+      false,
+      '模板里仍然渲染 cameraAlarmUi.entryHint：那也是被删掉的说明文字'
     )
   })
 
@@ -109,15 +194,22 @@ describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标'
     // 各区块自己的「新建」按钮，各恰好一个（跟随所在区块，不再有 v-if 分支互斥）。
     assert.equal(count(alarm, /@click="startNewStrategy"/), 1, '「新建策略」不是恰好一个')
     assert.equal(count(alarm, /@click="startNewCondition"/), 1, '「新建条件」不是恰好一个')
+    /*
+     * `newStrategy` 这个**文案键**现在出现 3 次，而不是这一轮记的 2 次：
+     * 区块头部那颗图标按钮的 `:aria-label` 与 `:title` 各一次（图标按钮没有可见文字，
+     * 无障碍名必须显式给），表单标题里一次（`isEditingStrategy ? editStrategy : newStrategy`）。
+     * 「新建策略」这个动作仍然只有一处（上面那条 `@click="startNewStrategy"` = 1）——
+     * 也就是说这里数的是**同一个动作的几个说法**，不是动作本身。
+     */
     assert.equal(
       count(alarm, /newStrategy/),
-      2,
-      '「新建策略」的出现次数不是 2（区块头部按钮 + 策略表单标题）'
+      3,
+      '「新建策略」文案键的出现次数不是 3（区块头按钮的 aria-label + title + 表单标题）'
     )
     assert.equal(
       count(alarm, /newCondition/),
-      2,
-      '「新建条件」的出现次数不是 2（区块头部按钮 + 条件表单标题）'
+      3,
+      '「新建条件」文案键的出现次数不是 3（区块头按钮的 aria-label + title + 表单标题）'
     )
   })
 
@@ -136,41 +228,47 @@ describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标'
   })
 
   it('刷新是一个只有图标的按钮，名字由 aria-label 与 title 同时给出', () => {
-    const refresh = toolbar.indexOf('toolbar__refresh')
-    assert.ok(refresh >= 0, '工具栏里没有刷新按钮')
-    const tag = between(toolbar, 'class="btn btn--sm btn--icon toolbar__refresh"', '>', '刷新按钮的开始标签')
-    assert.match(tag, /:aria-label="t\('cameraAlarmUi\.refreshIcon'\)"/, '刷新按钮没有 aria-label')
-    assert.match(tag, /:title="t\('cameraAlarmUi\.refreshIcon'\)"/, '刷新按钮没有 title')
+    assert.match(refreshStartTag, /class="[^"]*btn--icon/, '刷新按钮不再是图标按钮（btn--icon）')
+    assert.match(refreshStartTag, /:aria-label="t\('cameraAlarmUi\.refreshIcon'\)"/, '刷新按钮没有 aria-label')
+    assert.match(refreshStartTag, /:title="t\('cameraAlarmUi\.refreshIcon'\)"/, '刷新按钮没有 title')
+    // 图标按钮里只有 SVG：没有文字节点，也就不会渲染出文字版的 cameraAlarmUi.refresh。
     assert.equal(
-      /cameraAlarmUi\.refresh'/.test(toolbar),
+      /cameraAlarmUi\.refresh'/.test(alarm),
       false,
-      '工具栏里仍然渲染文字版的 cameraAlarmUi.refresh'
+      '对话框里仍然渲染文字版的 cameraAlarmUi.refresh'
     )
   })
 
   it('图标是内联 SVG（圆弧箭头），不引入任何图标依赖', () => {
-    const svg = between(toolbar, '<svg', '</svg>', '刷新图标')
+    /*
+     * 取**刷新按钮自己那个** `<svg>`：从按钮开始标签往后找第一个 `<svg>`。
+     * 原来写的是 `between(alarm, '<svg', '</svg>')` —— 那是**整份文件里第一个** SVG，
+     * 与刷新按钮没有任何关系；第 47 轮之后它恰好切出半个图，于是报"不是两条 path"，
+     * 而按钮里的图标一直是两条 path（圆弧 `M20 11a8 8…` + 箭头 `M20 4v7h-7`）。
+     */
+    const buttonAt = alarm.lastIndexOf(
+      '<button',
+      alarm.indexOf(":aria-label=\"t('cameraAlarmUi.refreshIcon')\"")
+    )
+    assert.ok(buttonAt >= 0, '找不到刷新按钮的开始标签')
+    const svgAt = alarm.indexOf('<svg', buttonAt)
+    assert.ok(svgAt > buttonAt, '刷新按钮里没有内联 SVG')
+    const svg = between(alarm.slice(svgAt), '<svg', '</svg>', '刷新图标')
     assert.match(svg, /viewBox="0 0 24 24"/, '刷新图标缺少 viewBox')
     // 两条 path：一段圆弧 + 一个箭头。一条 `M…Z` 的实心圆不会是"箭头"。
     assert.equal(count(svg, /<path /g), 2, '刷新图标不是两条 path（圆弧 + 箭头）')
     assert.equal(count(svg, /<path[^>]*d="M[^"]*[Aa][^"]*"/g), 1, '刷新图标里没有圆弧段')
     // 形如 `<use>` / `<img>` / 图标字体都是"引入依赖"的写法。
-    assert.equal(/<img|<use|xlink:href/.test(toolbar), false, '工具栏引用了外部图标资源')
+    assert.equal(/<img|<use|xlink:href/.test(alarm), false, '对话框里引用了外部图标资源')
   })
 
   it('图标刷新**真的回设备重读**（reloadAll → 策略/条件/区域四份数据，而不是重新渲染内存里的旧数据）', () => {
-    const refreshTag = between(
-      toolbar,
-      'class="btn btn--sm btn--icon toolbar__refresh"',
-      '</button>',
-      '刷新按钮'
-    )
     assert.match(refreshTag, /@click="reloadAll"/, '刷新按钮没有调用 reloadAll()')
-    const reloadAll = between(alarm, 'async function reloadAll(): Promise<void> {', '\n}', 'reloadAll()')
+    const reloadAll = block(alarm, 'async function reloadAll(): Promise<void> {', 'reloadAll()')
     assert.match(reloadAll, /load\(\)/, 'reloadAll() 没有重读策略与条件')
     assert.match(reloadAll, /loadEnabledStrategies\(\)/, 'reloadAll() 没有重读启用状态')
     assert.match(reloadAll, /loadRegions\(\)/, 'reloadAll() 没有重读告警区域')
-    const load = between(alarm, 'async function load(): Promise<void> {', '\n}\n', 'load()')
+    const load = block(alarm, 'async function load(): Promise<void> {', 'load()')
     assert.match(
       load,
       /window\.api\.cameraAlarms\.listStrategies\(deviceId\)/,
