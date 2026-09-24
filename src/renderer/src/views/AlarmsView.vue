@@ -48,6 +48,8 @@ import {
   linkageFrequencyText,
   linkageIntensityText,
   linkageMetricsText,
+  linkageNoRecordingKey,
+  linkageRecordingReason,
   linkageSeverityOf
 } from '@renderer/lib/linkageText'
 import type { PendingAlarmRecord } from '@shared/ipc/contract'
@@ -139,6 +141,14 @@ const cameraDetail = ref<PendingAlarmRecord | null>(null)
 /** 详情弹窗里的抓帧图与联动录像地址：打开才取，关掉即清。 */
 const cameraDetailImageUrl = ref('')
 const cameraDetailVideoUrl = ref('')
+/**
+ * `idle` = 还没查；`ok` = 拿到了；`missing` = **查过但没拿到**（设备没抓帧 / 文件不在）。
+ *
+ * ⚠ `idle` 必须**只**表示"正在查"，不能当成终态用：业主 2026-09-24 报的
+ * 「告警抓图 —— 正在读取抓帧图片…」就是因为下面那个 watch 在
+ * `frameRelativePath` 为空时直接 `return`，把状态留在 `idle`，
+ * 而模板最后那个 `v-else` 把它渲染成了"正在读取…" —— 一个**永远转不完**的加载态。
+ */
 const cameraDetailImageState = ref<'idle' | 'ok' | 'missing'>('idle')
 
 watch(cameraDetail, async (alarm) => {
@@ -157,12 +167,27 @@ watch(cameraDetail, async (alarm) => {
     } else {
       cameraDetailImageState.value = 'missing'
     }
+  } else {
+    /*
+     * 这条告警**压根没有抓帧路径**（联动的抓帧那一步没跑，或没成功）。
+     * 直接落成终态 —— 不要再回到"正在读取"上去。
+     */
+    cameraDetailImageState.value = 'missing'
   }
   if (alarm.recordingId) {
     const result = await callApi(() => window.api.cameraNvr.videoUrl(alarm.recordingId as string))
     const url = result.success ? (unwrap(result)?.url ?? '') : ''
     if (url !== '') cameraDetailVideoUrl.value = url
   }
+})
+
+/** 「这条告警为什么没有录像」的那一句（看这条自己的动作结果，不猜）。 */
+const cameraNoRecordingText = computed(() => {
+  const alarm = cameraDetail.value
+  if (!alarm) return ''
+  const sentence = t(linkageNoRecordingKey(alarm))
+  const reason = linkageRecordingReason(alarm)
+  return reason === '' ? sentence : `${sentence}（${reason}）`
 })
 
 /** 详情弹窗里就地确认（与铃铛面板同一条 IPC）。 */
@@ -1021,7 +1046,7 @@ function openDevice(deviceId: string): void {
                 <h4 class="detail-section__title">{{ t('alarmsUi.videoTitle') }}</h4>
               </div>
               <video v-if="cameraDetailVideoUrl" :src="cameraDetailVideoUrl" controls class="alarm-detail__video"></video>
-              <p v-else class="muted">{{ t('alarmsUi.cameraEvidenceNoVideo') }}</p>
+              <p v-else class="muted" data-camera-evidence-no-video>{{ cameraNoRecordingText }}</p>
             </section>
 
             <!-- 证据 ②：抓帧图片（文件）。 -->
@@ -1030,8 +1055,13 @@ function openDevice(deviceId: string): void {
                 <h4 class="detail-section__title">{{ t('alarmsUi.snapshotsTitle') }}</h4>
               </div>
               <img v-if="cameraDetailImageUrl" :src="cameraDetailImageUrl" class="alarm-detail__image" alt="" />
-              <p v-else-if="cameraDetailImageState === 'missing'" class="muted">{{ t('alarmsUi.cameraEvidenceMissing') }}</p>
-              <p v-else class="muted">{{ t('alarmsUi.cameraEvidenceLoading') }}</p>
+              <!--
+                三种终态各说各的话（`idle` = 正在查，只有这一种才显示"正在读取"）。
+                业主 2026-09-24 报的「告警抓图 / 正在读取抓帧图片…」就是这里：
+                没有抓帧路径时状态被留在 idle，于是一直显示"正在读取"。
+              -->
+              <p v-else-if="cameraDetailImageState === 'missing'" class="muted" data-camera-evidence-no-image>{{ t('alarmsUi.cameraEvidenceMissing') }}</p>
+              <p v-else class="muted" data-camera-evidence-loading>{{ t('alarmsUi.cameraEvidenceLoading') }}</p>
             </section>
 
             <!-- 证据 ③：联动动作结果（录像/弹窗/提示/邮件各一行，成功失败如实）。 -->

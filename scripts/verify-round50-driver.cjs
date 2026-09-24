@@ -665,6 +665,47 @@ async function run(win) {
     if (center.detailSections && center.detailSections.length === 0) {
       problems.push('详情面板里一个证据分区都没有：' + JSON.stringify(center.detailSections))
     }
+    /*
+     * 业主 2026-09-24 报的现象：相机告警的视频与抓图两栏永远停在
+     * 「这条告警没有本机联动录像」/「正在读取抓帧图片…」。
+     *
+     * 后半句是**卡住的加载态**（没有抓帧路径时状态被留在 idle）。这里在真窗口里钉住：
+     * 打开一条**没有抓帧、没有录像**的相机告警之后，那两栏必须是**终态文案**，
+     * 而且抓图那一栏**不许**再显示"正在读取"。
+     */
+    const evidence = await evalIn(
+      win,
+      '相机告警证据两栏',
+      '(async () => {' +
+        'const wait = (ms) => new Promise((r) => setTimeout(r, ms));' +
+        'await wait(800);' +
+        'const text = (sel) => { const el = document.querySelector(sel);' +
+        '  return el ? (el.textContent || "").replace(/\\s+/g, " ").trim() : null; };' +
+        'return JSON.stringify({' +
+        '  noVideo: text("[data-camera-evidence-no-video]"),' +
+        '  noImage: text("[data-camera-evidence-no-image]"),' +
+        '  loading: text("[data-camera-evidence-loading]"),' +
+        '  hasVideoTag: !!document.querySelector(".alarm-detail__video"),' +
+        '  hasImageTag: !!document.querySelector(".alarm-detail__image")' +
+        '});' +
+        '})()',
+      20_000
+    )
+    log('evidence     : ' + JSON.stringify(evidence))
+    if (evidence) {
+      if (evidence.loading !== null) {
+        problems.push(
+          '抓图那一栏仍然显示"正在读取抓帧图片…" —— 那是一个**永远转不完的加载态**：' +
+            JSON.stringify(evidence.loading)
+        )
+      }
+      if (evidence.hasVideoTag !== true && !evidence.noVideo) {
+        problems.push('没有录像时视频那一栏没有给出任何说明')
+      }
+      if (evidence.hasImageTag !== true && !evidence.noImage) {
+        problems.push('没有抓帧时抓图那一栏没有给出任何说明')
+      }
+    }
   }
 
   // ---- ⑤c 置顶弹窗：正对照 + 告警中心里被抑制 ----

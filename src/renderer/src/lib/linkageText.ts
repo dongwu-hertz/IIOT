@@ -124,3 +124,31 @@ export function linkageSourceLabelKey(record: Pick<PendingAlarmRecord, 'source'>
   if (record.source === 'push') return 'linkage.sourcePush'
   return 'linkage.sourceWebsocket'
 }
+
+/**
+ * 「这条告警为什么没有录像」——**说得出原因**的那一句（业主 2026-09-24 报的现象：
+ * 告警中心的告警视频那一栏只有一句"这条告警没有本机联动录像"，看不出为什么）。
+ *
+ * 判据全部来自**这条告警自己的动作结果**（`actions`），不猜也不去读设置：
+ *   · 有录像动作但 failed / skipped → 区分失败与跳过（原文原因由
+ *     `linkageRecordingReason()` 另给，拼在后面）；
+ *   · 根本没有录像动作 → 这一次联动没有跑录像那一路（动作没开，或这条记录是
+ *     在动作结果补上之前就被确认/落库了）。这两种我们从这一条记录里分不出来，
+ *     所以**不编**一个具体原因，只如实说"这条没有留下录像动作的结果"。
+ *
+ * 返回的是**目录键**，不是渲染好的句子（与这个文件里其它函数同一口径）。
+ */
+export function linkageNoRecordingKey(record: PendingAlarmRecord): string {
+  const action = record.actions.find((entry) => entry.action === 'record')
+  if (!action) return 'linkage.noRecordingNoAction'
+  return action.status === 'failed' ? 'linkage.noRecordingFailed' : 'linkage.noRecordingSkipped'
+}
+
+/**
+ * 那一次录像动作的**原文原因**（失败/跳过时才有）。调用方把它拼在上一句之后 ——
+ * 主进程写进来的 `reason` 是诊断文本（"设备不可达"这类），比我们再翻译一遍更可信。
+ */
+export function linkageRecordingReason(record: PendingAlarmRecord): string {
+  const action = record.actions.find((entry) => entry.action === 'record')
+  return action && action.status !== 'success' && action.reason ? action.reason : ''
+}

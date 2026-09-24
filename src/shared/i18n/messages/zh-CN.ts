@@ -628,7 +628,6 @@ export const zhCN = {
     cameraEvidenceMissing: '这条告警没有取到抓帧图片。',
     /** 全宽详情里的证据区标题与空态（业主 2026-09-26 第 4 条把详情改成整幅宽）。 */
     cameraEvidenceLoading: '正在读取抓帧图片…',
-    cameraEvidenceNoVideo: '这条告警没有本机联动录像。',
     cameraActionsTitle: '联动动作结果',
     /** 深链 `?cameraAlarm=` 指向一条已经不在待处理列表里的告警时的如实说明。 */
     cameraAlarmNotFound: '这条相机告警已经不在待处理列表里（可能已被确认并因超出保留上限被丢弃）。',
@@ -3234,6 +3233,9 @@ export const zhCN = {
     cameraPushPort: '推送接收端口',
     minAlarmLevel: '最低告警等级',
     sourcePoll: '轮询检测日志',
+    noRecordingNoAction: '这条告警没有留下录像动作的结果（这一条可能是在录像那一路跑完之前就被确认了）。',
+    noRecordingFailed: '本机联动录像失败了',
+    noRecordingSkipped: '本机联动录像这一次被跳过（冷却中，或录像动作没启用）',
     sourceWebsocket: '检测反馈流',
     sourcePush: '相机推送',
     sourceRunning: '运行中',
@@ -3500,6 +3502,8 @@ export const zhCN = {
     drawerResize: '拖动调整抽屉宽度',
 
     evidenceVisualTitle: '画面与图片',
+    evidenceExpand: '放大查看',
+    evidenceExpandTitle: '证据 · 放大查看',
     evidenceNone: '这条事件没有图片证据。',
     evidenceNotCaptured: '设备上没有抓到图（同步时可能没有打开抓图下载）。',
     evidenceFilesGone: '库里记着这份图，但本机磁盘上已经没有了。',

@@ -80,6 +80,8 @@ import type { IncidentThreshold, IncidentView } from '@shared/domain/incident'
 import type { E2AlarmSnapshotView } from '@shared/ipc/contract'
 import AlertQueue from '@renderer/components/event-center/AlertQueue.vue'
 import EventDetailDrawer from '@renderer/components/event-center/EventDetailDrawer.vue'
+import AppModal from '@renderer/components/AppModal.vue'
+import { Maximize2 } from 'lucide-vue-next'
 import IncidentCreateDialog from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import type { IncidentCandidate } from '@renderer/components/event-center/IncidentCreateDialog.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
@@ -395,6 +397,18 @@ function readInitialDrawerWidth(): number {
 
 const drawerWidth = ref(readInitialDrawerWidth())
 const drawerTab = ref<EventDetailTab>('overview')
+
+/**
+ * 「放大查看」：Evidence 那一段搬进一个 94vw 的弹窗（业主 2026-09-24）。
+ *
+ * 做法是 `<Teleport>`：**同一份 DOM**在抽屉与弹窗之间搬家，不是复制一份模板。
+ * 所以不存在"弹窗里少了几项"的可能，也不必把 `evidenceImage` / `videoUrl` /
+ * `downloadState` 那些状态从页面里挪出去（它们本来就在页面里，两个宿主共用）。
+ */
+const evidenceExpanded = ref(false)
+
+/** 弹窗里的宿主节点（Teleport 的目标；由下面的 `<div ref>` 提供）。 */
+const evidenceModalHost = ref<HTMLElement | null>(null)
 
 function setDrawerWidth(next: number): void {
   drawerWidth.value = clampDrawerWidth(next)
@@ -1478,7 +1492,27 @@ async function goToPage(offset: number): Promise<void> {
           Evidence（规格 §12.1 的 Acoustic 那一列）：视觉 / 音频 / 频谱与测量 / 结果文件。
           DTS / DAS / DGA 三个渲染器**不做**（我们一台那类设备都不管，见
           `docs/EVENT-CENTER.md` §3.1），所以这里按来源选渲染器，而不是复制三份抽屉。
+
+          「放大查看」（业主 2026-09-24）：「点击右侧的这个证据内容应该是直接弹窗，
+          这样比较宽可以把所有东西都展开查看。」
+
+          做法是 **`<Teleport>` 把**这一段**整块**搬进一个 94vw 的弹窗
+          （`:disabled` 为真时留在原地，也就是留在抽屉里）。同一份 DOM、同一批状态，
+          所以弹窗里与抽屉里永远是同一套内容 —— 不存在"弹窗少了几项"的可能。
         -->
+        <button
+          v-if="!evidenceExpanded"
+          type="button"
+          class="btn btn--sm evidence-expand"
+          data-action="evidence-expand"
+          :title="t('eventsUi.evidenceExpand')"
+          @click="evidenceExpanded = true"
+        >
+          <Maximize2 :size="14" aria-hidden="true" />
+          {{ t('eventsUi.evidenceExpand') }}
+        </button>
+        <Teleport :to="evidenceModalHost ?? 'body'" :disabled="!evidenceExpanded || !evidenceModalHost">
+        <div class="evidence-scope" :class="{ 'evidence-scope--expanded': evidenceExpanded }">
         <section class="drawer__section drawer__section--first">
           <h4 class="drawer__section-title">{{ t('eventsUi.evidenceVisualTitle') }}</h4>
 
@@ -1655,8 +1689,28 @@ async function goToPage(offset: number): Promise<void> {
             </li>
           </ul>
         </section>
+        </div>
+        </Teleport>
       </template>
     </EventDetailDrawer>
+
+    <!--
+      「放大查看」的宿主弹窗：94vw 宽，里面装的是上面 Teleport 过来的**同一块** Evidence。
+      关掉它就搬回抽屉（`evidenceExpanded` 归 false）。
+    -->
+    <AppModal
+      :model-value="evidenceExpanded"
+      :title="t('eventsUi.evidenceExpandTitle')"
+      width="94vw"
+      @update:model-value="evidenceExpanded = false"
+    >
+      <div ref="evidenceModalHost" class="evidence-modal-host" data-evidence-expanded></div>
+      <template #footer>
+        <button type="button" class="btn btn--sm" @click="evidenceExpanded = false">
+          {{ t('common.close') }}
+        </button>
+      </template>
+    </AppModal>
 
     <!--
       Incident 创建/关联对话框（规格 §16.1 的 `IncidentCreateDialog`）。
@@ -1678,6 +1732,43 @@ async function goToPage(offset: number): Promise<void> {
 </template>
 
 <style scoped>
+/*
+ * 「放大查看」（业主 2026-09-24）：证据那一段的两种宿主。
+ *
+ * 抽屉里是一列（窄，看一张图要滚）；弹窗里是 94vw，所以那一段之外的东西
+ * （左视觉 / 右播放+频谱+文件）可以**并排** —— 这就是"把所有东西都展开查看"。
+ * Teleport 搬的是同一块 DOM，所以这里只需要按 `--expanded` 换排布。
+ */
+.evidence-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+}
+
+.evidence-modal-host {
+  max-height: 78vh;
+  overflow: auto;
+}
+
+/*
+ * 放大之后：视觉与"其余证据"两列。`auto-fit` 的 minmax 让窄屏（或用户把窗口拉小）
+ * 自动落回一列 —— 与全站其它板子同一种自适应做法，不写断点。
+ */
+.evidence-scope--expanded {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* 放大之后图片不再限高 420px：那一档是给抽屉的窄列定的。 */
+.evidence-scope--expanded :deep(.evidence__image) {
+  max-height: 70vh;
+  width: 100%;
+  object-fit: contain;
+}
+
 /*
  * 筛选卡（业主 20260921 批）：字段式表单行 —— 左侧固定宽灰字 label（右对齐），
  * 右侧控件；一行一项、每行占筛选总宽 50%（<900px 回落 100%）。`.field` 全局是
