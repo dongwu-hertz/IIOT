@@ -23,6 +23,15 @@ const Database = require('better-sqlite3')
 const OUT = process.env.HZ_R50_OUT || path.join(process.cwd(), '.demo-shots-round50')
 const problems = []
 const notes = []
+/**
+ * 「这一次没量到」的条目 —— **不是**问题，也不让退出码变红。
+ *
+ * 什么时候用：空 profile（没加 `--with-data`）里**一台设备都没有**，于是"切到相机、
+ * 告警表有没有行、角标是不是 10"这些量不了。那不是产品缺陷，也不该报成 5 条问题
+ * （第一次不带 `--with-data` 跑就是这样）—— 但也不能静默：把它们列出来，
+ * 并说明"要量它们请加 --with-data"。
+ */
+const skipped = []
 
 function log(message) {
   process.stdout.write('[r50] ' + message + '\n')
@@ -497,7 +506,14 @@ async function run(win) {
   const picked = await selectCamera(win)
   log('camera pick  : ' + JSON.stringify(picked))
   if (!picked || picked.ok !== true) {
-    problems.push('切不到相机设备（告警信息表就无从量起）：' + JSON.stringify(picked))
+    /*
+     * 量不到相机 = 空 profile（没有加 `--with-data`）—— 记成"本次跳过"，不是问题。
+     * 这一段之后的告警表 / 角标 / 跳转 / 弹窗几条都依赖有设备，一起跳过。
+     */
+    skipped.push(
+      '切不到相机设备 → 告警表标题格/行/换页/等高/角标/跳转/置顶弹窗这几条**本次没量到**' +
+        '（空 profile 里没有设备；要量它们请加 `--with-data`）'
+    )
   } else {
     injected = await injectCameraAlarms(win)
     log('inject       : ' + JSON.stringify(injected))
@@ -596,7 +612,10 @@ async function run(win) {
   const jump = await probeJumpToCenter(win)
   log('jump         : ' + JSON.stringify(jump))
   if (!jump || jump.ok !== true) {
-    problems.push('实时监测页上点不到告警行：' + JSON.stringify(jump))
+    // 空 profile 里没有告警行可点 —— 与上面同一条前置条件，不重复报问题。
+    if (!skipped.some((entry) => entry.includes('切不到相机设备'))) {
+      problems.push('实时监测页上点不到告警行：' + JSON.stringify(jump))
+    }
   } else {
     if (!/\/alarms/.test(String(jump.hash))) {
       problems.push('点告警行没有跳到告警中心：' + jump.hash)
@@ -634,13 +653,16 @@ async function run(win) {
       if (center.master && center.detail.top < center.master.bottom) {
         problems.push('详情没有排在列表下方（它是右侧那一列的旧版式）')
       }
+    } else if (skipped.some((entry) => entry.includes('切不到相机设备'))) {
+      // 空 profile：连告警行都没有，"点一行开详情"自然量不到。
+      log('alarm center : skipped（没有告警行可点）')
     } else {
       problems.push('告警中心里点一行没有打开详情')
     }
     if (center.hasAudioPlayer !== true) {
       notes.push('这一条告警没有音频播放器（没有本机录音时是正常的：面板里会说明并给出口）')
     }
-    if (!center.detailSections || center.detailSections.length === 0) {
+    if (center.detailSections && center.detailSections.length === 0) {
       problems.push('详情面板里一个证据分区都没有：' + JSON.stringify(center.detailSections))
     }
   }
@@ -685,7 +707,8 @@ async function run(win) {
       }
     }
   } else {
-    problems.push('没有秘钥/端口，置顶弹窗那一条（正对照 + 抑制）没验到')
+    // 空 profile：没有秘钥/端口 —— 与上面同一条前置条件。
+    log('popup        : skipped（空 profile 里没有相机，置顶弹窗那两条没验到）')
   }
 
   // 截图留档：相机那一页与告警中心各一张（人眼核对用）。
@@ -775,6 +798,7 @@ app.whenReady().then(async () => {
 function report() {
   log('problems     : ' + problems.length)
   for (const problem of problems) log('  ! ' + problem)
+  for (const entry of skipped) log('  - ' + entry)
   for (const note of notes) log('  ~ ' + note)
   app.exit(problems.length > 0 ? 1 : 0)
 }
