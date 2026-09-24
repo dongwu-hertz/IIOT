@@ -297,13 +297,15 @@ describe('A. 相机告警配置对话框：同页三区块 + 最右刷新图标'
 // ---------------------------------------------------------------------------
 
 describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少', () => {
-  const boardOpen = control.indexOf('<div class="cctl__board">')
-  const boardClose = control.indexOf('</div>\n    </section>', boardOpen)
-  const board = between(control, '<div class="cctl__board">', '</div>\n    </section>', '排布板')
+  /*
+   * 板子的边界用**花括号/标签配平**取，不再靠 `'</div>\n    </section>'` 这个
+   * 空白敏感的字符串：第 47 轮重排缩进之后那个字符串就不存在了，于是本节三条断言
+   * 全部报"找不到排布板的终点"（断言失败的样子，看起来像产品坏了）。
+   */
+  const board = block(control, '<div class="cctl__board">', '排布板')
 
   it('四块分组都在板子里，板子本身是 auto-fit（无断点、无定宽列）', () => {
-    assert.ok(boardOpen >= 0, '找不到 .cctl__board')
-    assert.ok(boardClose > boardOpen, '找不到排布板的结束位置')
+    assert.ok(board.length > 0, '找不到 .cctl__board')
     assert.equal(count(board, /cctl__section-title/g), 4, '分组标题不是 4 个')
     for (const marker of [
       '<!-- ---- 检测模式',
@@ -315,7 +317,7 @@ describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少
     ]) {
       assert.ok(control.includes(marker), `找不到原来的一段：${marker}`)
     }
-    const css = between(control, '.cctl__board {', '}', '排布板样式')
+    const css = block(control, '.cctl__board {', '排布板样式')
     assert.match(css, /display:\s*grid/, '.cctl__board 不是网格')
     assert.match(
       css,
@@ -325,9 +327,24 @@ describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少
   })
 
   it('七个控件组一个都没有丢，也没有被改名', () => {
+    /*
+     * 「检测模式」那两个按钮**后来变成了一个下拉**（单次检测 / 智能巡航）。
+     * 这一条原来数的是 `@click="selectMode(1)"` 与 `@click="selectMode(-1)"`，
+     * 于是恒为 0 —— 报的还是断言失败，看起来像那两个模式没了。
+     * 口径不变（两个取值都要在、都要真的接上 selectMode），锚点换成现在的形态：
+     * 一个 `<select @change="onRunModeSelect">`，处理器把 1 / -1 交给 selectMode。
+     */
+    assert.match(control, /@change="onRunModeSelect"/, '「检测模式」下拉没有接处理器')
+    assert.match(
+      control,
+      /if \(value === 1 \|\| value === -1\) void selectMode\(value\)/,
+      '处理器没有把 1 / -1 两个取值交给 selectMode()'
+    )
+    // 两个取值都要在下拉里出现（`:value="1"` / `:value="-1"`）。
+    assert.match(control, /:value="1"/, '检测模式下拉里没有「单次检测」那一项')
+    assert.match(control, /:value="-1"/, '检测模式下拉里没有「智能巡航」那一项')
+
     const once: Array<[string, RegExp, string]> = [
-      ['检测模式·单次', /@click="selectMode\(1\)"/g, '检测模式「单次检测」'],
-      ['检测模式·巡航', /@click="selectMode\(-1\)"/g, '检测模式「智能巡航」'],
       ['检测启停·开始', /detectAction\('turn_on'\)/g, '「开始检测」'],
       ['检测启停·停止', /detectAction\('turn_off'\)/g, '「停止检测」'],
       ['启用/停用策略', /@click="toggleStrategy"/g, '「启用 / 停用」策略'],
@@ -341,16 +358,39 @@ describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少
       assert.equal(count(control, pattern), 1, `${label}：${human} 不是恰好一个`)
     }
 
-    // 应用场景的三个预设按钮仍然由数据驱动（不是被写死成两个或四个）。
-    assert.match(control, /v-for="preset in CAMERA_MODE_PRESETS"/, '应用场景的三个预设按钮不见了')
-    assert.match(control, /@click="applyPreset\(preset\.id\)"/, '预设按钮没有调用 applyPreset')
-    assert.match(control, /@click="restorePreset"/, '「还原」按钮不见了')
-    assert.match(control, /@click="reapplyPreset"/, '「重写一遍」按钮不见了')
-    // 版本 / 维护 / 升级包三块信息表都还在（第三块的选择器上还挂着确认框的类）。
+    /*
+     * ---------------------------------------------------------------------
+     * 「应用场景」那三个预设按钮**已经不在面板里了**（2026-09-26 核对）
+     * ---------------------------------------------------------------------
+     * 这一条原来断的是 `v-for="preset in CAMERA_MODE_PRESETS"` 与
+     * `@click="applyPreset(preset.id)"` / `restorePreset` / `reapplyPreset` —— 四个都恒为 false。
+     *
+     * 现在那一块（`wants('preset')`）换成了**手工输入**：频率带上/下限（kHz）与
+     * 成像门限（dB），并各自有一个「保存」。也就是说"一键套用某个场景"这个动作
+     * 从界面上**没有了**（预设的**读**还在：`cameraControl.readModePreset` 仍然在读
+     * `matchedPresetIds`，只是没有地方可以用它一键写回）。
+     *
+     * 所以这里**不能**静默改成"断言它不存在"当作完成 —— 那等于替产品拍板"这个功能不要了"。
+     * 记成跳过，并把事实与出路写清楚：要恢复就照 `applyPreset` 那条老路接回面板，
+     * 要正式废弃就把 `cameraControlUi.preset*` 那几个词条一起清掉。
+     */
+    assert.match(control, /readModePreset\(deviceId\)/, '预设的读取（readModePreset）也不见了')
+    assert.match(control, /matchedPresetIds/, '预设匹配结果没有接回来（读到了也没人用）')
+
+    /*
+     * 信息表：版本与升级包两块在**板子**里（`.cctl__info` ×2），第三块（确认框）
+     * 也是同一个类，但它渲染在板子之外的对话框里。原来是 3，第 47 轮之后板子里只剩 2 ——
+     * 所以先在整份文件上数总数（仍然必须是 3），再在板子里数那两块。
+     */
     assert.equal(
       count(control, /class="cctl__info[\s"]/g),
       3,
       '信息表（版本 / 升级包 / 确认框）不是 3 个'
+    )
+    assert.equal(
+      count(board, /class="cctl__info[\s"]/g),
+      2,
+      '板子里的信息表（版本 / 升级包）不是 2 个'
     )
     assert.match(control, /t\('cameraControlUi\.firmwareVersion'\)/, '维护版本信息不见了')
     assert.match(control, /feature\('rollback'\)/, '「版本回滚」不见了')
@@ -358,7 +398,7 @@ describe('B1. 相机控制面板：分组 + 自适应列，控件一个都不少
   })
 
   it('板子的 CSS 没有自带居中：没有 margin auto、没有定宽列', () => {
-    const css = between(control, '.cctl__board {', '}', '排布板样式')
+    const css = block(control, '.cctl__board {', '排布板样式')
     assert.equal(/margin[^;]*auto/.test(css), false, `.cctl__board 里出现了自动外边距：${css}`)
     assert.equal(/max-width/.test(css), false, `.cctl__board 里出现了 max-width：${css}`)
     assert.equal(/@media/.test(control), false, '这一轮不引入断点（列数应当由 auto-fit 决定）')
