@@ -4488,3 +4488,19 @@ node scripts/verify-multichannel.cjs --binding follow-current   # 实测行为�
 2. 真机并发 8 条 `/features_stream` 的稳定性（本机上限 8，未在真机压过）。
 3. 真机上 `PUT /channel_select` 复位带来的频谱瞬跳（勾选时频谱会短暂跟随被勾的那一路）。
 
+### LL.7 第 51 轮的发布（2026-09-25，v1.0.23）
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.23`（`package.json` version + `releaseDate` 2026-09-25） |
+| 安装包 | `release/HAIS-1.0.23-2026-09-25-x64-setup.exe` |
+| 大小 | **128,155,726 字节** |
+| sha256 | `123E75172A56E5F1DB97241C983F032DE590DD6EC5533911EA406D0BC00B699F` |
+| 输出目录 | `release/` —— 上一轮挡住它的 **Kimi 桌面版这次没在运行**，于是按标准目录出包（KK.14 那条绕行不再是常态） |
+| 打包产物验证 | `node scripts/verify-packaged.cjs --dir release/win-unpacked` → **26 通过 / 0 失败**（含"应用内信息可用 `1.0.23`"） |
+
+出包命令：`npm run build && npx electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs`
+（`electron-builder.offline.cjs` 让 electron-builder 用 `node_modules/electron/dist` 里的
+已解包运行时，不去 GitHub 下载 —— 见该文件头部：离线机器上那条路会先"下载完成"再挂十分钟）。
+
+
