@@ -4488,19 +4488,63 @@ node scripts/verify-multichannel.cjs --binding follow-current   # 实测行为�
 2. 真机并发 8 条 `/features_stream` 的稳定性（本机上限 8，未在真机压过）。
 3. 真机上 `PUT /channel_select` 复位带来的频谱瞬跳（勾选时频谱会短暂跟随被勾的那一路）。
 
-### LL.7 第 51 轮的发布（2026-09-25，v1.0.23）
+### LL.7 第 51 轮的发布（v1.0.23）
+
+#### ① 未签名包（2026-09-25 出，已被 ② 取代）
 
 | 项 | 值 |
 |---|---|
-| 版本 | `1.0.23`（`package.json` version + `releaseDate` 2026-09-25） |
+| 版本 | `1.0.23`（`releaseDate` 当时是 2026-09-25） |
 | 安装包 | `release/HAIS-1.0.23-2026-09-25-x64-setup.exe` |
-| 大小 | **128,155,726 字节** |
-| sha256 | `123E75172A56E5F1DB97241C983F032DE590DD6EC5533911EA406D0BC00B699F` |
-| 输出目录 | `release/` —— 上一轮挡住它的 **Kimi 桌面版这次没在运行**，于是按标准目录出包（KK.14 那条绕行不再是常态） |
-| 打包产物验证 | `node scripts/verify-packaged.cjs --dir release/win-unpacked` → **26 通过 / 0 失败**（含"应用内信息可用 `1.0.23`"） |
+| 大小 / sha256 | 128,155,726 字节 · `123E75172A56E5F1DB97241C983F032DE590DD6EC5533911EA406D0BC00B699F` |
+| 签名 | **NotSigned** |
+| 打包产物验证 | `verify-packaged --dir release/win-unpacked` → 26 通过 / 0 失败 |
+
+输出目录回到 `release/`：上一轮挡住它的 **Kimi 桌面版这次没有运行**（KK.14 那条换目录的
+绕行不再是常态）。这份**未签名**产物留在 `release/unsigned-1.0.23/` 作参照，
+`release/` 根下只有签名包，避免"该发哪个"这种问题。
 
 出包命令：`npm run build && npx electron-builder --win --x64 --publish never --config scripts/electron-builder.offline.cjs`
 （`electron-builder.offline.cjs` 让 electron-builder 用 `node_modules/electron/dist` 里的
 已解包运行时，不去 GitHub 下载 —— 见该文件头部：离线机器上那条路会先"下载完成"再挂十分钟）。
+
+#### ② **签名包**（业主 2026-09-26 要求「带证书的」，本次交付）
+
+| 项 | 值 |
+|---|---|
+| 安装包 | `release/HAIS-1.0.23-2026-09-26-x64-setup.exe` |
+| 大小 | **128,199,512 字节** |
+| sha256 | `BEB7A453BDB2DE97791B9C6EF330952CAEC894AE30B4FBA8FF8274A950455DAC` |
+| 签名主体 | `CN="Shanghai Hertzinno Technology Co., Ltd."`（颁发者 `Certum Code Signing 2021 CA`） |
+| 指纹 / 到期 | `F88A2FCEE6553908220C031FBFC2D412CB341DC3` · 2027-09-03 |
+| 时间戳 | ✅ `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1`（RFC 3161：证书过期后**已分发出去的包**仍然可验证） |
+| 验证 | `Get-AuthenticodeSignature` → **Valid**（安装包 / `HAIS.exe` / `ffmpeg.exe`）；`verify-packaged --dir release/win-unpacked` → **26 通过 / 0 失败**，两条签名判据从"未签名"变成 `Valid` |
+
+出包命令（证书指纹用环境变量明确指定，见 `scripts/sign-preflight.cjs` 里那条"两张证书
+同名时静默取第一张会摊薄 SmartScreen 声誉"的理由）：
+
+```powershell
+$env:HERTZINNO_CERT_SHA1 = 'F88A2FCEE6553908220C031FBFC2D412CB341DC3'
+npm run dist:win:signed          # preflight → build → electron-builder（signed 配置）
+```
+
+`releaseDate` 同步改成 **2026-09-26**：这一版实际是在 09-26 出的（时钟已经跨过午夜），
+安装包名由 `release-stamp.cjs` 从 `package.json` 取，日期与事实不一致比"晚一天发版"更糟。
+
+**本机证书存储里有三张代码签名证书，为什么选这一张**（业主可随时改用另外两张）：
+
+| 主体 | 颁发者 | 到期 | 用不用 |
+|---|---|---|---|
+| Shanghai Hertzinno Technology Co., Ltd. | **Certum Code Signing 2021 CA**（公共 CA） | 2027-09-03 | ✅ **本次用的**：公共 CA 签发 + 主体与产品公司一致 |
+| Shanghai Hertzinno Technology Co., Ltd. | 自己（subject == issuer） | 2029-07-09 | ❌ 自签名证书对 SmartScreen 没有任何帮助 |
+| 上海烁炎声科技有限公司 | Certum Code Signing 2021 CA | 2027-08-24 | ⏸ 有效可用；主体是另一家法人，要不要改用它由业主定 |
+
+**签名构建在这台出包机上本来是跑不起来的**（本轮修掉）：
+`electron-builder.signed.cjs` 只 `extends` 了 `electron-builder.yml`，没有
+`electronDist`，于是它去 GitHub 下载 Electron zip —— 表现为
+`downloaded label=electron progress=100%` 之后 `read ECONNRESET failedTask=build`，
+**在打包中途死掉，报错完全看不出是网络问题**（与 `electron-builder.offline.cjs` 头部
+记的是同一个坑）。现在该配置也指向 `node_modules/electron/dist`：签名构建不再依赖网络，
+顺带把"打进包的运行时"钉成与 dev/探针同一份。
 
 

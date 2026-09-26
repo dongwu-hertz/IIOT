@@ -70,6 +70,19 @@ if (!subject && !sha1) {
 /** @type {import('app-builder-lib').Configuration} */
 module.exports = {
   extends: 'file:electron-builder.yml',
+  /**
+   * 用 `node_modules/electron/dist` 里已解包的运行时，不去 GitHub 下载 zip。
+   *
+   * MEASURED（2026-09-25，本机出签名包时撞上）：不带这一行时 electron-builder 会去下载
+   * Electron zip，在这台出包机上表现为 **`downloaded label=electron progress=100%` 之后
+   * `read ECONNRESET failedTask=build`** —— 也就是"下完了、然后挂在后续请求上"，
+   * 失败发生在打包中途，报错还完全看不出是网络问题（`electron-builder.offline.cjs`
+   * 头部记的是同一个坑）。签名构建是最不能在这种地方翻车的一条路：证书已经就位、
+   * 前面的构建全过了，却在打包阶段死于网络。
+   *
+   * 顺带消掉一个版本漂移风险：打进安装包的运行时就是 `npm run dev` 与各支探针用的那一份。
+   */
+  electronDist: 'node_modules/electron/dist',
   win: {
     /** 与离线包同一个文件名（见 `release-stamp.cjs`）：签名与不签名只差签名，不差名字。 */
     artifactName: require('./release-stamp.cjs').artifactName,
