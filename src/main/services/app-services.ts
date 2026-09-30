@@ -1158,6 +1158,21 @@ export async function initServices(): Promise<AppServices> {
     }
   }
 
+  /**
+   * **探针专用**：把服务树挂到 `globalThis`，让真窗口探针能直接驱动录像器。
+   *
+   * 为什么需要它：主进程被 electron-vite **打包成单个 `out/main/index.js`**，探针没法
+   * `require('.../services/app-services.js')` 去拿服务对象；而连续录像最容易错的几条
+   * （断流重连、看门狗、崩溃补登记）必须在真窗口里量。走 IPC 也行，但那要求先有一台
+   * `rtsp_enabled=1` 的真相机 —— 而业主的要求正是"先不走真机"。
+   *
+   * 只在 `HZ_RECORDER_PROBE=1` 时挂（与 `HERTZINNO_STORAGE_ROOT`、`HZ_RECORDER_SOURCE`
+   * 同一类刻意开关：客户安装里不会有人设它）。
+   */
+  if (process.env.HZ_RECORDER_PROBE === '1') {
+    ;(globalThis as { __HZ_SERVICES__?: AppServices }).__HZ_SERVICES__ = services
+  }
+
   return services
 }
 
