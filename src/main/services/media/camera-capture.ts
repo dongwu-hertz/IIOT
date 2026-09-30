@@ -79,6 +79,59 @@ export function buildManualRecordArgs(rtspUrl: string, filePath: string): string
   ]
 }
 
+/**
+ * 连续录像：同一路 RTSP，按时间切片写成一串分片 MP4。
+ *
+ * 与 `buildManualRecordArgs()` 的差别只有三处，但每一处都有理由：
+ *
+ *   `-f segment -segment_time N -reset_timestamps 1`
+ *     交给 ffmpeg 的 segment 复用器切片，而不是"我们每 N 秒重启一次进程"——
+ *     重启会在切片边界丢掉几百毫秒（要重新握手 RTSP），而 segment 复用器是
+ *     **码流不断、文件换名**，边界上不丢帧。`-reset_timestamps 1` 让每一片的
+ *     时间戳从 0 开始，否则播放器会把第 50 片当成"从第一片开始算的 4 小时处"。
+ *
+ *   `-strftime 1` + `%Y-%m-%d_%H-%M-%S`
+ *     片段名由 ffmpeg 自己按**本地时间**生成（模式见 `CAMERA_MEDIA_RECORDER_NAME_PATTERN`），
+ *     于是"文件名 == 起始时刻"，主进程**不需要**事后从 mtime 猜时间。
+ *
+ *   `-segment_format_options movflags=frag_keyframe+empty_moov+default_base_moof`
+ *     内层 mp4 复用器仍然写分片 MP4：**断电/被杀也不会留下打不开的最后一片**。
+ *     这是整条连续录像里最重要的一条性质 —— 7×24 录像一定会遇到非正常退出。
+ *
+ * 与手动录像一样**不加任何 timeout 参数**：这台相机上 `-timeout` 会让 ffmpeg 进入
+ * RTSP listen 模式并直接失败（见本文件头部的实测记录）。
+ */
+export function buildRecorderArgs(input: {
+  rtspUrl: string
+  /** 输出模式（含目录与 `%Y-%m-%d_%H-%M-%S.mp4` 占位符）。 */
+  outputPattern: string
+  segmentSeconds: number
+}): string[] {
+  return [
+    '-rtsp_transport',
+    'tcp',
+    '-i',
+    input.rtspUrl,
+    // 与手动录像同一条口径：这里只录视频轨，声音由声学通道负责。
+    '-an',
+    '-c:v',
+    'copy',
+    '-f',
+    'segment',
+    '-segment_format',
+    'mp4',
+    '-segment_format_options',
+    'movflags=frag_keyframe+empty_moov+default_base_moof',
+    '-segment_time',
+    String(input.segmentSeconds),
+    '-reset_timestamps',
+    '1',
+    '-strftime',
+    '1',
+    input.outputPattern
+  ]
+}
+
 /** 抓图：从同一个 RTSP 源取**一帧**，编码成 JPEG。 */
 export function buildSnapshotArgs(rtspUrl: string, filePath: string): string[] {
   return [

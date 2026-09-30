@@ -540,6 +540,15 @@ export function cameraMediaRelativeDirectory(
   return [kind, safeCameraMediaSegment(deviceUid), year, month, day].join('/')
 }
 
+/**
+ * 连续录像（RTSP 取流存储）的 ffmpeg `-strftime` 文件名模式。
+ *
+ * 与 `cameraMediaStamp()` 同形，唯一差别是**没有毫秒** —— ffmpeg 的 `-strftime`
+ * 不支持毫秒。因此连续录像的最短切片是 10 秒（`shared/domain/recorder.ts`），
+ * 保证同一天内不会重名（"永不覆盖"这条硬规则仍然成立）。
+ */
+export const CAMERA_MEDIA_RECORDER_NAME_PATTERN = '%Y-%m-%d_%H-%M-%S.mp4'
+
 export interface CameraMediaNameInput {
   timestamp: number
   kind: CameraMediaKind
