@@ -1077,6 +1077,51 @@ export class RtspStreamService {
   }
 
   /**
+   * **不开直播会话**也要能拿到 RTSP 地址：连续录像要用的那一条。
+   *
+   * WHY THIS EXISTS
+   * `currentSource()` 只在"这一路直播正在出帧"时才有值 —— 它回答的是"现在能不能手动
+   * 录一段/抓一张"。连续录像（业主 2026-09-26 的 RTSP 取流存储）必须在**没人看画面**时
+   * 也能录，所以它要的是"这台相机的地址是什么"，而不是"现在有没有在播"。
+   *
+   * 与直播**共用同一条候选顺序**（`buildRtspUrlCandidates()`）：地址怎么拼、要不要带口令、
+   * `rtsp_enabled=0` 怎么拒，全都只有一份判据。另写一套"录像专用"的拼装规则，
+   * 迟早会和直播那边说的不一样（那就是典型的"同一个事实两处实现"）。
+   *
+   * @returns 可用地址，或**为什么现在不能录**（调用方据此给出诚实理由，而不是硬开 ffmpeg）。
+   */
+  async resolveRecorderSource(deviceId: string): Promise<
+    | { ok: true; url: string; sourceId: string }
+    | { ok: false; reason: 'rtsp-disabled' | 'missing-video-config' | 'unknown-device' }
+  > {
+    let device: CameraLiveDeviceHandle
+    let video: Fa371VideoConfig
+    try {
+      device = this.options.resolver.getDevice(deviceId)
+      video = await this.options.resolver.getVideoConfig(deviceId)
+    } catch (error) {
+      deviceLog().warn('Recorder source: device lookup failed', {
+        deviceId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+      return { ok: false, reason: 'unknown-device' }
+    }
+
+    if (video.rtspEnabled !== true) return { ok: false, reason: 'rtsp-disabled' }
+
+    const candidates = buildRtspUrlCandidates(device.host, video, device.credential)
+    const primary = candidates[0]
+    if (!primary) return { ok: false, reason: 'missing-video-config' }
+    // 日志里只出现打码后的地址（与直播同一条规矩：明文口令绝不进日志）。
+    deviceLog().info('Recorder source resolved', {
+      deviceId,
+      sourceId: primary.id,
+      rtspUrl: maskRtspUrl(primary.url)
+    })
+    return { ok: true, url: primary.url, sourceId: primary.id }
+  }
+
+  /**
    * Application teardown.
    *
    * `killAllFfmpeg()` is the belt to `stop()`'s braces: every session kills its own
