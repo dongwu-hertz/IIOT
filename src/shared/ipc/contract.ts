@@ -161,6 +161,32 @@ export type {
 } from '../domain/iot-ingest'
 import type { IotIngestConfig, IotIngestRuntimeStatus } from '../domain/iot-ingest'
 import type { RecorderConfig } from '../domain/recorder-config'
+
+/**
+ * 连续录像的设备状态（IPC 形态）。
+ *
+ * 字段与 `RtspRecorderService.status()` 一一对应，**不做加工**：界面要能说清
+ * "在录 / 进程在但没数据 / 断了在等重连"，这三件事的差别就是排障的全部线索。
+ */
+export interface RecorderStatusView {
+  deviceId: string
+  enabled: boolean
+  state: 'starting' | 'recording' | 'waiting' | 'backoff' | 'stopped'
+  segmentSeconds: number
+  runStartedAt?: number
+  lastGrowthAt?: number
+  lastSegment?: { name: string; startMs: number; endMs: number; bytes: number }
+  registeredCount: number
+  attempt: number
+  lastError?: string
+}
+
+export interface RecorderSetEnabledInput {
+  deviceId: string
+  enabled: boolean
+  /** 只改切片长度时也可以带上；不传则沿用当前设置。 */
+  segmentSeconds?: number
+}
 import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
 
 /**
@@ -364,6 +390,15 @@ export const IpcChannels = {
   RECORDING_SYNC_DEVICE: 'recording:sync-device',
   /** 另存一条本机录音（保存对话框 + 复制文件）。权限 `viewRecordings`。 */
   RECORDING_EXPORT: 'recording:export',
+  /**
+   * 连续录像（RTSP 取流存储，业主 2026-09-26 追加范围）。
+   *
+   * 两个通道都归 `controlCameras`：开启连续录像会让相机**再多一条 RTSP 连接**
+   * （实测 `rtsp_client_limit` 有限），这是对设备做动作，不是读状态。
+   * 状态查询本身只读，但保持一致更省事 —— 界面上的开关与状态行本来就成对出现。
+   */
+  RECORDER_STATUS: 'recorder:status',
+  RECORDER_SET_ENABLED: 'recorder:set-enabled',
   /**
    * 本地样本库（schema v7）。权限归 `viewRecordings` —— 这个库是从录音派生的，
    * 打标签是对派生物的注解，不动录音本身。
@@ -2293,6 +2328,17 @@ export interface RendererApi {
      * 返回 `{ path }`；取消对话框返回 `null`。**权限归 `viewRecordings`**。
      */
     export(recordingId: string): Promise<DeviceResult<{ path: string } | null>>
+  }
+
+  /**
+   * 连续录像（RTSP 取流存储）。
+   *
+   * `status()` 返回**全部被要求录像的设备**（不只是正在出的帧的那些）；界面据此显示
+   * "在录 / 等待 / 退避"，不需要自己记住开过哪些。
+   */
+  recorder: {
+    status(): Promise<DeviceResult<RecorderStatusView[]>>
+    setEnabled(input: RecorderSetEnabledInput): Promise<DeviceResult<RecorderStatusView | null>>
   }
 
   /**

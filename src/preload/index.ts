@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Preload — the ONLY bridge between the renderer and the main process.
  *
  * Security posture:
@@ -56,6 +56,7 @@ import type {
   NetworkProgressEvent,
   PendingAlarmSnapshot,
   RendererApi,
+  RecorderSetEnabledInput,
   StartRecordingInput
 } from '@shared/ipc/contract'
 import type {
@@ -237,6 +238,19 @@ const api: RendererApi = {
     syncDevice: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.RECORDING_SYNC_DEVICE, deviceId),
     export: (recordingId: string) => ipcRenderer.invoke(IpcChannels.RECORDING_EXPORT, recordingId)
+  },
+
+  /**
+   * 连续录像（RTSP 取流存储，业主 2026-09-26 追加范围）。
+   *
+   * 只有两个动作，因为界面要回答的只有两件事："现在在录什么"和"把这一台开/关"。
+   * 状态里的 `state`（recording / waiting / backoff）是**录像器自己的话**，
+   * 界面照原样显示，不许自己推断成"已开启"。
+   */
+  recorder: {
+    status: () => ipcRenderer.invoke(IpcChannels.RECORDER_STATUS),
+    setEnabled: (input: RecorderSetEnabledInput) =>
+      ipcRenderer.invoke(IpcChannels.RECORDER_SET_ENABLED, input)
   },
 
   /** 本地异常声纹样本库（schema v7）。 */

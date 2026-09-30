@@ -1,4 +1,4 @@
-/**
+﻿/**
  * IPC handlers — the trust boundary.
  *
  * Every renderer-initiated action enters here. Two invariants hold for all
@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IpcChannels } from '@shared/ipc/contract'
+import type { RecorderSetEnabledInput, RecorderStatusView } from '@shared/ipc/contract'
 import type {
   AddDeviceInput,
   UpdateDeviceInput
@@ -68,6 +69,7 @@ import type {
 } from '@shared/ipc/contract'
 import { isAiServicePreset } from '@shared/domain/sample-ai'
 import { MAX_FEATURE_CHANNELS } from '@shared/domain/monitoring'
+import { normaliseRecorderConfig } from '@shared/domain/recorder-config'
 import { AppError, ErrorCodes, toResult, type DeviceResult } from '@shared/errors'
 import type {
   ChangePasswordInput,
@@ -1417,6 +1419,83 @@ export function registerIpcHandlers(): void {
 
         deviceLog().info('Ad-hoc endpoint probe', { deviceId, path: rawPath, method })
         return services.protocolLab.probeCustomPath(client, rawPath.trim(), method)
+      })
+  )
+
+  // -------------------------------------------------------------------------
+  // 连续录像（RTSP 取流存储，业主 2026-09-26 追加范围）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 现在在录什么（只读）。
+   *
+   * 返回的是**录像器自己的话**：`recording` 要求"观察到文件在变大"，`waiting` 是
+   * "进程在但没数据"，`backoff` 是"断了在等重连"。界面不许把这些合成一句"已开启"。
+   */
+  ipcMain.handle(IpcChannels.RECORDER_STATUS, () =>
+    toResult(async () => getServices().recorder.status())
+  )
+
+  /**
+   * 开/关一台相机的连续录像。
+   *
+   * 顺序有意如此：**先解析地址、再落库、最后拉起**。
+   *   - 解析失败（`rtsp-disabled` / `missing-video-config`）直接报错、**不写设置** ——
+   *     否则界面显示"已开启"而设备侧根本没有地址，用户以为在录；
+   *   - 落库在拉起之前：录像器万一启动失败，设置里仍然是"用户要录"，重启后会再试，
+   *     而不是静默丢掉用户的意愿。
+   */
+  ipcMain.handle(
+    IpcChannels.RECORDER_SET_ENABLED,
+    (_event, input: RecorderSetEnabledInput): Promise<DeviceResult<RecorderStatusView | null>> =>
+      toResult(async () => {
+        requireAdministrator()
+        requirePermission('controlCameras')
+        const services = getServices()
+        if (!input || typeof input.deviceId !== 'string' || input.deviceId === '') {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, '缺少设备 ID')
+        }
+        const current = services.settings.get().recorder
+        const segmentSeconds =
+          input.segmentSeconds === undefined
+            ? current.segmentSeconds
+            : normaliseRecorderConfig({ ...current, segmentSeconds: input.segmentSeconds }).config
+                .segmentSeconds
+        const enabledIds = input.enabled
+          ? [...new Set([...current.enabledDeviceIds, input.deviceId])]
+          : current.enabledDeviceIds.filter((id) => id !== input.deviceId)
+
+        if (input.enabled) {
+          const source = await services.cameraLive.resolveRecorderSource(input.deviceId)
+          if (!source.ok) {
+            throw new AppError(
+              ErrorCodes.VALIDATION_ERROR,
+              source.reason === 'rtsp-disabled'
+                ? '相机的 RTSP 服务处于关闭状态，无法连续录像；请在相机 Web 界面启用 RTSP'
+                : source.reason === 'missing-video-config'
+                  ? '相机未上报视频端口/路径，无法拼出 RTSP 地址'
+                  : '找不到这台设备，无法开始连续录像'
+            )
+          }
+          const device = services.devices.get(input.deviceId)
+          await services.recorder.start(
+            { deviceId: input.deviceId, deviceUid: device.deviceUid, rtspUrl: source.url },
+            segmentSeconds
+          )
+        } else {
+          await services.recorder.stop(input.deviceId)
+        }
+
+        services.settings.update({
+          recorder: { enabledDeviceIds: enabledIds, segmentSeconds }
+        })
+        appLog().info('Continuous recording toggled', {
+          deviceId: input.deviceId,
+          enabled: input.enabled,
+          segmentSeconds,
+          actor: actor()
+        })
+        return services.recorder.statusOfDevice(input.deviceId) ?? null
       })
   )
 
