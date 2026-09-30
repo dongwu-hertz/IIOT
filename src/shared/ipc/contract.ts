@@ -160,6 +160,7 @@ export type {
   IotIngestStats
 } from '../domain/iot-ingest'
 import type { IotIngestConfig, IotIngestRuntimeStatus } from '../domain/iot-ingest'
+import type { RecorderConfig } from '../domain/recorder-config'
 import type { DeviceIngestEndpoint } from '../domain/iot-ingest'
 
 /**
@@ -960,6 +961,14 @@ export interface AppSettings {
    * 绑定地址与两个端口可配。
    */
   iotIngest: IotIngestConfig
+
+  /**
+   * 连续录像（RTSP 取流存储，业主 2026-09-26 追加范围，见 docs/STORAGE-DESIGN.md §9）。
+   *
+   * **opt-in**：空列表 = 谁都不录。一路 2 Mbps 一天约 21 GB，装完就开始 7×24 录像
+   * 会把用户的盘填满，比不录更糟。
+   */
+  recorder: RecorderConfig
 
   /**
    * 在线地图底图（业主 2026-09-19 追加第 1 条：地图 GIS 应该在设置里面配置）。

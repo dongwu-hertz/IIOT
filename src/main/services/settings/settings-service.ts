@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Settings service.
  *
  * Two-tier configuration (spec 4.4):
@@ -38,6 +38,7 @@ import {
   normaliseMapServices,
   normaliseMapTilesConfig
 } from '@shared/domain/map-tiles'
+import { defaultRecorderConfig, normaliseRecorderConfig } from '@shared/domain/recorder-config'
 import { appLog } from '../logging/logger'
 
 /** Defaults applied on first run and used to fill any missing key. */
@@ -99,6 +100,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
    * 绑定 `0.0.0.0` —— 只有设备连得上，接入才有意义）。
    */
   iotIngest: defaultIotIngestConfig(),
+
+  /**
+   * 连续录像（RTSP 取流存储）：默认**谁都不录**，切片 5 分钟。
+   *
+   * opt-in 是有意的：一路 2 Mbps 一天约 21 GB，装完就开始录会把用户的盘填满。
+   */
+  recorder: defaultRecorderConfig(),
 
   /**
    * 在线地图底图（业主 2026-09-19 追加第 1 条；**手册未说明**）。
@@ -258,6 +266,13 @@ const VALIDATORS: {
     const { config, issues } = normaliseIotIngestConfig(value)
     if (issues.length > 0) {
       appLog().warn('IoT 接入配置存在非法字段，已回落到默认值', { fields: issues })
+    }
+    return config
+  },
+  recorder: (value) => {
+    const { config, issues } = normaliseRecorderConfig(value)
+    if (issues.length > 0) {
+      appLog().warn('连续录像配置存在非法字段，已归一', { fields: issues })
     }
     return config
   },
