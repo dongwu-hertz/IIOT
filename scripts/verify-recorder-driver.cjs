@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 /*
  * 连续录像（S1）真窗口 driver。
  *
@@ -32,7 +32,10 @@ function probePlayable(file) {
     fs.readSync(fd, head, 0, 16, 0)
     fs.closeSync(fd)
     const size = fs.statSync(file).size
-    return { ok: head.includes(Buffer.from('ftyp')) && size > 1_000, size, head: head.toString('hex') }
+    // 判据只看**结构**：第一个 box 必须是 `ftyp`（`00000018 66747970`）。
+    // 不用"大小 > N 字节"当判据 —— 第一跑就是被这条误判的（文件头完全正确）。
+    const hasFtyp = head.subarray(4, 8).toString('latin1') === 'ftyp'
+    return { ok: hasFtyp && size > 0, size, head: head.subarray(0, 16).toString('hex') }
   } catch (error) {
     return { ok: false, size: 0, error: String(error && error.message) }
   }
@@ -67,6 +70,16 @@ app.whenReady().then(async () => {
     app.exit(1)
     return
   }
+
+  // 录像表对 `devices` 有外键（`ON DELETE CASCADE`），所以探针必须**先建一台设备行**再录。
+  // 第一跑就是漏了这一步：登记被外键挡下（日志里 `FOREIGN KEY constraint failed`），
+  // 库里 0 行 —— 而那其实是数据库在正常工作。
+  services.db
+    .prepare(
+      `INSERT OR IGNORE INTO devices (id, device_uid, name, connection_type, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'LAN', 'ONLINE', ?, ?)`
+    )
+    .run(DEVICE.deviceId, DEVICE.deviceUid, 'RECORDER PROBE', Date.now(), Date.now())
 
   const recorder = services.recorder
   const recordings = services.recordingRepo
@@ -109,10 +122,12 @@ app.whenReady().then(async () => {
     { encoding: 'utf8' }
   )
   const killOutput = String(killResult.stdout ?? '') + String(killResult.stderr ?? '')
-  const killedCount = (killOutput.match(/ffmpeg/gi) ?? []).length
-  log('killed       : ' + killedCount + ' 处 ffmpeg 进程痕迹（' + killOutput.trim().split('\n')[0] + '）')
-  if (killResult.status !== 0 && killedCount === 0) {
-    problems.push('没杀到任何 ffmpeg —— 说明录像器根本没跑起来')
+  // Windows 的 taskkill: 0 = 杀到了，128 = 没找到进程。**不能**去数输出里出现几次
+  // "ffmpeg"：失败信息里也有这个词（第一跑就是这么把 0 报成 1 的）。
+  const killedAny = killResult.status === 0
+  log('killed       : ' + (killedAny ? '已杀掉 ffmpeg' : '没有 ffmpeg 可杀') + '（' + killOutput.trim().split('\n')[0] + '）')
+  if (!killedAny) {
+    problems.push('没有 ffmpeg 可杀 —— 录像器没在跑（或 ffmpeg 已经退出）')
   }
 
   const afterKill = recorder.statusOfDevice(DEVICE.deviceId)
@@ -122,8 +137,14 @@ app.whenReady().then(async () => {
   await sleep(30_000)
   const recovered = recorder.statusOfDevice(DEVICE.deviceId)
   log('status(+30s) : ' + JSON.stringify(recovered))
-  if ((recovered?.attempt ?? 0) < 1) {
-    problems.push('杀掉 ffmpeg 之后没有进入过退避重连（attempt=' + String(recovered?.attempt) + '）')
+  /*
+   * 判据是**"换了一轮并且重新在长"**，不是 `attempt >= 1`：
+   * 退避档位在"文件重新变大"时会被主动归零（那是设计），所以重连成功后 attempt 反而是 0。
+   * 第一跑就是拿 attempt 当判据，把一个正常工作的重连判成了失败。
+   */
+  const restarted = (recovered?.runStartedAt ?? 0) > (afterKill?.runStartedAt ?? 0)
+  if (!restarted) {
+    problems.push('杀掉 ffmpeg 之后没有重新拉起一轮（runStartedAt 没变）')
   }
   const afterRecover = listSegments()
   const newest = afterRecover[afterRecover.length - 1]

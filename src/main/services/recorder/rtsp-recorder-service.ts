@@ -363,12 +363,22 @@ export class RtspRecorderService {
   /** 记录一次失败并按退避排下一轮（进程没起来 / 立刻退出）。 */
   private fail(run: RecorderRun, error: unknown): void {
     run.attempt += 1
-    run.nextAttemptAtMs = this.now() + recorderBackoffMs(run.attempt)
+    const now = this.now()
+    run.nextAttemptAtMs = now + recorderBackoffMs(run.attempt)
     run.lastError = error instanceof Error ? error.message : String(error)
+    /*
+     * 失败之后**没有进程在写**，所以"这一轮开始了多久"必须从此刻重算，`growthObserved`
+     * 也要清掉：否则看门狗会拿上一轮的时间戳当基准（探针第一跑就撞上：状态卡在
+     * `starting` 而 `attempt=1`，"文件在长"的判据跨轮串了味）。
+     */
+    run.startedAtMs = now
+    run.lastGrowthAtMs = now
+    run.growthObserved = false
+    run.lastBytes = 0
     deviceLog().warn('Recorder capture process failed; will retry', {
       deviceId: run.target.deviceId,
       attempt: run.attempt,
-      retryInMs: run.nextAttemptAtMs - this.now(),
+      retryInMs: recorderBackoffMs(run.attempt),
       reason: run.lastError
     })
   }

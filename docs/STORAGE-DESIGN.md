@@ -1,4 +1,4 @@
-# 存储方案设计：设备侧存储配置 + PC 存储池（解耦）
+﻿# 存储方案设计：设备侧存储配置 + PC 存储池（解耦）
 
 > 状态：**方案（未实施）**。业主 2026-09-26 提出需求：
 > 「对于声学相机和一些录音的接入，需要相机支持存储配置，支持接入 IPSAN、NAS、云存储等不同的模式，
@@ -465,4 +465,23 @@ GET    /events                      SSE：object.created / pool.threshold / pool
 > **两台机器上的验证都不需要真机**：`scripts/mock-fa371.cjs` 已经能提供 RTSP 侧的行为，
 > 而 S1 的断流/看门狗/崩溃恢复完全可以用**注入式假源**（本地文件循环推流或直接替换 ffmpeg 调用）
 > 跑真窗口验证 —— 这几条恰好是最容易出错的几条。
+
+### 9.5 实施状态（2026-09-30 更新）
+
+| 步 | 状态 | 证据 |
+|---|---|---|
+| **S1 录像器内核** | ✅ 已实现 | `shared/domain/recorder.ts`（纯规则）+ `main/services/recorder/rtsp-recorder-service.ts`（进程形状边界，依赖全注入）+ `buildRecorderArgs()`（`-f segment` + 内层分片 MP4） |
+| S1 切片入库 | ✅ 已实现 | `RecordingRepository.insertContinuousVideo()`：`recording_type='scheduled'`，幂等键 `continuous:<文件名>`，数据库级唯一索引 |
+| S1 设置 | ✅ 已实现 | `AppSettings.recorder { enabledDeviceIds, segmentSeconds }`，**默认谁都不录**、切片 5 分钟 |
+| S1 源解析 | ✅ 已实现 | `CameraLiveService.resolveRecorderSource()`：不开直播会话也能拿地址，与直播共用候选顺序 |
+| S1 IPC + preload | ✅ 已实现 | `RECORDER_STATUS` / `RECORDER_SET_ENABLED`，顺序为"先解析地址 → 再落库 → 最后拉起" |
+| S1 真窗口验证 | ✅ 通过（problems 0） | `scripts/verify-recorder.cjs`：真 ffmpeg + 合成源，6 片全可播、断流后换轮重启、停止时补登记 —— 见 `docs/UI-VERIFY.md` MM |
+| **S1 界面（开关 + 状态行）** | ❌ **还没做** | `window.api.recorder.*` 已可用，界面未接 |
+| S2 保留与水位 | ❌ 没做 | 现有保留清扫只删 `alarm` 且只在启动时跑一次；`scheduled` 会无上限增长 |
+| S3 回放 | ❌ 没做 | 跨片段续播 / 缺口呈现 / 与告警趋势同轴 |
+| S4 搬到独立服务 | ❌ 没做 | 录像器的依赖已全部注入，具备搬家条件 |
+
+**本机验证的边界（重要）**：S1 的验证用的是**合成源**（`HZ_RECORDER_SOURCE=lavfi`），
+不碰真机 RTSP —— 地址拼装与 `rtsp_enabled` 判据由真机探针负责。另外**切片边界取决于相机的
+GOP**（分段复用器只在关键帧上切），真机上的实际边界要实测。
 
