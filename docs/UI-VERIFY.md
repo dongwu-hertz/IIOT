@@ -4618,3 +4618,17 @@ driver 直接驱动录像器（与 `HERTZINNO_STORAGE_ROOT` 同一类刻意开�
 所以挂住的位置**不在录像器**，而在探针那一步的用法上（`settings.update()` 或真 ffmpeg 的
 收尾路径）。下一轮从这两条继续查；在查清之前，探针保持第 6 轮那个全过的版本，
 `resumeEnabled()` 仍然只有类型与单测证据 —— 不按已验证验收。
+**MM.5 第二次尝试（第 10 轮）：嫌疑缩小到 `resumeEnabled()` 自己**
+
+这次**去掉 `settings.update()`**，只调 `recorder.resumeEnabled(config, stubResolver)`，结果**仍然挂住**
+在同一位置（`stop` 行之后、`resume(ok)` 之前）。加上第 9 轮"录像器自身 `start→stop→start` 立刻返回"
+的单测结论，排查范围现在是：
+
+- ❌ 录像器的 start/stop 生命周期（单测全绿，已排除）
+- ❌ `settings.update()`（本轮去掉它，挂住照旧）
+- ✅ **`resumeEnabled()` 内部**（或在真窗口里"真 ffmpeg 刚被 taskkill 之后再拉起一轮"这条组合）
+
+具体可疑点（下一轮先看这两处）：① `resumeEnabled` 里 `resolveTarget` 的 await 语义（探针传的 stub 是
+`async` 函数，理论上立刻 resolve）；② `start()` 里 `recoverUnregistered()` → `registerSegment()` →
+SQLite 写入 在真窗口里是否被"待处理的 ffmpeg 收尾"挡住。driver 扩展再次回退，
+`verify-recorder.cjs` 仍是第 6 轮那个 **problems 0** 的版本。
