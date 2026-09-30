@@ -132,6 +132,49 @@ export function buildRecorderArgs(input: {
   ]
 }
 
+/**
+ * **探针专用**：把本机合成源切成片段，验证录像器的调度/登记/看门狗。
+ *
+ * 为什么需要它：断流、卡住、崩溃补登记这几条最容易错的路径，全都发生在"没有相机"的
+ * 时候；用真机根本没法稳定复现（拔网线要人去现场）。这里用 ffmpeg 自带的 `lavfi`
+ * 合成源（`testsrc2`）按**同一套切片参数**输出到同一套命名模式，
+ * 于是"录像器这一层"可以被真的跑起来验，而 RTSP 那一层交回给真机。
+ *
+ * 只在 `HZ_RECORDER_SOURCE=lavfi` 时启用（与 `HERTZINNO_STORAGE_ROOT` 同一类
+ * 刻意开关：客户安装里不会有人设它）。
+ */
+export function buildSyntheticSegmentArgs(outputPattern: string, segmentSeconds: number): string[] {
+  return [
+    '-re',
+    '-f',
+    'lavfi',
+    '-i',
+    // 有实际内容的画面：全黑画面在 H.264 下会被压到接近 0 字节，反而掩盖"文件在长"的判据。
+    'testsrc2=size=320x240:rate=10',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-tune',
+    'zerolatency',
+    '-pix_fmt',
+    'yuv420p',
+    '-f',
+    'segment',
+    '-segment_format',
+    'mp4',
+    '-segment_format_options',
+    'movflags=frag_keyframe+empty_moov+default_base_moof',
+    '-segment_time',
+    String(segmentSeconds),
+    '-reset_timestamps',
+    '1',
+    '-strftime',
+    '1',
+    outputPattern
+  ]
+}
+
 /** 抓图：从同一个 RTSP 源取**一帧**，编码成 JPEG。 */
 export function buildSnapshotArgs(rtspUrl: string, filePath: string): string[] {
   return [

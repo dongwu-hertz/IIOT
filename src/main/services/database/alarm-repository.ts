@@ -485,6 +485,22 @@ interface RecordingRow {
  */
 export const CAMERA_VIDEO_EVENT_TYPE = 'video_mp4'
 
+/**
+ * 连续录像切片的事件语义标记（`recording_type='scheduled'`）。
+ *
+ * 与手动录像（`video_mp4`）分开：界面上"这一段是我按的录制"与"这一段是录像器自己录的"
+ * 是两件不同的事，保留策略对它们的处理也不同（后者随时可能被按天清理）。
+ */
+export const CONTINUOUS_VIDEO_EVENT_TYPE = 'continuous_mp4'
+
+/**
+ * 连续录像切片的幂等键前缀（`remote_recording_id = 'continuous:<文件名>'`）。
+ *
+ * 用设备库镜像那张唯一索引（`idx_recordings_remote`）来做"同一片只入库一次"，
+ * 因为录像器会反复扫盘（崩溃恢复 / 停止 / 跨天），重复登记是常态而非异常。
+ */
+export const CONTINUOUS_VIDEO_REMOTE_PREFIX = 'continuous:'
+
 function toRecording(row: RecordingRow): Recording {
   const recording: Recording = {
     id: row.id,
@@ -659,6 +675,69 @@ export class RecordingRepository {
       eventType: input.eventType ?? CAMERA_VIDEO_EVENT_TYPE,
       fileSize: input.fileSize
     })
+  }
+
+  /**
+   * 登记一段**连续录像的切片**（RTSP 取流存储，`recording_type='scheduled'`）。
+   *
+   * 与 `insertVideo()` 的差别只有一处，但它是这条功能能不能重启的关键：**幂等键**。
+   * 连续录像每 5 分钟产出一个文件、7×24 一直产出，而录像器会在启动时/停止时反复扫盘
+   * （崩溃恢复、跨天换目录），所以"同一个文件被登记两次"是常态而不是异常。
+   * 这里用 `remote_recording_id = 'continuous:<文件名>'` 去重，且那条唯一索引是
+   * **数据库级**的（`idx_recordings_remote`）—— 录像器内存里的判断被绕过时，库仍然只留一行。
+   *
+   * @returns `created: false` 表示这一片早就登记过（不是错误）。
+   */
+  insertContinuousVideo(input: {
+    deviceId: string
+    startTime: number
+    endTime: number
+    durationMs: number
+    relativePath: string
+    fileSize: number
+    /** 片段文件名；它是同一天内的唯一键（时间戳在前，见 recorder.ts）。 */
+    segmentKey: string
+  }): { created: boolean } {
+    const remoteRecordingId = `${CONTINUOUS_VIDEO_REMOTE_PREFIX}${input.segmentKey}`
+    const existing = this.db
+      .prepare(
+        `SELECT id FROM recordings WHERE device_id = ? AND remote_recording_id = ?`
+      )
+      .get(input.deviceId, remoteRecordingId) as { id: string } | undefined
+    if (existing) return { created: false }
+
+    this.insert({
+      deviceId: input.deviceId,
+      channelId: 0,
+      recordingType: 'scheduled',
+      startTime: input.startTime,
+      endTime: input.endTime,
+      durationMs: input.durationMs,
+      sampleRate: 0,
+      audioFormat: null,
+      containerFormat: 'mp4',
+      relativePath: input.relativePath,
+      eventType: CONTINUOUS_VIDEO_EVENT_TYPE,
+      fileSize: input.fileSize,
+      remoteRecordingId
+    })
+    return { created: true }
+  }
+
+  /**
+   * 某个存储目录下**已经登记过**的文件名。
+   *
+   * 录像器扫盘时用它做"这一片登记过没有"的第一道判断（第二道是数据库唯一索引）。
+   * 按 `relative_path` 前缀匹配；目录是存储根相对路径，与入库时一致。
+   */
+  listRecordingNamesInDir(deviceId: string, relativeDir: string): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT relative_path FROM recordings
+         WHERE device_id = ? AND relative_path LIKE ?`
+      )
+      .all(deviceId, `${relativeDir}/%`) as Array<{ relative_path: string }>
+    return rows.map((row) => row.relative_path.slice(relativeDir.length + 1))
   }
 
   /**

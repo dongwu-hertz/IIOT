@@ -55,7 +55,13 @@ import { toWebSocketUrl } from './stream/websocket-stream'
 import { Fa371StreamService } from './device/fa371/fa371-stream-service'
 import { Fa371ApiClient } from './device/fa371/fa371-api-client'
 import { RtspStreamService } from './media/rtsp-stream'
-import { CameraCaptureService } from './media/camera-capture'
+import {
+  CameraCaptureService,
+  buildRecorderArgs,
+  buildSyntheticSegmentArgs
+} from './media/camera-capture'
+import { spawnFfmpeg } from './media/ffmpeg'
+import { RtspRecorderService } from './recorder/rtsp-recorder-service'
 import { CameraAlarmService } from './device/fa371/camera-alarm-service'
 import { CameraControlService } from './device/fa371/camera-control-service'
 import { CameraUpgradeService } from './device/fa371/camera-upgrade-service'
@@ -122,6 +128,13 @@ export interface AppServices {
   db: SqliteDatabase
   settings: SettingsService
   storage: StorageService
+  /**
+   * 连续录像器（RTSP 取流存储，业主 2026-09-26 追加范围，见 docs/STORAGE-DESIGN.md §9）。
+   *
+   * 依赖全部从构造函数注入（子进程、时钟、目录、入库），所以它将来可以**整体**搬进
+   * 独立服务（§9.3 的 S4）—— 这个接口就是那条边界的形状。
+   */
+  recorder: RtspRecorderService
   credentials: CredentialStore
   credentialsPersistent: boolean
   /** Application accounts + the current session. See `auth/auth-service.ts`. */
@@ -1026,10 +1039,44 @@ export async function initServices(): Promise<AppServices> {
     getStorageRoot: () => settings.get().storageRoot
   })
 
+  /**
+   * 连续录像器（RTSP 取流存储）。
+   *
+   * 三个依赖都是"窄函数"而不是服务对象：`spawn` 走唯一的子进程出口、`registerSegment`
+   * 走录像仓库、`listRegisteredNames` 走同一个仓库 —— 录像器**不认识** DeviceService、
+   * StorageService 或 IPC，这正是它能被整体搬走的前提（docs/STORAGE-DESIGN.md §9.3）。
+   *
+   * `buildArgs` 走 `buildRecorderArgs()`（`-f segment` + 内层分片 MP4）。
+   * `HZ_RECORDER_SOURCE=lavfi` 时改用本机测试源：**探针用**，这样断流/看门狗/补登记
+   * 这几条都能在没有真机的条件下验（与 `HERTZINNO_STORAGE_ROOT` 同一类刻意开关）。
+   */
+  const recorder = new RtspRecorderService({
+    getStorageRoot: () => settings.get().storageRoot,
+    spawn: (args) => spawnFfmpeg(args, { label: 'recorder' }),
+    buildArgs: ({ rtspUrl, outputPattern, segmentSeconds }) =>
+      process.env.HZ_RECORDER_SOURCE === 'lavfi'
+        ? buildSyntheticSegmentArgs(outputPattern, segmentSeconds)
+        : buildRecorderArgs({ rtspUrl, outputPattern, segmentSeconds }),
+    registerSegment: (segment) => {
+      recordingRepo.insertContinuousVideo({
+        deviceId: segment.deviceId,
+        startTime: segment.startMs,
+        endTime: segment.endMs,
+        durationMs: Math.max(0, segment.endMs - segment.startMs),
+        relativePath: segment.relativePath,
+        fileSize: segment.bytes,
+        segmentKey: segment.name
+      })
+    },
+    listRegisteredNames: async (deviceId, relativeDir) =>
+      recordingRepo.listRecordingNamesInDir(deviceId, relativeDir)
+  })
+
   services = {
     db,
     settings,
     storage,
+    recorder,
     credentials: credentialResult.store,
     credentialsPersistent: credentialResult.persistent,
     auth,
