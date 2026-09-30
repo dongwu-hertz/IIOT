@@ -147,6 +147,56 @@ export class RtspRecorderService {
     this.now = options.now ?? (() => Date.now())
   }
 
+  /**
+   * 应用启动时按设置**恢复**连续录像（"应用运行期间连续录"的另一半）。
+   *
+   * 为什么必须有：开关存在设置里、跨重启保留，而录像进程只活在内存里 ——
+   * 不恢复的话，用户重启一次应用，界面上开关还是"已开启"，实际**什么都没录**。
+   * 那是这条功能最危险的假象（数据静默缺失，而不是当场报错）。
+   *
+   * 单台失败**不阻断其余设备**：一台相机的 RTSP 关着不该让另外三台也不录；
+   * 失败原因逐台记日志，并且**不改设置**（用户的意愿仍然保留，下次启动再试）。
+   */
+  async resumeEnabled(
+    config: { enabledDeviceIds: readonly string[]; segmentSeconds: number },
+    resolveTarget: (deviceId: string) => Promise<RecorderDeviceTarget | undefined>
+  ): Promise<{ started: string[]; failed: Array<{ deviceId: string; reason: string }> }> {
+    const started: string[] = []
+    const failed: Array<{ deviceId: string; reason: string }> = []
+    for (const deviceId of config.enabledDeviceIds) {
+      if (this.runs.has(deviceId)) {
+        started.push(deviceId)
+        continue
+      }
+      try {
+        const target = await resolveTarget(deviceId)
+        if (!target) {
+          failed.push({ deviceId, reason: '找不到设备或相机没有可用的 RTSP 地址' })
+          continue
+        }
+        await this.start(target, config.segmentSeconds)
+        started.push(deviceId)
+      } catch (error) {
+        failed.push({
+          deviceId,
+          reason: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+    deviceLog().info('Continuous recording resumed from settings', {
+      requested: config.enabledDeviceIds.length,
+      started: started.length,
+      failed: failed.length
+    })
+    for (const entry of failed) {
+      deviceLog().warn('Could not resume continuous recording for a device', {
+        deviceId: entry.deviceId,
+        reason: entry.reason
+      })
+    }
+    return { started, failed }
+  }
+
   /** 正在录的设备状态（界面的唯一事实来源）。 */
   status(): RecorderStatus[] {
     return [...this.runs.values()].map((run) => this.statusOf(run))

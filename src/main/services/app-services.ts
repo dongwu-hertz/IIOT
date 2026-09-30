@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Application service container and composition root.
  *
  * Everything is constructed once, in dependency order, and disposed in reverse.
@@ -1169,6 +1169,26 @@ export async function initServices(): Promise<AppServices> {
    * 只在 `HZ_RECORDER_PROBE=1` 时挂（与 `HERTZINNO_STORAGE_ROOT`、`HZ_RECORDER_SOURCE`
    * 同一类刻意开关：客户安装里不会有人设它）。
    */
+  /*
+   * 启动时按设置恢复连续录像。
+   *
+   * 开关跨重启保留，而录像进程只活在内存里 —— 不恢复的话，用户重启一次应用，
+   * 界面上开关还是"已开启"、实际什么都没录（数据静默缺失，最危险的假象）。
+   * 不 await：启动路径不该等 RTSP 握手；单台失败也不影响其它设备。
+   */
+  void recorder
+    .resumeEnabled(settings.get().recorder, async (deviceId) => {
+      const source = await cameraLive.resolveRecorderSource(deviceId)
+      if (!source.ok) return undefined
+      const device = deviceService.get(deviceId)
+      return { deviceId, deviceUid: device.deviceUid, rtspUrl: source.url }
+    })
+    .catch((error: unknown) => {
+      appLog().warn('Resuming continuous recording failed', {
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    })
+
   if (process.env.HZ_RECORDER_PROBE === '1') {
     ;(globalThis as { __HZ_SERVICES__?: AppServices }).__HZ_SERVICES__ = services
   }
