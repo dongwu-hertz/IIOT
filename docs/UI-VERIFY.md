@@ -4609,3 +4609,12 @@ driver 直接驱动录像器（与 `HERTZINNO_STORAGE_ROOT` 同一类刻意开�
 是否撞上了"同一设备上一轮还没完全收干净"的状态；② `settings.update()` 在真窗口里是否
 触发了某个 await 不返回的监听（真机上没有这条路径，所以更像是探针用法问题）；
 ③ `resumeEnabled()` 的 `resolveTarget` 回调里 `await` 的语义。
+**MM.5 后续（同轮）：第一嫌疑已排除 —— 录像器的 `start → stop → start` 不会卡**
+
+按 MM.5 的排查方向①，用**纯录像器**（假 ffmpeg + 假时钟）把"同一台设备连续
+`start → stop → start`"摘出来跑：立刻返回、`spawnCount` 从 1 变 2、状态正常、第二次 `stop`
+后状态清空（`tests/recorder-service.test.ts` 新增一条，全绿）。
+
+所以挂住的位置**不在录像器**，而在探针那一步的用法上（`settings.update()` 或真 ffmpeg 的
+收尾路径）。下一轮从这两条继续查；在查清之前，探针保持第 6 轮那个全过的版本，
+`resumeEnabled()` 仍然只有类型与单测证据 —— 不按已验证验收。

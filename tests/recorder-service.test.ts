@@ -297,6 +297,21 @@ describe('连续录像器：跨天与补登记', () => {
     assert.deepEqual(harnessed.registrations.slice(before), [], '已经登记过的不许再插一次')
   })
 
+  it('同一台设备 start → stop → start 不会卡住（探针挂住时的第一嫌疑）', async () => {
+    // 真窗口探针在 stop() 之后立刻改设置并再 start()，然后**挂住不返回**。
+    // 这里先把"录像器自己会不会卡在第二轮 start"这条摘出来：假 ffmpeg + 假时钟下
+    // 这条路径必须立刻返回，否则问题在录像器；如果这里全绿，问题就在探针的用法
+    // （settings.update / 真 ffmpeg 收尾）上。
+    const harnessed = await harness()
+    await harnessed.service.start(harnessed.target, 300)
+    await harnessed.service.stop(harnessed.target.deviceId)
+    const second = await harnessed.service.start(harnessed.target, 300)
+    assert.equal(harnessed.spawnCount(), 2, '第二轮应当重新拉起一个进程')
+    assert.ok(second.state === 'starting' || second.state === 'recording', second.state)
+    await harnessed.service.stop(harnessed.target.deviceId)
+    assert.deepEqual(harnessed.service.status(), [])
+  })
+
   it('stop() 之后不再出现在状态里，重复 stop 不抛', async () => {
     const harnessed = await harness()
     await harnessed.service.start(harnessed.target, 300)
