@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ⑪ 连续录像器（`services/recorder/rtsp-recorder-service.ts`）的监督逻辑回归测试。
  *
  * WHY THIS FILE EXISTS
@@ -312,6 +312,37 @@ describe('连续录像器：跨天与补登记', () => {
     assert.deepEqual(harnessed.service.status(), [])
   })
 
+  it('resumeEnabled()：按配置把已开启的设备录起来，单台失败不影响其余', async () => {
+    // 真窗口探针在这条路径上挂住（见 docs/UI-VERIFY.md MM.5），所以在拿到真窗口证据之前，
+    // 先用假 ffmpeg + 假时钟把**逻辑**钉住：这一层不该有任何 await 悬空。
+    const harnessed = await harness()
+    const other = { deviceId: 'dev-2', deviceUid: 'FA371-OTHER', rtspUrl: 'rtsp://127.0.0.1:8554/other' }
+    const result = await harnessed.service.resumeEnabled(
+      { enabledDeviceIds: ['dev-1', 'ghost', 'dev-2'], segmentSeconds: 300 },
+      async (deviceId) => {
+        if (deviceId === 'ghost') return undefined
+        return deviceId === 'dev-1' ? harnessed.target : other
+      }
+    )
+    assert.deepEqual(result.started.sort(), ['dev-1', 'dev-2'])
+    assert.deepEqual(
+      result.failed.map((entry) => entry.deviceId),
+      ['ghost']
+    )
+    assert.equal(harnessed.spawnCount(), 2, '两台设备各拉起一轮')
+    assert.equal(harnessed.service.status().length, 2)
+    // 已经在录的设备再次 resume = 幂等（不会再拉起第三个进程）。
+    const again = await harnessed.service.resumeEnabled(
+      { enabledDeviceIds: ['dev-1'], segmentSeconds: 300 },
+      async () => harnessed.target
+    )
+    assert.deepEqual(again.started, ['dev-1'])
+    assert.equal(harnessed.spawnCount(), 2)
+
+    await harnessed.service.stop('dev-1')
+    await harnessed.service.stop('dev-2')
+    assert.deepEqual(harnessed.service.status(), [])
+  })
   it('stop() 之后不再出现在状态里，重复 stop 不抛', async () => {
     const harnessed = await harness()
     await harnessed.service.start(harnessed.target, 300)

@@ -4632,3 +4632,11 @@ driver 直接驱动录像器（与 `HERTZINNO_STORAGE_ROOT` 同一类刻意开�
 `async` 函数，理论上立刻 resolve）；② `start()` 里 `recoverUnregistered()` → `registerSegment()` →
 SQLite 写入 在真窗口里是否被"待处理的 ffmpeg 收尾"挡住。driver 扩展再次回退，
 `verify-recorder.cjs` 仍是第 6 轮那个 **problems 0** 的版本。
+**MM.5 第三次尝试（第 11 轮）：改用单测拿逻辑层证据**
+
+真窗口那一步仍然挂住、原因未定位，所以本轮换一条路：用假 ffmpeg + 假时钟直接测
+`resumeEnabled()` 的逻辑 —— 配置里三台（含一台不存在）→ 拉起两台、如实报一台失败、
+已在录的设备再 resume 幂等、收尾后状态清空（`tests/recorder-service.test.ts` 新增一条，全绿）。
+
+这条证据的**等级**必须说清：它证明的是"resume 的判断与循环是对的"，**不是**"应用启动时真的
+会自己录起来"。后者仍然只有组合根那一行代码 + 本次单测，**没有真窗口证据**。
