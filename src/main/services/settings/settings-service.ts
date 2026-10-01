@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Settings service.
  *
  * Two-tier configuration (spec 4.4):
@@ -107,6 +107,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
    * opt-in 是有意的：一路 2 Mbps 一天约 21 GB，装完就开始录会把用户的盘填满。
    */
   recorder: defaultRecorderConfig(),
+
+  /* 存储配额 50 GB + 告警永久保留区 10%（业主 2026-09-30「优先级是容量」）。 */
+  storageQuotaBytes: 50 * 1024 * 1024 * 1024,
+  retentionAlarmReserveRatio: 0.1,
 
   /**
    * 在线地图底图（业主 2026-09-19 追加第 1 条；**手册未说明**）。
@@ -269,6 +273,10 @@ const VALIDATORS: {
     }
     return config
   },
+  storageQuotaBytes: (value) =>
+    typeof value === 'number' && value >= 0 && value <= 1024 ** 5 ? Math.floor(value) : undefined,
+  retentionAlarmReserveRatio: (value) =>
+    typeof value === 'number' && value >= 0 && value <= 1 ? value : undefined,
   recorder: (value) => {
     const { config, issues } = normaliseRecorderConfig(value)
     if (issues.length > 0) {

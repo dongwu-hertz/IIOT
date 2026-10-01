@@ -1006,6 +1006,16 @@ export interface AppSettings {
   recorder: RecorderConfig
 
   /**
+   * 存储容量配额与告警保留区（业主 2026-09-30：优先级是容量）。
+   *
+   * `storageQuotaBytes`：录像/录音/趋势/日志/缓存**合计**的上限，界面按 GB 填，默认 50 GB。
+   * `retentionAlarmReserveRatio`：其中给"warning 以上的告警录像永久保存"预留的比例，默认 0.1。
+   * 两者都由 `shared/domain/retention.ts` 的纯策略消费（该模块只算不删）。
+   */
+  storageQuotaBytes: number
+  retentionAlarmReserveRatio: number
+
+  /**
    * 在线地图底图（业主 2026-09-19 追加第 1 条：地图 GIS 应该在设置里面配置）。
    *
    * **默认关闭**（离线优先）；只有用户显式打开后，地图页才会以 `<img>` 加载配置的
