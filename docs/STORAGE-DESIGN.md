@@ -477,7 +477,7 @@ GET    /events                      SSE：object.created / pool.threshold / pool
 | S1 IPC + preload | ✅ 已实现 | `RECORDER_STATUS` / `RECORDER_SET_ENABLED`，顺序为"先解析地址 → 再落库 → 最后拉起" |
 | S1 真窗口验证 | ✅ 通过（problems 0） | `scripts/verify-recorder.cjs`：真 ffmpeg + 合成源，6 片全可播、断流后换轮重启、停止时补登记 —— 见 `docs/UI-VERIFY.md` MM |
 | **S1 界面（开关 + 状态行）** | ❌ **还没做** | `window.api.recorder.*` 已可用，界面未接 |
-| S2 保留与水位 | ❌ 没做 | 现有保留清扫只删 `alarm` 且只在启动时跑一次；`scheduled` 会无上限增长 |
+| S2 保留与水位 | 🟡 容量/周期/界面已实现；趋势按天保留未接 | `shared/domain/retention.ts` + `StorageService.enforceRetention()` + 设置页配额与超额提示；见 §9.9 |
 | S3 回放 | ❌ 没做 | 跨片段续播 / 缺口呈现 / 与告警趋势同轴 |
 | S4 搬到独立服务 | ❌ 没做 | 录像器的依赖已全部注入，具备搬家条件 |
 
@@ -567,5 +567,16 @@ GOP**（分段复用器只在关键帧上切），真机上的实际边界要实
   否则"配额 50 GB"与磁盘实际占用会对不上；
 - 删除要**先删文件再删行**（或反之但要有补偿），沿用现有 `expiredAlarmRecordings()` 那套写法的顺序与容错。
 
-> **未做**：本节目前只是规格。下一步是实现 `shared/domain/retention.ts`（纯策略：给候选清单 +
-> 配额 → 输出该删哪些）+ 单测，再接进存储服务的周期清扫。
+> **现状（2026-10-01）**：纯策略、周期清扫、配额设置与超额提示都已实现，见 §9.9；仍未接线的是 `TrendQueryService.enforceRetention()`（趋势 parquet 按天删）。
+
+### 9.9 S2 实现记录（2026-10-01）
+
+- `AppSettings.storageQuotaBytes`（默认 50 GB）与 `retentionAlarmReserveRatio`（默认 0.1）已由设置页「存储」卡承接；`0` = 不限制。
+- 纯策略 `shared/domain/retention.ts` 已接进 `StorageService.enforceRetention({ retentionDays, quotaBytes, alarmReserveRatio })`：
+  - 超配额时先清可重建缓存；C 档（`scheduled` + 低于 warning 的 `alarm`）按最旧优先删到配额以内；P 档封顶 = 配额 × 比例，超出照样按最旧淘汰；M 档（`manual`）永不进待删队列。
+  - 删除顺序是先文件后行；文件被锁/无权限时保留行和文件，下一轮重试，不做「删行造成孤儿文件」。
+  - 配额占用按存储根下全部文件统计（录像 + 趋势 + 日志 + 缓存 + 导出）。设置页走专用的 `quotaUsage()`；录音保存热路径仍用轻量的 `diskUsage()`（只扫 `audio`），避免每次落盘都全树扫描。
+  - 清扫在启动时跑一次，此后每 `RETENTION_SWEEP_INTERVAL_MS`（10 分钟）一次；`app-services.dispose()` 会清掉定时器。
+  - P 档豁免按天；非保护告警仍按 `retentionDays` 删。`DiskUsage.remainingOverQuotaBytes > 0` 时设置页如实提示「已超出配额，只剩永久告警与手动录像」。
+- 集成回归：`tests/storage-retention-sweep.test.ts`（容量删最旧、P/M 保护、非录像计入、缓存优先、缺文件补删）。
+- **仍未接线**：`TrendQueryService.enforceRetention()`（趋势 parquet 按天删）目前没有调用者；趋势文件只计入配额并在容量清扫后如实报告，不会按天自动删除。

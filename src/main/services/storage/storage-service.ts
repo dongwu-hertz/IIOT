@@ -26,6 +26,12 @@ import type { Database as SqliteDatabase } from 'better-sqlite3'
 import type { DiskUsage } from '@shared/ipc/contract'
 import type { RecordingType } from '@shared/domain/models'
 import {
+  isRetentionProtected,
+  planCapacityRetention,
+  type RetentionCandidate,
+  type RetentionPlan
+} from '@shared/domain/retention'
+import {
   cameraMediaFileName,
   cameraMediaRelativeDirectory,
   cameraMediaStamp,
@@ -64,12 +70,65 @@ export const STORAGE_SUBDIRS = [
 
 export type StorageSubdir = (typeof STORAGE_SUBDIRS)[number]
 
+/**
+ * Continuous recording grows between restarts, so retention must run on a
+ * cadence as well. Ten minutes is short enough that a full quota cannot grow
+ * much past its limit, and long enough that a full-directory scan stays cheap.
+ */
+export const RETENTION_SWEEP_INTERVAL_MS = 10 * 60 * 1000
+
 export interface StorageServiceOptions {
   db: SqliteDatabase
   /** Returns the CURRENT storage root; read per call so a settings change applies live. */
   getStorageRoot: () => string
   /** Returns the current free-space safety floor in bytes. */
   getMinFreeBytes: () => number
+  /**
+   * Current capacity quota in bytes; 0 means unlimited. Optional so existing
+   * tests/callers that only used the other three getters keep compiling.
+   */
+  getStorageQuotaBytes?: () => number
+  /** Current warning+ alarm reserve ratio. Defaults to 0.1 when not injected. */
+  getRetentionAlarmReserveRatio?: () => number
+}
+
+export interface RetentionSweepOptions {
+  /** Age window for non-protected alarm recordings; <= 0 disables the age pass. */
+  retentionDays: number
+  /** Capacity cap in bytes; 0 disables capacity deletion. */
+  quotaBytes: number
+  /** Overrides the ratio from getRetentionAlarmReserveRatio. */
+  alarmReserveRatio?: number
+}
+
+export interface RetentionSweepResult {
+  /** Files physically unlinked by all passes. */
+  deletedFiles: number
+  /** Bytes those files occupied. */
+  freedBytes: number
+  /** Metadata rows deleted (including rows whose file was already missing). */
+  deletedRows: number
+  cacheDeletedFiles: number
+  cacheFreedBytes: number
+  /** Files removed by the capacity plan (C zone + over-cap P zone). */
+  capacityDeletedFiles: number
+  /** Files removed by the age rule (non-protected alarm rows past retentionDays). */
+  ageDeletedFiles: number
+  /** Files that could not be removed (locked/permission); their rows were kept. */
+  failedDeletions: number
+  /** Bytes still over quota after this pass; 0 inside quota or when quota=0. */
+  remainingOverBytes: number
+}
+
+interface StorageInventory {
+  totalBytes: number
+  /** Absolute path -> actual on-disk size. */
+  files: Map<string, number>
+}
+
+interface RetentionRecordingRow extends RetentionCandidate {
+  /** Root-relative DB path; '' for device-library mirrors not downloaded yet. */
+  relativePath: string
 }
 
 export interface AlarmClipPaths {
@@ -94,11 +153,18 @@ export class StorageService {
   private readonly db: SqliteDatabase
   private readonly getStorageRoot: () => string
   private readonly getMinFreeBytes: () => number
+  private readonly getStorageQuotaBytes: () => number
+  private readonly getRetentionAlarmReserveRatio: () => number
+  /** Coalesces overlapping timer/manual sweeps so two passes never race. */
+  private sweepPromise: Promise<RetentionSweepResult> | null = null
 
   constructor(options: StorageServiceOptions) {
     this.db = options.db
     this.getStorageRoot = options.getStorageRoot
     this.getMinFreeBytes = options.getMinFreeBytes
+    this.getStorageQuotaBytes = options.getStorageQuotaBytes ?? (() => 0)
+    this.getRetentionAlarmReserveRatio =
+      options.getRetentionAlarmReserveRatio ?? (() => 0.1)
   }
 
   get root(): string {
@@ -291,23 +357,18 @@ export class StorageService {
   // Capacity + disk protection (spec 14.4)
   // -------------------------------------------------------------------------
 
+  /**
+   * Lightweight free-space read for recording guards.
+   *
+   * It deliberately keeps `usedByAppBytes` as the audio directory only, as it
+   * always was: this method is called while saving a recording, and walking the
+   * whole storage root there would put quota bookkeeping on the hot write path.
+   * The settings endpoint uses `quotaUsage()` for the full picture.
+   */
   async diskUsage(): Promise<DiskUsage> {
     const root = this.root
     await this.ensureLayout(root)
-
-    let totalBytes = 0
-    let freeBytes = 0
-    try {
-      const stats = await fs.statfs(root)
-      totalBytes = stats.blocks * stats.bsize
-      freeBytes = stats.bavail * stats.bsize
-    } catch {
-      // statfs is unavailable on some Windows/network paths; degrade to "unknown"
-      // rather than blocking recording outright.
-      totalBytes = 0
-      freeBytes = Number.MAX_SAFE_INTEGER
-    }
-
+    const { totalBytes, freeBytes } = await this.fileSystemCapacity()
     const usedByAppBytes = await this.directorySize(path.join(root, 'audio'))
     const minFree = this.getMinFreeBytes()
 
@@ -316,7 +377,54 @@ export class StorageService {
       totalBytes,
       freeBytes,
       usedByAppBytes,
+      quotaBytes: 0,
+      overQuotaBytes: 0,
+      remainingOverQuotaBytes: 0,
+      reclaimableBytes: 0,
       belowSafetyFloor: freeBytes < minFree
+    }
+  }
+
+  /**
+   * Full quota picture for the settings screen: walks the storage root
+   * (recordings, trends, logs, caches, exports) and runs the pure retention
+   * plan WITHOUT deleting anything. `remainingOverQuotaBytes` is therefore the
+   * honest aftermath of the next sweep, and `reclaimableBytes` is what that
+   * sweep would remove from the C zone.
+   */
+  async quotaUsage(): Promise<DiskUsage> {
+    const root = this.root
+    await this.ensureLayout(root)
+    const { totalBytes, freeBytes } = await this.fileSystemCapacity()
+    const inventory = await this.collectInventory(root)
+    const quotaBytes = this.currentQuotaBytes()
+    const { plan } = this.buildCapacityPlan(inventory, quotaBytes)
+    const minFree = this.getMinFreeBytes()
+
+    return {
+      storageRoot: root,
+      totalBytes,
+      freeBytes,
+      usedByAppBytes: inventory.totalBytes,
+      quotaBytes,
+      overQuotaBytes: quotaBytes > 0 ? Math.max(0, inventory.totalBytes - quotaBytes) : 0,
+      remainingOverQuotaBytes: plan.remainingOverBytes,
+      reclaimableBytes: plan.freedBytes,
+      belowSafetyFloor: freeBytes < minFree
+    }
+  }
+
+  private async fileSystemCapacity(): Promise<{ totalBytes: number; freeBytes: number }> {
+    try {
+      const stats = await fs.statfs(this.root)
+      return {
+        totalBytes: stats.blocks * stats.bsize,
+        freeBytes: stats.bavail * stats.bsize
+      }
+    } catch {
+      // statfs is unavailable on some Windows/network paths; degrade to "unknown"
+      // rather than blocking recording outright.
+      return { totalBytes: 0, freeBytes: Number.MAX_SAFE_INTEGER }
     }
   }
 
@@ -332,52 +440,294 @@ export class StorageService {
   }
 
   /**
-   * Retention sweep. Deletion order mandated by spec 14.4:
-   *   1. rebuildable caches (spectrum / spectrogram)
-   *   2. historical ALARM recordings past `retentionDays`
-   *   3. manual recordings: never auto-deleted
+   * Retention sweep (owner decision 2026-09-30, spec 14.4 + docs/STORAGE-DESIGN §9.8).
+   *
+   * Order:
+   *   1. rebuildable caches, but ONLY when the quota is already exceeded;
+   *   2. capacity plan: C-zone oldest-first until inside quota; P-zone capped at
+   *      `quota * reserveRatio`; M-zone never enters the deletion queue;
+   *   3. age pass for non-protected alarm recordings older than `retentionDays`
+   *      (the P zone is exempt, which is what "permanent" means);
+   *   4. truthful `remainingOverBytes` when only P/M/non-recording data is left.
+   *
+   * The old `enforceRetention(retentionDays)` signature is kept: it reads quota
+   * and ratio from the injected getters.
    */
-  async enforceRetention(retentionDays: number): Promise<{ deletedFiles: number; freedBytes: number }> {
-    const root = this.root
-    let deletedFiles = 0
-    let freedBytes = 0
+  async enforceRetention(options: RetentionSweepOptions): Promise<RetentionSweepResult>
+  async enforceRetention(retentionDays: number): Promise<RetentionSweepResult>
+  async enforceRetention(
+    options: RetentionSweepOptions | number
+  ): Promise<RetentionSweepResult> {
+    if (this.sweepPromise) return this.sweepPromise
 
-    // 1. Caches are always safe to drop when space is tight.
-    for (const subdir of ['spectrum_cache', 'spectrogram_cache'] as const) {
-      const result = await this.pruneDirectory(path.join(root, subdir), 0)
-      deletedFiles += result.files
-      freedBytes += result.bytes
+    const input: RetentionSweepOptions =
+      typeof options === 'number'
+        ? {
+            retentionDays: options,
+            quotaBytes: this.currentQuotaBytes(),
+            alarmReserveRatio: this.getRetentionAlarmReserveRatio()
+          }
+        : { ...options, quotaBytes: normaliseQuota(options.quotaBytes) }
+
+    const run = this.runRetentionSweep(input).finally(() => {
+      this.sweepPromise = null
+    })
+    this.sweepPromise = run
+    return run
+  }
+
+  private async runRetentionSweep(
+    options: RetentionSweepOptions
+  ): Promise<RetentionSweepResult> {
+    const root = this.root
+    await this.ensureLayout(root)
+
+    const inventory = await this.collectInventory(root)
+    const quotaBytes = normaliseQuota(options.quotaBytes)
+    const alarmReserveRatio =
+      options.alarmReserveRatio ?? this.getRetentionAlarmReserveRatio()
+    let projectedTotalBytes = inventory.totalBytes
+
+    let cacheDeletedFiles = 0
+    let cacheFreedBytes = 0
+    if (quotaBytes > 0 && projectedTotalBytes > quotaBytes) {
+      for (const subdir of ['spectrum_cache', 'spectrogram_cache'] as const) {
+        const result = await this.pruneDirectory(path.join(root, subdir), 0)
+        cacheDeletedFiles += result.files
+        cacheFreedBytes += result.bytes
+      }
+      projectedTotalBytes = Math.max(0, projectedTotalBytes - cacheFreedBytes)
     }
 
-    // 2. Alarm recordings older than the retention window.
-    if (retentionDays > 0) {
-      const cutoff = now() - retentionDays * 24 * 60 * 60 * 1000
-      const expired = this.db
-        .prepare<[number], { id: string; relative_path: string; file_size: number | null }>(
-          `SELECT id, relative_path, file_size
-             FROM recordings
-            WHERE recording_type = 'alarm' AND start_time < ?`
+    const { rows, plan } = this.buildCapacityPlan(
+      inventory,
+      quotaBytes,
+      projectedTotalBytes,
+      alarmReserveRatio
+    )
+    const rowsById = new Map(rows.map((row) => [row.id, row]))
+    const attempted = new Set<string>()
+
+    let capacityDeletedFiles = 0
+    let ageDeletedFiles = 0
+    let deletedRows = 0
+    let freedBytes = 0
+    let failedDeletions = 0
+
+    for (const id of plan.deleteIds) {
+      const row = rowsById.get(id)
+      if (!row) continue
+      attempted.add(id)
+      const result = await this.deleteRecordingRow(row)
+      if (result.failed) {
+        failedDeletions += 1
+        continue
+      }
+      if (result.deletedFile) capacityDeletedFiles += 1
+      if (result.rowDeleted) deletedRows += 1
+      freedBytes += result.bytes
+      projectedTotalBytes = Math.max(0, projectedTotalBytes - result.bytes)
+    }
+
+    if (options.retentionDays > 0) {
+      const cutoff = now() - options.retentionDays * 24 * 60 * 60 * 1000
+      const expired = rows
+        .filter(
+          (row) =>
+            row.kind === 'alarm' &&
+            !isRetentionProtected(row) &&
+            row.startMs < cutoff &&
+            !attempted.has(row.id)
         )
-        .all(cutoff)
+        .sort((left, right) => left.startMs - right.startMs)
 
       for (const row of expired) {
+        attempted.add(row.id)
+        const result = await this.deleteRecordingRow(row)
+        if (result.failed) {
+          failedDeletions += 1
+          continue
+        }
+        if (result.deletedFile) ageDeletedFiles += 1
+        if (result.rowDeleted) deletedRows += 1
+        freedBytes += result.bytes
+        projectedTotalBytes = Math.max(0, projectedTotalBytes - result.bytes)
+      }
+    }
+
+    return {
+      deletedFiles: cacheDeletedFiles + capacityDeletedFiles + ageDeletedFiles,
+      freedBytes: cacheFreedBytes + freedBytes,
+      deletedRows,
+      cacheDeletedFiles,
+      cacheFreedBytes,
+      capacityDeletedFiles,
+      ageDeletedFiles,
+      failedDeletions,
+      remainingOverBytes: quotaBytes > 0 ? Math.max(0, projectedTotalBytes - quotaBytes) : 0
+    }
+  }
+
+  /**
+   * Delete a recording's file first, then its metadata row.
+   *
+   * Missing file = stale row, still safe to delete. Existing file that cannot
+   * be unlinked (locked/permission) keeps its row: deleting the row would turn
+   * a retryable failure into an orphaned file this service can never find again.
+   */
+  private async deleteRecordingRow(
+    row: RetentionRecordingRow
+  ): Promise<{ deletedFile: boolean; bytes: number; rowDeleted: boolean; failed: boolean }> {
+    let deletedFile = false
+    let fileBytes = 0
+
+    if (row.relativePath !== '') {
+      let absolute: string
+      try {
+        absolute = this.resolve(row.relativePath)
+      } catch {
+        return { deletedFile: false, bytes: 0, rowDeleted: false, failed: true }
+      }
+
+      const stat = await fs.stat(absolute).catch(() => null)
+      if (stat?.isFile()) {
         try {
-          const absolute = this.resolve(row.relative_path)
-          const stat = await fs.stat(absolute).catch(() => null)
-          if (stat) {
-            await fs.unlink(absolute)
-            deletedFiles += 1
-            freedBytes += stat.size
-          }
-          this.db.prepare(`DELETE FROM recordings WHERE id = ?`).run(row.id)
+          await fs.unlink(absolute)
+          deletedFile = true
+          fileBytes = stat.size
         } catch {
-          // A missing file still means the row should go; keep sweeping.
-          this.db.prepare(`DELETE FROM recordings WHERE id = ?`).run(row.id)
+          return { deletedFile: false, bytes: 0, rowDeleted: false, failed: true }
         }
       }
     }
 
-    return { deletedFiles, freedBytes }
+    try {
+      this.db.prepare(`DELETE FROM recordings WHERE id = ?`).run(row.id)
+      return { deletedFile, bytes: fileBytes, rowDeleted: true, failed: false }
+    } catch {
+      return { deletedFile, bytes: fileBytes, rowDeleted: false, failed: true }
+    }
+  }
+
+  private buildCapacityPlan(
+    inventory: StorageInventory,
+    quotaBytes: number = this.currentQuotaBytes(),
+    totalBytes: number = inventory.totalBytes,
+    alarmReserveRatio: number = this.getRetentionAlarmReserveRatio()
+  ): { rows: RetentionRecordingRow[]; plan: RetentionPlan } {
+    const rows = this.retentionRows(inventory)
+    const plan = planCapacityRetention({
+      candidates: rows,
+      quotaBytes,
+      alarmReserveRatio,
+      totalBytes
+    })
+    return { rows, plan }
+  }
+
+  /**
+   * JOIN recordings to alarm severity. A recording is protected when ANY alarm
+   * pointing at it is warning/critical, which is the P-zone entry criterion.
+   */
+  private retentionRows(inventory: StorageInventory): RetentionRecordingRow[] {
+    const rows = this.db
+      .prepare<
+        [],
+        {
+          id: string
+          recording_type: string
+          start_time: number
+          relative_path: string
+          protected_severity: string | null
+        }
+      >(
+        `SELECT r.id,
+                r.recording_type,
+                r.start_time,
+                r.relative_path,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM alarms a
+                   WHERE a.recording_id = r.id
+                     AND a.severity IN ('warning', 'critical')
+                ) THEN 'warning' ELSE NULL END AS protected_severity
+           FROM recordings r
+          WHERE r.recording_type IN ('alarm', 'manual', 'scheduled')`
+      )
+      .all()
+
+    const result: RetentionRecordingRow[] = []
+    for (const row of rows) {
+      const kind = row.recording_type
+      if (kind !== 'alarm' && kind !== 'manual' && kind !== 'scheduled') continue
+      const candidate: RetentionRecordingRow = {
+        id: row.id,
+        kind,
+        startMs: row.start_time,
+        relativePath: row.relative_path,
+        bytes: this.storedFileSize(row.relative_path, inventory.files)
+      }
+      if (row.protected_severity !== null) candidate.severity = row.protected_severity
+      result.push(candidate)
+    }
+    return result
+  }
+
+  /** Actual bytes on disk for a stored relative path; 0 when the file is gone. */
+  private storedFileSize(relativePath: string, files: Map<string, number>): number {
+    if (relativePath === '') return 0
+    try {
+      return files.get(this.resolve(relativePath)) ?? 0
+    } catch {
+      return 0
+    }
+  }
+
+  private currentQuotaBytes(): number {
+    return normaliseQuota(this.getStorageQuotaBytes())
+  }
+
+  /** Legacy audio-only size scan used by the hot recording guard. */
+  private async directorySize(directory: string): Promise<number> {
+    let total = 0
+    const walk = async (current: string): Promise<void> => {
+      const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        const child = path.join(current, entry.name)
+        if (entry.isDirectory()) {
+          await walk(child)
+        } else {
+          const stat = await fs.stat(child).catch(() => null)
+          if (stat && !stat.isDirectory()) total += stat.size
+        }
+      }
+    }
+    await walk(directory)
+    return total
+  }
+
+  /** One directory walk, reused by both quota accounting and the sweep. */
+  private async collectInventory(root = this.root): Promise<StorageInventory> {
+    const files = new Map<string, number>()
+    let totalBytes = 0
+
+    const walk = async (current: string): Promise<void> => {
+      const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        const child = path.join(current, entry.name)
+        if (entry.isDirectory()) {
+          await walk(child)
+          continue
+        }
+        const stat = await fs.stat(child).catch(() => null)
+        if (!stat || stat.isDirectory()) continue
+        const absolute = path.resolve(child)
+        files.set(absolute, stat.size)
+        totalBytes += stat.size
+      }
+    }
+
+    await walk(root)
+    return { totalBytes, files }
   }
 
   private async pruneDirectory(
@@ -397,9 +747,13 @@ export class StorageService {
         } else {
           const stat = await fs.stat(child).catch(() => null)
           if (!stat || stat.mtimeMs > cutoff) continue
-          await fs.unlink(child).catch(() => undefined)
-          files += 1
-          bytes += stat.size
+          try {
+            await fs.unlink(child)
+            files += 1
+            bytes += stat.size
+          } catch {
+            // Locked cache file: skip it, the next sweep will retry.
+          }
         }
       }
     }
@@ -407,29 +761,16 @@ export class StorageService {
     await walk(directory)
     return { files, bytes }
   }
-
-  private async directorySize(directory: string): Promise<number> {
-    let total = 0
-    const walk = async (current: string): Promise<void> => {
-      const entries = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
-      for (const entry of entries) {
-        const child = path.join(current, entry.name)
-        if (entry.isDirectory()) {
-          await walk(child)
-        } else {
-          const stat = await fs.stat(child).catch(() => null)
-          if (stat) total += stat.size
-        }
-      }
-    }
-    await walk(directory)
-    return total
-  }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** 0 means unlimited; an invalid quota must never authorise deletion. */
+function normaliseQuota(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
 
 /** Strip characters that are illegal in Windows paths or enable traversal. */
 function safeSegment(value: string): string {

@@ -644,7 +644,7 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.SETTINGS_DISK_USAGE, (): Promise<DeviceResult<DiskUsage>> =>
-    toResult(async () => getServices().storage.diskUsage())
+    toResult(async () => getServices().storage.quotaUsage())
   )
 
   /**

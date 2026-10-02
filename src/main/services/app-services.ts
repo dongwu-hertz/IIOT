@@ -39,7 +39,7 @@ import { AppMetaRepository, UserRepository } from './database/user-repository'
 import { AuthService } from './auth/auth-service'
 import { AccountPermissionStore } from './auth/account-permission-store'
 import { SettingsService } from './settings/settings-service'
-import { StorageService } from './storage/storage-service'
+import { RETENTION_SWEEP_INTERVAL_MS, StorageService } from './storage/storage-service'
 import { DeviceService } from './device/device-service'
 import { ProtocolLab } from './device/protocol-lab'
 import { FetchHttpTransport } from './device/http-transport'
@@ -402,7 +402,9 @@ export async function initServices(): Promise<AppServices> {
   const storage = new StorageService({
     db,
     getStorageRoot: () => settings.get().storageRoot,
-    getMinFreeBytes: () => settings.get().minFreeBytes
+    getMinFreeBytes: () => settings.get().minFreeBytes,
+    getStorageQuotaBytes: () => settings.get().storageQuotaBytes,
+    getRetentionAlarmReserveRatio: () => settings.get().retentionAlarmReserveRatio
   })
 
   // Built before DeviceService: the stream-manager factory closes over it.
@@ -907,20 +909,37 @@ export async function initServices(): Promise<AppServices> {
     })
   })
 
-  // Retention sweep runs once at startup, never on a timer: deleting files
-  // while the user is browsing recordings is worse than a slightly late sweep.
-  storage
-    .enforceRetention(settings.get().retentionDays)
-    .then((result) => {
-      if (result.deletedFiles > 0) {
-        storageLog().info('Retention sweep complete', result)
-      }
-    })
-    .catch((error: unknown) => {
-      storageLog().warn('Retention sweep failed', {
-        reason: error instanceof Error ? error.message : String(error)
+  /**
+   * Retention runs at startup AND on a timer: continuous recording only grows
+   * between restarts, so a startup-only sweep silently loses the capacity
+   * guarantee on a machine that stays up for weeks.
+   */
+  const sweepRetention = (reason: 'startup' | 'timer'): void => {
+    void storage
+      .enforceRetention({
+        retentionDays: settings.get().retentionDays,
+        quotaBytes: settings.get().storageQuotaBytes,
+        alarmReserveRatio: settings.get().retentionAlarmReserveRatio
       })
-    })
+      .then((result) => {
+        if (result.deletedFiles > 0 || result.remainingOverBytes > 0 || result.failedDeletions > 0) {
+          storageLog().info('Retention sweep complete', { reason, ...result })
+        }
+      })
+      .catch((error: unknown) => {
+        storageLog().warn('Retention sweep failed', {
+          reason,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+  }
+
+  sweepRetention('startup')
+  const retentionTimer = setInterval(
+    () => sweepRetention('timer'),
+    RETENTION_SWEEP_INTERVAL_MS
+  )
+  retentionTimer.unref()
 
   deviceService.startMonitor()
 
@@ -1113,6 +1132,8 @@ export async function initServices(): Promise<AppServices> {
     trendQuery,
     transport,
     dispose: async () => {
+      // Stop the periodic sweep before any service it depends on is torn down.
+      clearInterval(retentionTimer)
       appLog().info('Shutting down services')
       // Order: stop network activity first, then close the database, so no
       // in-flight write can hit a closed handle (appendix C rule 12).

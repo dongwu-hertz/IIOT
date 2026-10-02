@@ -1078,7 +1078,28 @@ export interface DiskUsage {
   storageRoot: string
   totalBytes: number
   freeBytes: number
+  /**
+   * The settings endpoint (`quotaUsage()`) reports the whole storage root:
+   * recordings, trends, logs, caches, exports and anything else the app writes
+   * there. The quota is compared against THIS number so the UI cannot report
+   * one figure while the retention policy enforces another. The internal hot-
+   * path guard (`diskUsage()`) still fills this with the legacy audio scan and
+   * leaves the quota fields below at zero; use `quotaUsage()` when displaying.
+   */
   usedByAppBytes: number
+  /** Configured capacity quota in bytes; 0 means unlimited (0 in quick guards). */
+  quotaBytes: number
+  /** `max(0, usedByAppBytes - quotaBytes)`; may be non-zero while a sweep is pending. */
+  overQuotaBytes: number
+  /**
+   * Bytes that would remain over quota after the next capacity sweep deletes
+   * every auto-deletable recording. A value > 0 means only permanent alarms,
+   * manual recordings and non-recording data are left; the UI must report that
+   * honestly instead of claiming the sweep cleaned everything.
+   */
+  remainingOverQuotaBytes: number
+  /** Bytes the next capacity sweep can free from rolling/evictable recordings. */
+  reclaimableBytes: number
   belowSafetyFloor: boolean
 }
 

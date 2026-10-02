@@ -120,6 +120,10 @@ interface Draft {
   storageRoot: string
   retentionDays: number
   minFreeGb: number
+  /** Capacity quota in GB; 0 = unlimited. */
+  storageQuotaGb: number
+  /** Warning+ alarm reserve, percent of the quota. */
+  retentionAlarmReservePercent: number
   healthCheckIntervalMs: number
   offlineFailureThreshold: number
   requestTimeoutMs: number
@@ -148,6 +152,8 @@ const draft = reactive<Draft>({
   storageRoot: '',
   retentionDays: 30,
   minFreeGb: 10,
+  storageQuotaGb: 50,
+  retentionAlarmReservePercent: 10,
   healthCheckIntervalMs: 5000,
   offlineFailureThreshold: 3,
   requestTimeoutMs: 5000,
@@ -174,6 +180,8 @@ function seedFromStore(): void {
   draft.storageRoot = current.storageRoot
   draft.retentionDays = current.retentionDays
   draft.minFreeGb = bytesToGb(current.minFreeBytes)
+  draft.storageQuotaGb = bytesToGb(current.storageQuotaBytes)
+  draft.retentionAlarmReservePercent = Math.round(current.retentionAlarmReserveRatio * 100)
   draft.healthCheckIntervalMs = current.healthCheckIntervalMs
   draft.offlineFailureThreshold = current.offlineFailureThreshold
   draft.requestTimeoutMs = current.requestTimeoutMs
@@ -711,6 +719,14 @@ function validate(): string {
   if (!Number.isInteger(draft.retentionDays) || draft.retentionDays < 1)
     return t('settingsUi.errRetentionDays')
   if (draft.minFreeGb < 0) return t('settingsUi.errMinFree')
+  if (!Number.isFinite(draft.storageQuotaGb) || draft.storageQuotaGb < 0)
+    return t('settingsUi.errStorageQuota')
+  if (
+    !Number.isFinite(draft.retentionAlarmReservePercent) ||
+    draft.retentionAlarmReservePercent < 0 ||
+    draft.retentionAlarmReservePercent > 100
+  )
+    return t('settingsUi.errAlarmReserve')
   if (!Number.isInteger(draft.healthCheckIntervalMs) || draft.healthCheckIntervalMs < 1000)
     return t('settingsUi.errHealthCheck')
   if (!Number.isInteger(draft.offlineFailureThreshold) || draft.offlineFailureThreshold < 1)
@@ -746,6 +762,8 @@ function patchFromDraft(): AppSettingsPatch {
     storageRoot: draft.storageRoot.trim(),
     retentionDays: draft.retentionDays,
     minFreeBytes: gbToBytes(draft.minFreeGb),
+    storageQuotaBytes: gbToBytes(draft.storageQuotaGb),
+    retentionAlarmReserveRatio: draft.retentionAlarmReservePercent / 100,
     healthCheckIntervalMs: draft.healthCheckIntervalMs,
     offlineFailureThreshold: draft.offlineFailureThreshold,
     requestTimeoutMs: draft.requestTimeoutMs,
@@ -931,6 +949,16 @@ const appPercent = computed(() => {
   const usage = disk.value
   if (!usage || usage.totalBytes <= 0) return 0
   return Math.min(100, Math.round((usage.usedByAppBytes / usage.totalBytes) * 100))
+})
+
+/**
+ * Quota percentage is deliberately NOT capped at 100: going over is the fact
+ * the user has to see, and the alert below is the action item.
+ */
+const quotaPercent = computed(() => {
+  const usage = disk.value
+  if (!usage || usage.quotaBytes <= 0) return 0
+  return Math.round((usage.usedByAppBytes / usage.quotaBytes) * 100)
 })
 
 const info = computed(() => settings.appInfo)
@@ -1150,11 +1178,37 @@ async function confirmRestore(): Promise<void> {
                 <span class="field-label">{{ t('settingsUi.minFreeGb') }}</span>
                 <input v-model.number="draft.minFreeGb" class="input" type="number" min="0" step="0.5" />
               </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.storageQuotaGb') }}</span>
+                <input v-model.number="draft.storageQuotaGb" class="input" type="number" min="0" step="1" />
+                <small class="muted">{{ t('settingsUi.storageQuotaHelp') }}</small>
+              </label>
+              <label class="field">
+                <span class="field-label">{{ t('settingsUi.alarmReservePercent') }}</span>
+                <input
+                  v-model.number="draft.retentionAlarmReservePercent"
+                  class="input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                />
+              </label>
             </div>
             <div class="mini-card__sub">
               <span class="mini-card__subtitle">{{ t('settingsUi.diskSection') }}</span>
               <p v-if="disk?.belowSafetyFloor" class="alert alert--danger" role="alert">
                 {{ t('settingsUi.diskBelowFloor') }}
+              </p>
+              <p v-if="disk && disk.remainingOverQuotaBytes > 0" class="alert alert--danger" role="alert">
+                {{ t('settingsUi.quotaOverNotice', { bytes: formatBytes(disk.remainingOverQuotaBytes) }) }}
+              </p>
+              <p
+                v-else-if="disk && disk.reclaimableBytes > 0"
+                class="alert alert--warning"
+                role="status"
+              >
+                {{ t('settingsUi.quotaSweepPending', { bytes: formatBytes(disk.reclaimableBytes) }) }}
               </p>
               <div v-if="!disk" class="muted">{{ t('settingsUi.diskUnavailable') }}</div>
               <template v-else>
@@ -1189,6 +1243,22 @@ async function confirmRestore(): Promise<void> {
                     <dd class="kv__value">
                       {{ t('settingsUi.diskAppUsageValue', { bytes: formatBytes(disk.usedByAppBytes), percent: appPercent }) }}
                     </dd>
+                  </div>
+                  <div v-if="disk.quotaBytes > 0" class="kv__item">
+                    <dt class="kv__label">{{ t('settingsUi.quotaUsage') }}</dt>
+                    <dd class="kv__value">
+                      {{
+                        t('settingsUi.quotaUsageValue', {
+                          used: formatBytes(disk.usedByAppBytes),
+                          quota: formatBytes(disk.quotaBytes),
+                          percent: quotaPercent
+                        })
+                      }}
+                    </dd>
+                  </div>
+                  <div v-else class="kv__item">
+                    <dt class="kv__label">{{ t('settingsUi.quotaUsage') }}</dt>
+                    <dd class="kv__value">{{ t('settingsUi.quotaUnlimited') }}</dd>
                   </div>
                 </dl>
               </template>
