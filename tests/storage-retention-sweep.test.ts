@@ -339,4 +339,15 @@ describe('S2 retention wiring: capacity plan reaches real files and rows', () =>
     assert.equal(full.quotaBytes, 1_000)
     assert.equal(full.overQuotaBytes, 100)
   })
+
+  it('quotaUsage mirrors cache-first sweep: cache-only overage is not a permanent overage', async () => {
+    quotaBytes = 1_000
+    await writeRaw('spectrum_cache/expensive.bin', 2_000)
+
+    const usage = await storage.quotaUsage()
+    assert.equal(usage.usedByAppBytes, 2_000)
+    assert.equal(usage.overQuotaBytes, 1_000)
+    assert.equal(usage.remainingOverQuotaBytes, 0, 'caches are auto-deletable')
+    assert.equal(usage.reclaimableBytes, 2_000)
+  })
 })

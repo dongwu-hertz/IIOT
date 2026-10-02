@@ -70,6 +70,9 @@ export const STORAGE_SUBDIRS = [
 
 export type StorageSubdir = (typeof STORAGE_SUBDIRS)[number]
 
+/** Rebuildable caches: always safe to drop before any recording is evicted. */
+const REBUILDABLE_CACHE_SUBDIRS = ['spectrum_cache', 'spectrogram_cache'] as const
+
 /**
  * Continuous recording grows between restarts, so retention must run on a
  * cadence as well. Ten minutes is short enough that a full quota cannot grow
@@ -368,7 +371,7 @@ export class StorageService {
   async diskUsage(): Promise<DiskUsage> {
     const root = this.root
     await this.ensureLayout(root)
-    const { totalBytes, freeBytes } = await this.fileSystemCapacity()
+    const { totalBytes, freeBytes } = await this.fileSystemCapacity(root)
     const usedByAppBytes = await this.directorySize(path.join(root, 'audio'))
     const minFree = this.getMinFreeBytes()
 
@@ -390,15 +393,21 @@ export class StorageService {
    * (recordings, trends, logs, caches, exports) and runs the pure retention
    * plan WITHOUT deleting anything. `remainingOverQuotaBytes` is therefore the
    * honest aftermath of the next sweep, and `reclaimableBytes` is what that
-   * sweep would remove from the C zone.
+   * sweep would remove (rebuildable caches first, then C-zone recordings).
    */
   async quotaUsage(): Promise<DiskUsage> {
     const root = this.root
     await this.ensureLayout(root)
-    const { totalBytes, freeBytes } = await this.fileSystemCapacity()
+    const { totalBytes, freeBytes } = await this.fileSystemCapacity(root)
     const inventory = await this.collectInventory(root)
     const quotaBytes = this.currentQuotaBytes()
-    const { plan } = this.buildCapacityPlan(inventory, quotaBytes)
+    const cacheBytes = this.inventoryBytesIn(inventory, root, REBUILDABLE_CACHE_SUBDIRS)
+    const overQuota = quotaBytes > 0 && inventory.totalBytes > quotaBytes
+    /** Mirror the actual sweep order: caches are dropped before any recording plan runs. */
+    const planTotalBytes = overQuota
+      ? Math.max(0, inventory.totalBytes - cacheBytes)
+      : inventory.totalBytes
+    const { plan } = this.buildCapacityPlan(inventory, quotaBytes, planTotalBytes)
     const minFree = this.getMinFreeBytes()
 
     return {
@@ -409,14 +418,14 @@ export class StorageService {
       quotaBytes,
       overQuotaBytes: quotaBytes > 0 ? Math.max(0, inventory.totalBytes - quotaBytes) : 0,
       remainingOverQuotaBytes: plan.remainingOverBytes,
-      reclaimableBytes: plan.freedBytes,
+      reclaimableBytes: overQuota ? cacheBytes + plan.freedBytes : 0,
       belowSafetyFloor: freeBytes < minFree
     }
   }
 
-  private async fileSystemCapacity(): Promise<{ totalBytes: number; freeBytes: number }> {
+  private async fileSystemCapacity(root: string): Promise<{ totalBytes: number; freeBytes: number }> {
     try {
-      const stats = await fs.statfs(this.root)
+      const stats = await fs.statfs(root)
       return {
         totalBytes: stats.blocks * stats.bsize,
         freeBytes: stats.bavail * stats.bsize
@@ -491,7 +500,7 @@ export class StorageService {
     let cacheDeletedFiles = 0
     let cacheFreedBytes = 0
     if (quotaBytes > 0 && projectedTotalBytes > quotaBytes) {
-      for (const subdir of ['spectrum_cache', 'spectrogram_cache'] as const) {
+      for (const subdir of REBUILDABLE_CACHE_SUBDIRS) {
         const result = await this.pruneDirectory(path.join(root, subdir), 0)
         cacheDeletedFiles += result.files
         cacheFreedBytes += result.bytes
@@ -684,6 +693,26 @@ export class StorageService {
 
   private currentQuotaBytes(): number {
     return normaliseQuota(this.getStorageQuotaBytes())
+  }
+
+  /** Sum bytes under selected storage subdirectories using an existing inventory. */
+  private inventoryBytesIn(
+    inventory: StorageInventory,
+    root: string,
+    subdirs: readonly string[]
+  ): number {
+    const resolvedRoot = path.resolve(root)
+    let total = 0
+    for (const [absolute, bytes] of inventory.files) {
+      for (const subdir of subdirs) {
+        const directory = path.join(resolvedRoot, subdir)
+        if (absolute === directory || absolute.startsWith(directory + path.sep)) {
+          total += bytes
+          break
+        }
+      }
+    }
+    return total
   }
 
   /** Legacy audio-only size scan used by the hot recording guard. */

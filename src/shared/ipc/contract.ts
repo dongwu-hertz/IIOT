@@ -1098,7 +1098,7 @@ export interface DiskUsage {
    * honestly instead of claiming the sweep cleaned everything.
    */
   remainingOverQuotaBytes: number
-  /** Bytes the next capacity sweep can free from rolling/evictable recordings. */
+  /** Bytes the next capacity sweep can free: rebuildable caches first, then rolling recordings. */
   reclaimableBytes: number
   belowSafetyFloor: boolean
 }
