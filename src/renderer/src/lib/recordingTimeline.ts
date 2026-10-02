@@ -95,6 +95,29 @@ export function nextSegmentStep(
   return { next, gapMs: next.startMs - current.endMs }
 }
 
+/**
+ * 某个时刻落在哪一段录像里；不在任何段里时返回之后最近的一段。
+ *
+ * 告警跳到「对应片段的那一秒」需要这个判定：先找包含时刻的段；
+ * 如果告警正好落在缺口里，就退到时间上紧接着的下一段，由调用方决定是否提示缺口。
+ */
+export function segmentForTime(
+  segments: readonly TimelineSegment[],
+  timestamp: number
+): TimelineSegment | undefined {
+  if (!Number.isFinite(timestamp)) return undefined
+  let containing: TimelineSegment | undefined
+  let next: TimelineSegment | undefined
+  for (const segment of segments) {
+    if (timestamp >= segment.startMs && timestamp <= segment.endMs) {
+      if (!containing || segment.startMs < containing.startMs) containing = segment
+    } else if (segment.startMs >= timestamp) {
+      if (!next || segment.startMs < next.startMs) next = segment
+    }
+  }
+  return containing ?? next
+}
+
 /** 所有录像覆盖的时间范围；没有录像时返回 `null`（调用方据此显示空态）。 */
 export function recordingsExtent(
   segments: readonly TimelineSegment[]

@@ -33,10 +33,15 @@ const props = defineProps<{
   label?: string
   zoomInLabel?: string
   zoomOutLabel?: string
+  /** 同轴告警标记；点击后父组件跳到对应片段的那一秒。 */
+  alarms?: readonly { id: string; timestamp: number; severity?: string }[]
+  /** 同轴声学趋势点（本轮用主频）；NaN 由组件过滤，不连线。 */
+  trendPoints?: readonly { timestamp: number; value: number }[]
 }>()
 
 const emit = defineEmits<{
   (event: 'select', id: string): void
+  (event: 'alarm', alarm: { id: string; timestamp: number; severity?: string }): void
 }>()
 
 const trackEl = ref<HTMLElement | null>(null)
@@ -61,6 +66,44 @@ const cursorX = computed(() => {
   const window = viewWindow.value
   if (cursor < window.startMs || cursor > window.endMs) return null
   return timeToX(window, trackWidth.value, cursor)
+})
+
+const alarmMarks = computed(() => {
+  const window = viewWindow.value
+  if (!(window.endMs > window.startMs) || trackWidth.value <= 0) return []
+  return (props.alarms ?? [])
+    .filter((alarm) => alarm.timestamp >= window.startMs && alarm.timestamp <= window.endMs)
+    .map((alarm) => ({
+      ...alarm,
+      x: timeToX(window, trackWidth.value, alarm.timestamp)
+    }))
+})
+
+const trendMarks = computed(() => {
+  const window = viewWindow.value
+  const width = trackWidth.value
+  if (!(window.endMs > window.startMs) || width <= 0) return []
+  const visible = (props.trendPoints ?? []).filter(
+    (point) =>
+      Number.isFinite(point.timestamp) &&
+      Number.isFinite(point.value) &&
+      point.timestamp >= window.startMs &&
+      point.timestamp <= window.endMs
+  )
+  if (visible.length === 0) return []
+
+  let minimum = Number.POSITIVE_INFINITY
+  let maximum = Number.NEGATIVE_INFINITY
+  for (const point of visible) {
+    minimum = Math.min(minimum, point.value)
+    maximum = Math.max(maximum, point.value)
+  }
+  const span = maximum - minimum
+  return visible.map((point) => ({
+    timestamp: point.timestamp,
+    x: timeToX(window, width, point.timestamp),
+    top: span > 0 ? 3 + (1 - (point.value - minimum) / span) * 14 : 10
+  }))
 })
 
 function resetWindow(): void {
@@ -199,6 +242,18 @@ watch(
         @click="onSegmentClick(segment.id)"
       ></button>
 
+      <button
+        v-for="alarm in alarmMarks"
+        :key="`alarm-${alarm.id}`"
+        type="button"
+        class="vpt__alarm"
+        :class="`vpt__alarm--${alarm.severity ?? 'unknown'}`"
+        :style="{ left: `${alarm.x}px` }"
+        :title="new Date(alarm.timestamp).toLocaleString()"
+        :aria-label="new Date(alarm.timestamp).toLocaleString()"
+        @click.stop="emit('alarm', alarm)"
+      ></button>
+
       <span
         v-for="tick in tickMarks"
         :key="tick.at"
@@ -214,6 +269,15 @@ watch(
         class="vpt__cursor"
         :style="{ left: `${cursorX}px` }"
         aria-hidden="true"
+      ></span>
+    </div>
+
+    <div v-if="trendMarks.length > 0" class="vpt__trend" aria-hidden="true">
+      <span
+        v-for="point in trendMarks"
+        :key="`trend-${point.timestamp}`"
+        class="vpt__trend-mark"
+        :style="{ left: `${point.x}px`, top: `${point.top}px` }"
       ></span>
     </div>
   </div>
@@ -313,4 +377,56 @@ watch(
   background: var(--color-accent);
   pointer-events: none;
 }
+
+.vpt__alarm {
+  position: absolute;
+  top: 1px;
+  z-index: 5;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  transform: translateX(-5px);
+  background: transparent;
+  cursor: pointer;
+}
+
+.vpt__alarm::before {
+  display: block;
+  width: 0;
+  height: 0;
+  border-right: 5px solid transparent;
+  border-left: 5px solid transparent;
+  border-top: 7px solid var(--color-warning);
+  content: "";
+}
+
+.vpt__alarm--critical::before {
+  border-top-color: var(--color-danger);
+}
+
+.vpt__alarm--info::before,
+.vpt__alarm--unknown::before {
+  border-top-color: var(--color-neutral);
+}
+
+.vpt__trend {
+  position: relative;
+  height: 22px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-soft);
+}
+
+.vpt__trend-mark {
+  position: absolute;
+  width: 2px;
+  height: 4px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  opacity: 0.7;
+}
+
 </style>

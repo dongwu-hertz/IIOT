@@ -24,13 +24,13 @@
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Recording } from '@shared/domain/models'
+import type { AlarmEvent, Recording } from '@shared/domain/models'
 import { recordingTypeLabel } from '@renderer/lib/labels'
 import { formatBytes, formatDateTime, formatDuration } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import AppModal from '@renderer/components/AppModal.vue'
 import VideoPlaybackTimeline from '@renderer/components/VideoPlaybackTimeline.vue'
-import { nextSegmentStep, recordingSegments } from '@renderer/lib/recordingTimeline'
+import { nextSegmentStep, recordingSegments, segmentForTime } from '@renderer/lib/recordingTimeline'
 
 const props = defineProps<{
   modelValue: boolean
@@ -77,6 +77,13 @@ type PlaybackFollowUp =
   | { kind: 'end' }
 const followUp = ref<PlaybackFollowUp | null>(null)
 
+/** 同轴告警：只读展示；点击标记会跳到对应片段的那一秒。 */
+const alarms = ref<AlarmEvent[]>([])
+/** 同轴趋势：本轮先用主频迷你轨，值按窗口做归一化。 */
+const trendPoints = ref<Array<{ timestamp: number; value: number }>>([])
+/** 点告警跳转时，视频元数据加载完要 seek 到的偏移（秒）。 */
+const pendingSeekMs = ref<number | null>(null)
+
 /** 已经登记的行里，属于「本机视频」的那些。 */
 const videoItems = computed(() => items.value.filter(isVideoRecording))
 
@@ -110,6 +117,7 @@ function stopPlayback(): void {
   videoTitle.value = ''
   videoCurrentMs.value = null
   followUp.value = null
+  pendingSeekMs.value = null
 }
 
 async function load(): Promise<void> {
@@ -135,11 +143,15 @@ async function load(): Promise<void> {
  * 地址由主进程给（回环 HTTP，支持 Range 拖动），拿不到就**明说**无法播放，
  * 而不是打开一个永远空着的播放器。
  */
-async function play(recording: Recording): Promise<void> {
+async function play(recording: Recording, seekToMs?: number): Promise<void> {
   stopPlayback()
   playingId.value = recording.id
   videoTitle.value = formatDateTime(recording.startTime)
   videoCurrentMs.value = recording.startTime
+  pendingSeekMs.value =
+    typeof seekToMs === 'number' && Number.isFinite(seekToMs)
+      ? Math.max(0, seekToMs - recording.startTime)
+      : null
   const result = await callApi(() => window.api.cameraNvr.videoUrl(recording.id))
   // 期间被关掉或换了另一段：这一份结果已经过期，丢掉它（否则会把地址写回去）。
   if (playingId.value !== recording.id) return
@@ -155,6 +167,69 @@ async function play(recording: Recording): Promise<void> {
 function playById(id: string): void {
   const target = videoItems.value.find((recording) => recording.id === id)
   if (target) void play(target)
+}
+
+/** `<video>` 元数据就绪后，把告警跳转的目标时刻 seek 过去。 */
+function onVideoLoadedMetadata(): void {
+  const video = videoEl.value
+  const pending = pendingSeekMs.value
+  pendingSeekMs.value = null
+  if (!video || pending === null) return
+  const duration = video.duration
+  const maximum =
+    Number.isFinite(duration) && duration > 0 ? Math.max(0, duration - 0.1) : pending / 1000
+  video.currentTime = Math.max(0, Math.min(pending / 1000, maximum))
+}
+
+/** 告警标记 → 它所在（或之后最近）的片段，并 seek 到告警时刻。 */
+function jumpToAlarm(alarm: { id: string; timestamp: number; severity?: string }): void {
+  const target = segmentForTime(timelineSegments.value, alarm.timestamp)
+  if (!target) return
+  const recording = videoItems.value.find((item) => item.id === target.id)
+  if (recording) void play(recording, alarm.timestamp)
+}
+
+/** 同轴数据异步加载，不阻塞弹窗打开；失败就保持空轨，不伪造点。 */
+function loadExtras(deviceId: string): void {
+  const segments = timelineSegments.value
+  if (deviceId === '' || segments.length === 0) return
+  let from = Number.POSITIVE_INFINITY
+  let to = Number.NEGATIVE_INFINITY
+  for (const segment of segments) {
+    from = Math.min(from, segment.startMs)
+    to = Math.max(to, segment.endMs)
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return
+  void loadAlarms(deviceId, from, to)
+  void loadTrend(deviceId, from, to)
+}
+
+async function loadAlarms(deviceId: string, from: number, to: number): Promise<void> {
+  const result = await callApi(() =>
+    window.api.alarms.query({ deviceId, from, to, limit: 500 })
+  )
+  if (!result.success) {
+    alarms.value = []
+    return
+  }
+  alarms.value = unwrap(result)?.items ?? []
+}
+
+async function loadTrend(deviceId: string, from: number, to: number): Promise<void> {
+  const result = await callApi(() =>
+    window.api.trends.query({
+      deviceId,
+      metric: 'mainFrequency',
+      from,
+      to,
+      maxPoints: 400
+    })
+  )
+  if (!result.success) {
+    trendPoints.value = []
+    return
+  }
+  trendPoints.value = unwrap(result)?.points ?? []
 }
 
 /** 把 `<video>.currentTime` 换算回录像的 epoch 时刻，喂给时间轴游标。 */
@@ -197,8 +272,12 @@ function continueAfterGap(): void {
 
 /** 打开时读一次列表；若带着 preset 就直接播那一段（下载 -> 回放）。 */
 async function openForDevice(): Promise<void> {
+  const deviceId = props.deviceId
   stopPlayback()
+  alarms.value = []
+  trendPoints.value = []
   await load()
+  void loadExtras(deviceId)
   const preset = props.presetRecordingId ?? ''
   if (preset === '') return
   const target = videoItems.value.find((recording) => recording.id === preset)
@@ -252,6 +331,9 @@ onUnmounted(stopPlayback)
       :zoom-in-label="t('monitorTimelineUi.playbackZoomIn')"
       :zoom-out-label="t('monitorTimelineUi.playbackZoomOut')"
       @select="playById"
+      :alarms="alarms"
+      :trend-points="trendPoints"
+      @alarm="jumpToAlarm"
     />
 
     <p v-if="loading" class="muted" role="status">{{ t('cameraNvrUi.playbackLoading') }}</p>
@@ -307,6 +389,7 @@ onUnmounted(stopPlayback)
         controls
         @ended="onVideoEnded"
         @timeupdate="onVideoTimeUpdate"
+        @loadedmetadata="onVideoLoadedMetadata"
         autoplay
       ></video>
       <p v-else-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>

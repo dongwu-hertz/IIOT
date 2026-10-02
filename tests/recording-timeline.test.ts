@@ -23,6 +23,7 @@ import {
   recordingEndMs,
   recordingSegments,
   recordingsExtent,
+  segmentForTime,
   timelineLimits,
   timelineWindow,
   type TimelineSegment
@@ -182,5 +183,33 @@ describe('跨片段续播：当前片段之后是谁', () => {
 
   it('当前 id 不在列表里：返回 undefined，不猜', () => {
     assert.equal(nextSegmentStep([segment('a', 10_000, 20_000)], 'missing'), undefined)
+  })
+})
+describe('告警跳转：时刻 → 片段', () => {
+  function segment(id: string, startMs: number, endMs: number): TimelineSegment {
+    return { id, kind: 'scheduled', startMs, endMs }
+  }
+
+  it('时刻落在某段里，就返回那一段', () => {
+    const found = segmentForTime([segment('a', 10_000, 20_000), segment('b', 30_000, 40_000)], 15_000)
+    assert.equal(found?.id, 'a')
+  })
+
+  it('时刻落在缺口里：退到之后最近的一段，由调用方决定要不要跳缺口', () => {
+    const found = segmentForTime([segment('a', 10_000, 20_000), segment('b', 30_000, 40_000)], 25_000)
+    assert.equal(found?.id, 'b')
+  })
+
+  it('时刻在所有段之前：返回第一段', () => {
+    const found = segmentForTime([segment('b', 20_000, 30_000), segment('a', 10_000, 20_000)], 5_000)
+    assert.equal(found?.id, 'a')
+  })
+
+  it('时刻在所有段之后：返回 undefined，界面不要绕回第一段', () => {
+    assert.equal(segmentForTime([segment('a', 10_000, 20_000)], 30_000), undefined)
+  })
+
+  it('非有限时刻返回 undefined', () => {
+    assert.equal(segmentForTime([segment('a', 10_000, 20_000)], Number.NaN), undefined)
   })
 })

@@ -38,6 +38,13 @@ describe('S3 相机回放：时间轴与跨片段续播', () => {
     assert.ok(dialog.includes('AUTO_ADVANCE_GAP_TOLERANCE_MS'), 'no gap tolerance constant')
     assert.ok(dialog.includes('playbackGap'), 'large gap is not surfaced')
     assert.ok(dialog.includes('playbackContinueNext'), 'no explicit skip-over-gap action')
+    assert.ok(dialog.includes('@loadedmetadata="onVideoLoadedMetadata"'), 'alarm seek is not wired')
+    assert.ok(dialog.includes(':alarms="alarms"'), 'dialog does not pass alarm markers')
+    assert.ok(dialog.includes(':trend-points="trendPoints"'), 'dialog does not pass trend points')
+    assert.ok(dialog.includes('@alarm="jumpToAlarm"'), 'alarm marker has no jump handler')
+    assert.ok(dialog.includes('window.api.alarms.query('), 'dialog does not query alarms')
+    assert.ok(dialog.includes('window.api.trends.query('), 'dialog does not query trend data')
+    assert.ok(dialog.includes('segmentForTime('), 'alarm jump does not use the segment resolver')
   })
 
   it('时间轴只画段和缺口，不自己造有录像的假象', () => {
@@ -46,6 +53,11 @@ describe('S3 相机回放：时间轴与跨片段续播', () => {
     assert.ok(timeline.includes('timelineWindow('), 'timeline does not compute its window from segments')
     assert.ok(timeline.includes("emit('select'"), 'timeline does not expose segment selection')
     assert.ok(timeline.includes('vpt__segment'), 'timeline has no segment elements')
+    assert.ok(timeline.includes('alarmMarks'), 'timeline does not render alarm markers')
+    assert.ok(timeline.includes('trendMarks'), 'timeline does not render trend marks')
+    assert.ok(timeline.includes("emit('alarm'"), 'timeline does not emit alarm clicks')
+    assert.ok(timeline.includes('zoomWindow('), 'timeline cannot zoom')
+    assert.ok(timeline.includes('panWindow('), 'timeline cannot pan')
   })
 
   it('六语言都有缺口/时间轴文案，占位符一致', () => {
