@@ -26,7 +26,7 @@
  */
 
 import path from 'node:path'
-import { promises as fs } from 'node:fs'
+import { promises as fs, type Dirent } from 'node:fs'
 import { AppError, ErrorCodes } from '@shared/errors'
 import { appLog } from '../logging/logger'
 import type { StorageService } from '../storage/storage-service'
@@ -301,6 +301,48 @@ export class TrendQueryService {
       appLog().info('Trend retention sweep removed files', { deviceUid, deleted })
     }
     return { deleted }
+  }
+
+  /**
+   * Age sweep across EVERY device directory under `metrics/`, including
+   * directories whose device row has already been deleted. There is no device
+   * service dependency here on purpose: retention is a storage-tree property,
+   * not a property of currently-registered devices.
+   */
+  async enforceRetentionForAllDevices(
+    retentionDays: number
+  ): Promise<{ devices: number; deleted: number }> {
+    if (retentionDays <= 0) return { devices: 0, deleted: 0 }
+
+    const metricsRoot = path.join(this.storage.root, 'metrics')
+    let entries: Dirent[]
+    try {
+      entries = await fs.readdir(metricsRoot, { withFileTypes: true })
+    } catch {
+      // No metrics directory yet is a normal fresh install, not an error.
+      return { devices: 0, deleted: 0 }
+    }
+
+    let devices = 0
+    let deleted = 0
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      devices += 1
+      try {
+        const result = await this.enforceRetention(entry.name, retentionDays)
+        deleted += result.deleted
+      } catch (error) {
+        appLog().warn('Trend retention sweep failed for device', {
+          deviceUid: entry.name,
+          reason: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+
+    if (deleted > 0) {
+      appLog().info('Trend retention sweep complete', { devices, deleted })
+    }
+    return { devices, deleted }
   }
 
   /**

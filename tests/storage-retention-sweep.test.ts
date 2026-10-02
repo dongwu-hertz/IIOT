@@ -350,4 +350,23 @@ describe('S2 retention wiring: capacity plan reaches real files and rows', () =>
     assert.equal(usage.remainingOverQuotaBytes, 0, 'caches are auto-deletable')
     assert.equal(usage.reclaimableBytes, 2_000)
   })
+
+  it('startup + periodic sweep wires trend age cleanup before the capacity pass', async () => {
+    const projectRoot = path.resolve(__dirname, '..', '..')
+    const source = await fs.readFile(
+      path.join(projectRoot, 'src', 'main', 'services', 'app-services.ts'),
+      'utf8'
+    )
+
+    const trendCall = source.indexOf('enforceRetentionForAllDevices(current.retentionDays)')
+    const capacityCall = source.indexOf('storage.enforceRetention({')
+    assert.ok(trendCall > 0, 'app-services does not call the all-device trend sweep')
+    assert.ok(capacityCall > 0, 'app-services does not call the recording retention sweep')
+    assert.ok(
+      trendCall < capacityCall,
+      'trend cleanup must run first: expired parquet bytes are not deletable by the quota plan'
+    )
+    assert.ok(source.includes("sweepRetention('startup')"), 'startup sweep is not wired')
+    assert.ok(source.includes('RETENTION_SWEEP_INTERVAL_MS'), 'periodic sweep is not wired')
+  })
 })

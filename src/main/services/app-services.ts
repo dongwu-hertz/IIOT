@@ -913,25 +913,48 @@ export async function initServices(): Promise<AppServices> {
    * Retention runs at startup AND on a timer: continuous recording only grows
    * between restarts, so a startup-only sweep silently loses the capacity
    * guarantee on a machine that stays up for weeks.
+   *
+   * Trends are swept first: an expired parquet file is non-deletable data in
+   * the storage quota's eyes, so removing it before the capacity pass avoids
+   * evicting a recording that did not need to go.
    */
+  const runRetentionSweep = async (reason: 'startup' | 'timer'): Promise<void> => {
+    const current = settings.get()
+    let trendDeletedFiles = 0
+    try {
+      trendDeletedFiles = (
+        await trendQuery.enforceRetentionForAllDevices(current.retentionDays)
+      ).deleted
+    } catch (error: unknown) {
+      storageLog().warn('Trend retention sweep failed', {
+        reason,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+
+    const result = await storage.enforceRetention({
+      retentionDays: current.retentionDays,
+      quotaBytes: current.storageQuotaBytes,
+      alarmReserveRatio: current.retentionAlarmReserveRatio
+    })
+
+    if (
+      trendDeletedFiles > 0 ||
+      result.deletedFiles > 0 ||
+      result.remainingOverBytes > 0 ||
+      result.failedDeletions > 0
+    ) {
+      storageLog().info('Retention sweep complete', { reason, trendDeletedFiles, ...result })
+    }
+  }
+
   const sweepRetention = (reason: 'startup' | 'timer'): void => {
-    void storage
-      .enforceRetention({
-        retentionDays: settings.get().retentionDays,
-        quotaBytes: settings.get().storageQuotaBytes,
-        alarmReserveRatio: settings.get().retentionAlarmReserveRatio
+    void runRetentionSweep(reason).catch((error: unknown) => {
+      storageLog().warn('Retention sweep failed', {
+        reason,
+        error: error instanceof Error ? error.message : String(error)
       })
-      .then((result) => {
-        if (result.deletedFiles > 0 || result.remainingOverBytes > 0 || result.failedDeletions > 0) {
-          storageLog().info('Retention sweep complete', { reason, ...result })
-        }
-      })
-      .catch((error: unknown) => {
-        storageLog().warn('Retention sweep failed', {
-          reason,
-          error: error instanceof Error ? error.message : String(error)
-        })
-      })
+    })
   }
 
   sweepRetention('startup')

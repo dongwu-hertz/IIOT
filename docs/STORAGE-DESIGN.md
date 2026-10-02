@@ -96,7 +96,7 @@
 | **已有的鸭子类型缝隙** | 仅 1 处：`EventCenterService` 只依赖 `{ resolve(relativePath): string }`（`events/event-center-service.ts:135,285`）—— 说明"窄接口"这条改写路子在本仓库是可行的 |
 | **绕过 StorageService、直接拼存储根的写路径** | **2 处**：趋势 CSV（`handlers.ts:2885`）与地图瓦片缓存（`map/tile-cache-service.ts:104-105`）；日志目录也直拼（`app-services.ts:294`）。**这三处不纳入后端抽象，池就会静默漏掉它们** |
 | **目录清单与真实写入不一致** | 声明了 `export`（单数，`storage-service.ts:61`）但**没有任何写入方**；真实趋势 CSV 落在 `exports/trends/`（复数）。另外 `spectrum_cache/`、`spectrogram_cache/` 只被创建与清理，**全仓无写入方** |
-| **保留策略的真实语义** | 只在**启动时扫一次**（`app-services.ts:897-910`，注释明确"never on a timer"）；只删 `recording_type='alarm'` 且早于 cutoff 的**文件 + 行**，**manual 永不自动删**；趋势那套 `TrendQueryService.enforceRetention()` **没有任何调用者** |
+| **保留策略的真实语义（2026-10-01 起）** | 启动 + **周期清扫**（`RETENTION_SWEEP_INTERVAL_MS`）；容量优先三档 + 非保护告警按天；`manual` 永不自动删；`TrendQueryService.enforceRetentionForAllDevices()` 已接入启动/周期清扫，见 §9.9 |
 | **换根后的动作** | `SettingsService` 会 emit `storage-root-changed`，但**全仓无订阅者**；实际动作只有 IPC handler 调一次 `ensureLayout()`（`handlers.ts:599`）。不迁移、不校验新根、不保护进行中的写入 —— 网络卷掉线时今天**没有任何提示** |
 | **磁盘护栏的不一致** | `diskUsage()` 在 `statfs` 失败时**降级为"永不拦"**（`freeBytes = MAX_SAFE_INTEGER`）；`usedByAppBytes` **只统计 `<root>/audio`**；**无护栏**的写盘路径有 5 条（相机抓图、检测库下载、趋势 parquet、瓦片缓存、趋势 CSV）；另有两处 `DISK_FULL` 判据实际不可达（`canRecord('manual')` 恒 true） |
 | **删除能力** | **没有"删除录像"功能**（`deleteRecordings` 权限在 `PERMISSION_WITHOUT_ENFORCEMENT` 名单里，界面文案自认"还没有这条通道"）；`RECORDING_DOWNLOAD` 通道**无 handler**，是死通道；唯一另存是 `RECORDING_EXPORT`（copyFile 到用户选定路径） |
@@ -477,7 +477,7 @@ GET    /events                      SSE：object.created / pool.threshold / pool
 | S1 IPC + preload | ✅ 已实现 | `RECORDER_STATUS` / `RECORDER_SET_ENABLED`，顺序为"先解析地址 → 再落库 → 最后拉起" |
 | S1 真窗口验证 | ✅ 通过（problems 0） | `scripts/verify-recorder.cjs`：真 ffmpeg + 合成源，6 片全可播、断流后换轮重启、停止时补登记 —— 见 `docs/UI-VERIFY.md` MM |
 | **S1 界面（开关 + 状态行）** | ❌ **还没做** | `window.api.recorder.*` 已可用，界面未接 |
-| S2 保留与水位 | 🟡 容量/周期/界面已实现；趋势按天保留未接 | `shared/domain/retention.ts` + `StorageService.enforceRetention()` + 设置页配额与超额提示；见 §9.9 |
+| S2 保留与水位 | ✅ 已实现 | `shared/domain/retention.ts` + `StorageService.enforceRetention()` 周期清扫 + `TrendQueryService.enforceRetentionForAllDevices()` + 设置页配额与超额提示；见 §9.9 |
 | S3 回放 | ❌ 没做 | 跨片段续播 / 缺口呈现 / 与告警趋势同轴 |
 | S4 搬到独立服务 | ❌ 没做 | 录像器的依赖已全部注入，具备搬家条件 |
 
@@ -579,4 +579,5 @@ GOP**（分段复用器只在关键帧上切），真机上的实际边界要实
   - 清扫在启动时跑一次，此后每 `RETENTION_SWEEP_INTERVAL_MS`（10 分钟）一次；`app-services.dispose()` 会清掉定时器。
   - P 档豁免按天；非保护告警仍按 `retentionDays` 删。`DiskUsage.remainingOverQuotaBytes > 0` 时设置页如实提示「已超出配额，只剩永久告警与手动录像」。
 - 集成回归：`tests/storage-retention-sweep.test.ts`（容量删最旧、P/M 保护、非录像计入、缓存优先、缺文件补删）。
-- **仍未接线**：`TrendQueryService.enforceRetention()`（趋势 parquet 按天删）目前没有调用者；趋势文件只计入配额并在容量清扫后如实报告，不会按天自动删除。
+- 趋势 parquet 的按天保留已接线：`TrendQueryService.enforceRetentionForAllDevices(retentionDays)` 扫描 `metrics/` 下**所有设备目录**（包括设备已删除后留下的孤儿目录），逐个复用 `enforceRetention()` 单设备逻辑。
+- 启动与周期清扫都**先清趋势、再跑录像容量策略**：过期 parquet 在配额眼里属于不可删数据，先删掉它，才不会为了凑配额误删一段本来可以留的录像。

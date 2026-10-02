@@ -329,3 +329,71 @@ describe('trend query end-to-end', () => {
     assert.equal(series.filesScanned, 0)
   })
 })
+
+describe('TrendQueryService retention sweep', () => {
+  let retentionRoot: string
+  let retentionService: TrendQueryService
+
+  before(async () => {
+    retentionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hz-trend-retention-'))
+    retentionService = new TrendQueryService({
+      storage: { root: retentionRoot } as unknown as StorageService
+    })
+  })
+
+  after(async () => {
+    await fs.rm(retentionRoot, { recursive: true, force: true })
+  })
+
+  async function touchRetentionFile(uid: string, isoDate: string): Promise<string> {
+    const [year] = isoDate.split('-')
+    const dir = path.join(retentionRoot, 'metrics', uid, year as string)
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, `${isoDate}.parquet`)
+    await fs.writeFile(file, '')
+    return file
+  }
+
+  /** UTC day string `YYYY-MM-DD`, `daysAgo` before now. */
+  function dayIso(daysAgo: number): string {
+    return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  }
+
+  async function fileExists(file: string): Promise<boolean> {
+    return (await fs.stat(file).catch(() => null)) !== null
+  }
+
+  it('deletes only files older than the retention window', async () => {
+    const oldFile = await touchRetentionFile('uid-a', dayIso(10))
+    const recentFile = await touchRetentionFile('uid-a', dayIso(1))
+
+    const result = await retentionService.enforceRetention('uid-a', 5)
+
+    assert.equal(result.deleted, 1)
+    assert.equal(await fileExists(oldFile), false)
+    assert.equal(await fileExists(recentFile), true)
+  })
+
+  it('all-device sweep reaches directories with no current device row', async () => {
+    const oldA = await touchRetentionFile('uid-a', dayIso(20))
+    const oldOrphan = await touchRetentionFile('uid-orphan', dayIso(20))
+    const recentOrphan = await touchRetentionFile('uid-orphan', dayIso(1))
+
+    const result = await retentionService.enforceRetentionForAllDevices(5)
+
+    assert.equal(result.devices, 2)
+    assert.equal(result.deleted, 2)
+    assert.equal(await fileExists(oldA), false)
+    assert.equal(await fileExists(oldOrphan), false)
+    assert.equal(await fileExists(recentOrphan), true)
+  })
+
+  it('a non-positive window disables the sweep entirely', async () => {
+    const file = await touchRetentionFile('uid-b', dayIso(30))
+
+    const result = await retentionService.enforceRetentionForAllDevices(0)
+
+    assert.deepEqual(result, { devices: 0, deleted: 0 })
+    assert.equal(await fileExists(file), true)
+  })
+})
