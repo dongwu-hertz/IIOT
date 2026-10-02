@@ -46,4 +46,18 @@ describe('S2 storage quota settings', () => {
       db.close()
     }
   })
+
+  it('existing installs without the new key start unlimited, not 50 GB', () => {
+    const db = openDatabase({ file: ':memory:' })
+    try {
+      db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)`).run('retentionDays', JSON.stringify(7))
+      const settings = new SettingsService({ db, defaultStorageRoot: 'C:\\hz-test' })
+
+      assert.equal(settings.get().retentionDays, 7, 'old settings still load')
+      assert.equal(settings.get().storageQuotaBytes, 0, 'an upgrade must not start deleting old recordings')
+      assert.equal(settings.get().retentionAlarmReserveRatio, 0.1)
+    } finally {
+      db.close()
+    }
+  })
 })

@@ -571,7 +571,7 @@ GOP**（分段复用器只在关键帧上切），真机上的实际边界要实
 
 ### 9.9 S2 实现记录（2026-10-01）
 
-- `AppSettings.storageQuotaBytes`（默认 50 GB）与 `retentionAlarmReserveRatio`（默认 0.1）已由设置页「存储」卡承接；`0` = 不限制。
+- `AppSettings.storageQuotaBytes`（默认 50 GB）与 `retentionAlarmReserveRatio`（默认 0.1）已由设置页「存储」卡承接；`0` = 不限制。全新安装用出厂 50 GB；旧装设置表里没有这一格时按 0 启动，避免升级后第一次清扫就把旧录像删掉。
 - 纯策略 `shared/domain/retention.ts` 已接进 `StorageService.enforceRetention({ retentionDays, quotaBytes, alarmReserveRatio })`：
   - 超配额时先清可重建缓存；C 档（`scheduled` + 低于 warning 的 `alarm`）按最旧优先删到配额以内；P 档封顶 = 配额 × 比例，超出照样按最旧淘汰；M 档（`manual`）永不进待删队列。
   - 删除顺序是先文件后行；文件被锁/无权限时保留行和文件，下一轮重试，不做「删行造成孤儿文件」。

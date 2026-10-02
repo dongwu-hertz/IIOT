@@ -528,6 +528,8 @@ export class SettingsService extends EventEmitter {
       }
     }
 
+    const hadStoredSettings = stored.size > 0
+
     const result: AppSettings = { ...DEFAULT_SETTINGS }
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof AppSettings)[]) {
       const raw = stored.get(key)
@@ -537,6 +539,16 @@ export class SettingsService extends EventEmitter {
       if (validated !== undefined) {
         ;(result as unknown as Record<string, unknown>)[key] = validated
       }
+    }
+
+    /**
+     * 旧装升级：storageQuotaBytes 是 2026-10-01 才加入的设置项。若设置表里已经有旧设置
+     * 但没有这一格，不能把新的 50 GB 出厂值直接拿去做容量清扫 —— 那会让用户升级后的
+     * 第一次启动就开始删旧录像。这里先按"不限制"启动，等操作员在设置页里看见并决定。
+     * 真正的全新安装设置表为空，仍走 50 GB 出厂默认。
+     */
+    if (hadStoredSettings && !stored.has('storageQuotaBytes')) {
+      result.storageQuotaBytes = 0
     }
 
     if (!result.storageRoot || result.storageRoot.trim() === '') {
