@@ -313,7 +313,7 @@ export const zhTW: MessageSchema = {
     diskAppUsageValue: '{bytes}（約占 {percent}%）',
     quotaUsage: '配額占用',
     quotaUsageValue: '{used} / {quota}（{percent}%）',
-    quotaUnlimited: '未限制（0 = 不限制）',
+    quotaUnlimited: '無上限（0 = 不限制）',
     quotaOverNotice: '已超出配額 {bytes}；自動清理只能保留永久告警與手動錄影。請清理手動錄影或調大配額。',
     quotaSweepPending: '已超過配額，自動清理預計可釋放 {bytes}。',
 
@@ -2487,6 +2487,28 @@ export const zhTW: MessageSchema = {
    * message containing one fails to COMPILE at render time (`SyntaxError: 10`) —
    * which the catalogue tests catch, because they compile every message.
    */
+  /**
+   * 連續錄影（S1 介面）：開關 + 狀態行。
+   *
+   * 與 `cameraLiveUi` 同一條硬規則：本塊任何一條訊息都不得包含 `@`。
+   */
+  recorderUi: {
+    title: '連續錄影',
+    enable: '開啟連續錄影',
+    disable: '停止連續錄影',
+    working: '處理中…',
+    statusOff: '未開啟',
+    statusStarting: '正在啟動…',
+    statusRecording: '錄影中',
+    statusWaiting: '已啟動，等待視訊資料',
+    statusBackoff: '連線中斷，第 {attempt} 次重試',
+    notRunning: '已要求錄影，但錄影程序未執行',
+    registered: '本次執行已登記 {count} 片',
+    segmentLength: '每段 {seconds} 秒',
+    lastError: '最近錯誤：{reason}',
+    hint: '連續錄影會按時間切片保存在本機；超出儲存配額時會先刪除最舊的連續錄影。'
+  },
+
   cameraLiveUi: {
     title: '相機實時影片',
     rtspAddressUnknown: '裝置未上報影片地址',

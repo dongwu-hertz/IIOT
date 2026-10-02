@@ -2556,6 +2556,30 @@ export const zhCN = {
    * message containing one fails to COMPILE at render time (`SyntaxError: 10`) —
    * which the catalogue tests catch, because they compile every message.
    */
+  /**
+   * 连续录像（S1 界面）：开关 + 状态行。
+   *
+   * 与 `cameraLiveUi` 同一条硬规则：本块任何一条消息都不得包含 `@`。
+   * starting / recording / waiting / backoff 是四种不同的事实，界面不许把它们
+   * 合成一句「已开启」。
+   */
+  recorderUi: {
+    title: '连续录像',
+    enable: '开启连续录像',
+    disable: '停止连续录像',
+    working: '处理中…',
+    statusOff: '未开启',
+    statusStarting: '正在启动…',
+    statusRecording: '录像中',
+    statusWaiting: '已启动，等待视频数据',
+    statusBackoff: '连接中断，第 {attempt} 次重试',
+    notRunning: '已要求录像，但录像进程未运行',
+    registered: '本次运行已登记 {count} 片',
+    segmentLength: '每片 {seconds} 秒',
+    lastError: '最近错误：{reason}',
+    hint: '连续录像按时间切片保存在本机；超出存储配额时会先删除最旧的连续录像。'
+  },
+
   cameraLiveUi: {
     title: '相机实时视频',
     rtspAddressUnknown: '设备未上报视频地址',

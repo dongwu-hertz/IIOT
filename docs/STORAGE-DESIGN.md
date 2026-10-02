@@ -476,7 +476,7 @@ GET    /events                      SSE：object.created / pool.threshold / pool
 | S1 源解析 | ✅ 已实现 | `CameraLiveService.resolveRecorderSource()`：不开直播会话也能拿地址，与直播共用候选顺序 |
 | S1 IPC + preload | ✅ 已实现 | `RECORDER_STATUS` / `RECORDER_SET_ENABLED`，顺序为"先解析地址 → 再落库 → 最后拉起" |
 | S1 真窗口验证 | ✅ 通过（problems 0） | `scripts/verify-recorder.cjs`：真 ffmpeg + 合成源，6 片全可播、断流后换轮重启、停止时补登记 —— 见 `docs/UI-VERIFY.md` MM |
-| **S1 界面（开关 + 状态行）** | ❌ **还没做** | `window.api.recorder.*` 已可用，界面未接 |
+| **S1 界面（开关 + 状态行）** | ✅ 已实现（真窗口点击未验） | `CameraRecorderBar.vue` 接入 MonitorView 相机分支：开关走 `window.api.recorder.setEnabled`，状态行原样显示 starting/recording/waiting/backoff + 已请求未运行；六语言文案与源码守卫见 `tests/recorder-ui.test.ts` |
 | S2 保留与水位 | ✅ 已实现 | `shared/domain/retention.ts` + `StorageService.enforceRetention()` 周期清扫 + `TrendQueryService.enforceRetentionForAllDevices()` + 设置页配额与超额提示；见 §9.9 |
 | S3 回放 | ❌ 没做 | 跨片段续播 / 缺口呈现 / 与告警趋势同轴 |
 | S4 搬到独立服务 | ❌ 没做 | 录像器的依赖已全部注入，具备搬家条件 |
@@ -508,7 +508,7 @@ GOP**（分段复用器只在关键帧上切），真机上的实际边界要实
 
 **没做**
 
-- 界面（开关 + 状态行）：`window.api.recorder.*` 已可用，界面未接。
+- 界面（开关 + 状态行）：已在相机实时画面卡内接线（`CameraRecorderBar.vue`），开关走 IPC、状态行显示录像器四态；真窗口点击/状态刷新仍放在下一轮探针。
 - S2 保留与水位、S3 回放、S4 搬到独立服务。
 
 ### 9.7 ⚠️ 需要业主决策：连续录像的保留策略（做 S2 前必须定）

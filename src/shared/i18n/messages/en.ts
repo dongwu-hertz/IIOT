@@ -2310,6 +2310,30 @@ presets, the licence boundaries
   },
 
   /** Camera live video (FA371 RTSP -> ffmpeg -> loopback <video>). */
+  /**
+   * Continuous recording (S1 UI): toggle + status line.
+   *
+   * Same hard rule as `cameraLiveUi`: no message in this block may contain `@`.
+   * starting / recording / waiting / backoff are four distinct facts and must
+   * never be collapsed into a single "on" state.
+   */
+  recorderUi: {
+    title: 'Continuous recording',
+    enable: 'Start continuous recording',
+    disable: 'Stop continuous recording',
+    working: 'Working…',
+    statusOff: 'Not started',
+    statusStarting: 'Starting…',
+    statusRecording: 'Recording',
+    statusWaiting: 'Started, waiting for video data',
+    statusBackoff: 'Connection lost; retry {attempt}',
+    notRunning: 'Recording requested, but the recorder process is not running',
+    registered: '{count} segment(s) registered this run',
+    segmentLength: '{seconds}s per segment',
+    lastError: 'Last error: {reason}',
+    hint: 'Continuous recording is stored as local time slices; when the storage quota is exceeded, the oldest slices are deleted first.'
+  },
+
   cameraLiveUi: {
     title: 'Camera live video',
     rtspAddressUnknown: 'The device did not report a video address',

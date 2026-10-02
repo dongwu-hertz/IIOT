@@ -2272,6 +2272,28 @@ export const es: MessageSchema = {
   },
 
   /** Camera live video (FA371 RTSP -> ffmpeg -> loopback <video>). */
+  /**
+   * Grabación continua (interfaz S1): interruptor y línea de estado.
+   *
+   * Misma regla estricta que `cameraLiveUi`: ningún mensaje de este bloque puede contener `@`.
+   */
+  recorderUi: {
+    title: 'Grabación continua',
+    enable: 'Iniciar grabación continua',
+    disable: 'Detener grabación continua',
+    working: 'Procesando…',
+    statusOff: 'No iniciada',
+    statusStarting: 'Iniciando…',
+    statusRecording: 'Grabando',
+    statusWaiting: 'Iniciada; esperando datos de vídeo',
+    statusBackoff: 'Conexión perdida; reintento {attempt}',
+    notRunning: 'Grabación solicitada, pero el proceso de grabación no está en ejecución',
+    registered: 'Segmentos registrados en esta ejecución: {count}',
+    segmentLength: '{seconds} s por segmento',
+    lastError: 'Último error: {reason}',
+    hint: 'La grabación continua se guarda como segmentos locales; al superar la cuota de almacenamiento se eliminan primero los segmentos más antiguos.'
+  },
+
   cameraLiveUi: {
     title: 'Vídeo en directo de la cámara',
     rtspAddressUnknown: 'El dispositivo no informó de ninguna dirección de vídeo',

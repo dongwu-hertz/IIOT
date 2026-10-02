@@ -2275,6 +2275,28 @@ export const tr: MessageSchema = {
   },
 
   /** Camera live video (FA371 RTSP -> ffmpeg -> loopback <video>). */
+  /**
+   * Sürekli kayıt (S1 arayüzü): anahtar ve durum satırı.
+   *
+   * `cameraLiveUi` ile aynı katı kural: bu bloktaki hiçbir mesaj `@` içermez.
+   */
+  recorderUi: {
+    title: 'Sürekli kayıt',
+    enable: 'Sürekli kaydı başlat',
+    disable: 'Sürekli kaydı durdur',
+    working: 'İşleniyor…',
+    statusOff: 'Başlatılmadı',
+    statusStarting: 'Başlatılıyor…',
+    statusRecording: 'Kayıt yapılıyor',
+    statusWaiting: 'Başlatıldı, video verisi bekleniyor',
+    statusBackoff: 'Bağlantı kesildi; {attempt}. yeniden deneme',
+    notRunning: 'Kayıt istendi ancak kayıt süreci çalışmıyor',
+    registered: 'Bu çalışmada {count} parça kaydedildi',
+    segmentLength: 'Parça başına {seconds} sn',
+    lastError: 'Son hata: {reason}',
+    hint: 'Sürekli kayıt yerel zaman parçaları olarak saklanır; depolama kotası aşılırsa en eski parçalar önce silinir.'
+  },
+
   cameraLiveUi: {
     title: 'Kamera canlı görüntüsü',
     rtspAddressUnknown: 'Aygıt bir görüntü adresi bildirmedi',

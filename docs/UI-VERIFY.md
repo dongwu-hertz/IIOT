@@ -4590,7 +4590,7 @@ driver 直接驱动录像器（与 `HERTZINNO_STORAGE_ROOT` 同一类刻意开�
    由 `resolveRecorderSource()` 与既有真机探针负责 —— 本探针**刻意不碰**，也不假装验过。
 2. **真机 GOP 与切片边界**：见 MM.3 第 1 条，实际边界要真机量。
 3. **长跑**：只跑了约 1 分钟；跨天换目录、7×24 数小时的内存/句柄稳定性未验。
-4. **界面**：开关与状态行**还没做**（`window.api.recorder.status()/setEnabled()` 已可用）。
+4. **界面**：开关与状态行已接线（`CameraRecorderBar.vue` + MonitorView + 六语言 + `tests/recorder-ui.test.ts` 源码守卫）；**真窗口点击与状态刷新未验**，仍不能按已验证验收。
 5. **保留策略**：连续录像是 `recording_type='scheduled'`，而现有保留清扫只自动删
    `alarm` 且**只在启动时跑一次** —— 连续录像会无上限增长，这条属于 S2，必须做。
 ### MM.5 启动恢复（resumeEnabled）：**未验**，且探针第一次尝试时挂住了（待查）

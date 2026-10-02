@@ -124,6 +124,7 @@ import SpectrogramViewer from '@renderer/components/SpectrogramViewer.vue'
 import AudioLevelMeter from '@renderer/components/AudioLevelMeter.vue'
 import CameraAcousticPanel from '@renderer/components/CameraAcousticPanel.vue'
 import CameraControlPanel from '@renderer/components/CameraControlPanel.vue'
+import CameraRecorderBar from '@renderer/components/CameraRecorderBar.vue'
 import VideoContextMenu from '@renderer/components/VideoContextMenu.vue'
 import CameraAlarmDialog from '@renderer/components/CameraAlarmDialog.vue'
 import CameraRecordingPlaybackDialog from '@renderer/components/CameraRecordingPlaybackDialog.vue'
@@ -2934,6 +2935,8 @@ const sessionLabel = computed(() => {
                 </button>
               </p>
               <p v-if="cameraMessage" :class="cameraAlertClass" role="status">{{ cameraMessage }}</p>
+
+              <CameraRecorderBar :device-id="selectedDeviceId" />
 
               <!-- Icon-only player toolbar. Text is available only through title/aria-label. -->
               <div class="camera-controls camera-controls--icons" data-camera-controlbar>
