@@ -4752,3 +4752,43 @@ npm run dist:win:signed
 
 - 真窗口截图 / 真机再跑一次：本轮只有单测与真实落盘数据的函数级复现，没有起真窗口；
 - 按设备回 `detect_mode` 的固件行为修（老固件未知模式走非零值规则），没有真机老固件样本可验。
+
+
+---
+
+## PP. 第 53 轮的发布（v1.0.25，2026-10-03）
+
+业主 2026-10-03：「需要」—— 把 OO 那条修复出成签名包。
+
+### PP.1 交付
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.25`（`package.json` version，`releaseDate` 2026-10-03） |
+| 安装包 | `release/HAIS-1.0.25-2026-10-03-x64-setup.exe` |
+| 大小 / sha256 | 128,218,664 字节 · `BA2B70DFEEE1C99C520A630F062A335EF05188BAC88796E871730912E2DA8129` |
+| 签名主体 | `CN="Shanghai Hertzinno Technology Co., Ltd."`（颁发者 `Certum Code Signing 2021 CA`） |
+| 指纹 / 到期 | `F88A2FCEE6553908220C031FBFC2D412CB341DC3` · 2027-09-03 |
+| 时间戳 | ✅ `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1`（RFC 3161） |
+| 打包产物验证 | 严格签名模式 `verify:packaged` → **26 通过 / 0 失败**（应用内版本号 1.0.25） |
+
+出包命令：
+
+```powershell
+$env:HERTZINNO_CERT_SHA1 = 'F88A2FCEE6553908220C031FBFC2D412CB341DC3'
+npm run dist:win:signed
+```
+
+上一版签名包已移到 `release-1.0.24-2026-10-02/` 留档。
+
+### PP.2 出包前的验证
+
+- `npm run typecheck` 通过；
+- `npm run test:inproc`：121 文件 · **2466 通过 / 75 失败**，失败文件集合与 v1.0.24
+  完全一致（仍是那 29 个 KK.8 陈旧守卫），无新增；
+- `verify:packaged`（`HERTZINNO_REQUIRE_SIGNATURE=1`）26 通过 / 0 失败。
+
+### PP.3 这一版相对 v1.0.24 的唯一改动
+
+就是 OO 那段修复（局放记录不再显示占位 `data_1` 造成的「泄漏量 0」）；S1/S2/S3 功能、
+验证数字与未验证项全部照 v1.0.24，没有其它代码改动。
