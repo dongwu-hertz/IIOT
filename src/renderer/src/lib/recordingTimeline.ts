@@ -68,6 +68,33 @@ export function recordingSegments(recordings: readonly Recording[]): TimelineSeg
   })
 }
 
+/**
+ * 当前片段之后、按开始时间排的下一个片段（用于跨片段续播）。
+ *
+ * `gapMs` 允许为负：相邻切片可能有重叠（分段复用器的关键帧边界不是精确整数秒），
+ * 调用方按自己的容差决定「续播」还是「这里有一段缺口，先停下如实说出来」。
+ */
+export interface NextSegmentStep {
+  next?: TimelineSegment
+  gapMs: number
+}
+
+export function nextSegmentStep(
+  segments: readonly TimelineSegment[],
+  currentId: string
+): NextSegmentStep | undefined {
+  const ordered = [...segments].sort(
+    (left, right) => left.startMs - right.startMs || left.id.localeCompare(right.id)
+  )
+  const index = ordered.findIndex((segment) => segment.id === currentId)
+  if (index < 0) return undefined
+
+  const current = ordered[index] as TimelineSegment
+  const next = ordered.slice(index + 1).find((segment) => segment.id !== current.id)
+  if (!next) return { gapMs: Number.POSITIVE_INFINITY }
+  return { next, gapMs: next.startMs - current.endMs }
+}
+
 /** 所有录像覆盖的时间范围；没有录像时返回 `null`（调用方据此显示空态）。 */
 export function recordingsExtent(
   segments: readonly TimelineSegment[]

@@ -29,6 +29,8 @@ import { recordingTypeLabel } from '@renderer/lib/labels'
 import { formatBytes, formatDateTime, formatDuration } from '@renderer/lib/format'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import AppModal from '@renderer/components/AppModal.vue'
+import VideoPlaybackTimeline from '@renderer/components/VideoPlaybackTimeline.vue'
+import { nextSegmentStep, recordingSegments } from '@renderer/lib/recordingTimeline'
 
 const props = defineProps<{
   modelValue: boolean
@@ -52,6 +54,9 @@ const { t } = useI18n()
 /** 一次读回的行数。列表只用于**挑一段**，不做分页界面。 */
 const RECORDING_LIMIT = 200
 
+/** 只有超过这个正缺口的才停下来提示；小于它的正/负间隙按切片边界抖动处理，直接续播。 */
+const AUTO_ADVANCE_GAP_TOLERANCE_MS = 5_000
+
 const items = ref<Recording[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -63,8 +68,20 @@ const videoError = ref('')
 const videoTitle = ref('')
 const videoEl = ref<HTMLVideoElement | null>(null)
 
+/** 当前播放时刻（epoch ms），喂给时间轴游标；停止时为 null。 */
+const videoCurrentMs = ref<number | null>(null)
+
+/** 播完后的去路：正常接下一段、遇到大缺口等用户确认、或已经到末尾。 */
+type PlaybackFollowUp =
+  | { kind: 'gap'; nextId: string; nextStart: number; gapMs: number }
+  | { kind: 'end' }
+const followUp = ref<PlaybackFollowUp | null>(null)
+
 /** 已经登记的行里，属于「本机视频」的那些。 */
 const videoItems = computed(() => items.value.filter(isVideoRecording))
+
+/** 时间轴只画有本机地址的视频片段；音频行不参与相机回放。 */
+const timelineSegments = computed(() => recordingSegments(videoItems.value))
 
 /**
  * 一行的扩展名决定它能不能进 `<video>`。
@@ -91,6 +108,8 @@ function stopPlayback(): void {
   videoUrl.value = ''
   videoError.value = ''
   videoTitle.value = ''
+  videoCurrentMs.value = null
+  followUp.value = null
 }
 
 async function load(): Promise<void> {
@@ -120,6 +139,7 @@ async function play(recording: Recording): Promise<void> {
   stopPlayback()
   playingId.value = recording.id
   videoTitle.value = formatDateTime(recording.startTime)
+  videoCurrentMs.value = recording.startTime
   const result = await callApi(() => window.api.cameraNvr.videoUrl(recording.id))
   // 期间被关掉或换了另一段：这一份结果已经过期，丢掉它（否则会把地址写回去）。
   if (playingId.value !== recording.id) return
@@ -129,6 +149,50 @@ async function play(recording: Recording): Promise<void> {
   }
   videoUrl.value = unwrap(result)?.url ?? ''
   if (videoUrl.value === '') videoError.value = t('cameraNvrUi.playbackUnavailable')
+}
+
+/** 按 id 播放列表里的某一段（时间轴点击与「跳到下一段」共用）。 */
+function playById(id: string): void {
+  const target = videoItems.value.find((recording) => recording.id === id)
+  if (target) void play(target)
+}
+
+/** 把 `<video>.currentTime` 换算回录像的 epoch 时刻，喂给时间轴游标。 */
+function onVideoTimeUpdate(): void {
+  const video = videoEl.value
+  const recording = videoItems.value.find((item) => item.id === playingId.value)
+  if (!video || !recording) return
+  videoCurrentMs.value = recording.startTime + video.currentTime * 1000
+}
+
+/**
+ * 一段播完：只有小缝/重叠才自动接下一段；真缺口停下来显示在时间轴上，
+ * 由操作员点「跳到下一段」决定是否跨过。
+ */
+function onVideoEnded(): void {
+  const current = playingId.value
+  if (current === '') return
+  const step = nextSegmentStep(timelineSegments.value, current)
+  if (!step?.next) {
+    followUp.value = { kind: 'end' }
+    return
+  }
+  if (step.gapMs > AUTO_ADVANCE_GAP_TOLERANCE_MS) {
+    followUp.value = {
+      kind: 'gap',
+      nextId: step.next.id,
+      nextStart: step.next.startMs,
+      gapMs: step.gapMs
+    }
+    return
+  }
+  playById(step.next.id)
+}
+
+/** 用户确认跨过缺口：播下一段（缺口本身已经由时间轴如实画出来）。 */
+function continueAfterGap(): void {
+  const pending = followUp.value
+  if (pending?.kind === 'gap') playById(pending.nextId)
 }
 
 /** 打开时读一次列表；若带着 preset 就直接播那一段（下载 -> 回放）。 */
@@ -178,6 +242,17 @@ onUnmounted(stopPlayback)
     -->
     <p class="muted playback__note" role="note">{{ t('cameraNvrUi.playbackLocalNote') }}</p>
     <p class="muted">{{ deviceName }}</p>
+
+    <VideoPlaybackTimeline
+      v-if="timelineSegments.length > 0"
+      :segments="timelineSegments"
+      :current-id="playingId || undefined"
+      :cursor-ms="videoCurrentMs"
+      :label="t('cameraNvrUi.playbackTimeline')"
+      :zoom-in-label="t('monitorTimelineUi.playbackZoomIn')"
+      :zoom-out-label="t('monitorTimelineUi.playbackZoomOut')"
+      @select="playById"
+    />
 
     <p v-if="loading" class="muted" role="status">{{ t('cameraNvrUi.playbackLoading') }}</p>
     <p v-else-if="error" class="alert alert--danger" role="alert">{{ error }}</p>
@@ -230,10 +305,30 @@ onUnmounted(stopPlayback)
         class="playback__video"
         :src="videoUrl"
         controls
+        @ended="onVideoEnded"
+        @timeupdate="onVideoTimeUpdate"
         autoplay
       ></video>
       <p v-else-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
       <p v-else class="muted" role="status">{{ t('recordingsUi.videoLoading') }}</p>
+      <div
+        v-if="followUp?.kind === 'gap'"
+        class="alert alert--warning playback__gap"
+        role="status"
+      >
+        <p>
+          {{ t('cameraNvrUi.playbackGap', {
+            time: formatDateTime(followUp.nextStart),
+            gap: formatDuration(followUp.gapMs)
+          }) }}
+        </p>
+        <button type="button" class="btn btn--sm" @click="continueAfterGap">
+          {{ t('cameraNvrUi.playbackContinueNext') }}
+        </button>
+      </div>
+      <p v-else-if="followUp?.kind === 'end'" class="muted playback__gap">
+        {{ t('cameraNvrUi.playbackLastSegment') }}
+      </p>
     </div>
 
     <template #footer>
@@ -243,6 +338,13 @@ onUnmounted(stopPlayback)
 </template>
 
 <style scoped>
+.playback__gap {
+  margin-top: 8px;
+}
+
+.playback__gap p {
+  margin: 0 0 6px;
+}
 .playback__note {
   font-size: 11.5px;
   line-height: 1.5;

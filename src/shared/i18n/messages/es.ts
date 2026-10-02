@@ -2431,6 +2431,10 @@ export const es: MessageSchema = {
     playbackLocalNote:
       'Grabaciones locales: la lista siguiente es lo que guarda este equipo (grabaciones manuales y archivos de detección descargados del dispositivo). La FA371 no tiene almacenamiento continuo en el dispositivo, así que no se reproducen grabaciones del dispositivo.',
     playbackUnavailable: 'No se puede reproducir esta grabación: el proceso principal no devolvió ninguna dirección local reproducible.',
+    playbackTimeline: 'Línea de tiempo de grabaciones (los huecos son tramos sin grabación)',
+    playbackGap: 'Este segmento ha terminado. El siguiente empieza a las {time}; entre ambos hay unos {gap} sin grabación.',
+    playbackContinueNext: 'Saltar al siguiente segmento',
+    playbackLastSegment: 'Este es el último segmento.',
     downloadTitle: 'Descargar registros de detección',
     downloadLoading: 'Leyendo los registros de detección del dispositivo…',
     downloadEmpty: 'El dispositivo no devolvió ningún registro de detección.',

@@ -2727,6 +2727,10 @@ export const zhCN = {
     playbackLocalNote:
       '本机录像：下面列出的是这台电脑上已保存的录像文件（手动录像，以及从设备下载的检测录像）。FA371 没有设备侧的连续录像存储，这里回放的不是设备上的录像。',
     playbackUnavailable: '无法播放这段录像：没有取得可播放的本机地址。',
+    playbackTimeline: '录像时间轴（空白处为没有录像的缺口）',
+    playbackGap: '当前片段已结束；下一段从 {time} 开始，中间约 {gap} 没有录像。',
+    playbackContinueNext: '跳到下一段',
+    playbackLastSegment: '已经是最后一段。',
     downloadTitle: '下载检测记录',
     downloadLoading: '正在读取设备检测记录…',
     downloadEmpty: '设备没有返回任何检测记录。',

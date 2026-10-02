@@ -478,7 +478,7 @@ GET    /events                      SSE：object.created / pool.threshold / pool
 | S1 真窗口验证 | ✅ 通过（problems 0） | `scripts/verify-recorder.cjs`：真 ffmpeg + 合成源，6 片全可播、断流后换轮重启、停止时补登记 —— 见 `docs/UI-VERIFY.md` MM |
 | **S1 界面（开关 + 状态行）** | ✅ 已实现（真窗口点击未验） | `CameraRecorderBar.vue` 接入 MonitorView 相机分支：开关走 `window.api.recorder.setEnabled`，状态行原样显示 starting/recording/waiting/backoff + 已请求未运行；六语言文案与源码守卫见 `tests/recorder-ui.test.ts` |
 | S2 保留与水位 | ✅ 已实现 | `shared/domain/retention.ts` + `StorageService.enforceRetention()` 周期清扫 + `TrendQueryService.enforceRetentionForAllDevices()` + 设置页配额与超额提示；见 §9.9 |
-| S3 回放 | ❌ 没做 | 跨片段续播 / 缺口呈现 / 与告警趋势同轴 |
+| S3 回放 | 🟡 第一刀已落：相机本机录像时间轴 + 跨片段续播 + 缺口如实提示；告警/趋势同轴未接 | `VideoPlaybackTimeline.vue` + `CameraRecordingPlaybackDialog.vue` + `recording-timeline` / `camera-playback-timeline` 测试；见 §9.10 |
 | S4 搬到独立服务 | ❌ 没做 | 录像器的依赖已全部注入，具备搬家条件 |
 
 **本机验证的边界（重要）**：S1 的验证用的是**合成源**（`HZ_RECORDER_SOURCE=lavfi`），
@@ -581,3 +581,13 @@ GOP**（分段复用器只在关键帧上切），真机上的实际边界要实
 - 集成回归：`tests/storage-retention-sweep.test.ts`（容量删最旧、P/M 保护、非录像计入、缓存优先、缺文件补删）。
 - 趋势 parquet 的按天保留已接线：`TrendQueryService.enforceRetentionForAllDevices(retentionDays)` 扫描 `metrics/` 下**所有设备目录**（包括设备已删除后留下的孤儿目录），逐个复用 `enforceRetention()` 单设备逻辑。
 - 启动与周期清扫都**先清趋势、再跑录像容量策略**：过期 parquet 在配额眼里属于不可删数据，先删掉它，才不会为了凑配额误删一段本来可以留的录像。
+
+### 9.10 S3 第一刀实现记录（2026-10-01）
+
+- `VideoPlaybackTimeline.vue`：相机本机 MP4 的只读时间轴。片段按录像类型着色，**片段之间的空白就是缺口**；滚轮以光标为锚点缩放、左键拖动平移、按钮放大/缩小、当前播放位置画游标。几何全部复用 `lib/playbackTimeline.ts`。
+- `CameraRecordingPlaybackDialog.vue`：只列 MP4（音频不交给 `<video>`），点击时间轴/表格播放；`ended` 时用 `recordingTimeline.nextSegmentStep()` 找下一段：
+  - 相邻切片的小缝或重叠（≤ 5 秒）→ 自动续播；
+  - 真缺口 → 停下，时间轴上如实留白，并显示「下一段从 {time} 开始，中间约 {gap} 没有录像」，操作员点「跳到下一段」才跨过；
+  - 没有下一段 → 明说「已经是最后一段」。
+- 回归：`recording-timeline.test.ts` 新增 5 条序列判定；`camera-playback-timeline.test.ts` 3 条源码守卫。
+- **仍未做**：告警/声学趋势与录像同轴叠加；真窗口连续播放验证。

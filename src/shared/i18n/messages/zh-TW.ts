@@ -2656,6 +2656,10 @@ export const zhTW: MessageSchema = {
     playbackLocalNote:
       '本機錄影：下面列出的是這臺電腦上已儲存的錄影檔案（手動錄影，以及從裝置下載的檢測錄影）。FA371 沒有裝置側的連續錄影儲存，這裡回放的不是裝置上的錄影。',
     playbackUnavailable: '無法播放這段錄影：沒有取得可播放的本機地址。',
+    playbackTimeline: '錄影時間軸（空白處為沒有錄影的缺口）',
+    playbackGap: '目前片段已結束；下一段從 {time} 開始，中間約 {gap} 沒有錄影。',
+    playbackContinueNext: '跳至下一段',
+    playbackLastSegment: '已經是最後一段。',
     downloadTitle: '下載檢測記錄',
     downloadLoading: '正在讀取裝置檢測記錄…',
     downloadEmpty: '裝置沒有返回任何檢測記錄。',

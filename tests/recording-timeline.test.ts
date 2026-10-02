@@ -19,11 +19,13 @@ import {
   EDGE_PADDING_RATIO,
   EMPTY_WINDOW_SPAN_MS,
   POINT_EVENT_MS,
+  nextSegmentStep,
   recordingEndMs,
   recordingSegments,
   recordingsExtent,
   timelineLimits,
-  timelineWindow
+  timelineWindow,
+  type TimelineSegment
 } from '../src/renderer/src/lib/recordingTimeline'
 import { placeSegments, ticksFor, zoomWindow } from '../src/renderer/src/lib/playbackTimeline'
 
@@ -146,5 +148,39 @@ describe('初始窗口与可拖范围', () => {
       recordingsExtent([{ id: 'x', kind: 'manual', startMs: Number.NaN, endMs: Number.NaN }]),
       null
     )
+  })
+})
+
+describe('跨片段续播：当前片段之后是谁', () => {
+  function segment(id: string, startMs: number, endMs: number): TimelineSegment {
+    return { id, kind: 'scheduled', startMs, endMs }
+  }
+
+  it('按开始时间找下一段，背靠背时 gap 为 0', () => {
+    const step = nextSegmentStep([segment('b', 20_000, 30_000), segment('a', 10_000, 20_000)], 'a')
+    assert.equal(step?.next?.id, 'b')
+    assert.equal(step?.gapMs, 0)
+  })
+
+  it('重叠片段给负 gap：调用方可以直接续播，不算缺口', () => {
+    const step = nextSegmentStep([segment('a', 10_000, 30_000), segment('b', 20_000, 40_000)], 'a')
+    assert.equal(step?.next?.id, 'b')
+    assert.equal(step?.gapMs, -10_000)
+  })
+
+  it('中间断录时 gap 是正数，且如实返回具体毫秒数', () => {
+    const step = nextSegmentStep([segment('a', 10_000, 20_000), segment('b', 25_000, 30_000)], 'a')
+    assert.equal(step?.next?.id, 'b')
+    assert.equal(step?.gapMs, 5_000)
+  })
+
+  it('最后一段：没有 next，gap 是正无穷（调用方据此说「已到末尾」）', () => {
+    const step = nextSegmentStep([segment('a', 10_000, 20_000), segment('b', 20_000, 30_000)], 'b')
+    assert.equal(step?.next, undefined)
+    assert.equal(step?.gapMs, Number.POSITIVE_INFINITY)
+  })
+
+  it('当前 id 不在列表里：返回 undefined，不猜', () => {
+    assert.equal(nextSegmentStep([segment('a', 10_000, 20_000)], 'missing'), undefined)
   })
 })

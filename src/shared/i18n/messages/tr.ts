@@ -2434,6 +2434,10 @@ export const tr: MessageSchema = {
     playbackLocalNote:
       'Yerel kayıtlar: aşağıdaki liste bu bilgisayarda saklananlardır (elle kayıtlar ve aygıttan indirilen algılama dosyaları). FA371 aygıt tarafında sürekli kayıt depolamasına sahip değildir, bu yüzden burada aygıt kayıtları oynatılmaz.',
     playbackUnavailable: 'Bu kayıt oynatılamıyor: ana süreç oynatılabilir bir yerel adres döndürmedi.',
+    playbackTimeline: 'Kayıt zaman çizelgesi (boş alanlar kayıt olmayan aralıklardır)',
+    playbackGap: 'Bu parça bitti. Sonraki parça {time} saatinde başlıyor; arada yaklaşık {gap} kayıt yok.',
+    playbackContinueNext: 'Sonraki parçaya geç',
+    playbackLastSegment: 'Bu son parça.',
     downloadTitle: 'Algılama kayıtlarını indir',
     downloadLoading: 'Aygıtın algılama kayıtları okunuyor…',
     downloadEmpty: 'Aygıt hiçbir algılama kaydı döndürmedi.',

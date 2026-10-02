@@ -2476,6 +2476,10 @@ presets, the licence boundaries
     playbackLocalNote:
       'Local recordings: the list below is what this computer has stored (manual recordings and detection files downloaded from the device). The FA371 has no continuous on-device recording storage, so this is not playback of device-side recordings.',
     playbackUnavailable: 'Cannot play this recording: the main process returned no playable local address.',
+    playbackTimeline: 'Recording timeline (blank areas are gaps with no recording)',
+    playbackGap: 'This segment has ended. The next one starts at {time}; about {gap} has no recording in between.',
+    playbackContinueNext: 'Skip to next segment',
+    playbackLastSegment: 'This is the last segment.',
     downloadTitle: 'Download detection records',
     downloadLoading: 'Reading the device detection records…',
     downloadEmpty: 'The device returned no detection records.',
