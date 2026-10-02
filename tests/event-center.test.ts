@@ -241,6 +241,7 @@ function pendingRecord(
     acknowledged: overrides.acknowledged ?? false,
     ...(overrides.recordingId !== undefined ? { recordingId: overrides.recordingId } : {}),
     ...(overrides.alarmLevelRaw !== undefined ? { alarmLevelRaw: overrides.alarmLevelRaw } : {}),
+    ...(overrides.detectMode !== undefined ? { detectMode: overrides.detectMode } : {}),
     ...(overrides.metrics !== undefined ? { metrics: overrides.metrics } : {})
   }
 }
@@ -410,6 +411,47 @@ describe('EventCenterService.query', () => {
     assert.deepEqual(page.countsBySource, { deviceDetect: 1, linkage: 1, localAlarm: 1, deviceStatus: 0 })
     assert.equal(page.total, 3)
     assert.equal(page.truncated, false)
+  })
+
+  it('联动记录：模式未知的占位 leakVolume=0 不进事件指标，其余指标照旧', async () => {
+    const { service } = createService({
+      linkage: {
+        items: [
+          pendingRecord({
+            eventId: 'cam-1:20:30',
+            at: 30_000,
+            deviceId: 'cam-1',
+            metrics: { soundmapIntensity: 26.45, leakVolume: 0 }
+          })
+        ],
+        dropped: 0,
+        acknowledgedCalls: []
+      }
+    })
+
+    const page = await service.query({ sources: ['linkage'], limit: 50, offset: 0 })
+
+    assert.equal(page.items.length, 1)
+    assert.equal(page.items[0]?.metrics?.leakVolume, undefined)
+    assert.equal(page.items[0]?.metrics?.soundmapIntensity, 26.45)
+  })
+
+  it('联动记录：泄漏模式的 0 与未知模式的非零读数都保留', async () => {
+    const { service } = createService({
+      linkage: {
+        items: [
+          pendingRecord({ eventId: 'cam-1:21:31', at: 31_000, deviceId: 'cam-1', detectMode: 2, metrics: { leakVolume: 0 } }),
+          pendingRecord({ eventId: 'cam-1:22:32', at: 32_000, deviceId: 'cam-1', metrics: { leakVolume: 4.5 } })
+        ],
+        dropped: 0,
+        acknowledgedCalls: []
+      }
+    })
+
+    const page = await service.query({ sources: ['linkage'], limit: 50, offset: 0 })
+
+    assert.equal(page.items.find((item) => item.at === 31_000)?.metrics?.leakVolume, 0)
+    assert.equal(page.items.find((item) => item.at === 32_000)?.metrics?.leakVolume, 4.5)
   })
 
   it('marks device timestamps as approximate and box timestamps as exact', async () => {
@@ -765,6 +807,35 @@ function detectLogsPayload(overrides: Record<string, unknown>): unknown {
 }
 
 describe('DetectLibraryService', () => {
+  it('泄漏量按检测模式取舍：局放的 data_1=0 是占位，泄漏模式与未知非零值保留', async () => {
+    const deviceId = camera('dl-leak-gate')
+
+    const pdState: FakeClientState = {
+      payload: detectLogsPayload({ detect_mode: 1, data_1: 0 }),
+      bytes: new Uint8Array(),
+      downloadCalls: []
+    }
+    const pdPage = await createLibrary(pdState).list(deviceId)
+    assert.equal(pdPage.items[0]?.detectMode, 1)
+    assert.equal(pdPage.items[0]?.metrics?.leakVolume, undefined)
+
+    const leakState: FakeClientState = {
+      payload: detectLogsPayload({ detect_mode: 2, data_1: 0 }),
+      bytes: new Uint8Array(),
+      downloadCalls: []
+    }
+    const leakPage = await createLibrary(leakState).list(deviceId)
+    assert.equal(leakPage.items[0]?.metrics?.leakVolume, 0)
+
+    const oldFirmwareState: FakeClientState = {
+      payload: detectLogsPayload({ data_1: 4.5 }),
+      bytes: new Uint8Array(),
+      downloadCalls: []
+    }
+    const oldFirmwarePage = await createLibrary(oldFirmwareState).list(deviceId)
+    assert.equal(oldFirmwarePage.items[0]?.metrics?.leakVolume, 4.5)
+  })
+
   it('registers a WAV result file with the right container and audio format', async () => {
     const deviceId = camera('dl-wav')
     const state: FakeClientState = {

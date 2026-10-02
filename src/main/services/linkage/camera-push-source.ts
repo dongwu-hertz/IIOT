@@ -24,7 +24,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Device } from '@shared/domain/models'
-import { linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
+import { leakMetricsForMode, linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
 import { mapDetectLog } from '../device/fa371/mappers'
 import { resolveDischargeTypeKey } from '@shared/domain/fa371'
 import { deviceLog } from '../logging/logger'
@@ -213,8 +213,9 @@ export function toPushCandidate(
 
   const metrics: { soundmapIntensity?: number; leakVolume?: number; leakCost?: number; alarmDb?: number; alarmDf?: number } = {}
   if (log.soundmapIntensity !== undefined) metrics.soundmapIntensity = log.soundmapIntensity
-  if (log.leakVolume !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakVolume = log.leakVolume
-  if (log.leakCost !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakCost = log.leakCost
+  // 泄漏量/价格只在泄漏模式（或模式未知的非零值）下才是泄漏读数，规则见
+  // `leakMetricsForMode`：局放/机械记录里的 data_1=0 是占位，不能再印成「泄漏量 0」。
+  Object.assign(metrics, leakMetricsForMode(log.detectMode, log.leakVolume, log.leakCost))
   if (log.lastAlarmDb !== undefined) metrics.alarmDb = log.lastAlarmDb
   if (log.lastAlarmDf !== undefined) metrics.alarmDf = log.lastAlarmDf
   if (Object.keys(metrics).length > 0) candidate.metrics = metrics

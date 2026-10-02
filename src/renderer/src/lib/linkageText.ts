@@ -3,8 +3,10 @@
  *
  * 判定在相机上、软件只展示（2026-09-23/24 确立的口径）：这里只是「把设备写好的
  * 字段摆出来」，不做任何重新推导。模式取舍规则：局放（1）看声场强度/主频/放电类型，
- * 泄漏（2）看声场强度/泄漏量，机械（3）看声场强度/主频；模式未知时有什么显示什么。
+ * 泄漏（2）看声场强度/泄漏量，机械（3）看声场强度/主频；模式未知时只有非零的泄漏量
+ * 才当读数说（数据侧的同一份规则见 `leakMetricsForMode()`）。
  */
+import { leakMetricsForMode } from '@shared/domain/alarm-linkage'
 import type { PendingAlarmRecord } from '@shared/ipc/contract'
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
@@ -30,17 +32,20 @@ export function linkageMetricsText(t: Translate, record: PendingAlarmRecord): st
   return parts.join('，')
 }
 
-/** 泄漏模式的两个额外量（只有泄漏模式或模式未知时才说）。 */
+/**
+ * 泄漏模式的两个额外量。取值的唯一规则在 `leakMetricsForMode()`：模式明确不是泄漏
+ * 时不说；模式未知（老固件不回 detect_mode）时只有非零值才说 —— 局放记录里的
+ * `data_1=0` 是占位，印成「泄漏量 0」就是替设备编了一个读数。
+ */
 function leakParts(t: Translate, record: PendingAlarmRecord): string[] {
   const m = record.metrics
-  const mode = record.detectMode
-  if (mode !== undefined && mode !== 2) return []
+  const leak = leakMetricsForMode(record.detectMode, m?.leakVolume, m?.leakCost)
   const parts: string[] = []
-  if (m?.leakVolume !== undefined) {
-    parts.push(t('linkage.metricVolume', { value: shortNumber(m.leakVolume) }))
+  if (leak.leakVolume !== undefined) {
+    parts.push(t('linkage.metricVolume', { value: shortNumber(leak.leakVolume) }))
   }
-  if (m?.leakCost !== undefined) {
-    parts.push(t('linkage.metricLeakCost', { value: shortNumber(m.leakCost) }))
+  if (leak.leakCost !== undefined) {
+    parts.push(t('linkage.metricLeakCost', { value: shortNumber(leak.leakCost) }))
   }
   return parts
 }

@@ -29,7 +29,7 @@
 import type { Device } from '@shared/domain/models'
 import type { Fa371DetectLog } from '@shared/domain/fa371'
 import type { Fa371DetectFeedbackPreview } from '@shared/domain/fa371-stream'
-import { linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
+import { leakMetricsForMode, linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
 import { resolveDischargeTypeKey } from '@shared/domain/fa371'
 import { deviceLog } from '../logging/logger'
 import type { LinkageCandidate, LinkageTriggerSource } from './alarm-linkage-engine'
@@ -170,15 +170,16 @@ export function toWebSocketCandidate(
   if (log.alarmLevelRaw !== undefined) candidate.alarmLevelRaw = log.alarmLevelRaw
   if (log.alarmStrategyId !== undefined) candidate.strategyId = log.alarmStrategyId
   // 与轮询源同一套口径：模式/放电类型如实携带（概率字段优先于笼统的 discharge_type=4）；
-  // 泄漏量与泄漏价格在模式明确不是泄漏时不携带。
+  // 泄漏量/价格按 `leakMetricsForMode` 取舍（占位 0 不当读数）。
   if (log.detectMode !== undefined) candidate.detectMode = log.detectMode
   const dischargeTypeKey = resolveDischargeTypeKey(log)
   if (dischargeTypeKey !== undefined) candidate.dischargeTypeKey = dischargeTypeKey
 
   const metrics: { soundmapIntensity?: number; leakVolume?: number; leakCost?: number; alarmDb?: number; alarmDf?: number } = {}
   if (log.soundmapIntensity !== undefined) metrics.soundmapIntensity = log.soundmapIntensity
-  if (log.leakVolume !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakVolume = log.leakVolume
-  if (log.leakCost !== undefined && (log.detectMode === undefined || log.detectMode === 2)) metrics.leakCost = log.leakCost
+  // 泄漏量/价格只在泄漏模式（或模式未知的非零值）下才是泄漏读数，规则见
+  // `leakMetricsForMode`：局放/机械记录里的 data_1=0 是占位，不能再印成「泄漏量 0」。
+  Object.assign(metrics, leakMetricsForMode(log.detectMode, log.leakVolume, log.leakCost))
   if (log.lastAlarmDb !== undefined) metrics.alarmDb = log.lastAlarmDb
   if (log.lastAlarmDf !== undefined) metrics.alarmDf = log.lastAlarmDf
   if (Object.keys(metrics).length > 0) candidate.metrics = metrics

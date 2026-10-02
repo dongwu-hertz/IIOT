@@ -33,7 +33,11 @@ import { appLog, deviceLog } from '../logging/logger'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { AlarmEvent, DeviceKind, Recording } from '@shared/domain/models'
-import type { PendingAlarmRecord, PendingAlarmSnapshot } from '@shared/domain/alarm-linkage'
+import {
+  leakMetricsForMode,
+  type PendingAlarmRecord,
+  type PendingAlarmSnapshot
+} from '@shared/domain/alarm-linkage'
 import type {
   EventAcknowledgePerSource,
   EventAcknowledgeResult,
@@ -1151,7 +1155,12 @@ export class EventCenterService {
     }
     if (record.alarmLevelRaw !== undefined) entry.alarmLevelRaw = record.alarmLevelRaw
     if (record.frameRelativePath !== undefined) entry.frameRelativePath = record.frameRelativePath
-    if (record.metrics !== undefined) entry.metrics = { ...record.metrics }
+    if (record.metrics !== undefined) {
+      // 旧记录里可能已经落盘了占位的 leakVolume=0（模式未知的局放记录）；事件中心
+      // 与告警中心必须读同一份取舍规则，不能一处藏、一处显示。
+      const { leakVolume, leakCost, ...rest } = record.metrics
+      entry.metrics = { ...rest, ...leakMetricsForMode(record.detectMode, leakVolume, leakCost) }
+    }
     this.attachRecording(entry, record.recordingId)
     return entry
   }

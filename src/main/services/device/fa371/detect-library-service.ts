@@ -46,6 +46,7 @@ import {
   deriveRecordingContainer,
   detectRemoteRecordingId
 } from '@shared/domain/event-center'
+import { leakMetricsForMode } from '@shared/domain/alarm-linkage'
 import type { Fa371DetectLog, Fa371ResultFileKind, Fa371TimestampUnit } from '@shared/domain/fa371'
 import { FA371_RESULT_FILE_KINDS } from '@shared/domain/fa371'
 import type { Fa371DownloadedFile, Fa371DetectLogsEnvelopeDto } from './dto'
@@ -198,8 +199,9 @@ export class DetectLibraryService {
     // 指标逐项拷贝：缺字段就是缺字段，绝不填 0（0 会被渲染成一个真实读数）。
     const metrics: EventDetectMetrics = {}
     if (log.soundmapIntensity !== undefined) metrics.soundmapIntensity = log.soundmapIntensity
-    if (log.leakVolume !== undefined) metrics.leakVolume = log.leakVolume
-    if (log.leakCost !== undefined) metrics.leakCost = log.leakCost
+    // 泄漏量/价格按模式取舍（`leakMetricsForMode`）：局放记录里的 data_1=0 是占位，
+    // 带进事件中心就会被渲染成「泄漏量 0.000」。
+    Object.assign(metrics, leakMetricsForMode(log.detectMode, log.leakVolume, log.leakCost))
     if (Object.keys(metrics).length > 0) view.metrics = metrics
 
     return view

@@ -952,6 +952,31 @@ describe('轮询游标', () => {
     assert.equal(toPushCandidate({ id: 'cam-1', name: 'C' }, mapDetectLog({}), 5000), undefined)
   })
 
+  it('老固件不回 detect_mode 时，占位的 data_1=0 不当泄漏量；非零读数仍然保留', async () => {
+    const { toPushCandidate } = await import('../src/main/services/linkage/camera-push-source')
+    const { mapDetectLog } = await import('../src/main/services/device/fa371/mappers')
+    // 2026-10-03 本机 pending-alarms.json：147 条没有 detect_mode 的局放历史记录
+    // 全部带着 leakVolume: 0（data_1 占位），告警界面因此显示「泄漏量 0」。
+    const placeholder = toPushCandidate(
+      { id: 'cam-1', name: 'Acoustic Camera' },
+      mapDetectLog({ id: 11, start_time: 1790206646, is_alarm: true, data_1: 0 }),
+      5000
+    )
+    assert.ok(placeholder)
+    assert.equal(placeholder.detectMode, undefined)
+    assert.equal(placeholder.metrics?.leakVolume, undefined)
+
+    // 模式未知但值非零：这是老固件真实的泄漏读数，不能丢。
+    const realLeak = toPushCandidate(
+      { id: 'cam-1', name: 'Acoustic Camera' },
+      mapDetectLog({ id: 12, start_time: 1790206700, is_alarm: true, data_1: 12.5, data_2: 3 }),
+      5000
+    )
+    assert.ok(realLeak)
+    assert.equal(realLeak.metrics?.leakVolume, 12.5)
+    assert.equal(realLeak.metrics?.leakCost, 3)
+  })
+
   it('候选事件带上设备给的可选字段（等级、策略、指标）', async () => {
     const result = await pollDetectLogs(
       device,

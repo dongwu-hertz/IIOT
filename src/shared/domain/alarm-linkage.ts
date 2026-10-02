@@ -460,6 +460,30 @@ export interface LinkageMetrics {
 }
 
 /**
+ * `data_1`/`data_2`（泄漏量 / 泄漏价格）什么时候能当泄漏读数携带与展示。
+ *
+ * 设备在非泄漏记录里会把 `data_1` 写成占位 0（2026-09-24 真机：局放告警 `data_1=0`；
+ * 本机 200 条历史里 147 条没有 `detect_mode` 的局放记录全是 `leakVolume: 0`）。
+ * 把占位的 0 印成「泄漏量 0」，等于替设备说了一个它没说的读数，所以：
+ *   · 模式明确不是泄漏（1 局放 / 3 机械）：不携带；
+ *   · 模式未知（老固件不回 `detect_mode`）：只保留**非零**值 —— 非零才像真实读数；
+ *   · 模式是泄漏（2）：原样保留，包括 0（那是设备在这个模式下给的读数）。
+ *
+ * 一处规则，四处共用：三个触发源（轮询 / 推送 / WebSocket）、检测库事件与告警文案。
+ */
+export function leakMetricsForMode(
+  mode: number | undefined,
+  volume: number | undefined,
+  cost: number | undefined
+): Pick<LinkageMetrics, 'leakVolume' | 'leakCost'> {
+  if (mode !== undefined && mode !== 2) return {}
+  const out: Pick<LinkageMetrics, 'leakVolume' | 'leakCost'> = {}
+  if (volume !== undefined && (mode === 2 || volume !== 0)) out.leakVolume = volume
+  if (cost !== undefined && (mode === 2 || cost !== 0)) out.leakCost = cost
+  return out
+}
+
+/**
  * 告警事件的设备侧语义（相机自己判定的结果，2026-09-23 真机字段实测）。
  *
  * 「检测与判断都在相机上、软件只接收」是产品口径：这两个字段就是相机判定结论的
