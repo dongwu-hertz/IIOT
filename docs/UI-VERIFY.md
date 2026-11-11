@@ -4904,3 +4904,62 @@ npm run dist:win:signed
 - 没有起真窗口截图；徽标的观感与 10 秒轮询在真实相机页面上的表现未实测。
 - 相机 `/system` 若不回 `work_mode`（旧固件），徽标不出现、轮询不发布设备事实，
   界面不会编造一个模式。
+
+
+---
+
+## SS. 第 54 轮的发布（v1.0.26，2026-11-11）
+
+业主 2026-11-11：「完成后，你打个包」。把认证风暴修复（`f33a982`）与相机检测模式
+直接显示（`d9f0ab7`）收口出版本。
+
+### SS.1 交付
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.26`（`package.json` version，`releaseDate` 2026-11-11） |
+| 安装包 | `release/HAIS-1.0.26-2026-11-11-x64-setup.exe` |
+| 大小 / sha256 | 128,219,752 字节 · `0C4B948C01FED1C000AD6A5AB37B1CB03C2424223D2DEFA90879516A7971A087` |
+| 签名主体 | `CN="Shanghai Hertzinno Technology Co., Ltd."`（颁发者 `Certum Code Signing 2021 CA`） |
+| 指纹 / 到期 | `F88A2FCEE6553908220C031FBFC2D412CB341DC3` · 2027-09-03 |
+| 时间戳 | ✅ `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1`（RFC 3161） |
+| 打包产物验证 | 严格签名模式 `verify:packaged` → **26 通过 / 0 失败**（应用内版本号 1.0.26） |
+
+出包命令：
+
+```powershell
+$env:HERTZINNO_CERT_SHA1 = 'F88A2FCEE6553908220C031FBFC2D412CB341DC3'
+npm run dist:win:signed
+```
+
+上一版签名包已移到 `release-1.0.25-2026-10-03/` 留档。
+
+### SS.2 这一版包含什么（v1.0.25 之后）
+
+- **相机 HTTP 认证风暴修复**（`f33a982`）：客户端按归一化输入地址缓存、登录 5xx/404
+  报 `DEVICE_ERROR`、验证端点改用受保护的 `/system`、RTSP 直播计入出帧证据、
+  缓存最后一次 `/system/video`；解决「AUTH_FAILED」「两台上墙 TIMEOUT」。
+- **相机检测模式直接显示**（`d9f0ab7`）：设备头显示「检测模式: X」徽标；
+  每 10 秒 / 窗口聚焦时重读 `work_mode`；不一致弹窗可一键「使用相机当前模式」。
+- v1.0.25 已含的局放告警「泄漏量 0」修复照旧。
+
+### SS.3 出包前验证
+
+- `npm run typecheck` 通过；
+- `npm run test:inproc`：123 文件 · **2477 通过 / 75 失败**，失败文件集合与上一轮
+  完全一致（29 个 KK.8 陈旧守卫），无新增；
+- `verify:packaged`（`HERTZINNO_REQUIRE_SIGNATURE=1`）26 通过 / 0 失败。
+
+> **踩过的坑（2026-11-11）**：第一次 `verify:packaged` 是 11 通过 / 15 失败，
+> 全部是「未取得探针输出」。原因不是包，而是本会话环境里带着
+> `ELECTRON_RUN_AS_NODE=1` —— 打包后的 `HAIS.exe` 被当成 Node 运行，Electron 的
+> `--user-data-dir` / `--disable-gpu` 全被当成非法参数，窗口根本没起。
+> `Remove-Item Env:ELECTRON_RUN_AS_NODE` 后同一份产物 26/0。以后遇到
+> 「所有探针都没有输出」先查这个变量。
+
+### SS.4 未验证
+
+- 相机检测模式的徽标观感与 10 秒轮询没有起真窗口看过；
+- 认证风暴修复的真机复测是在本机相机上做的（见 QQ），本安装包未在客户现场再验；
+- 相机固件在 RTSP + 多路 WebSocket 下 HTTP 变慢仍是设备侧事实；
+- 64 通道相机的型号 / 通道数未建模（没有该型号固件文档）。
