@@ -5013,3 +5013,56 @@ npm run dist:win:signed
 
 - 没有起真窗口点 CH5/CH8 看页签切换（改的是数据来源与刷新时机；单测 + 真机通道
   读回已验证，窗口行为未实测）。
+
+
+---
+
+## UU. 第 55 轮的发布（v1.0.27，2026-11-11）
+
+业主 2026-11-11：「完成后，你打个包」。把通道启用状态刷新修复（`67300cc`）打进
+v1.0.26 之后的签名包。
+
+### UU.1 交付
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.27`（`package.json` version，`releaseDate` 2026-11-11） |
+| 安装包 | `release/HAIS-1.0.27-2026-11-11-x64-setup.exe` |
+| 大小 / sha256 | 128,219,768 字节 · `0DB2F9C4D349CE7AC20B65F001A4DB767A16D7687DC095A1B208BA242E7E7B41` |
+| 签名主体 | `CN="Shanghai Hertzinno Technology Co., Ltd."`（颁发者 `Certum Code Signing 2021 CA`） |
+| 指纹 / 到期 | `F88A2FCEE6553908220C031FBFC2D412CB341DC3` · 2027-09-03 |
+| 时间戳 | ✅ `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1`（RFC 3161） |
+| 打包产物验证 | 严格签名模式 `verify:packaged` → **26 通过 / 0 失败**（应用内版本号 1.0.27） |
+
+出包命令：
+
+```powershell
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+$env:HERTZINNO_CERT_SHA1 = 'F88A2FCEE6553908220C031FBFC2D412CB341DC3'
+npm run dist:win:signed
+```
+
+上一版签名包已移到 `release-1.0.26-2026-11-11/` 留档。
+
+### UU.2 这一版包含什么（v1.0.26 之后）
+
+- **通道启用状态刷新修复**（`67300cc`）：实时监测进入/换设备/窗口聚焦时强制从设备
+  重读 `/get_passageway`；设备管理每次打开通道页签重读；保存通道后同步共享缓存。
+  解决「只接 CH5/CH8 时页签仍是旧的、切换没有变化」。
+- v1.0.26 已含的相机认证风暴修复、相机检测模式直接显示、局放「泄漏量 0」修复照旧。
+
+### UU.3 出包前验证
+
+- `npm run typecheck` 通过；
+- `npm run test:inproc`：124 文件 · **2482 通过 / 75 失败**，失败文件集合与上一轮
+  完全一致（29 个 KK.8 陈旧守卫），无新增；
+- `verify:packaged`（`HERTZINNO_REQUIRE_SIGNATURE=1`）26 通过 / 0 失败；
+- 真机：`DeviceService.refreshChannels()` 读 AE08 @ .90，8 路中 enabled = `[4, 7]`
+  （CH5 / CH8），name5 / name8，传感器类型 0 / 1。
+
+### UU.4 未验证
+
+- 没有起真窗口点 CH5/CH8 看页签切换（数据来源与刷新时机已由单测 + 真机读回验证）；
+- 安装包未在客户现场安装复测；
+- 相机固件在 RTSP + 多路 WebSocket 下 HTTP 变慢仍是设备侧事实；
+- 64 通道相机的型号 / 通道数未建模。
