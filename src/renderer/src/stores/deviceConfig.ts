@@ -48,6 +48,7 @@ import type {
 } from '@renderer/types/device-config'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { i18n } from '@renderer/i18n'
+import { useDevicesStore } from '@renderer/stores/devices'
 
 /**
  * Sample rates the device accepts (spec 11.2).
@@ -361,6 +362,15 @@ export const useDeviceConfigStore = defineStore('deviceConfig', () => {
     if (rows) {
       channels.value = rows
       channelsLoaded.value = true
+      /*
+       * 设备刚确认的通道表同步进共享的设备缓存。
+       *
+       * 实时监测的通道页签读的是 `devices.channelsOf()`（DEVICE_GET_CHANNELS →
+       * 设备 `/get_passageway` → 本地 channels 表），不是这个配置 store。不同步的话，
+       * 在设备管理里启用 CH5/CH8 之后，实时监测仍拿旧 enabled 值把这两路画成关闭，
+       * 页签点了也不切换。`force = true` 会走一次设备读并把本地表一起更新。
+       */
+      void useDevicesStore().loadChannels(targetDeviceId, true)
     }
     return rows
   }

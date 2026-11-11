@@ -4963,3 +4963,53 @@ npm run dist:win:signed
 - 认证风暴修复的真机复测是在本机相机上做的（见 QQ），本安装包未在客户现场再验；
 - 相机固件在 RTSP + 多路 WebSocket 下 HTTP 变慢仍是设备侧事实；
 - 64 通道相机的型号 / 通道数未建模（没有该型号固件文档）。
+
+
+---
+
+## TT. 通道启用状态不刷新（只接 CH5/CH8 时切换无效）的修复（2026-11-11）
+
+业主报：「我现在接的是通道5和通道8，但是我在 live monitoring 和设备管理里面
+切换没有变化。」
+
+### TT.1 真机事实
+
+`GET /get_passageway`（AE08 @ 192.168.110.90，2026-11-11）：
+
+- `chinfoSize: 8`；
+- `dchEn=1` 只在 `dchId=4`（name5 / CH5）与 `dchId=7`（name8 / CH8），其余为 0。
+
+映射层与主进程刷新都正确：用真实编译后的 `DeviceService.refreshChannels()` 读回
+并落库，enabled 索引正是 `[4, 7]`。问题不在读设备，而在**界面缓存**：
+
+1. 实时监测的通道页签读 `devices.channelsOf()`；`devices.loadChannels()` 默认命中
+   渲染层缓存就不再请求，进入页面 / 换设备都不强制刷新；
+2. 设备管理只在页面挂载时 `config.loadAll()` 一次；切回「通道与采样率」页签不重读；
+3. 保存通道只更新 `deviceConfig` store，不更新实时监测读的那份共享通道表。
+
+设备不会推送通道配置变更事件，所以操作员在设备 Web 界面启用 CH5/CH8 后，软件仍把
+这两路画成「已关闭」，页签禁用 → 点了也不切换；设备管理里的表也是旧的。
+
+### TT.2 修法
+
+| 位置 | 修法 |
+|---|---|
+| `MonitorView` 进入页面 / 换设备 | `devices.loadChannels(..., true)` 强制从设备重读（`DEVICE_GET_CHANNELS` → `/get_passageway` → 更新本地 channels 表） |
+| `MonitorView` 窗口 focus | 从设备 Web 界面切回来时立刻重读通道表 |
+| `ChannelConfigSection` | 每次打开「通道与采样率」页签 `onMounted` 重读设备通道 |
+| `deviceConfig.updateChannel` | 保存成功后 `useDevicesStore().loadChannels(id, true)`，实时监测页签立即跟着变 |
+
+### TT.3 验证
+
+- `npm run typecheck` 通过；
+- 新增 `tests/channel-refresh.test.ts` 4 条源码守卫；
+- `tests/config-service.test.ts` 新增「dchEn 在 4/7 时 enabled 索引为 [4,7]」真实形状用例；
+- 全量 `test:inproc`：124 文件 · **2482 通过 / 75 失败**，失败文件集合与上一轮一致
+  （29 个 KK.8 陈旧守卫），无新增；
+- 真机复测：真实编译后的 `DeviceService.refreshChannels()` 读 AE08 @ .90，返回 8 路，
+  enabled = `[4, 7]`（CH5 / CH8），name5 / name8，传感器类型分别为 0 / 1。
+
+### TT.4 未验证
+
+- 没有起真窗口点 CH5/CH8 看页签切换（改的是数据来源与刷新时机；单测 + 真机通道
+  读回已验证，窗口行为未实测）。

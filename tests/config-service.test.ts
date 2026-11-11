@@ -55,7 +55,7 @@ interface Recorded {
  * generated mock would encode our assumptions back at us, which is precisely the
  * failure this project has already hit twice.
  */
-function fakeClient(options: { failOn?: string } = {}): {
+function fakeClient(options: { failOn?: string; passageway?: unknown } = {}): {
   client: DeviceApiClient
   written: Recorded
 } {
@@ -67,6 +67,8 @@ function fakeClient(options: { failOn?: string } = {}): {
 
   const api = {
     async getPassageway() {
+      // A test can override this with a different real capture (e.g. CH5/CH8 enabled).
+      if (options.passageway !== undefined) return options.passageway
       // Verified AE08 payload, including the `chinfoArray` key the spec omits.
       return {
         chinfoArray: [
@@ -205,6 +207,33 @@ describe('ConfigService reads', () => {
     assert.equal(channels[2]?.enabled, false)
     // Sorted ascending even if the device returns them out of order.
     assert.deepEqual(channels.map((channel) => channel.channelIndex), [0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('maps enabled CH5 / CH8 from the real device shape (dchEn on indexes 4 and 7)', async () => {
+    // 业主 2026-11-11 的现场：只接了通道 5 和通道 8，设备把 dchEn=1 放在
+    // dchId 4 / 7 上。映射层必须原样保留这个事实，不能把「前两路启用」当默认值。
+    const passageway = {
+      chinfoArray: [
+        { dchAlarmPara: 1, dchEn: 0, dchId: 0, dchName: 'name1', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 0, dchId: 1, dchName: 'name2', dchSensorType: 1 },
+        { dchAlarmPara: 1, dchEn: 0, dchId: 2, dchName: 'name3', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 0, dchId: 3, dchName: 'name4', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 1, dchId: 4, dchName: 'name5', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 0, dchId: 5, dchName: 'name6', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 0, dchId: 6, dchName: 'name7', dchSensorType: 0 },
+        { dchAlarmPara: 1, dchEn: 1, dchId: 7, dchName: 'name8', dchSensorType: 1 }
+      ]
+    }
+    const { client } = fakeClient({ passageway })
+    const channels = await new ConfigService(client).getChannels()
+
+    assert.deepEqual(
+      channels.filter((channel) => channel.enabled).map((channel) => channel.channelIndex),
+      [4, 7]
+    )
+    assert.equal(channels[4]?.name, 'name5')
+    assert.equal(channels[7]?.name, 'name8')
+    assert.equal(channels[7]?.sensorType, 1)
   })
 
   it('maps alarm profiles to friendly names, never the firmware vocabulary', async () => {

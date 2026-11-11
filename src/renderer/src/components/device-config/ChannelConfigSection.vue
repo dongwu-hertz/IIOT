@@ -12,7 +12,7 @@
  * Drafts are local: typing must not mutate store state, or a background refresh
  * would silently commit half-typed values into the object that gets written.
  */
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { ChannelConfigView } from '@renderer/types/device-config'
 import { SAMPLE_RATE_OPTIONS, useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import { useDeviceDetailDirtyStore } from '@renderer/stores/deviceDetailDirty'
@@ -180,6 +180,17 @@ async function reloadChannels(): Promise<void> {
   channelsNotice.value = failure
   if (!failure) seedDrafts()
 }
+
+/*
+ * 每次打开「通道与采样率」页签都从设备重读一次。
+ *
+ * 设备不推送通道配置变更；只在页面挂载时读一次的话，操作员在设备 Web 界面
+ * 把传感器改到 CH5 / CH8 后再切回本页，看到的仍是旧表（甚至把旧值再写回设备）。
+ * 这个页签是按需挂载的，onMounted 只会在真正打开它时跑一次。
+ */
+onMounted(() => {
+  void reloadChannels()
+})
 
 // ---------------------------------------------------------------------------
 // 采样率

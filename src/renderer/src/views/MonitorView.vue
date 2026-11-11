@@ -2476,8 +2476,21 @@ async function finaliseRecordingIfAny(): Promise<void> {
   await toggleManualRecording()
 }
 
+/**
+ * 从设备 Web 界面切回本软件时强制重读通道表。
+ *
+ * 通道的启用状态由设备侧决定（`/get_passageway` 的 `dchEn`），设备不会推配置变更
+ * 事件；窗口重新获得焦点是最可靠的「操作员刚改完设备」信号。代价是一条很小的 GET，
+ * 换来的是 CH5 / CH8 这类刚启用的通道能立刻出现在页签里。
+ */
+function refreshChannelsOnFocus(): void {
+  if (!isVoiceprint.value || selectedDeviceId.value === '') return
+  void devices.loadChannels(selectedDeviceId.value, true)
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', onFullscreenKeydown, true)
+  window.addEventListener('focus', refreshChannelsOnFocus)
   if (devices.devices.length === 0) await devices.load()
   /*
    * 每次进入这一页都重新允许一次自动起播（与总览页同一个口径，见
@@ -2488,7 +2501,10 @@ onMounted(async () => {
   syncFromRoute()
   if (selectedDeviceId.value) {
     // 通道表要先到手，初始通道才能避开被明确关闭的那几路。
-    await devices.loadChannels(selectedDeviceId.value)
+    // force = true：设备侧的通道启用状态（dchEn）不会推送变更事件，缓存可能是
+    // 上次打开页面时的旧值（实测：设备上把传感器从 CH1/CH2 改到 CH5/CH8 后，
+    // 页签仍把 CH5/CH8 画成「已关闭」，点了也不切换）。
+    await devices.loadChannels(selectedDeviceId.value, true)
     activeChannelIndex.value = preferredChannelIndex(selectedDeviceId.value)
     await loadSampleRateIfVoiceprint(selectedDeviceId.value)
     // A camera gets the live-video panel, not a WebSocket monitor session: its
@@ -2557,7 +2573,7 @@ watch(selectedDeviceId, async (id) => {
   if (!id) return
   const live = isLive.value
   devices.select(id)
-  await devices.loadChannels(id)
+  await devices.loadChannels(id, true)
   void loadSampleRateIfVoiceprint(id)
   activeChannelIndex.value = preferredChannelIndex(id)
   monitor.selectDevice(id)
@@ -2630,6 +2646,7 @@ watch(selectedDeviceId, async (id) => {
  */
 onUnmounted(() => {
   document.removeEventListener('keydown', onFullscreenKeydown, true)
+  window.removeEventListener('focus', refreshChannelsOnFocus)
   // 音量浮层的 click-outside 监听同理：组件没了，监听必须跟着掉。
   document.removeEventListener('mousedown', onVolumePopoverDocMouseDown, true)
   // 控制条浮层（音量 / 红外）的同一条监听同理。
