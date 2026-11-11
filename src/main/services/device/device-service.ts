@@ -189,6 +189,17 @@ interface DeviceRuntime {
   /** FA371 acoustic camera client. */
   cameraClient?: Fa371ApiClient
   /**
+   * 建 box / camera 客户端时**传入的**基地址（归一化后）。
+   *
+   * 与下面 `e2ClientInputBaseUrl` 同一条理由：两个客户端类都在构造函数里把地址
+   * 归一化（`192.168.110.235:80` → `http://192.168.110.235`），拿 `currentBaseUrl`
+   * 去和设备记录里的裸 `ip:port` 比**永远不相等**。那会让每次健康检查 / 轮询 /
+   * 页面操作都 new 一个客户端、重新登录一次（2026-11-11 实测：8 分钟内一台相机
+   * 登录 171 次；相机 HTTP 栈被拖垮后表现为 AUTH_FAILED / TIMEOUT）。
+   */
+  clientInputBaseUrl?: string
+  cameraClientInputBaseUrl?: string
+  /**
    * 听诊盒子族（E2 / FA100 / FA110）的客户端。
    *
    * 它与其他两族不同的地方在于**会话在客户端里**：每个请求都要带
@@ -434,7 +445,8 @@ export class DeviceService extends EventEmitter {
    */
   private clientFor(device: Device): DeviceApiClient {
     const existing = this.runtime.get(device.id)
-    if (existing?.client && existing.client.currentBaseUrl === this.baseUrlFor(device)) {
+    const inputBaseUrl = normaliseBaseUrl(this.baseUrlFor(device))
+    if (existing?.client && existing.clientInputBaseUrl === inputBaseUrl) {
       return existing.client
     }
 
@@ -450,7 +462,7 @@ export class DeviceService extends EventEmitter {
     const client = new DeviceApiClient({
       transport: this.transport,
       resolver: this.resolver,
-      baseUrl: this.baseUrlFor(device),
+      baseUrl: inputBaseUrl,
       credential,
       ...(this.devices.getAuthStrategy(device.id)
         ? { preferredStrategyId: this.devices.getAuthStrategy(device.id) as string }
@@ -471,7 +483,8 @@ export class DeviceService extends EventEmitter {
 
     this.setRuntime(device.id, {
       ...(existing ?? { consecutiveFailures: 0, lastStatus: device.status, observedOnline: false }),
-      client
+      client,
+      clientInputBaseUrl: inputBaseUrl
     })
     return client
   }
@@ -1713,7 +1726,8 @@ export class DeviceService extends EventEmitter {
    */
   private cameraClientFor(device: Device): Fa371ApiClient {
     const existing = this.runtime.get(device.id)
-    if (existing?.cameraClient && existing.cameraClient.currentBaseUrl === this.baseUrlFor(device)) {
+    const inputBaseUrl = normaliseBaseUrl(this.baseUrlFor(device))
+    if (existing?.cameraClient && existing.cameraClientInputBaseUrl === inputBaseUrl) {
       return existing.cameraClient
     }
 
@@ -1724,7 +1738,7 @@ export class DeviceService extends EventEmitter {
 
     const client = new Fa371ApiClient({
       transport: this.transport,
-      baseUrl: normaliseBaseUrl(this.baseUrlFor(device)),
+      baseUrl: inputBaseUrl,
       credential,
       timeoutMs: this.getSettings().requestTimeoutMs,
       ...(this.devices.getAuthStrategy(device.id)
@@ -1744,7 +1758,8 @@ export class DeviceService extends EventEmitter {
 
     this.setRuntime(device.id, {
       ...(existing ?? { consecutiveFailures: 0, lastStatus: device.status, observedOnline: false }),
-      cameraClient: client
+      cameraClient: client,
+      cameraClientInputBaseUrl: inputBaseUrl
     })
     return client
   }

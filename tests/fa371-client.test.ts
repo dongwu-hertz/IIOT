@@ -131,6 +131,10 @@ interface DeviceOptions {
   respondRaw?: Record<string, HttpResponse>
   /** 让第 n 个受保护请求返回 401（0 基），用来驱动 401 -> 重登 -> 重试。 */
   unauthorizedProtectedIndexes?: number[]
+  /** 登录接口本身返回这个 HTTP 状态（模拟相机的内嵌 HTTP 栈回 503）。 */
+  loginStatus?: number
+  /** 这些路径不要求认证（真机：`/system/detect_status` 不设防）。 */
+  openPaths?: string[]
 }
 
 function createDevice(options: DeviceOptions = {}): {
@@ -147,13 +151,18 @@ function createDevice(options: DeviceOptions = {}): {
     // §2.1：登录响应只有 token，没有 ret/msg。
     if (url.pathname === '/login') {
       logins += 1
-      return jsonResponse({ token: TOKEN })
+      return options.loginStatus !== undefined
+        ? statusResponse(options.loginStatus)
+        : jsonResponse({ token: TOKEN })
     }
 
     const protectedIndex = protectedCount
     protectedCount += 1
-    if (options.unauthorizedProtectedIndexes?.includes(protectedIndex)) return statusResponse(401)
-    if (!accept(request.headers)) return statusResponse(401)
+    const isOpen = options.openPaths?.includes(url.pathname) === true
+    if (!isOpen) {
+      if (options.unauthorizedProtectedIndexes?.includes(protectedIndex)) return statusResponse(401)
+      if (!accept(request.headers)) return statusResponse(401)
+    }
 
     const override = options.respond?.[`${request.method} ${url.pathname}`]
     if (override !== undefined) {
@@ -311,7 +320,7 @@ describe('FA371 client: 认证与会话', () => {
     assert.equal(requests.length, 3)
     const verify = requests[1]
     assert.ok(verify)
-    assert.equal(verify.url, `${BASE}/system/detect_status`)
+    assert.equal(verify.url, `${BASE}/system`)
     assert.equal(verify.headers.Authorization, TOKEN)
     assert.equal(verify.json, undefined, '只读请求不应带请求体')
 
@@ -388,6 +397,37 @@ describe('FA371 client: 认证与会话', () => {
     assert.equal(countPath(requests, '/login'), 1, '不应为了 500 重新登录')
   })
 
+  it('登录接口 503 报 DEVICE_ERROR，不把设备忙说成用户名密码错', async () => {
+    const { client, requests } = setup({ device: { loginStatus: 503 } })
+
+    await assert.rejects(
+      () => client.getDetectStatus(),
+      (error: unknown) => {
+        assert.ok(error instanceof AppError)
+        assert.equal(error.code, 'DEVICE_ERROR')
+        assert.match(error.message, /HTTP 503/)
+        return true
+      }
+    )
+    assert.equal(countPath(requests, '/login'), 1, '设备级失败不应再换三种 Token 带法重试')
+  })
+
+  it('验证端点必须是受保护的：detect_status 不设防也不能让错误候选通过', async () => {
+    // 真机形状：`/system/detect_status` 不带 token 也回 200，`/system` 才校验。
+    // 旧验证路径下三个候选都会「通过」，永远选 raw-auth-header；现在必须落到 token 头。
+    const { client, requests } = setup({
+      device: {
+        acceptAuth: (headers) => headers.token === TOKEN,
+        openPaths: ['/system/detect_status']
+      }
+    })
+
+    await client.getDetectStatus()
+
+    assert.equal(client.resolvedStrategyId, 'token-header')
+    assert.equal(countPath(requests, '/login'), 3, '前两个候选应各失败一次')
+  })
+
   it('登录本身被拒时报 AUTH_FAILED', async () => {
     const client = new Fa371ApiClient({
       transport: {
@@ -455,7 +495,9 @@ describe('FA371 client: 401 处理', () => {
     assert.equal(status.detect_status, 0)
     assert.equal(loginCount(), 2, '401 只应触发一次重新登录')
     assert.equal(countPath(requests, '/detect_status'), 0)
-    assert.equal(countPath(requests, '/system/detect_status'), 4)
+    // 认证探测 2 次（每次登录后一次 `/system`）+ 业务请求 2 次（401 后重试一次）。
+    assert.equal(countPath(requests, '/system'), 2)
+    assert.equal(countPath(requests, '/system/detect_status'), 2)
   })
 
   it('持续 401 时抛 AUTH_FAILED，不无限重试', async () => {

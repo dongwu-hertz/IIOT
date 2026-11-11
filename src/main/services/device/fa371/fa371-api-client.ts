@@ -214,7 +214,18 @@ export const FA371_ENDPOINTS = {
  * `/get_devinfo`，两者都是 FA8/AE08 的实测形状，FA371 手册 §2.1 明确是裸登录体，
  * 且 §8.5 E10 说明本设备**没有**系统信息读取接口。
  */
-export const FA371_VERIFY_PATH = FA371_ENDPOINTS.detectStatus
+/**
+ * 验证某个 Token 携带方式是否真的被设备接受。
+ *
+ * **必须是受保护接口**。实测（2026-11-11，192.168.110.235 / .236 两台）：
+ * `GET /system/detect_status` 在**不带任何 token** 时也回 200 + `{detect_status:0}`。
+ * 用它做验证时每个候选都会「通过」，于是永远采用第一个 `raw-auth-header`，
+ * 后续每个受保护请求才暴露 token 不对 —— 表现就是「加得进去、随后一直认证失败」。
+ *
+ * `/system` 是手册 §5.1.3 的只读接口、响应很小，无 token 时回 `{ret:401}`，
+ * 能真正区分「会话可用」与「接口恰好不设防」。
+ */
+export const FA371_VERIFY_PATH = FA371_ENDPOINTS.system
 
 // ---------------------------------------------------------------------------
 // Token 携带方式候选（规格 §2.2 + §8.1 A1/A2）
@@ -1258,6 +1269,9 @@ export class Fa371ApiClient {
         ) {
           break
         }
+        // 登录接口自己回了 5xx/404（非 401/403）：设备/路径暂时不可用，
+        // 换 Token 携带方式不会变好，也不能把它改写成「凭据被拒」。
+        if (appError.code === ErrorCodes.DEVICE_ERROR) break
       }
     }
 
@@ -1270,6 +1284,12 @@ export class Fa371ApiClient {
      * 不应答（实测：流媒体跑满时 /login 超时），凭据是对的，那句话把现场带去了
      * 错误的方向。
      */
+    // 设备级登录失败（503/404…）原样上报：这一次根本不是「token 带法不对」，
+    // 把它合并进 AUTH_FAILED 会把现场带去查用户名密码。
+    if (lastError?.code === ErrorCodes.DEVICE_ERROR) {
+      throw new AppError(ErrorCodes.DEVICE_ERROR, lastError.message, attempts.join(' | '))
+    }
+
     const transportError =
       lastError !== undefined &&
       (lastError.code === ErrorCodes.NETWORK_ERROR ||
@@ -1320,12 +1340,20 @@ export class Fa371ApiClient {
     })
 
     // §8.1 A7：登录失败时的状态码手册未说明（401？200+ret？）。
-    // 所以这里不假设 401，只要不是 2xx 就按登录被拒处理。
+    //
+    // 但 5xx/404 这类响应**不是**「凭据被拒」：2026-11-11 实测相机的内嵌 HTTP 栈
+    // 在忙时会回 `503`，旧代码把它写成 AUTH_FAILED，界面于是让操作员去查用户名
+    // 密码 —— 而真正的原因在设备侧。只有 401/403 才是认证拒绝；其余按设备错误
+    // 如实上报，并且不再继续试其它 Token 携带方式（换个头不会让 503 变好）。
     if (!response.ok) {
+      const status = response.status
+      const authRejected = status === 401 || status === 403
       throw new AppError(
-        ErrorCodes.AUTH_FAILED,
-        `登录被设备拒绝 (HTTP ${response.status})`,
-        response.text?.slice(0, 200)
+        authRejected ? ErrorCodes.AUTH_FAILED : ErrorCodes.DEVICE_ERROR,
+        authRejected
+          ? `登录被设备拒绝 (HTTP ${status})`
+          : `设备暂时不可用（登录接口返回 HTTP ${status}）`,
+        `loginStatus=${status} ${response.text?.slice(0, 160) ?? ''}`.trim()
       )
     }
 
@@ -1348,11 +1376,15 @@ export class Fa371ApiClient {
       throwOnHttpError: false
     })
 
-    // 2xx 是必要不充分条件：一个对所有未认证请求都回空 200 的固件不能被当成
-    // "会话可用"。要求响应至少是一个 JSON 对象（§5.1.16 正常返回 `{detect_status:N}`）。
+    // 2xx 是必要不充分条件：设备对未认证请求也回 **HTTP 200**，业务码在正文里
+    // （实测 `{"msg":"No Auth","ret":401}`）。所以同时要求：
+    //   · 正文是 JSON 对象；
+    //   · `isFa371Success()` 认可它（`ret` 缺失或 `ret===200`）。
+    const payload = response.json
     const payloadIsObject =
-      response.json !== null && typeof response.json === 'object' && !Array.isArray(response.json)
-    return { ok: response.ok && payloadIsObject, status: response.status }
+      payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    const accepted = payloadIsObject && isFa371Success(payload)
+    return { ok: response.ok && accepted, status: response.status }
   }
 }
 

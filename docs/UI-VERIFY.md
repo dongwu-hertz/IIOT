@@ -4792,3 +4792,74 @@ npm run dist:win:signed
 
 就是 OO 那段修复（局放记录不再显示占位 `data_1` 造成的「泄漏量 0」）；S1/S2/S3 功能、
 验证数字与未验证项全部照 v1.0.24，没有其它代码改动。
+
+
+---
+
+## QQ. 相机 HTTP 认证风暴 / 两台上墙超时的修复（2026-11-11）
+
+业主报两件事：
+
+1. 添加 64 通道相机时提示机型识别错误；后来加上了，但提示 `AUTH_FAILED`；
+2. 两台相机不能同时上墙，提示 `TIMEOUT`。
+
+### QQ.1 真机日志证据
+
+来自 `D:\HertzinnoData\logs\device-2026-11-11.log` / `app-2026-11-11.log`
+（当时安装的是 v1.0.22；同样的代码路径在 v1.0.25 里也在）：
+
+- 8 分钟内两台相机共 **171 次** `FA371 认证方式已解析` —— 每台每次调用都重新登录；
+  AE08 也有 **32 次** `Auth strategy resolved`（同一个 bug 在声纹盒子客户端上）。
+- 15:22:07 `.236` 的 `/login` 返回 **HTTP 503**，旧代码把它写成 `AUTH_FAILED` →
+  界面提示 `Authentication failed. Check the username and password`，而 35 秒后
+  同一凭据登录成功。
+- 15:24–15:27 `.235` / `.236` 的 `/login` 在 RTSP 推流期间开始超时；此时 ffmpeg
+  的帧计数仍在增长（RTSP 数据面正常）。用户把第二台相机放上墙时，`/system/video`
+  读不到 → `TIMEOUT`。
+
+### QQ.2 根因
+
+`DeviceService` 缓存客户端时用 `client.currentBaseUrl === baseUrlFor(device)` 比较。
+两个客户端类都在构造函数里把基地址归一化（`ip:80` → `http://ip`），而
+`baseUrlFor()` 返回的是裸 `ip:port`，**永远不相等** → 每次健康检查 / 检测日志轮询 /
+页面操作都 new 一个客户端、重新登录一次。相机内嵌 HTTP 栈在 RTSP 推流时本来就吃紧，
+被这轮登录风暴打中后就出现 503 / 超时，并进一步挡住第二台上墙。
+
+另有两个放大器：
+
+- 登录验证用的是 `/system/detect_status`，真机实测该端点**不设防**（无 token 也回
+  200 + JSON）→ 所有 Token 携带方式都验证通过，永远选第一个；
+- 登录接口 5xx/404 被当成 `AUTH_FAILED`，把设备忙说成用户名密码错。
+
+### QQ.3 修复
+
+| 位置 | 修法 |
+|---|---|
+| `DeviceService.clientFor` / `cameraClientFor` | 缓存键改为**归一化后的输入地址**（与 `e2ClientFor` 同一设计），端口回退也不会误判 |
+| `Fa371ApiClient` 登录 | 只有 401/403 报 `AUTH_FAILED`；5xx/429/404 报 `DEVICE_ERROR`（设备暂时不可用），且不再换 Token 带法重试 |
+| `FA371_VERIFY_PATH` | `/system/detect_status` → `/system`（受保护），并要求 `isFa371Success()`；不设防端点不能再让错误候选通过 |
+| `RtspStreamService` | 新增 `hasActiveSession()`；直播期间计入出帧即在线证据，健康检查不再发 HTTP 探活 |
+| `RtspStreamService` | 缓存最后一次成功的 `/system/video`；仅在 TIMEOUT / NETWORK_ERROR / DEVICE_OFFLINE 时回退，认证或业务错误照旧上抛 |
+
+### QQ.4 验证
+
+- `npm run typecheck` 通过；
+- 新增 `tests/device-client-cache.test.ts`（真 `DeviceService` + 真 HTTP 假设备）：
+  两次 `/system/video` 的总登录数 = 2（1 次添加探活 + 1 次首次读配置），第二次不再登录；
+- `tests/fa371-client.test.ts` 49/49：新增 503 → `DEVICE_ERROR`、不设防的
+  `detect_status` 不能让错误候选通过；验证端点断言改为 `/system`；
+- `tests/rtsp-stream.test.ts` 113/113：新增 `hasActiveSession`、缓存回退、
+  认证错误不被缓存盖住；
+- 全量 `test:inproc`：122 文件 · **2472 通过 / 75 失败**，失败文件集合与 v1.0.25
+  完全一致（29 个 KK.8 陈旧守卫），无新增；
+- **真机验证**（192.168.110.236，用本机已存凭据、真实编译后的 `DeviceService`）：
+  添加 + 两次 `/system/video` 共 **2 次登录**（修复前会 3 次，且之后每次 +1）；
+  `RtspStreamService` 对 .235 / .236 连续 `start()` 两路都成功（`limits.active = 2`）。
+
+### QQ.5 未验证 / 边界
+
+- 没有在 v1.0.22 安装包上热替换验证；修复需要出新的安装包。
+- 相机固件在「RTSP + 多路 WebSocket 同时跑」时 HTTP 栈变慢是设备侧事实；本轮修的是
+  **应用不要自己制造登录风暴**，不是修复相机固件。
+- 64 通道相机的「机型识别错误」在相机 HTTP 返回 503 时仍会如实显示设备错误；
+  相机恢复后可以添加。没有拿到该型号的固件文档，通道数 / 型号名未建模。

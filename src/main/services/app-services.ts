@@ -737,7 +737,6 @@ export async function initServices(): Promise<AppServices> {
    * 相机健康检查的「出帧即在线」证据（2026-09-23 抖动修复）：流服务比
    * DeviceService 晚出生，所以在这里回插。详见 `checkOne` 的相机分支。
    */
-  deviceService.setCameraStreamEvidence((deviceId) => fa371Streams.hasRecentFrames(deviceId))
 
   /**
    * Camera LIVE VIDEO (manual §5.1.6): RTSP in, fragmented MP4 over loopback out.
@@ -768,6 +767,16 @@ export async function initServices(): Promise<AppServices> {
      */
     maxConcurrentStreams: () => settings.get().maxConcurrentCameraStreams
   })
+
+  /*
+   * 「出帧即在线」现在有**两条**证据：WebSocket 预览帧（fa371Streams）与
+   * RTSP 直播会话（cameraLive）。只认前者时，视频墙只开视频、不开图谱的相机
+   * 仍会每 10 秒被一次 HTTP 探活砸中；相机在推流时 HTTP 栈本来就吃紧，
+   * 那些 `/login` 超时/503 正是「认证失败 / 请求超时」提示的来源。
+   */
+  deviceService.setCameraStreamEvidence(
+    (deviceId) => fa371Streams.hasRecentFrames(deviceId) || cameraLive.hasActiveSession(deviceId)
+  )
 
   /**
    * 相机 NVR 采集（手动录像 / 抓图）。

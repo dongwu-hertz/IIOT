@@ -53,6 +53,7 @@ import {
   type CameraLiveResolver
 } from '../src/main/services/media/rtsp-stream'
 import { buildRtspUrlCandidates } from '../src/main/services/device/fa371/mappers'
+import { AppError, ErrorCodes } from '../src/shared/errors'
 import type { Fa371RtspUrlCandidate, Fa371VideoConfig } from '../src/shared/domain/fa371'
 
 // ---------------------------------------------------------------------------
@@ -621,6 +622,76 @@ describe('camera live loopback server', () => {
     assert.deepEqual(service.listState('dev-camera-1'), [])
     // The server is closed with the session.
     await assert.rejects(() => httpGet(url))
+  })
+
+  it('exposes hasActiveSession so the health check can skip HTTP while the wall streams', async () => {
+    const fake = createFakeFfmpeg(() => FAKE_MP4_HEAD, { endAfterPayload: true })
+    const service = makeService(MEASURED_VIDEO_CONFIG, fake)
+
+    assert.equal(service.hasActiveSession('dev-camera-1'), false)
+    const started = await service.start('dev-camera-1')
+    assert.equal(started.status, 'starting')
+    assert.equal(service.hasActiveSession('dev-camera-1'), true)
+
+    service.stop('dev-camera-1')
+    assert.equal(service.hasActiveSession('dev-camera-1'), false)
+  })
+
+  it('falls back to the last known video config when /system/video times out', async () => {
+    const fake = createFakeFfmpeg(() => FAKE_MP4_HEAD, { endAfterPayload: true })
+    let reads = 0
+    const resolver: CameraLiveResolver = {
+      getDevice: () => ({ id: 'dev-camera-1', host: '192.168.110.235' }),
+      getVideoConfig: async () => {
+        reads += 1
+        if (reads > 1) throw new AppError(ErrorCodes.TIMEOUT, '请求超时: /system/video')
+        return MEASURED_VIDEO_CONFIG
+      }
+    }
+    const service = new RtspStreamService({
+      resolver,
+      spawn: fake.spawn,
+      probe: probeOk,
+      firstByteTimeoutMs: 5_000
+    })
+    services.push(service)
+
+    const first = await service.start('dev-camera-1')
+    assert.equal(first.status, 'starting')
+    service.stop('dev-camera-1')
+
+    // 第二台/第二次上墙时相机 HTTP 栈不应答：仍应能用上一次读到的地址开流。
+    const second = await service.start('dev-camera-1')
+    assert.equal(second.status, 'starting')
+    assert.equal(second.rtspUrl, 'rtsp://192.168.110.235:443/live')
+    assert.equal(service.hasActiveSession('dev-camera-1'), true)
+    service.stop('dev-camera-1')
+  })
+
+  it('does not hide a device/auth rejection behind the cached video config', async () => {
+    const fake = createFakeFfmpeg(() => FAKE_MP4_HEAD, { endAfterPayload: true })
+    let reads = 0
+    const resolver: CameraLiveResolver = {
+      getDevice: () => ({ id: 'dev-camera-1', host: '192.168.110.235' }),
+      getVideoConfig: async () => {
+        reads += 1
+        if (reads > 1) throw new AppError(ErrorCodes.AUTH_FAILED, '设备拒绝认证')
+        return MEASURED_VIDEO_CONFIG
+      }
+    }
+    const service = new RtspStreamService({ resolver, spawn: fake.spawn, probe: probeOk })
+    services.push(service)
+
+    const first = await service.start('dev-camera-1')
+    assert.equal(first.status, 'starting')
+    service.stop('dev-camera-1')
+
+    // 认证/业务错误是设备明确给的新事实，不能拿旧配置盖过去。
+    await assert.rejects(() => service.start('dev-camera-1'), (error: unknown) => {
+      assert.ok(error instanceof AppError)
+      assert.equal(error.code, 'AUTH_FAILED')
+      return true
+    })
   })
 
   it('keeps one session per camera', async () => {

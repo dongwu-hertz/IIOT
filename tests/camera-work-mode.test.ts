@@ -416,19 +416,17 @@ describe('camera work mode: 真机响应形状（未文档化端点的实际包�
     // 这就是"两条通道刻意分开"的运行时证据：切换应用模式**不会**顺带重写客户
     // 现场调好的频带/目标数量/灵敏度。
     //
-    // 只允许两类请求：`/login`（会话）与 `/system` 本身（读/写 work_mode）。
-    // 注意 `/system/detect_status` 也会出现在这里 —— 它是**登录验证**用的只读端点
-    // （`FA371_VERIFY_PATH`），不是配置写入，所以单独放行；下面那条断言把
-    // "写入型端点"再单独钉一遍。
+    // 只允许两类请求：`/login`（会话）与 `/system` 本身（登录验证 + 读/写 work_mode）。
+    // 下面那条断言把"写入型端点"再单独钉一遍。
     const touched = requests.map((request) => request.path).filter((path) => path !== '/login')
     const writes = requests
       .filter((request) => request.method !== 'GET' && request.path !== '/login')
       .map((request) => request.path)
     assert.deepEqual(writes, ['/system'], '唯一的写入必须就是 /system')
     assert.deepEqual(
-      touched.filter((path) => path !== '/system' && path !== '/system/detect_status'),
+      touched.filter((path) => path !== '/system'),
       [],
-      '除 /system 与登录验证端点外不得出现别的请求'
+      '除 /system（登录验证与 work_mode）外不得出现别的请求'
     )
     for (const forbidden of ['/system/acoustic', '/system/image', '/system/video', '/system/leakage']) {
       assert.ok(!touched.includes(forbidden), `切换应用模式不得触碰 ${forbidden}`)

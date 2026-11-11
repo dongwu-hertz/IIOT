@@ -794,6 +794,15 @@ class CameraLiveSession {
  */
 export class RtspStreamService {
   private readonly sessions = new Map<string, CameraLiveSession>()
+  /**
+   * 每台相机**最后一次成功读到**的视频配置。
+   *
+   * 用途只有一个：相机的内嵌 HTTP 栈在 RTSP 直播期间会间歇性不应答（2026-11-11
+   * 实测：两台相机都在推流 2~3 分钟后 `/login` 开始超时，而 RTSP 数据一直正常）。
+   * 这时把另一台相机放上墙需要读 `/system/video`，读不到就报 TIMEOUT —— 但地址
+   * 几分钟前刚读到过。仅在**传输层失败**时回退到这份缓存；401/业务错误仍然照实上抛。
+   */
+  private readonly lastVideoConfig = new Map<string, Fa371VideoConfig>()
   private readonly spawnImpl: typeof spawnFfmpeg
   private readonly probeImpl: typeof probeFfmpeg
   private readonly firstByteTimeoutMs: number
@@ -855,7 +864,7 @@ export class RtspStreamService {
     }
 
     const device = this.options.resolver.getDevice(deviceId)
-    const video = await this.options.resolver.getVideoConfig(deviceId)
+    const video = await this.resolveVideoConfig(deviceId)
 
     // `rtsp_enabled = 0` (the value the real camera reports today) means the device's
     // own RTSP service is OFF. Spawning ffmpeg at it would produce a connection
@@ -1067,6 +1076,46 @@ export class RtspStreamService {
   }
 
   /**
+   * 这台相机此刻是否还占着一路直播（`starting` 或 `playing`）。
+   *
+   * 与 `listState()` 的区别：调用方（健康检查）只关心「有没有一路 RTSP 在跑」。
+   * 直播出帧是比一次 HTTP 探活更强的在线证据，和 `fa371Streams.hasRecentFrames()`
+   * 同一条口径 —— 用它把流期间的 `/login` 探活停掉，别再给已经吃紧的相机 HTTP
+   * 栈加负载。
+   */
+  hasActiveSession(deviceId: string): boolean {
+    return this.sessions.get(deviceId)?.isActive() === true
+  }
+
+  /**
+   * 读 `/system/video`，传输层失败时回退到上一次成功读到的配置。
+   *
+   * 只回退 TIMEOUT / NETWORK_ERROR / DEVICE_OFFLINE：这三种情况下设备**没有**
+   * 给出新事实，旧地址仍是已知的可用地址；401/业务错误说明设备明确拒绝，必须
+   * 照实上抛，不能拿旧配置覆盖。
+   */
+  private async resolveVideoConfig(deviceId: string): Promise<Fa371VideoConfig> {
+    try {
+      const video = await this.options.resolver.getVideoConfig(deviceId)
+      this.lastVideoConfig.set(deviceId, video)
+      return video
+    } catch (error) {
+      const appError = AppError.from(error)
+      const transportFailure =
+        appError.code === ErrorCodes.TIMEOUT ||
+        appError.code === ErrorCodes.NETWORK_ERROR ||
+        appError.code === ErrorCodes.DEVICE_OFFLINE
+      const cached = this.lastVideoConfig.get(deviceId)
+      if (!transportFailure || cached === undefined) throw error
+      deviceLog().warn('Camera live: video config read failed, using last known config', {
+        deviceId,
+        reason: appError.message
+      })
+      return cached
+    }
+  }
+
+  /**
    * 这台相机当前可用的 RTSP 源（含口令），供手动录像 / 抓图 / 外部播放器使用。
    *
    * 返回 `undefined` 表示**现在不能录也不能抓**（没有会话，或还没出帧）；
@@ -1098,7 +1147,7 @@ export class RtspStreamService {
     let video: Fa371VideoConfig
     try {
       device = this.options.resolver.getDevice(deviceId)
-      video = await this.options.resolver.getVideoConfig(deviceId)
+      video = await this.resolveVideoConfig(deviceId)
     } catch (error) {
       deviceLog().warn('Recorder source: device lookup failed', {
         deviceId,
