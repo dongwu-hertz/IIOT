@@ -3011,6 +3011,7 @@ export const zhCN = {
     modeMismatchMessage: '实时监测当前设置为“{configured}”，但相机当前检测模式为“{actual}”。请在“相机控制设置”中确认或修改检测模式。',
     modeMismatchConfigured: '当前设置',
     modeMismatchCamera: '相机模式',
+  modeMismatchAdopt: '使用相机当前模式',
     title: '相机控制',
     refresh: '刷新',
     modeTitle: '运行方式',

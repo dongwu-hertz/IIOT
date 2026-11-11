@@ -2763,6 +2763,7 @@ presets, the licence boundaries
     modeMismatchMessage: 'Realtime Monitoring is configured for “{configured}”, but the camera is currently in “{actual}” mode. Confirm or change Detection Mode in Camera Control Settings.',
     modeMismatchConfigured: 'Configured',
     modeMismatchCamera: 'Camera Mode',
+  modeMismatchAdopt: 'Use camera mode',
     title: 'Camera control',
     refresh: 'Refresh',
     modeTitle: 'Operation',

@@ -2707,6 +2707,7 @@ export const tr: MessageSchema = {
     modeMismatchMessage: 'Realtime Monitoring “{configured}” olarak ayarlı, ancak kamera şu anda “{actual}” modunda. Kamera Kontrol Ayarlarında Algılama Modunu doğrulayın veya değiştirin.',
     modeMismatchConfigured: 'Yapılandırılmış',
     modeMismatchCamera: 'Kamera Modu',
+  modeMismatchAdopt: 'Kamera modunu kullan',
     title: 'Kamera kontrolü',
     refresh: 'Yenile',
     modeTitle: 'Çalışma biçimi',

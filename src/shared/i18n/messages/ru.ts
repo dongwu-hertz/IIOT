@@ -2641,6 +2641,7 @@ export const ru: MessageSchema = {
     modeMismatchMessage: 'Realtime Monitoring настроен на «{configured}», но камера сейчас работает в режиме «{actual}». Подтвердите или измените режим обнаружения в настройках управления камерой.',
     modeMismatchConfigured: 'Настроено',
     modeMismatchCamera: 'Режим камеры',
+  modeMismatchAdopt: 'Использовать режим камеры',
     title: 'Управление камерой',
     refresh: 'Обновить',
     modeTitle: 'Режим работы',

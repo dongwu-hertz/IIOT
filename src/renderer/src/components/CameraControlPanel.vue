@@ -140,6 +140,17 @@ const realtimeLayout = computed(() => {
 const detectionSettingsOpen = ref(false)
 const settingsWorkModeDraft = ref<Fa371WorkModeValue | null>(null)
 let detectStatusPollTimer: number | null = null
+/**
+ * 相机实际 work_mode 的轮询定时器。
+ *
+ * 与 detect_status 的 2 秒轮询分开：work_mode 是**设备设置**，变化频率低，
+ * 10 秒一次足够；相机内嵌 HTTP 栈本来就小，不拿它去挤 2 秒那一拍。
+ *
+ * 轮询只更新「相机当前模式」这个事实并上报给父页面做一致性核对，**不**直接改
+ * PRPD / 泄漏 / 机械分析卡的渲染（那仍由软件配置决定，见 refreshWorkMode 的注释）。
+ */
+let workModePollTimer: number | null = null
+const WORK_MODE_POLL_MS = 10_000
 let workModeLoadedDeviceId = ''
 
 function isConfirmedWorkMode(value: unknown): value is Fa371WorkModeValue {
@@ -200,6 +211,44 @@ function startDetectStatusPolling(): void {
   // 的 HTTP 服务是单线程的小服务 —— 500 ms 一拍等于全天不间断地占着它（设备日志里
   // 一上午 1300+ 次 /system/detect_status，还挤掉了其它请求的连接）。
   detectStatusPollTimer = window.setInterval(() => { void refreshRealtimeDetectStatus() }, 2_000)
+}
+
+/**
+ * 轮询相机实际 work_mode（仅实时布局需要）。
+ *
+ * 业主 2026-11-11：「相机的模式切换后，软件上好像没有直接显示」。原来 work_mode
+ * 只在进入设备时读一次（为了不让轮询读回把 PRPD 卡片闪没），于是**相机 Web 界面
+ * 改了模式，软件永远不知道**。现在每 10 秒读一次 + 窗口重新获得焦点时立刻读一次：
+ * 只更新「相机当前模式」与一致性提醒，不直接切换分析卡。
+ */
+function startWorkModePolling(): void {
+  if (!realtimeLayout.value || workModePollTimer !== null) return
+  workModePollTimer = window.setInterval(() => {
+    void refreshWorkMode(props.deviceId, true)
+  }, WORK_MODE_POLL_MS)
+}
+
+function stopWorkModePolling(): void {
+  if (workModePollTimer === null) return
+  window.clearInterval(workModePollTimer)
+  workModePollTimer = null
+}
+
+/** 从相机 Web 界面切回本软件时立刻对一次：不必等下一拍 10 秒。 */
+function onWindowFocus(): void {
+  if (!realtimeLayout.value || props.deviceId === '') return
+  void refreshWorkMode(props.deviceId, true)
+}
+
+/**
+ * 刷新按钮：除了常规读数，还要**强制重读 work_mode**。
+ *
+ * `load()` 刻意不读 work_mode（避免普通刷新闪动分析卡）；手动点刷新是操作员的
+ * 明确意图，必须把相机当前模式一起读回来。
+ */
+async function reload(): Promise<void> {
+  await refreshWorkMode(props.deviceId, true)
+  await load()
 }
 
 function openDetectionSettings(): void {
@@ -1180,6 +1229,8 @@ onMounted(() => {
     upgradeProgress.value = event
   })
   startDetectStatusPolling()
+  startWorkModePolling()
+  window.addEventListener('focus', onWindowFocus)
 })
 
 onUnmounted(() => {
@@ -1189,6 +1240,8 @@ onUnmounted(() => {
     window.clearInterval(detectStatusPollTimer)
     detectStatusPollTimer = null
   }
+  stopWorkModePolling()
+  window.removeEventListener('focus', onWindowFocus)
 })
 
 // ---------------------------------------------------------------------------
@@ -1358,7 +1411,7 @@ watch(
             :disabled="loading"
             :title="t('cameraControlUi.refresh')"
             :aria-label="t('cameraControlUi.refresh')"
-            @click="load"
+            @click="reload"
           >
             <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M14.8 6.4A6 6 0 1 0 15 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14.8 3.4v3.4h-3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>

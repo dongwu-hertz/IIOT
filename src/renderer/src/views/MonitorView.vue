@@ -197,11 +197,40 @@ const cameraWorkMode = computed<CameraDetectionMode | undefined>(() => {
   return configuredCameraWorkModes.value[deviceId] ?? 1
 })
 
+/**
+ * 相机**实际**的 work_mode（最近一次成功读到的值）。
+ *
+ * 与 `cameraWorkMode` 分开：前者是设备事实，用于设备头那枚「检测模式」徽标；
+ * 后者是软件配置，决定 PRPD / 泄漏 / 机械分析卡渲染什么。外部（相机 Web 界面）
+ * 改了模式时，徽标会跟着变，分析卡则等操作员采用新值。
+ */
+const cameraActualWorkMode = computed<CameraDetectionMode | undefined>(() => {
+  const deviceId = selectedDeviceId.value
+  if (deviceId === '') return undefined
+  return observedCameraWorkModes.value[deviceId] ?? configuredCameraWorkModes.value[deviceId]
+})
+
 const cameraModeMismatch = ref<{
   deviceId: string
   configured: CameraDetectionMode
   actual: CameraDetectionMode
 } | null>(null)
+
+/**
+ * 已经由操作员关掉的那一条不一致提醒。
+ *
+ * 没有它，10 秒一次的模式轮询会**反复弹同一个窗**（关掉 → 下一拍又弹出），
+ * 比不提醒更烦。键里带上 configured 与 actual：任一侧变了就是一条新的不一致。
+ */
+const dismissedCameraMismatchKey = ref('')
+
+function cameraModeMismatchKey(
+  deviceId: string,
+  configured: CameraDetectionMode,
+  actual: CameraDetectionMode
+): string {
+  return `${deviceId}:${configured}:${actual}`
+}
 
 function persistConfiguredCameraWorkModes(): void {
   try {
@@ -264,10 +293,15 @@ function onCameraWorkModeObserved(payload: { deviceId: string; mode: number | un
   }
 
   // The configured mode remains authoritative for the UI. The observation only decides whether
-  // the one-time mismatch dialog is needed; it never directly switches PRPD/Leakage/Mechanical.
-  cameraModeMismatch.value = configured === mode
-    ? null
-    : { deviceId, configured, actual: mode }
+  // the mismatch dialog is needed; it never directly switches PRPD/Leakage/Mechanical.
+  if (configured === mode) {
+    cameraModeMismatch.value = null
+    dismissedCameraMismatchKey.value = ''
+    return
+  }
+  const key = cameraModeMismatchKey(deviceId, configured, mode)
+  if (dismissedCameraMismatchKey.value === key) return
+  cameraModeMismatch.value = { deviceId, configured, actual: mode }
 }
 
 function onCameraWorkModeChange(payload: { deviceId: string; mode: number | undefined }): void {
@@ -279,9 +313,40 @@ function onCameraWorkModeChange(payload: { deviceId: string; mode: number | unde
   observedCameraWorkModes.value = { ...observedCameraWorkModes.value, [deviceId]: mode }
   persistConfiguredCameraWorkModes()
   cameraModeMismatch.value = null
+  dismissedCameraMismatchKey.value = ''
 }
 
 function closeCameraModeMismatch(): void {
+  const mismatch = cameraModeMismatch.value
+  if (mismatch) {
+    dismissedCameraMismatchKey.value = cameraModeMismatchKey(
+      mismatch.deviceId,
+      mismatch.configured,
+      mismatch.actual
+    )
+  }
+  cameraModeMismatch.value = null
+}
+
+/**
+ * 采用相机当前模式：把软件配置切到设备事实，分析卡随之切换。
+ *
+ * 这是操作员在「检测模式不一致」弹窗里的**一键同步**入口；它不写设备（设备已经
+ * 在这个模式上），只更新软件侧配置并持久化。
+ */
+function adoptCameraWorkMode(): void {
+  const mismatch = cameraModeMismatch.value
+  if (!mismatch) return
+  configuredCameraWorkModes.value = {
+    ...configuredCameraWorkModes.value,
+    [mismatch.deviceId]: mismatch.actual
+  }
+  observedCameraWorkModes.value = {
+    ...observedCameraWorkModes.value,
+    [mismatch.deviceId]: mismatch.actual
+  }
+  persistConfiguredCameraWorkModes()
+  dismissedCameraMismatchKey.value = ''
   cameraModeMismatch.value = null
 }
 
@@ -2480,6 +2545,7 @@ async function autoPlayCameraIfWorking(): Promise<void> {
 // Keep the store's notion of "current device" in sync when the user switches.
 watch(selectedDeviceId, async (id) => {
   cameraModeMismatch.value = null
+  dismissedCameraMismatchKey.value = ''
   detectionRegions.value = []
   regionDrawMode.value = false
   regionEditorOpen.value = false
@@ -2740,9 +2806,24 @@ const sessionLabel = computed(() => {
               -->
               <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
             </template>
-            <span v-else :class="cameraBadgeClass">
-              {{ cameraStatusLabel }}
-            </span>
+            <template v-else>
+              <!--
+                相机当前**实际**检测模式（设备事实）。业主 2026-11-11：
+                「相机的模式切换后，软件上好像没有直接显示」——不再只靠分析卡标题
+                暗示，这里直接写出来；与软件配置不一致时变警告色并弹出确认。
+              -->
+              <span
+                v-if="cameraActualWorkMode"
+                class="badge"
+                :class="{ 'badge--warning': cameraModeMismatch !== null }"
+                data-camera-work-mode-badge
+              >
+                {{ t('cameraControlUi.detectionModeLabel') }}: {{ cameraDetectionModeText(cameraActualWorkMode) }}
+              </span>
+              <span :class="cameraBadgeClass">
+                {{ cameraStatusLabel }}
+              </span>
+            </template>
           </div>
 
           <div class="spacer"></div>
@@ -3971,8 +4052,11 @@ const sessionLabel = computed(() => {
           </div>
         </dl>
         <template #footer>
-          <button type="button" class="btn btn--primary" @click="closeCameraModeMismatch">
+          <button type="button" class="btn" @click="closeCameraModeMismatch">
             {{ t('common.close') }}
+          </button>
+          <button type="button" class="btn btn--primary" @click="adoptCameraWorkMode">
+            {{ t('cameraControlUi.modeMismatchAdopt') }}
           </button>
         </template>
       </AppModal>

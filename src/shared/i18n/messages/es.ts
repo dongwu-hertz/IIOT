@@ -2704,6 +2704,7 @@ export const es: MessageSchema = {
     modeMismatchMessage: 'Realtime Monitoring está configurado como “{configured}”, pero la cámara está actualmente en “{actual}”. Confirme o cambie el modo de detección en la configuración de control de cámara.',
     modeMismatchConfigured: 'Configurado',
     modeMismatchCamera: 'Modo de la cámara',
+  modeMismatchAdopt: 'Usar el modo de la cámara',
     title: 'Control de la cámara',
     refresh: 'Actualizar',
     modeTitle: 'Operación',

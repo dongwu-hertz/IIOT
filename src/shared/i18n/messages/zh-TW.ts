@@ -2929,6 +2929,7 @@ export const zhTW: MessageSchema = {
     modeMismatchMessage: '即時監測目前設定為「{configured}」，但相機目前檢測模式為「{actual}」。請在「相機控制設定」中確認或修改檢測模式。',
     modeMismatchConfigured: '目前設定',
     modeMismatchCamera: '相機模式',
+  modeMismatchAdopt: '使用相機目前模式',
     title: '相機控制',
     refresh: '重新整理',
     modeTitle: '運行方式',
