@@ -574,7 +574,7 @@ export class E2Client {
     params: Record<string, unknown>,
     options: CallOptions = {}
   ): Promise<void> {
-    await this.call('/system', 'PUT', params, options)
+    await this.call('/system', 'PUT', params, { ...options, allowEmptyResponse: true })
   }
 
   /**
@@ -866,11 +866,11 @@ export class E2Client {
     if (Object.keys(body).length === 0) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, '心跳设置至少要给一个字段')
     }
-    await this.call('/hb_settings', 'PUT', body, options)
+    await this.call('/hb_settings', 'PUT', body, { ...options, allowEmptyResponse: true })
   }
 
   async reboot(options: CallOptions = {}): Promise<void> {
-    await this.call('/reboot', 'PUT', undefined, options)
+    await this.call('/reboot', 'PUT', undefined, { ...options, allowEmptyResponse: true })
   }
 
   // -------------------------------------------------------------------------
@@ -938,6 +938,7 @@ export class E2Client {
     }
     const json = response.json
     if (json === undefined || json === null) {
+      if (options.allowEmptyResponse === true) return undefined as T
       throw new AppError(ErrorCodes.INVALID_RESPONSE, '设备没有返回 JSON', path)
     }
     if (typeof json !== 'object' || Array.isArray(json)) {
@@ -952,6 +953,8 @@ interface CallOptions {
   signal?: AbortSignal
   binary?: boolean
   maxBytes?: number
+  /** 写端点可能只回 200、不回 JSON；此时返回 undefined 而不是 INVALID_RESPONSE。 */
+  allowEmptyResponse?: boolean
 }
 
 /**

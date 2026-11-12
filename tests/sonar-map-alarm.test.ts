@@ -59,6 +59,28 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(store, /READ_ERROR_IDS\.status, result\.error\?\.code === 'AUTH_FAILED'/)
     assert.match(store, /READ_ERROR_IDS\.channels, result\.error\?\.code === 'AUTH_FAILED'/)
   })
+  it('feeds SN-16 realtime SPL into trends and refreshes the curve', () => {
+    const app = read('src/main/services/app-services.ts')
+    assert.match(app, /iotIngest\.on\('e2-realtime'/)
+    assert.match(app, /trends\.append\(deviceUid/)
+    assert.match(app, /e2TrendLastFlushAt/)
+    const query = read('src/main/services/trend/trend-query-service.ts')
+    assert.match(query, /safeStorageSegment\(deviceUid\)/)
+    const e2 = read('src/main/services/device/e2/e2-device-service.ts')
+    assert.match(e2, /typeof value === 'boolean'/)
+    const trends = read('src/renderer/src/views/TrendsView.vue')
+    assert.match(trends, /startLiveRefresh/)
+    assert.match(trends, /3_000/)
+  })
+
+  it('uses the real GIS map in Live monitoring and the Device location card', () => {
+    const panel = read('src/renderer/src/components/SonarOverviewPanel.vue')
+    assert.match(panel, /<DeviceLocationMap/)
+    assert.match(panel, /import DeviceLocationMap/)
+    const live = read('src/renderer/src/views/MonitorView.vue')
+    assert.match(live, /:show-map="true"/)
+    assert.match(live, /SonarOverviewPanel/)
+  })
   it('only airSonar gets the PTZ tab; AO01/other devices do not', () => {
     const detail = read('src/renderer/src/views/DeviceDetailView.vue')
     assert.match(detail, /AIR_SONAR_TABS/)

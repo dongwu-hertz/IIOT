@@ -4244,7 +4244,12 @@ const sessionLabel = computed(() => {
         -->
         <SonarOverviewPanel :device-id="selectedDeviceId" />
 
-        <DeviceInstallationCard :installation="selectedDevice?.installation" :device-id="selectedDevice?.id" />
+        <DeviceInstallationCard
+          :installation="selectedDevice?.installation"
+          :device-id="selectedDevice?.id"
+          :device-name="selectedDevice?.name"
+          :show-map="true"
+        />
 
         <AuscultationPanel :device-id="selectedDeviceId" />
 

@@ -29,7 +29,7 @@ import path from 'node:path'
 import { promises as fs, type Dirent } from 'node:fs'
 import { AppError, ErrorCodes } from '@shared/errors'
 import { appLog } from '../logging/logger'
-import type { StorageService } from '../storage/storage-service'
+import { safeStorageSegment, type StorageService } from '../storage/storage-service'
 import type {
   TrendAggregation,
   TrendPoint,
@@ -368,7 +368,7 @@ export class TrendQueryService {
    */
   private async findFiles(deviceUid: string, from: number, to: number): Promise<string[]> {
     const root = path.join(this.storage.root, 'metrics')
-    const safeUid = deviceUid.replace(/[^A-Za-z0-9._-]/g, '_')
+    const safeUid = safeStorageSegment(deviceUid)
 
     const fromDay = from > 0 ? startOfDay(from) : 0
     const toDay = to < Number.MAX_SAFE_INTEGER ? endOfDay(to) : Number.MAX_SAFE_INTEGER

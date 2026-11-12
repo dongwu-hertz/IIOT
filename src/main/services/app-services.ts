@@ -17,6 +17,7 @@ import type { Database as SqliteDatabase } from 'better-sqlite3'
 import type { RealtimeFeature } from '@shared/domain/models'
 import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import type { Fa371StreamPreview } from '@shared/domain/fa371-stream'
+import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 
 import { openDatabase, SCHEMA_VERSION } from './database/schema'
 import {
@@ -590,6 +591,52 @@ export async function initServices(): Promise<AppServices> {
     }
   })
 
+  /**
+   * SN-16 的 `realtime_value` 不是普通遥测行（没有趋势表那几列），但 SPL 是真实测量值。
+   * 这里把它补进同一个趋势写入器，Trends 页才有可查询的 SPL 历史曲线；渲染层的实时
+   * 卡片仍走 `e2-realtime` 推送，两者不会互相阻塞。
+   */
+  const e2TrendLastAt = new Map<string, number>()
+  let e2TrendLastFlushAt = 0
+  iotIngest.on('e2-realtime', (event: E2RealtimeValueEvent) => {
+    const spl = event.value.maxDbValue
+    if (spl === undefined) return
+    const lastAt = e2TrendLastAt.get(event.deviceId) ?? 0
+    if (event.at - lastAt < 1_000) return
+    try {
+      const device = deviceRepo.findById(event.deviceId)
+      const deviceUid = device?.deviceUid ?? event.deviceId
+      const channel = Math.max(0, (event.value.maxDbChannel ?? 1) - 1)
+      trends.append(deviceUid, {
+        deviceId: event.deviceId,
+        channelId: channel,
+        timestamp: event.at,
+        spl,
+        mainFrequency: Number.NaN,
+        smoothness: Number.NaN,
+        bandEnergyRatio: Number.NaN,
+        oddEvenHarmonicRatio: Number.NaN,
+        spectralComplexity: Number.NaN,
+        fingerprintVariation: Number.NaN
+      })
+      e2TrendLastAt.set(event.deviceId, event.at)
+      // Trends 页要看到接近实时的曲线：默认 60 秒批量落盘会让刚收到的 SPL 一直
+      // 藏在内存里。每 10 秒主动 flush 一次，既能画出实时曲线，也不会每秒写文件。
+      if (event.at - e2TrendLastFlushAt >= 10_000) {
+        e2TrendLastFlushAt = event.at
+        void trends.flush().catch((error: unknown) => {
+          appLog().warn('E2 trend flush failed', {
+            reason: error instanceof Error ? error.message : String(error)
+          })
+        })
+      }
+    } catch (error) {
+      appLog().warn('E2 trend append failed', {
+        deviceId: event.deviceId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    }
+  })
   /**
    * 设置一变就重新对账监听（改端口 / 开总开关都不需要重启应用）。
    *

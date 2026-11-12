@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 听诊盒子族的**应用服务**：把「拉」通道包装成 IPC 能用的两件事（状态 / 同步）。
  *
  * 分工：
@@ -478,6 +478,9 @@ function readString(value: unknown): string | undefined {
 }
 
 function readInteger(value: unknown): number | undefined {
+  // 真机 V3.4.0 的 /system 把开关回成 boolean（不是 0/1）；不认它会让
+  // 回调已生效永远判成未生效，界面一直显示未接入。
+  if (typeof value === 'boolean') return value ? 1 : 0
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
   if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value)

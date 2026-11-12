@@ -29,6 +29,7 @@ import { alarmTypeLabel } from '@renderer/lib/labels'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import { useSessionStore } from '@renderer/stores/session'
 import { resultMessage } from '@renderer/lib/result'
+import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 
 const props = defineProps<{ deviceId: string }>()
 
@@ -45,11 +46,6 @@ const device = computed(() => devices.byId(props.deviceId))
 // ---------------------------------------------------------------------------
 
 /** 设备有没有可画的坐标（GIS 坐标在安装信息里，`installation.gisLatitude` 那一组）。 */
-const hasGis = computed(
-  () =>
-    device.value?.installation?.gisLatitude !== undefined &&
-    device.value?.installation?.gisLongitude !== undefined
-)
 /** 安装方位角（0 = 正北，顺时针）。 */
 const azimuth = computed(() => device.value?.installation?.azimuthDeg)
 
@@ -74,8 +70,33 @@ async function loadAlarms(): Promise<void> {
   alarms.value = result.success ? (unwrap(result)?.items ?? []) : []
 }
 
+/**
+ * 轻量轮询：只拉最近 5 条告警元数据，不下载音频。
+ *
+ * SN-16 的 `realtime_value` 只有 SPL/TDE/FDE，没有方向；方向只出现在 `alarm_msg`
+ * 告警日志的 `horizontal` 里。这里每 5 秒轻量同步一次，让方向/最近告警读数在设备持续
+ * 产生告警时接近实时；不伪造一个没有数据源的实时角度。
+ */
+let alarmPollTimer: number | undefined
+let alarmPolling = false
+async function pollLatestAlarms(): Promise<void> {
+  if (alarmPolling || props.deviceId === '') return
+  alarmPolling = true
+  try {
+    const result = await callApi(() =>
+      window.api.e2.syncAlarms(props.deviceId, { limit: 5, downloadAudio: false })
+    )
+    if (result.success) await loadAlarms()
+  } finally {
+    alarmPolling = false
+  }
+}
 /** 最近一次告警（query 按时间倒序，第一条就是）。 */
 const latestAlarm = computed(() => alarms.value[0])
+/** 最近告警的声压级；实时回调没到时用它作为「最近一次」读数，并明确标注。 */
+const latestAlarmSpl = computed(() => latestAlarm.value?.spl)
+const displaySpl = computed(() => currentSpl.value ?? latestAlarmSpl.value)
+const splIsLive = computed(() => currentSpl.value !== undefined)
 /** 最近一条告警里的声源方位（设备原文 horizontal；取不到就不猜）。 */
 const latestAlarmDirection = computed(() => {
   const raw = latestAlarm.value?.deviceRaw
@@ -238,10 +259,12 @@ onMounted(async () => {
   await loadCallback()
   await loadAlarms()
   await loadLatestSnapshot(latestAlarm.value)
+  alarmPollTimer = window.setInterval(() => void pollLatestAlarms(), 5_000)
 })
 
 onBeforeUnmount(() => {
   e2Realtime.release()
+  if (alarmPollTimer !== undefined) window.clearInterval(alarmPollTimer)
   if (audioEl.value) audioEl.value.pause()
   if (audioUrl.value !== '') URL.revokeObjectURL(audioUrl.value)
 })
@@ -265,38 +288,26 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
       <div class="section-header">
         <h3 class="section-title">{{ t('sonarUi.mapTitle') }}</h3>
       </div>
-      <div class="sonar-map__stage">
-        <svg v-if="hasGis" viewBox="0 0 1280 720" class="sonar-map__svg" role="img">
-          <!-- 本机网格（离线优先：不请求任何在线瓦片） -->
-          <g stroke="var(--color-border)" stroke-width="1">
-            <line v-for="x in 9" :key="`v${x}`" :x1="x * 128" y1="0" :x2="x * 128" y2="720" />
-            <line v-for="y in 5" :key="`h${y}`" x1="0" :y1="y * 144" x2="1280" :y2="y * 144" />
-          </g>
-          <!-- 设备标记：居中，箭头指向安装方位角（0 = 正北 = 上方）。 -->
-          <g :transform="`rotate(${direction ?? 0} 640 360)`">
-            <line x1="640" y1="360" x2="640" y2="270" stroke="var(--color-accent)" stroke-width="3" />
-            <path d="M640 258 l10 18 h-20 Z" fill="var(--color-accent)" />
-          </g>
-          <circle cx="640" cy="360" r="10" fill="var(--color-accent)" />
-          <circle cx="640" cy="360" r="18" fill="none" stroke="var(--color-accent)" stroke-width="1.5" opacity="0.6" />
-          <text x="640" y="402" text-anchor="middle" font-size="15" fill="var(--color-text-secondary)">
-            {{ device?.name ?? '' }}
-          </text>
-        </svg>
-        <p v-else class="muted sonar-map__empty">{{ t('sonarUi.noGis') }}</p>
-      </div>
+      <DeviceLocationMap
+        :installation="device?.installation"
+        :device-id="props.deviceId"
+        :device-name="device?.name"
+      />
     </section>
 
     <!-- 右列：第一行当前值，第二行最近一次告警 -->
     <div class="sonar-side">
       <section class="card sonar-now" data-sonar-now>
         <div class="sonar-now__spl">
-          <span class="sonar-now__spl-value">{{ currentSpl === undefined ? '—' : formatNumber(currentSpl, 1) }}</span>
+          <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
           <span class="sonar-now__spl-unit">dB</span>
         </div>
         <dl class="sonar-now__facts">
           <dt>{{ t('sonarUi.currentSpl') }}</dt>
-          <dd>{{ currentSpl === undefined ? '—' : `${formatNumber(currentSpl, 1)} dB` }}</dd>
+          <dd>
+            {{ displaySpl === undefined ? '—' : `${formatNumber(displaySpl, 1)} dB` }}
+            <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted"> · {{ t('sonarUi.latestAlarm') }}</span>
+          </dd>
           <dt>{{ t('sonarUi.azimuth') }}</dt>
           <dd>
             {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}

@@ -5667,3 +5667,64 @@ durationMs: 10240
   28 个失败文件为既有陈旧 UI 守卫（旧地图布局、旧相机 UI、旧设置页签、旧趋势图等），
   不是本轮功能回归。
 - `verify:packaged`：26/0；安装包签名 Valid。
+
+---
+
+## GGG. 第 67 轮的发布（v1.0.41，2026-11-12）
+
+业主 2026-11-12：
+> 这个 192.168.110.234 设备应该实时给出方位角，和声压级，以及在 Live monitoring 和 Device location 里面应该有 GIS 地图。
+
+### GGG.1 交付
+
+- 版本：1.0.41（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.41-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,242,960 字节 / 009C621EA2CCA4C1270964114A49E9A7BCC814F3E06A9BCC7F92F779A19CB036
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.41
+- 上一版归档：release-1.0.40-2026-11-12/
+
+### GGG.2 实时声压级与趋势
+
+- `iotIngest` 收到的 SN-16 `realtime_value` 现在同时写入趋势存储：
+  - 以 `max_db_value` 写 `spl`；
+  - 以 `max_db_chn` 映射本地通道（1 起 → 0 起）；
+  - 其余未提供的量写 NaN，不伪造。
+- 每 10 秒主动 flush 一次，避免默认 60 秒批量落盘导致 Trends 长时间看不到曲线。
+- 修复**长设备 UID 趋势目录与查询目录不一致**：
+  - 写入端用 `safeStorageSegment()` 把 UID 截到 64 字符；
+  - 查询端之前没截，长 UID 永远查不到 Parquet 文件；
+  - 现在两边共用同一个 helper。
+- Trends 页面每 3 秒刷新当前窗口，SPL 曲线实时更新。
+
+实测 234 回调开启后：
+
+```text
+Current level: 50.5 dB
+Pointed direction: 246° · latest alarm direction
+Trend query: totalRows 143 / 1 file / 10 s bucket
+```
+
+### GGG.3 方向与回调
+
+- 真机 /system 把 is_send_realtime_value 回成 boolean true，旧代码只认数字/字符串，导致回调已生效但界面仍显示未接入。
+- 现在 readInteger() 同时接受 true/false，回调状态正确显示 isSendRealtimeValue: 1。
+- 设备对 PUT /system 只回 200、不回 JSON；写端点现在允许空响应，不再误报 INVALID_RESPONSE。
+- 方向优先取最近告警的 horizontal，否则取安装 azimuthDeg；轻量轮询每 5 秒拉最近 5 条告警元数据（不下载音频）。
+
+
+### GGG.4 GIS 地图
+
+- SonarOverviewPanel 改用真正的 DeviceLocationMap，不再画本机网格占位图；
+- Live monitoring 的 DeviceInstallationCard 传入 :show-map="true"；
+- 设备详情 / Device location 卡片继续使用同一个内嵌 GIS 地图；
+- 地图带在线瓦片、方向线、100 m / ±18° 范围扇区；
+- 实测 234 Live monitoring：两个 GIS 地图实例，[data-sonar-map] 内有 GIS 地图，30 张瓦片加载。
+
+### GGG.5 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm：11/11 通过
+- npm run test:inproc：134 文件 / 2530 通过 / 72 失败；26 个失败文件为既有陈旧 UI 守卫，不是本轮功能回归。
+- verify:packaged：26/0；安装包签名 Valid。

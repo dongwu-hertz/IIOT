@@ -217,7 +217,7 @@ export class StorageService {
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     const channel = `CH${String(channelIndex + 1).padStart(2, '0')}`
-    return path.join(root, 'audio', safeSegment(deviceUid), year, month, day, channel, kind)
+    return path.join(root, 'audio', safeStorageSegment(deviceUid), year, month, day, channel, kind)
   }
 
   /** metrics/<DEVICE_UID>/<YYYY>/<YYYY-MM-DD>.parquet */
@@ -230,7 +230,7 @@ export class StorageService {
     const year = String(date.getFullYear())
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
-    return path.join(root, 'metrics', safeSegment(deviceUid), year, `${year}-${month}-${day}.parquet`)
+    return path.join(root, 'metrics', safeStorageSegment(deviceUid), year, `${year}-${month}-${day}.parquet`)
   }
 
   /**
@@ -247,7 +247,7 @@ export class StorageService {
   }): AlarmClipPaths {
     const directory = this.audioDir(input.deviceUid, input.channelIndex, input.kind, input.startTime)
     const stamp = formatFileStamp(input.startTime)
-    const suffix = input.suffix ? `_${safeSegment(input.suffix)}` : ''
+    const suffix = input.suffix ? `_${safeStorageSegment(input.suffix)}` : ''
     const filename = `${stamp}${suffix}.${input.extension}`
     const absolutePath = path.join(directory, filename)
     return {
@@ -802,7 +802,7 @@ function normaliseQuota(value: number): number {
 }
 
 /** Strip characters that are illegal in Windows paths or enable traversal. */
-function safeSegment(value: string): string {
+export function safeStorageSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64) || 'unknown'
 }
 

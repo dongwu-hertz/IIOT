@@ -1302,6 +1302,19 @@ function rangeAlarmTitle(alarm: AlarmEvent): string {
 // Wiring
 // ---------------------------------------------------------------------------
 
+/**
+ * 曲线实时刷新：E2 的回调值已经写进趋势存储，但页面本身只查询一次。
+ * 3 秒拉一次当前时间窗口（页面不可见/正在查询时跳过），让 SPL 曲线跟随新样本。
+ * 这只刷新数据，不改用户的设备/通道/量筛选。
+ */
+let liveRefreshTimer: number | undefined
+function startLiveRefresh(): void {
+  liveRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    if (trends.loading || selectedDeviceId.value === '') return
+    trends.query({ immediate: true })
+  }, 3_000)
+}
 onMounted(async () => {
   if (devices.devices.length === 0) await devices.load()
 
@@ -1315,6 +1328,7 @@ onMounted(async () => {
   // mount path and the switch path cannot drift apart — and the first load
   // happens exactly once instead of once per path.
   selectedDeviceId.value = candidate
+  startLiveRefresh()
 })
 
 watch(selectedDeviceId, (id) => {
@@ -1362,6 +1376,7 @@ watch(
  * page shows the last result immediately instead of an empty chart.
  */
 onUnmounted(() => {
+  if (liveRefreshTimer !== undefined) window.clearInterval(liveRefreshTimer)
   trends.cancelPendingQuery()
 })
 
