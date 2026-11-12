@@ -648,14 +648,14 @@ function onAdded(deviceId: string): void {
                 v-if="session.isAdmin"
                 type="button"
                 class="btn btn--ghost btn--icon"
-                :aria-label="t('devicesUi.settingColumn')"
-                :title="t('devicesUi.settingColumn')"
+                :aria-label="t('common.edit')"
+                :title="t('common.edit')"
                 data-action="device-configure"
                 @click.stop="startEdit(device)"
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <circle cx="12" cy="12" r="3.2" />
-                  <path d="M12 3.4v2.4M12 18.2v2.4M20.6 12h-2.4M5.8 12H3.4M17.5 6.5l-1.7 1.7M8.2 15.8l-1.7 1.7M17.5 17.5l-1.7-1.7M8.2 8.2 6.5 6.5" />
+                  <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z" />
+                  <path d="m13.5 6.5 4 4" />
                 </svg>
               </button>
             </td>

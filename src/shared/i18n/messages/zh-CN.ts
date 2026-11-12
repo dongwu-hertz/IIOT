@@ -788,7 +788,7 @@ export const zhCN = {
 
   mapPickerUi: {
     title: '在地图上选点',
-    hint: '点击地图选择设备点位',
+    hint: '左键拖动地图，右键确认点位',
     offlineHint: '在线底图未启用：仍可点击网格选点。',
     selected: '已选：{lat}, {lon}',
     zoomIn: '放大',

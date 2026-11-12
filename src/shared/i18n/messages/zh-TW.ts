@@ -719,7 +719,7 @@ export const zhTW: MessageSchema = {
 
   mapPickerUi: {
     title: '在地圖上選點',
-    hint: '點擊地圖選擇裝置點位',
+    hint: '左鍵拖動地圖，右鍵確認點位',
     offlineHint: '線上底圖未啟用：仍可點擊網格選點。',
     selected: '已選：{lat}, {lon}',
     zoomIn: '放大',

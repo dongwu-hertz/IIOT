@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 设备 GIS 点位的「在地图上选点」弹窗。
  *
@@ -18,6 +18,7 @@ import {
   defaultMapTilesConfig,
   latToWorldY,
   lonToWorldX,
+  panMapCenter,
   projectToViewport,
   timeZoneCenter,
   viewTiles,
@@ -47,6 +48,9 @@ const DEFAULT_ZOOM = 14
 const center = ref<MapCenter>({ latitude: 30, longitude: 110, zoom: DEFAULT_ZOOM })
 const marker = ref<{ latitude: number; longitude: number } | null>(null)
 const tileErrors = ref<Record<string, boolean>>({})
+const dragging = ref(false)
+let lastPointer: { x: number; y: number } | null = null
+let dragMoved = false
 
 const tileConfig = computed(() => settings.settings?.mapTiles ?? defaultMapTilesConfig())
 const tiles = computed(() =>
@@ -115,21 +119,66 @@ function hideTile(key: string): void {
   tileErrors.value = { ...tileErrors.value, [key]: true }
 }
 
-function pickAt(event: MouseEvent): void {
+/** 客户端坐标 → 经纬度。地图画布按 16:9 缩放，所以先换算回逻辑坐标。 */
+function pointFromEvent(event: MouseEvent): { latitude: number; longitude: number } | null {
   const element = event.currentTarget as HTMLElement | null
-  if (!element) return
+  if (!element) return null
   const rect = element.getBoundingClientRect()
-  if (rect.width <= 0 || rect.height <= 0) return
+  if (rect.width <= 0 || rect.height <= 0) return null
   const x = ((event.clientX - rect.left) / rect.width) * WIDTH
   const y = ((event.clientY - rect.top) / rect.height) * HEIGHT
   const zoom = clampTileZoom(center.value.zoom)
   const worldX = lonToWorldX(center.value.longitude, zoom) + x - WIDTH / 2
   const worldY = latToWorldY(center.value.latitude, zoom) + y - HEIGHT / 2
-  const latitude = Math.max(-85.05112878, Math.min(85.05112878, worldYToLat(worldY, zoom)))
-  const longitude = worldXToLon(worldX, zoom)
-  marker.value = { latitude, longitude }
+  return {
+    latitude: Math.max(-85.05112878, Math.min(85.05112878, worldYToLat(worldY, zoom))),
+    longitude: worldXToLon(worldX, zoom)
+  }
 }
 
+/**
+ * 左键按下后拖动平移地图；没有拖动的左键单击只落一个候选点，不确认。
+ * 右键落点并立即确认（业主 2026-11-12：左键移动地图，右键确认点）。
+ */
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return
+  dragging.value = true
+  dragMoved = false
+  lastPointer = { x: event.clientX, y: event.clientY }
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!dragging.value || lastPointer === null) return
+  const element = event.currentTarget as HTMLElement
+  const rect = element.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const dx = ((event.clientX - lastPointer.x) / rect.width) * WIDTH
+  const dy = ((event.clientY - lastPointer.y) / rect.height) * HEIGHT
+  if (Math.abs(dx) + Math.abs(dy) > 1) dragMoved = true
+  center.value = panMapCenter(center.value, dx, dy)
+  lastPointer = { x: event.clientX, y: event.clientY }
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!dragging.value) return
+  dragging.value = false
+  lastPointer = null
+  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
+  if (!dragMoved) {
+    const point = pointFromEvent(event)
+    if (point !== null) marker.value = point
+  }
+}
+
+function onContextMenu(event: MouseEvent): void {
+  event.preventDefault()
+  const point = pointFromEvent(event)
+  if (point === null) return
+  marker.value = point
+  emit('pick', point)
+  emit('close')
+}
 function zoomBy(delta: number): void {
   center.value = {
     ...center.value,
@@ -155,7 +204,16 @@ function confirm(): void {
     @update:model-value="(value) => { if (!value) emit('close') }"
   >
     <div class="map-picker" data-map-picker>
-      <div class="map-picker__frame" @click="pickAt">
+      <div
+        class="map-picker__frame"
+        :class="{ 'map-picker__frame--dragging': dragging }"
+        :data-map-center="`${center.latitude.toFixed(5)},${center.longitude.toFixed(5)},${center.zoom}`"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+        @contextmenu.prevent="onContextMenu"
+      >
         <img
           v-for="tile in tiles"
           v-show="!tileErrors[tile.key]"
@@ -177,8 +235,8 @@ function confirm(): void {
           </g>
         </svg>
         <div class="map-picker__controls">
-          <button type="button" class="btn btn--icon" :aria-label="t('mapPickerUi.zoomIn')" @click.stop="zoomBy(1)">+</button>
-          <button type="button" class="btn btn--icon" :aria-label="t('mapPickerUi.zoomOut')" @click.stop="zoomBy(-1)">−</button>
+          <button type="button" class="btn btn--icon" :aria-label="t('mapPickerUi.zoomIn')" @pointerdown.stop @click.stop="zoomBy(1)">+</button>
+          <button type="button" class="btn btn--icon" :aria-label="t('mapPickerUi.zoomOut')" @pointerdown.stop @click.stop="zoomBy(-1)">−</button>
         </div>
         <div v-if="tileConfig.attribution && tileConfig.enabled" class="map-picker__attribution">
           {{ tileConfig.attribution }}
@@ -217,7 +275,13 @@ function confirm(): void {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-sunken, #eef2f5);
-  cursor: crosshair;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.map-picker__frame--dragging {
+  cursor: grabbing;
 }
 
 .map-picker__tile {

@@ -1,10 +1,11 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 import {
   latToWorldY,
   lonToWorldX,
+  panMapCenter,
   worldXToLon,
   worldYToLat
 } from '../src/shared/domain/map-tiles'
@@ -29,6 +30,9 @@ describe('map point picker', () => {
     const y = latToWorldY(latitude, zoom)
     assert.ok(Math.abs(worldXToLon(x, zoom) - longitude) < 1e-9)
     assert.ok(Math.abs(worldYToLat(y, zoom) - latitude) < 1e-6)
+    const moved = panMapCenter({ latitude, longitude, zoom }, 120, 40)
+    assert.notEqual(moved.longitude, longitude)
+    assert.notEqual(moved.latitude, latitude)
   })
 
   it('picker reuses the map-tiles projection and never fetches directly', () => {
@@ -37,6 +41,9 @@ describe('map point picker', () => {
     assert.match(picker, /projectToViewport\(/)
     assert.match(picker, /worldXToLon\(/)
     assert.match(picker, /worldYToLat\(/)
+    assert.match(picker, /panMapCenter\(/)
+    assert.match(picker, /@pointerdown="onPointerDown"/)
+    assert.match(picker, /@contextmenu\.prevent="onContextMenu"/)
     assert.doesNotMatch(picker, /\bfetch\s*\(/)
     assert.doesNotMatch(picker, /XMLHttpRequest/)
   })

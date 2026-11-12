@@ -689,7 +689,7 @@ presets, the licence boundaries
 
   mapPickerUi: {
     title: 'Pick a point on the map',
-    hint: 'Click the map to choose the device location',
+    hint: 'Drag with the left mouse button to move the map; right-click to confirm the point.',
     offlineHint: 'Online base map is disabled; you can still click the grid to pick a point.',
     selected: 'Selected: {lat}, {lon}',
     zoomIn: 'Zoom in',

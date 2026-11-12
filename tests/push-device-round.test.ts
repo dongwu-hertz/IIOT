@@ -5,7 +5,7 @@
  * 这一批的核心是第四种机型 `pushDevice`（HTTP/MQTT 接入的纯推送第三方设备），它牵出
  * 一串"老代码遇到新 kind 会怎样"的问题：
  *
- *   1. **齿轮图标**（Item 13）：设备表「设置」列的太阳图标换成 24 viewBox 的 8 齿齿轮；
+ *   1. **铅笔编辑图标**：设备表「设置」列的图标改为 24 viewBox 的可编辑铅笔；
  *   2. **编辑对话框的显隐**（Item 12）：推流秘钥那一块（DevicePushEndpoint）只对声明了
  *      http/mqtt 接入的设备显示；推送设备编辑名称 / GIS / 推流键，IP 区整块隐藏；
  *   3. **设备详情页**：pushDevice 得到最小页签集（概览 + push），不挂任何设备协议页签；
@@ -36,29 +36,26 @@ const detailView = read('src/renderer/src/views/DeviceDetailView.vue')
 const mapView = read('src/renderer/src/views/DeviceMapView.vue')
 const dialog = read('src/renderer/src/components/AddDeviceDialog.vue')
 
-describe('设置列图标是**齿轮**（Item 13：太阳图标换掉）', () => {
-  it('device-configure 按钮里是 24 viewBox 的 8 齿齿轮，描边风格与相邻图标一致', () => {
+describe('设置列图标是**铅笔**（可编辑动作）', () => {
+  it('device-configure 按钮里是 24 viewBox 的铅笔，描边风格与相邻图标一致', () => {
     const button = devicesView.slice(
       devicesView.indexOf('data-action="device-configure"'),
       devicesView.indexOf('data-action="device-delete"')
     )
-    assert.match(button, /viewBox="0 0 24 24"/, '设置按钮不是 24 viewBox')
+    assert.match(button, /viewBox="0 0 24 24"/, '编辑按钮不是 24 viewBox')
     assert.match(button, /stroke="currentColor"/, '没有用 currentColor 描边')
     assert.match(button, /fill="none"/, '不是无填充描边风格')
-    // 8 齿：4 条直齿 + 4 条斜齿。
-    assert.match(button, /<path d="M12 3\.4v2\.4M12 18\.2v2\.4M20\.6 12h-2\.4M5\.8 12H3\.4M17\.5 6\.5l-1\.7 1\.7M8\.2 15\.8l-1\.7 1\.7M17\.5 17\.5l-1\.7-1\.7M8\.2 8\.2 6\.5 6\.5"/)
-    // 齿毂（中心圆）。
-    assert.match(button, /<circle cx="12" cy="12" r="3\.2" \/>/)
+    assert.match(button, /<path d="M4 20h4l10\.5-10\.5a2\.1 2\.1 0 0 0-3-3L5 17v3Z"/)
+    assert.match(button, /<path d="m13\.5 6\.5 4 4"/)
   })
 
-  it('太阳图标真的不在了（那一格不再出现 16 viewBox 的 8 辐条 + r="2.1" 圆）', () => {
+  it('旧的齿轮/太阳图形不在了，data-action 保持不变', () => {
     const button = devicesView.slice(
       devicesView.indexOf('data-action="device-configure"'),
       devicesView.indexOf('data-action="device-delete"')
     )
-    assert.equal(button.includes('viewBox="0 0 16 16"'), false, '设置按钮里还有 16 viewBox 的图标')
-    assert.equal(button.includes('r="2.1"'), false, '设置按钮里还有太阳的中心圆')
-    // data-action 本身不变（探针与权限逻辑都挂在这颗按钮上）。
+    assert.equal(button.includes('<circle'), false, '编辑按钮里还有齿轮中心圆')
+    assert.equal(button.includes('viewBox="0 0 16 16"'), false, '编辑按钮里还有 16 viewBox 的图标')
     assert.ok(button.includes('data-action="device-configure"'))
   })
 })

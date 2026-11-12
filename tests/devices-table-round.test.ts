@@ -260,7 +260,7 @@ describe('设备表：查看 / 设置 / 删除是图标，IP 双击开设备页�
 
     const settingButton = buttonAround(devicesViewCode, 'data-action="device-configure"')
     assert.ok(settingButton.includes('<svg'), '设置按钮里没有图标')
-    assert.ok(settingButton.includes("t('devicesUi.settingColumn')"), '设置按钮没有无障碍名字')
+    assert.ok(settingButton.includes("t('common.edit')"), '编辑按钮没有无障碍名字')
 
     const deleteButton = buttonAround(devicesViewCode, 'data-action="device-delete"')
     assert.ok(deleteButton.includes('<svg'), '删除按钮里没有图标')
