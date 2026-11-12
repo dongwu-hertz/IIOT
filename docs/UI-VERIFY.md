@@ -5130,3 +5130,49 @@ npm run dist:win:signed
   43 条告警同步、WAV 下载）；
 - 实时监测图表因设备不推流，无法验证有数据的外观；
 - 告警参数/模型/自动录音页面未接。
+
+---
+
+## XX. 第 57 轮的发布（v1.0.29，2026-11-12）
+
+业主 2026-11-12 三条：
+1. Stream error 为何出现在 overview？
+2. 气井泄漏没有原始音频可拆解，是否直接简化显示？
+3. overview 离开再进入，之前配置不应该变。
+
+### XX.1 交付
+
+- 版本：1.0.29（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.29-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,221,632 字节 / CDFDAD8730AB5A0D8D02A12EC2E9DCF6F88662D777D7591A3250B614A1CDE635
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，2027-09-03 到期，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged 26 通过 / 0 失败，应用内版本 1.0.29
+- 上一版归档：release-1.0.28-2026-11-12/
+
+### XX.2 这一版包含什么
+
+- 8ed8a12 总览画面墙配置跨导航保留：
+  - 离开页面只调用 liveWall.resetSessions() 停会话，保留每格相机分配与具名视图；
+  - 回到总览用 resumeAssignedCells() 逐格恢复；
+  - 相机格状态徽标 title 显示主进程诊断原文，不再只剩一句 Stream error。
+- 8ed8a12 AO01 气井泄漏简化显示：
+  - isGasLeakMonitor() 识别 AO01；
+  - MonitorView 不再对 AO01 开四个实时 WebSocket、不再画声纹四图四卡；
+  - 新 GasLeakMonitorPanel 显示累计泄漏告警、最近一次、启用通道、同步入口，下方复用本机录音时间轴；
+  - 六种语言新增 gasLeakUi 词条。
+
+### XX.3 实测
+
+- dev build（v1.0.29）用 CDP 实测：
+  - AO01 页面显示 Gas well leak monitoring、43 条泄漏告警、最近 11/6/26；页面无 Stream error，也无 Waiting for 的空图；
+  - 总览画面墙 .235 / .236 两格：离开到实时监测再回来，两格仍在且都恢复 Playing。
+- 全量 test:inproc：128 文件 / 2493 通过 / 75 失败，失败文件集合与上一轮一致。
+
+### XX.4 签名环境备注
+
+第一次出 v1.0.29 时 signtool 报 No certificates were found ... After Private Key filter, 0 certs。证书本身存在（SimplySign CSP，HasPrivateKey=True），原因是 SimplySign 的授权会话失效。重启 SimplySign Desktop / proCertum SmartSign 后，用同一张证书签一个临时 PE 文件得到 Valid，随后完整出包成功。以后遇到 0 certs after private key filter 先重启 SimplySign，不要重新导入证书。
+
+### XX.5 未验证
+
+- 没有在安装后的 GUI 里逐页点 AO01（dev build 已 CDP 实测；打包产物 verify-packaged 26/0，应用内版本 1.0.29）；
+- 实时图仍受设备固件限制（四个 WebSocket 0 帧），这一版按简化显示处理，不伪造图表。
