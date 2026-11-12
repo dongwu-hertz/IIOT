@@ -58,6 +58,7 @@ import {
 } from '@shared/domain/alarm-linkage'
 import { appLog } from '../logging/logger'
 import type { PendingAlarmStore } from './pending-alarm-store'
+import type { DeviceKind } from '@shared/domain/models'
 import type {
   LinkageEmailContext,
   LinkageEmailSender,
@@ -107,6 +108,8 @@ export interface LinkageCandidate {
   strategyId?: number
   /** 设备侧通道号（AO01 的气井告警需要它落 alarms 行；相机日志通常为 0）。 */
   channelIndex?: number
+  /** 设备族；非相机没有 RTSP 视频源，联动录像动作要整条省略而不是显示失败。 */
+  deviceKind?: DeviceKind
   /** 相机判定的检测模式（1 局放 / 2 泄漏 / 3 机械）与放电类型键（2026-09-23 真机字段）。 */
   detectMode?: number
   dischargeTypeKey?: string
@@ -338,6 +341,7 @@ export class AlarmLinkageEngine {
       deviceId: candidate.deviceId,
       deviceName: candidate.deviceName,
       source: candidate.source,
+      ...(candidate.deviceKind !== undefined ? { deviceKind: candidate.deviceKind } : {}),
       decision
     }
     if (candidate.alarmLevelRaw !== undefined) trigger.alarmLevelRaw = candidate.alarmLevelRaw
@@ -376,6 +380,11 @@ export class AlarmLinkageEngine {
 
     const outcomes: LinkageActionOutcome[] = []
     for (const action of this.actionOrder) {
+      // 非相机设备（AO01 等纯传感器）没有视频源：联动录像对它们不成立，
+      // 整条动作省略，不要在待处理告警里显示 Recording: Failed — 无视频源。
+      if (action === 'record' && trigger.deviceKind !== undefined && trigger.deviceKind !== 'acousticCamera') {
+        continue
+      }
       const outcome = await this.runAction(action, trigger, config)
       outcomes.push(outcome)
     }

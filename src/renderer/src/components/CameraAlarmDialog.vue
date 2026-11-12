@@ -180,15 +180,27 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [strategyResult, conditionResult] = await Promise.all([
-      callApi(() => window.api.cameraAlarms.listStrategies(deviceId)),
-      callApi(() => window.api.cameraAlarms.listConditions(deviceId))
-    ])
+    /*
+     * 相机 HTTP 栈在同时处理直播/检测时会偶发 401：这里一次只发一个请求，
+     * 且 AUTH_FAILED 只重试一次。旧版本同时发两个请求，任何一个瞬时被拒都会
+     * 把「认证失败，请检查用户名和密码」留在对话框里，而设备其实在线。
+     */
+    let strategyResult = await callApi(() => window.api.cameraAlarms.listStrategies(deviceId))
+    if (!strategyResult.success && strategyResult.error?.code === 'AUTH_FAILED') {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      strategyResult = await callApi(() => window.api.cameraAlarms.listStrategies(deviceId))
+    }
     if (!strategyResult.success) {
       error.value = resultMessage(strategyResult)
       strategies.value = []
     } else {
       strategies.value = unwrap(strategyResult)?.items ?? []
+    }
+
+    let conditionResult = await callApi(() => window.api.cameraAlarms.listConditions(deviceId))
+    if (!conditionResult.success && conditionResult.error?.code === 'AUTH_FAILED') {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      conditionResult = await callApi(() => window.api.cameraAlarms.listConditions(deviceId))
     }
     if (!conditionResult.success) {
       if (error.value === '') error.value = resultMessage(conditionResult)
@@ -200,10 +212,11 @@ async function load(): Promise<void> {
     loading.value = false
   }
 }
-
 /** 刷新按钮：四份数据一起回设备重读。 */
 async function reloadAll(): Promise<void> {
-  await Promise.all([load(), loadEnabledStrategies(), loadRegions()])
+  await load()
+  await loadEnabledStrategies()
+  await loadRegions()
 }
 
 watch(
@@ -216,12 +229,14 @@ watch(
     notice.value = ''
     error.value = ''
     if (deviceId !== '') {
-      void load()
-      void loadEnabledStrategies()
-      if (showRegions.value) {
-        void loadRegions()
-        void refreshRegionVideoState()
-      }
+      void (async () => {
+        await load()
+        await loadEnabledStrategies()
+        if (showRegions.value) {
+          await loadRegions()
+          await refreshRegionVideoState()
+        }
+      })()
     }
   }
 )
@@ -276,7 +291,8 @@ async function toggleStrategyEnabled(strategy: Fa371AlarmStrategy): Promise<void
     notice.value = t('cameraAlarmUi.strategyEnableSaved')
   } finally {
     strategyBusyId.value = ''
-    await Promise.all([load(), loadEnabledStrategies()])
+    await load()
+  await loadEnabledStrategies()
   }
 }
 
@@ -453,7 +469,8 @@ async function removeCondition(condition: Fa371AlarmCondition): Promise<void> {
     return
   }
   conditions.value = unwrap(result)?.items ?? []
-  await Promise.all([load(), loadEnabledStrategies()])
+  await load()
+  await loadEnabledStrategies()
   notice.value = linkedEnabled.length > 0
     ? t('cameraAlarmUi.deletedConditionAfterDisable')
     : t('cameraAlarmUi.deleted')

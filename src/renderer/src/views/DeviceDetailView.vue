@@ -22,6 +22,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useDevicesStore } from '@renderer/stores/devices'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
@@ -157,6 +158,8 @@ const renaming = ref(false)
 const nameNotice = ref('')
 
 const device = computed(() => devices.byId(props.id))
+/** AO01 是两路气井传感器，没有声压级告警模板；配置里隐藏 SPL 组。 */
+const isGasLeakDevice = computed(() => isGasLeakMonitor(device.value))
 
 /**
  * 当前机型能看到的页签。
@@ -628,7 +631,7 @@ const webUiAddress = computed(() => {
 
       <!-- 告警参数 -->
       <template v-else-if="activeTab === 'alarms'">
-        <AlarmProfileSection :device-id="props.id" />
+        <AlarmProfileSection :device-id="props.id" :hide-spl="isGasLeakDevice" />
       </template>
 
       <!-- 网络配置 -->

@@ -1310,6 +1310,7 @@ onBeforeUnmount(() => {
               tabindex="0"
               :data-map-marker="marker.id"
               :data-marker-tone="markerTones[marker.id]"
+              :data-marker-blink="markerTones[marker.id] === 'alarm' ? 'yes' : 'no'"
               :data-floor-placed="marker.floorPlaced === undefined ? null : String(marker.floorPlaced)"
               @pointerdown="onMarkerPointerDown(marker.id, $event)"
               @click="selectDevice(marker.id)"
@@ -1527,6 +1528,12 @@ onBeforeUnmount(() => {
                 </span>
               </div>
               <p v-else-if="!alarmsLoading" class="muted map-detail-panel__empty">{{ t('mapUi.noAlarms') }}</p>
+              <ul v-if="alarms.length > 0" class="map-latest-alarm__list" data-map-alarm-list>
+                <li v-for="alarm in alarms.slice(0, 3)" :key="alarm.id" data-map-alarm-row>
+                  <span>{{ t('alarmsUi.columnChannel') }} CH{{ alarm.channelId + 1 }}</span>
+                  <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+                </li>
+              </ul>
             </section>
 
             <p v-if="syncOutcome" class="muted map-detail-panel__sync-result">
@@ -2125,6 +2132,7 @@ onBeforeUnmount(() => {
  * `--color-success`，红用 `--color-danger`，灰用 `--color-text-tertiary`（这套 token 里
  * "不突出"的那一档灰；没有 `--color-text-muted` 这个名字）。
  */
+
 .map-marker__dot {
   stroke-width: 2;
 }
@@ -2137,6 +2145,37 @@ onBeforeUnmount(() => {
 .map-marker--alarm .map-marker__dot {
   fill: var(--color-danger);
   stroke: var(--color-danger);
+}
+.map-marker--alarm .map-marker__dot {
+  animation: map-alarm-blink 0.9s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px var(--color-danger));
+}
+
+@keyframes map-alarm-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.28; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-marker--alarm .map-marker__dot {
+    animation: none;
+  }
+}
+
+.map-latest-alarm__list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.map-latest-alarm__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .map-marker--offline .map-marker__dot {

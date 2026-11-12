@@ -15,9 +15,9 @@
  * 面板只做**呈现与派发**：排序、过滤、格式化都在这里，任何判断（比如
  * 「这条为什么没有录像」）读的都是主进程给的 `actions[]`，界面不重新推断。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAlarmLinkageStore } from '@renderer/stores/alarmLinkage'
 import { useAppNoticesStore } from '@renderer/stores/appNotices'
 import { useDevicesStore } from '@renderer/stores/devices'
@@ -29,6 +29,7 @@ import { linkageDischargeText, linkageMetricsText } from '@renderer/lib/linkageT
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const linkage = useAlarmLinkageStore()
 const devices = useDevicesStore()
 /**
@@ -40,6 +41,7 @@ const devices = useDevicesStore()
 const notices = useAppNoticesStore()
 
 const open = ref(false)
+const root = ref<HTMLElement | null>(null)
 const acknowledging = ref(false)
 
 /**
@@ -109,10 +111,24 @@ function toggle(): void {
   if (open.value) void loadDeviceAlarms()
 }
 
+/** 点击其他页面/侧栏/空白处时收起面板；路由变化也收起，避免顶栏浮层跨页残留。 */
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!open.value) return
+  const target = event.target as Node | null
+  if (target && root.value && !root.value.contains(target)) open.value = false
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    open.value = false
+  }
+)
 let unsubscribe: (() => void) | undefined
 
 onMounted(() => {
   void loadDeviceAlarms()
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   /*
    * 联动引擎推来一条待处理时也重读一次设备告警：设备推来的那条告警很可能就是这同一条事件
    * 引起的，早一次读到，角标就早一格正确。
@@ -122,6 +138,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   unsubscribe?.()
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
 })
 
 /**
@@ -151,6 +168,18 @@ const rows = computed<PendingAlarmRecord[]>(() =>
 )
 
 /** 一条动作结果的中文/英文/… 一行说明。 */
+/**
+ * AO01 等纯传感器设备没有 RTSP 视频源：联动录像动作不适用。旧版本可能已经把
+ * 一条 failed 的 record 动作写进待处理快照，界面也必须过滤掉。
+ */
+function actionsForRow(row: PendingAlarmRecord): LinkageActionRecord[] {
+  const device = devices.byId(row.deviceId)
+  if (device && device.kind !== 'acousticCamera') {
+    return row.actions.filter((action) => action.action !== 'record')
+  }
+  return row.actions
+}
+
 function actionLine(record: LinkageActionRecord): string {
   const state = t(`linkage.actionState.${record.status}`)
   const name = t(`linkage.action.${record.action}`)
@@ -195,7 +224,7 @@ function goToAlarms(): void {
 </script>
 
 <template>
-  <div class="alarm-badge">
+  <div ref="root" class="alarm-badge">
     <!--
       这一颗就是顶栏的**告警图标**（产品要求：待处理告警与告警图标合在一起）。
       以前它旁边还另有一个「待处理告警」按钮 + 一颗只显示未确认告警数的铃铛，两处说的是
@@ -399,11 +428,11 @@ function goToAlarms(): void {
             <span v-if="metrics(row)">{{ metrics(row) }}</span>
           </div>
 
-          <p v-if="row.actions.length === 0" class="alarm-item__actions muted">
+          <p v-if="actionsForRow(row).length === 0" class="alarm-item__actions muted">
             {{ t('linkage.pendingNoActions') }}
           </p>
           <ul v-else class="alarm-item__actions">
-            <li v-for="action in row.actions" :key="action.action" :class="actionClass(action)">
+            <li v-for="action in actionsForRow(row)" :key="action.action" :class="actionClass(action)">
               {{ actionLine(action) }}
             </li>
           </ul>

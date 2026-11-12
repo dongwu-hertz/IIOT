@@ -227,7 +227,7 @@ export async function pollDetectLogs(
 
 /** 由一条映射后的日志产出候选事件。 */
 export function toCandidate(
-  device: Pick<Device, 'id' | 'name'>,
+  device: Pick<Device, 'id' | 'name'> & { kind?: Device['kind'] },
   log: Fa371DetectLog,
   source: LinkageTriggerSourceKind,
   observedAt: number
@@ -243,6 +243,7 @@ export function toCandidate(
     observedAt
   }
   if (log.channelIndex !== undefined) candidate.channelIndex = log.channelIndex
+  if (device.kind !== undefined) candidate.deviceKind = device.kind
   if (log.isAlarm !== undefined) candidate.alarmFlag = log.isAlarm
   if (log.alarmLevelRaw !== undefined) candidate.alarmLevelRaw = log.alarmLevelRaw
   if (log.alarmStrategyId !== undefined) candidate.strategyId = log.alarmStrategyId

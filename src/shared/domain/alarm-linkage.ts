@@ -439,6 +439,8 @@ export interface LinkageTrigger {
   /** 设备回告的告警策略 id。 */
   strategyId?: number
   source: LinkageTriggerSourceKind
+  /** 设备族；非相机没有 RTSP 视频源，联动录像动作应省略。 */
+  deviceKind?: 'acousticBox' | 'acousticCamera' | 'auscultationBox' | 'pushDevice'
   /** 判定依据，进审计日志。 */
   decision: LinkageAlarmDecision
 }

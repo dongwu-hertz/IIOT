@@ -69,6 +69,16 @@ describe('gas-leak alarm integration', () => {
     assert.match(map, /onLinkagePending/)
   })
 
+  it('non-camera devices omit the linkage recording action instead of failing on no video', () => {
+    const engine = read('src/main/services/linkage/alarm-linkage-engine.ts')
+    assert.match(engine, /action === 'record' && trigger\.deviceKind !== undefined && trigger\.deviceKind !== 'acousticCamera'/)
+    assert.match(engine, /candidate\.deviceKind !== undefined \? \{ deviceKind: candidate\.deviceKind \}/)
+    const poll = read('src/main/services/linkage/detect-logs-poll-source.ts')
+    assert.match(poll, /candidate\.deviceKind = device\.kind/)
+    const panel = read('src/renderer/src/components/AlarmLinkagePanel.vue')
+    assert.match(panel, /actionsForRow\(row\)/)
+    assert.match(panel, /action\.action !== 'record'/)
+  })
   it('recordings row icon is a real play button and selecting reloads playback', () => {
     const view = read('src/renderer/src/views/RecordingsView.vue')
     assert.match(view, /const playerNonce = ref\(0\)/)

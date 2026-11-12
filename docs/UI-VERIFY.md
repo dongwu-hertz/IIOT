@@ -5337,3 +5337,74 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
 - test:inproc：132 文件 / 2509 通过 / 77 失败，失败文件集合与上一轮一致（29 个陈旧
   KK.8 守卫），无新增失败文件。
 - 新增 floor-plan / gas-leak-alarm 定向测试；地图、播放、告警落库均已用 dev build CDP 实测。
+
+---
+
+## BBB. 第 61 轮的发布（v1.0.35，2026-11-12）
+
+业主 2026-11-12 追加：
+1. 告警点应该在地图上闪烁；
+2. 右上角告警按钮展开后，点击其他页面要收起；
+3. 地图点击设备时显示告警通道和告警时间；
+4. AO01 告警配置模板去掉声压级内容；
+5. 声学相机配置告警时出现 AUTH_FAILED 提醒。
+
+### BBB.1 交付
+
+- 版本：1.0.35（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.35-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,235,280 字节 / D07264021207FBFEA1BE3DC41AA8A7983E910978790E04F7C0B472DF9485E821
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，2027-09-03 到期，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged 26 通过 / 0 失败，应用内版本 1.0.35
+- 上一版归档：release-1.0.34-2026-11-12/
+
+### BBB.2 告警点闪烁
+
+- `.map-marker--alarm .map-marker__dot` 增加 `map-alarm-blink` 动画（0.9 s 一循环，
+  透明度 1 → 0.28 → 1）并加红色光晕；`prefers-reduced-motion` 下关闭动画。
+- 标记增加 `data-marker-blink="yes|no"`，便于探针与测试确认。
+- 实测：测试 AO01 告警落库后标记 `data-marker-blink="yes"`，计算样式
+  `animationName=map-alarm-blink`、`animationDuration=0.9s`。
+
+### BBB.3 右上角告警面板收起
+
+- `AlarmLinkagePanel` 增加路由监听：`route.fullPath` 变化即 `open=false`；
+- 同时监听 `document.pointerdown`（捕获阶段）：点面板外面/侧栏/内容区都会收起；
+- 卸载时移除监听，不会留下跨页的 document 事件。
+
+实测：点击铃铛后面板 open=true；导航到 `/devices` 后 `.alarm-panel` 不存在。
+
+### BBB.4 地图点击显示告警通道与时间
+
+- 选中设备详情面板的 Latest Alarm 区增加最近 3 条告警列表：
+  每条显示 `Channel CH<n>` 与 `formatDateTime(alarm.timestamp)`。
+- 实测：点击带告警的 AO01 标记后，`[data-map-alarm-list]` 文本包含
+  `Channel CH2` 与对应告警时间。
+
+### BBB.5 AO01 告警配置去掉声压级
+
+- `AlarmProfileSection` 新增 `hideSpl` 属性：为真时隐藏「声压级 / SPL」整组，
+  同时不再在列表的「启用的规则」里显示 SPL 规则。
+- `DeviceDetailView` 用 `isGasLeakMonitor(device)` 判定 AO01，并传入 `:hide-spl`。
+- 实测：打开 AO01 设备详情 → Alarm parameters，页面不再出现
+  Sound pressure / SPL / 声压级。
+
+### BBB.6 声学相机告警配置的 AUTH_FAILED
+
+- `CameraAlarmDialog.load()` 不再同时发 listStrategies + listConditions：
+  改为串行；遇到 `AUTH_FAILED` 等 300 ms 重试一次，仍失败才显示错误。
+- 打开对话框的初始化也改为串行（告警条件 → 启用策略 → 区域/视频状态），
+  避免相机 HTTP 栈在直播/检测并发时把瞬时 401 变成一条误导性的
+  「检查用户名和密码」。
+- 刷新、启停策略、删除条件之后的刷新也改为串行重读。
+- 实测：开发构建里打开 235 / 236 的 Alarm conditions，条件表正常显示，无 AUTH_FAILED 横幅。
+  真正凭据错误仍会如实显示，不会被静默吞掉。
+
+### BBB.7 测试
+
+- test:inproc：133 文件 / 2514 通过 / 77 失败，失败文件集合与上一轮一致
+  （29 个陈旧 KK.8 守卫），无新增失败文件。
+- 新增 `tests/alarm-ui-fixes.test.ts`：覆盖地图闪烁、告警列表、面板收起、
+  AO01 hideSpl、相机 AUTH_FAILED 重试。
+- 地图闪烁/告警通道/面板收起均用 dev build CDP 实测；相机告警配置在 235/236
+  两台设备上实际打开验证。

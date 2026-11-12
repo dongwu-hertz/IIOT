@@ -19,7 +19,7 @@ import { useDeviceConfigStore } from '@renderer/stores/deviceConfig'
 import AppModal from '@renderer/components/AppModal.vue'
 import EmptyState from '@renderer/components/EmptyState.vue'
 
-const props = defineProps<{ deviceId: string }>()
+const props = withDefaults(defineProps<{ deviceId: string; hideSpl?: boolean }>(), { hideSpl: false })
 
 const { t } = useI18n()
 const config = useDeviceConfigStore()
@@ -196,10 +196,12 @@ async function confirmDelete(): Promise<void> {
 /** Which detectors a profile currently has switched on, for the table. */
 function enabledDetectors(profile: AlarmProfileConfig): string[] {
   const labels: string[] = []
+  if (!props.hideSpl) {
   if (profile.splOverloadEnabled) labels.push(t('configAlarms.ruleOverload'))
   if (profile.splSurgeEnabled) labels.push(t('configAlarms.ruleSurge'))
   if (profile.splDropEnabled) labels.push(t('configAlarms.ruleDrop'))
   if (profile.splStabilityEnabled) labels.push(t('configAlarms.ruleStability'))
+  }
   if (profile.mainFrequencyEnabled) labels.push(t('configAlarms.ruleMainFrequency'))
   if (profile.bandEnergyRatioEnabled) labels.push(t('configAlarms.ruleBandEnergy'))
   return labels
@@ -328,7 +330,7 @@ async function reload(): Promise<void> {
       </div>
     </section>
 
-    <section class="group">
+    <section v-if="!hideSpl" class="group">
       <h4 class="group__title">{{ t('configAlarms.groupSpl') }}</h4>
       <div class="param-grid">
         <div class="param-row">
