@@ -677,6 +677,20 @@ export const tr: MessageSchema = {
     videoUnavailable: 'Bu kayıt yerleşik oynatıcıda oynatılamıyor (yerel dosya eksik ya da biçim desteklenmiyor).'
   },
 
+  gasLeakUi: {
+    title: 'Gaz kuyusu kaçak izleme',
+    badge: 'Cihaz üzerinde algılama',
+    noLiveStream: 'Bu yazılım canlı ses/tayf akışı sağlamıyor. Kaçak algılama cihazda çalışır ve sonuçlar alarm kayıtları olarak gelir. Aşağıda bu bilgisayara eşitlenen kaçak alarmları gösterilir.',
+    alarmCount: 'Kaçak alarmları',
+    latestAlarm: 'Son',
+    none: 'Yok',
+    channels: 'Etkin kanallar',
+    sync: 'Alarm kayıtlarını eşitle',
+    syncing: 'Eşitleniyor…',
+    synced: '{count} eşitlendi',
+    syncFailed: 'Eşitleme başarısız: {reason}',
+    goRecordings: 'Tüm kayıtlar'
+  },
   monitorUi: {
     noDeviceTitle: 'Önce bir cihaz ekleyin',
     goToDevices: 'Cihazlar sayfasına git',

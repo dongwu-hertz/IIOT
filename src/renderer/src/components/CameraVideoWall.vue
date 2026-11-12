@@ -1669,6 +1669,25 @@ const autoPlaySignal = computed(() =>
 let autoPlayRun: Promise<void> | null = null
 let autoPlayAgain = false
 
+/**
+ * 恢复上一页保留在模型里的每一格直播。
+ *
+ * 离开页面时 `resetSessions()` 只停了会话，格子分配还在；如果这里不主动恢复，
+ * 操作员回到总览会看到一墙「未开始」，仍然像配置丢了。只处理 `autoPlay` 页面
+ * （总览），且跳过离线相机与已经在播/正在启动的格；并发上限仍由 `startCell()` 判。
+ */
+async function resumeAssignedCells(): Promise<void> {
+  if (props.autoPlay !== true) return
+  for (const cell of cells.value) {
+    if (!cell.deviceId) continue
+    const state = cameraLive.sessionOf(cell.deviceId)
+    if (state?.status === 'playing' || state?.status === 'starting') continue
+    const device = devices.byId(cell.deviceId)
+    if (device && device.status !== 'ONLINE') continue
+    await startCell(cell)
+  }
+}
+
 async function requestAutoPlay(): Promise<void> {
   if (props.autoPlay !== true) return
   if (autoPlayRun !== null) {
@@ -1718,6 +1737,8 @@ onMounted(async () => {
   resetAutoPlayAttempts()
   // 最后才是本次进页面的那一次自动起播：它要用到上面读到的设备列表与设置。
   await requestAutoPlay()
+  // 上一页留下的格子分配仍然在；把每一格真正恢复起来（只受并发/离线守卫约束）。
+  await resumeAssignedCells()
   // 轮询轮换（业主 2026-09-21 批）：有队才需要它，没队时 tick 自己早退，成本可忽略。
   rotationTimer = window.setInterval(onRotationTick, WALL_ROTATION_INTERVAL_MS)
 })
@@ -1774,7 +1795,8 @@ onUnmounted(() => {
    * 而相机侧并发连接数只有个位数。离开画面墙还占着两条，等于替下一位使用者吃掉了预算。
    */
   charts.dispose()
-  const assigned = wall.clearAll(layout.value)
+  // 只停会话，保留格子分配：业主 2026-11-12「离开再进入，之前的配置不应该变」。
+  const assigned = wall.resetSessions()
   for (const deviceId of assigned) {
     if (recordingDeviceIds.includes(deviceId)) {
       void window.api.cameraNvr.stopRecording(deviceId)
@@ -2062,7 +2084,10 @@ function cellBadgeClass(cell: CameraCellView): string {
           </button>
           <span v-else class="camera-wall__name" :title="cell.deviceName">{{ cell.deviceName }}</span>
           <!-- 短状态徽标：这是**状态**，不是解释，所以它逐格保留。 -->
-          <span :class="cellBadgeClass(cell)">{{ cellStatusLabel(cell) }}</span>
+          <span
+            :class="cellBadgeClass(cell)"
+            :title="cellMessage(cell) || cellStatusLabel(cell)"
+          >{{ cellStatusLabel(cell) }}</span>
           <!--
             「正在出声」文字徽标按业主 2026-09-23 要求删除：哪一格在出声由音量按钮的
             按下态（`--on`）表达，不需要再写一行字。

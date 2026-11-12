@@ -671,6 +671,20 @@ export const es: MessageSchema = {
     videoUnavailable: 'Esta grabación no se puede reproducir en el reproductor integrado (falta el archivo local o el formato no es compatible).'
   },
 
+  gasLeakUi: {
+    title: 'Vigilancia de fugas en pozos de gas',
+    badge: 'Detección en el dispositivo',
+    noLiveStream: 'Este firmware no ofrece audio/espectro en vivo. La detección se ejecuta en el dispositivo y los resultados llegan como grabaciones de alarma. Abajo están las alarmas de fuga sincronizadas con este equipo.',
+    alarmCount: 'Alarmas de fuga',
+    latestAlarm: 'Última',
+    none: 'Ninguna',
+    channels: 'Canales activos',
+    sync: 'Sincronizar grabaciones',
+    syncing: 'Sincronizando…',
+    synced: '{count} sincronizadas',
+    syncFailed: 'Error de sincronización: {reason}',
+    goRecordings: 'Ver grabaciones'
+  },
   monitorUi: {
     noDeviceTitle: 'Añada primero un equipo',
     goToDevices: 'Ir a Equipos',

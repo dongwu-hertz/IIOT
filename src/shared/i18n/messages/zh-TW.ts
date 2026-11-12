@@ -708,6 +708,20 @@ export const zhTW: MessageSchema = {
     videoUnavailable: '該錄影無法在內建播放器中播放（本地檔案缺失或格式不受支援）。'
   },
 
+  gasLeakUi: {
+    title: '氣井洩漏監測',
+    badge: '裝置端偵測',
+    noLiveStream: '目前韌體不提供即時音訊/頻譜串流；洩漏偵測在裝置端執行，結果以告警錄音回傳。下方顯示已同步到本機的洩漏告警錄音。',
+    alarmCount: '累計洩漏告警',
+    latestAlarm: '最近一次',
+    none: '暫無',
+    channels: '啟用通道',
+    sync: '同步告警錄音',
+    syncing: '正在同步…',
+    synced: '已同步 {count} 筆',
+    syncFailed: '同步失敗：{reason}',
+    goRecordings: '查看全部錄音'
+  },
   monitorUi: {
     noDeviceTitle: '請先新增裝置',
     goToDevices: '前往裝置管理',

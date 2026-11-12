@@ -777,6 +777,20 @@ export const zhCN = {
     videoUnavailable: '该录像无法在内置播放器中播放（本地文件缺失或格式不受支持）。'
   },
 
+  gasLeakUi: {
+    title: '气井泄漏监测',
+    badge: '设备端检测',
+    noLiveStream: '当前固件不提供实时音频/频谱流；泄漏检测在设备端运行，结果以告警录音回传。下面显示已同步到本机的泄漏告警录音。',
+    alarmCount: '累计泄漏告警',
+    latestAlarm: '最近一次',
+    none: '暂无',
+    channels: '启用通道',
+    sync: '同步告警录音',
+    syncing: '正在同步…',
+    synced: '已同步 {count} 条',
+    syncFailed: '同步失败：{reason}',
+    goRecordings: '查看全部录音'
+  },
   monitorUi: {
     noDeviceTitle: '请先添加设备',
     goToDevices: '前往设备管理',

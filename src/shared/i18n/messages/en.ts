@@ -678,6 +678,20 @@ presets, the licence boundaries
     videoUnavailable: 'This recording cannot be played in the built-in player (the local file is missing or the format is unsupported).'
   },
 
+  gasLeakUi: {
+    title: 'Gas well leak monitoring',
+    badge: 'On-device detection',
+    noLiveStream: 'This firmware does not provide a live audio/spectrum stream. Leak detection runs on the device and results arrive as alarm recordings. The recordings below are the leak alarms synced to this machine.',
+    alarmCount: 'Leak alarms',
+    latestAlarm: 'Latest',
+    none: 'None',
+    channels: 'Enabled channels',
+    sync: 'Sync alarm recordings',
+    syncing: 'Syncing…',
+    synced: '{count} synced',
+    syncFailed: 'Sync failed: {reason}',
+    goRecordings: 'Open recordings'
+  },
   monitorUi: {
     noDeviceTitle: 'Add a device first',
     goToDevices: 'Go to Devices',

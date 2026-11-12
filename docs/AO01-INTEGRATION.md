@@ -55,3 +55,15 @@ MAC `32:D4:35:DC:D2:F5`。
    显示「气体泄漏」；
 2. 若厂商提供实时泄漏值/模型输出的正式接口，再接实时卡片（当前只有日志里有）；
 3. 告警参数页按 AO01 的 `alarmparaArray`（模型 + 灵敏度 + 录音）单独适配。
+## 5. UI branch (2026-11-12)
+
+- Live monitoring: AO01 now renders `GasLeakMonitorPanel` instead of the voiceprint
+  four charts. The panel shows device status, leak alarm count, latest alarm, enabled
+  channels, a sync button, and the local recording timeline. No features/audio WS is opened.
+- Verified in the dev build: AO01 page showed 43 leak alarms and latest 11/6/26, with no
+  "Stream error" and no empty "Waiting for..." charts.
+- Overview video wall now stops sessions on leave but keeps every cell assignment; on
+  return `resumeAssignedCells()` restarts them. Verified with .235 and .236: both cells
+  survived navigation and were playing on return.
+- The camera cell status badge title now carries the main-process diagnostic, so an
+  error is explainable instead of only showing "Stream error".

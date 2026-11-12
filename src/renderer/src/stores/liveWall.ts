@@ -533,6 +533,22 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     return cleared.assigned
   }
 
+  /**
+   * 离开页面：只放掉**会话**，保留格子分配与视图。
+   *
+   * 业主 2026-11-12：「overview 界面中，如果离开后再进入，之前的配置不应该变」。
+   * 原实现调用 `clearAll()`，把每格放了哪台相机一起清掉；回来只剩 auto-play 挑中的
+   * 那一台，配置看起来被重置了。这里返回需要停流的 id，由视图停止 IPC 会话，但
+   * `model.slots` / `audioSlot` / `activeSlot` / 具名视图全部留下。
+   */
+  function resetSessions(): string[] {
+    const assigned = model.value.slots.filter((slot): slot is string => slot !== null)
+    states.value = {}
+    refusal.value = null
+    notice.value = null
+    return assigned
+  }
+
   // -------------------------------------------------------------------------
   // 视图对象（iVMS 的 View = 档位 + 每格绑谁，可命名保存）
   // -------------------------------------------------------------------------
@@ -657,6 +673,7 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
     startPermission,
     syncDevices,
     clearAll,
+    resetSessions,
     saveViewAs,
     renameView,
     deleteView,

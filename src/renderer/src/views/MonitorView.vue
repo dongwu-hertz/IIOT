@@ -53,6 +53,7 @@ import {
   type ChannelAlarmSummary
 } from '@shared/domain/channel-alarm'
 import { decideMonitorAutoStart } from '@shared/domain/monitor-autostart'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import type { CameraLiveState, CameraLiveStatus } from '@shared/domain/camera-live'
 import type { Fa371ScanArea } from '@shared/domain/fa371'
 import {
@@ -133,6 +134,7 @@ import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimel
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import SonarOverviewPanel from '@renderer/components/SonarOverviewPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
+import GasLeakMonitorPanel from '@renderer/components/GasLeakMonitorPanel.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -1584,8 +1586,14 @@ const isCamera = computed(() => selectedDevice.value?.kind === 'acousticCamera')
  */
 const isSonar = computed(() => selectedDevice.value?.kind === 'auscultationBox')
 
+/**
+ * 气井泄漏（AO01）：协议上是 acousticBox，但固件不推实时音频/频谱。
+ * 不能走声纹那一支的四个图 + 四张指标卡，否则整页都是 "Waiting for…"/"Stream error"。
+ */
+const isGasLeak = computed(() => isGasLeakMonitor(selectedDevice.value))
+
 /** 声纹设备那一支（也是"没有选中设备"时的默认支，与改造前一致）。 */
-const isVoiceprint = computed(() => !isCamera.value && !isSonar.value)
+const isVoiceprint = computed(() => !isCamera.value && !isSonar.value && !isGasLeak.value)
 
 /**
  * 相机声学数据流的会话**唯一**主人（业主 2026-09-21 第三批）。
@@ -2484,7 +2492,7 @@ async function finaliseRecordingIfAny(): Promise<void> {
  * 换来的是 CH5 / CH8 这类刚启用的通道能立刻出现在页签里。
  */
 function refreshChannelsOnFocus(): void {
-  if (!isVoiceprint.value || selectedDeviceId.value === '') return
+  if ((!isVoiceprint.value && !isGasLeak.value) || selectedDeviceId.value === '') return
   void devices.loadChannels(selectedDeviceId.value, true)
 }
 
@@ -2522,6 +2530,12 @@ onMounted(async () => {
       // 第 24 条：告警信息（最近几条）与自动起播一起读一次。
       await loadDeviceAlarms(selectedDeviceId.value)
       await autoPlayCameraIfWorking()
+    } else if (isGasLeak.value) {
+      // 气井泄漏设备没有可开的实时流；本机告警录音由 GasLeakMonitorPanel 自己读。
+      // 从声纹设备切过来时，上一台的四个 WebSocket 必须收干净。
+      if (monitor.isRunning) await monitor.stop()
+      await stopCameraLive()
+      await stopBoxAudio()
     } else if (isVoiceprint.value) {
       // 第 13 批第 3 条：进页面就默认开始接收数据（判定见 `autoStartSessionIfNeeded`），
       // 页头那个「开始监测」按钮已经删掉。
@@ -2599,6 +2613,12 @@ watch(selectedDeviceId, async (id) => {
     // 第 21 条：**选中即自动播放**。挂在换设备这条路径上，与挂载那条走同一个
     // `autoPlayCameraIfWorking()` —— 两条入口读的是同一份判定，不会一个自动一个不自动。
     await autoPlayCameraIfWorking()
+  } else if (isGasLeak.value) {
+    // 气井泄漏设备没有可开的实时流；与声呐一样，先把上一台设备的会话收干净。
+    await stopCameraLive()
+    if (live) await monitor.stop()
+    await stopBoxAudio()
+    await finaliseRecordingIfAny()
   } else if (isSonar.value) {
     /*
      * 切到声呐：**把声纹设备那一套全部收干净**，然后什么都不开。
@@ -2812,6 +2832,11 @@ const sessionLabel = computed(() => {
               声呐（SN-16 空气声呐）：这一族**有**通道（16 路），但没有我们已经接入的实时流，
               所以这里给通道数 + 一句"实时流未接入"，而不是一个永远停在"监测已停止"的按钮。
             -->
+            <template v-else-if="isGasLeak">
+              <span class="muted">{{ channelHint }}</span>
+              <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
+              <span class="badge">{{ t('gasLeakUi.badge') }}</span>
+            </template>
             <template v-else-if="isSonar">
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
@@ -4162,6 +4187,17 @@ const sessionLabel = computed(() => {
           </button>
         </template>
       </AppModal>
+      </template>
+
+      <!--
+        ---- 气井泄漏（AO01）------------------------------------------------------
+
+        不用声纹那一支：真机四个 WebSocket（features/audio/freq/time_freq）都能握手
+        但都是 0 帧，设备自己的 /preview 页面也一样。这一支只显示设备端回传的泄漏
+        告警录音，以及同步入口；详细边界见 `docs/AO01-INTEGRATION.md`。
+      -->
+      <template v-else-if="isGasLeak">
+        <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
       </template>
 
       <!--
