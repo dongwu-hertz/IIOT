@@ -813,6 +813,24 @@ export class ChannelRepository {
           timestamp
         )
       }
+      /*
+       * 设备返回的是**完整**通道表（例如 AO01 只有 2 路），不是增量。只 upsert
+       * 不删除会让添加时 seed 的 8 路残留在本地，实时监测于是多出 6 个点不开的
+       * 页签，设备管理却显示 2 路 —— 两处看到的世界不一样。
+       *
+       * 空数组不走这里：`refreshChannels()` 在 configs.length === 0 时直接返回
+       * 旧表，不会用一次空响应把所有通道删光。
+       */
+      const keep = channels.map((channel) => channel.channelIndex)
+      if (keep.length > 0) {
+        this.db
+          .prepare(
+            `DELETE FROM channels WHERE device_id = ? AND channel_index NOT IN (${keep
+              .map(() => '?')
+              .join(', ')})`
+          )
+          .run(deviceId, ...keep)
+      }
     })
     apply()
 

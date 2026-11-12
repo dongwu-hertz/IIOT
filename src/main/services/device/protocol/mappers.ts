@@ -702,7 +702,9 @@ export function extractAlarmAudio(payload: unknown): AlarmAudioDto[] {
   if (!payload || typeof payload !== 'object') return []
   const source = payload as Record<string, unknown>
 
-  for (const key of ['audioArray', 'data', 'list', 'audio', 'records']) {
+  // AE08 uses `audioArray`; AO01's alarm-event endpoint uses `alertArray`
+  // (MEASURED 2026-11-12 on AO01 @ 192.168.110.200).
+  for (const key of ['audioArray', 'alertArray', 'data', 'list', 'audio', 'records']) {
     const value = source[key]
     if (Array.isArray(value)) return value as AlarmAudioDto[]
   }
@@ -756,20 +758,34 @@ export interface AlarmRecordingConfig {
  */
 export function mapAlarmRecording(dto: AlarmAudioDto): AlarmRecordingConfig | undefined {
   const source = dto as Record<string, unknown>
+  // AO01 的告警事件行用 `dal*` 字段（alertArray）；AE08 用 `dau*`（audioArray）。
+  // 同一个映射器处理两种形状，靠 `dalId` 区分；AO01 的 `dalAbnoType` 是 0/1
+  // 事件标志，不是 AE08 的 14 位 alarm mask，所以**不**拿它去解位。
+  const isAo01Alert = pickNumber(source, ['dalId']) !== undefined
 
-  const alarmTime = toEpochMs(pick(source, ['dauAlarmTime', 'alarm_time', 'time']))
+  const alarmTime = toEpochMs(
+    pick(source, ['dauAlarmTime', 'dalStartTime', 'alarm_time', 'time'])
+  )
   if (alarmTime === undefined) return undefined
 
-  const channelRaw = pickNumber(source, ['dauChId', 'ch_id', 'channel_id'])
+  const channelRaw = pickNumber(source, ['dauChId', 'dalChId', 'ch_id', 'channel_id'])
   const channelIndex =
     channelRaw !== undefined ? clamp(Math.floor(channelRaw), 0, CHANNEL_COUNT - 1) : 0
 
-  // The mask arrives as a NUMBER on this firmware. `mapAlarmMask` also accepts
-  // hex and decimal strings for other revisions.
-  const alarmMask = mapAlarmMask({ alarm_mask: pick(source, ['dauAbnoType', 'abnormal_type']) }) ?? 0
+  // The mask arrives as a NUMBER on AE08. `mapAlarmMask` also accepts hex and
+  // decimal strings for other revisions. AO01's `dalAbnoType` is not a mask.
+  const alarmMask = isAo01Alert
+    ? 0
+    : (mapAlarmMask({ alarm_mask: pick(source, ['dauAbnoType', 'abnormal_type']) }) ?? 0)
 
   // Seconds -> milliseconds.
-  const durationSeconds = pickNumber(source, ['dauAudionLeng', 'duration', 'duration_s'])
+  const durationSeconds = pickNumber(source, [
+    'dauAudionLeng',
+    'dalDuration',
+    'dalduration',
+    'duration',
+    'duration_s'
+  ])
   const durationMs =
     durationSeconds !== undefined && durationSeconds >= 0
       ? Math.round(durationSeconds * 1000)
@@ -780,16 +796,16 @@ export function mapAlarmRecording(dto: AlarmAudioDto): AlarmRecordingConfig | un
     alarmMask,
     alarmTime,
     durationMs,
-    sampleRate: pickNumber(source, ['dauSmp', 'sample_rate']) ?? 48_000
+    sampleRate: pickNumber(source, ['dauSmp', 'dalSmp', 'sample_rate']) ?? 48_000
   }
 
-  const remoteId = pickNumber(source, ['dauId', 'id'])
+  const remoteId = pickNumber(source, ['dauId', 'dalId', 'id'])
   if (remoteId !== undefined) config.remoteId = Math.floor(remoteId)
-  const channelName = pickString(source, ['dauChName', 'channel_name'])
+  const channelName = pickString(source, ['dauChName', 'dalChName', 'channel_name'])
   if (channelName) config.channelName = channelName
-  const fileName = pickString(source, ['dauFileName', 'file_name'])
+  const fileName = pickString(source, ['dauFileName', 'dalFileName', 'file_name'])
   if (fileName) config.fileName = fileName
-  const remoteFilePath = pickString(source, ['dauFilePath', 'audio_path'])
+  const remoteFilePath = pickString(source, ['dauFilePath', 'dalFilePath', 'audio_path'])
   if (remoteFilePath) config.remoteFilePath = remoteFilePath
 
   const spl = pickNumber(source, ['dauSPL', 'spl'])
@@ -805,6 +821,39 @@ export function mapAlarmRecording(dto: AlarmAudioDto): AlarmRecordingConfig | un
   if (continuous !== undefined) config.continuousAlert = continuous
 
   return config
+}
+
+/**
+ * Pull the playable-file metadata out of AO01's `GET /audio?alert_id=<id>`.
+ *
+ * MEASURED response (2026-11-12):
+ *   `msgBody.audioArray[0] = { dauFileName: "0_0_20261106_064212.wav",
+ *     dauFilePath: "/mic/2026_11_06/", dauAudionLeng: 10, dauSmp: 48000 }`
+ *
+ * The download URL is `/download_audio/<dauFilePath without leading slash>/<dauFileName>`;
+ * `downloadRecording()` percent-encodes the whole relative path, which the device
+ * accepts (verified: HTTP 200, RIFF/WAVE, 5,760,044 bytes).
+ */
+export function mapAlertAudioFile(payload: unknown): {
+  fileName?: string
+  durationMs?: number
+  sampleRate?: number
+} {
+  const rows = extractAlarmAudio(payload)
+  const row = rows[0] as Record<string, unknown> | undefined
+  if (!row) return {}
+  const name = pickString(row, ['dauFileName', 'file_name'])
+  const dir = pickString(row, ['dauFilePath', 'audio_path'])
+  const duration = pickNumber(row, ['dauAudionLeng', 'duration'])
+  const rate = pickNumber(row, ['dauSmp', 'sample_rate'])
+  const cleanDir = dir?.replace(/^\/+|\/+$/g, '')
+  return {
+    ...(name ? { fileName: cleanDir ? `${cleanDir}/${name}` : name } : {}),
+    ...(duration !== undefined && duration > 0
+      ? { durationMs: Math.round(duration * 1000) }
+      : {}),
+    ...(rate !== undefined && rate > 0 ? { sampleRate: rate } : {})
+  }
 }
 
 /**

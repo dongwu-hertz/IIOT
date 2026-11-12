@@ -68,6 +68,8 @@ export const ENDPOINTS = {
   freqDomain: '/freq_domain',
   timeFreqDomain: '/time_freq_domain',
   getAudio: '/get_audio',
+  /** AO01: GET /audio?alert_id=<dalId> returns the audio files for one alert. */
+  getAudioByAlert: '/audio',
   getAlarmAudio: '/get_alarm_audio',
   deleteAudio: '/dele_audio',
   deleteAlarmAudio: '/dele_alarm_audio',
@@ -697,6 +699,26 @@ export class DeviceApiClient {
    */
   queryAudio(body: unknown = { msgBody: { page_start: 0, page_size: 12 } }, options: CallOptions = {}): Promise<AudioListResponseDto> {
     return this.call<AudioListResponseDto>(ENDPOINTS.getAudio, 'PUT', body, options)
+  }
+
+  /**
+   * AO01: `GET /audio?alert_id=<dalId>` — audio file(s) attached to one alarm.
+   *
+   * Different from `queryAudio` (PUT `/get_audio`, the general library): the
+   * AO01 alarm row (`alertArray`/`dal*`) does not carry a filename, only the
+   * alert id. The download key lives here.
+   */
+  getAudioByAlert(
+    alertId: number,
+    options: CallOptions = {}
+  ): Promise<AudioListResponseDto> {
+    const query = `?alert_id=${encodeURIComponent(String(alertId))}`
+    return this.call<AudioListResponseDto>(
+      `${ENDPOINTS.getAudioByAlert}${query}`,
+      'GET',
+      undefined,
+      options
+    )
   }
 
   deleteAudio(body: unknown, options: CallOptions = {}): Promise<unknown> {

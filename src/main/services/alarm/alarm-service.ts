@@ -24,6 +24,7 @@ import {
   extractAlarmAudio,
   mapAlarmMask,
   mapAlarmRecording,
+  mapAlertAudioFile,
   toAlarmRecordingRow,
   type AlarmRecordingConfig
 } from '../device/protocol/mappers'
@@ -193,6 +194,30 @@ export class RecordingService {
       for (const row of rows) {
         const mapped = mapAlarmRecording(row)
         if (!mapped) continue
+        /*
+         * AO01 的 `alertArray` 行只有告警 id，没有文件名；播放键在
+         * `GET /audio?alert_id=<dalId>` 的 audioArray[0] 里。这里按需把
+         * 相对路径（`mic/2026_11_06/xxx.wav`）取回来，`downloadRecording()`
+         * 会把它编码成 `/download_audio/mic%2F...`（真机实测 200 + RIFF/WAVE）。
+         * 取不到就保留无播放文件的告警行，不因为一次附件失败丢掉告警本身。
+         */
+        const alertId = Number((row as Record<string, unknown>).dalId)
+        if (Number.isFinite(alertId)) {
+          try {
+            const audioFile = mapAlertAudioFile(await client.getAudioByAlert(alertId))
+            if (audioFile.fileName) mapped.fileName = audioFile.fileName
+            if (audioFile.durationMs !== undefined && mapped.durationMs === 0) {
+              mapped.durationMs = audioFile.durationMs
+            }
+            if (audioFile.sampleRate !== undefined) mapped.sampleRate = audioFile.sampleRate
+          } catch (error) {
+            deviceLog().warn('AO01 alert audio lookup failed; recording stays metadata-only', {
+              deviceId,
+              alertId,
+              reason: error instanceof Error ? error.message : String(error)
+            })
+          }
+        }
         // De-duplicate within this sync pass; the repository also de-duplicates
         // against existing rows by remote id.
         const key = mapped.remoteId !== undefined ? String(mapped.remoteId) : mapped.fileName

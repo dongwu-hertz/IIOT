@@ -548,6 +548,19 @@ export interface FeatureFrameDto {
  * A body without the `msgBody` wrapper returns an nginx error page.
  */
 export interface AlarmAudioDto {
+  // -- AO01 alert rows (MEASURED 2026-11-12) --------------------------------
+  /** Alert record id (AO01's `alertArray`). */
+  dalId?: number | string
+  /** Channel index 0-7. */
+  dalChId?: number | string
+  dalChName?: string
+  dalChSenType?: number | string
+  /** 0 normal / 1 abnormal — NOT the 14-bit AE08 mask. */
+  dalAbnoType?: number | string
+  /** Alarm start time; the device sends epoch SECONDS. */
+  dalStartTime?: number | string
+  /** Alarm duration in seconds. */
+  dalDuration?: number | string
   /** Firmware's spelling of "abnormal type". This is the alarm bit mask. */
   dauAbnoType?: number | string
   /** Record id, monotonically increasing. NOT the download key. */
@@ -595,6 +608,8 @@ export interface AlarmAudioDto {
 /** Response of `PUT /get_alarm_audio`. */
 export interface AlarmAudioListDto {
   audioArray?: AlarmAudioDto[]
+  /** AO01 alarm-event array (MEASURED 2026-11-12). */
+  alertArray?: AlarmAudioDto[]
   /** Total records available across all pages. Observed 10000. */
   allSize?: number | string
   [key: string]: unknown

@@ -242,10 +242,31 @@ export class AuthStrategyResolver {
     // A 2xx is necessary but not sufficient: a firmware that answers every
     // unauthenticated request with an empty 200 must not be mistaken for a
     // working session.
-    const payloadOk = looksLikeHertzinnoDevice(response.json)
+    //
+    // AO01 MEASURED (2026-11-12): a wrong carrier returns HTTP 200
+    // `{"message":"Token is invalid","result":1}`. The old check accepted any
+    // JSON body, so it happily selected the wrong carrier and every later call
+    // failed with "Token is invalid". Treat the device envelope's non-zero
+    // `result` (and an explicit invalid-token message) as a failed verification.
+    const payload = response.json as Record<string, unknown> | undefined
+    const nested = payload?.msgBody
+    const payloadOk =
+      looksLikeHertzinnoDevice(response.json) ||
+      looksLikeHertzinnoDevice(nested)
+    const resultValue = payload?.result
+    const resultOk =
+      resultValue === undefined ||
+      resultValue === null ||
+      resultValue === 0 ||
+      resultValue === '0'
+    const message = typeof payload?.message === 'string' ? payload.message : ''
+    const messageOk = !/token\s+is\s+invalid|unauthor|forbidden|incorrect/i.test(message)
     const statusOk = response.status >= 200 && response.status < 300
 
-    return { ok: statusOk && (payloadOk || response.json !== undefined), status: response.status }
+    return {
+      ok: statusOk && resultOk && messageOk && (payloadOk || response.json !== undefined),
+      status: response.status
+    }
   }
 }
 

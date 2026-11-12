@@ -236,6 +236,28 @@ export const CANDIDATE_STRATEGIES: readonly AuthStrategy[] = [
     extractToken: (payload) => findToken(payload, ['token', 'access_token', 'accessToken'])
   },
   {
+    /*
+     * AO01 气井泄漏监测装置：登录密码是**明文**，且 token 只认
+     * `Authorization: <token>`（不带 `token:` 头）。
+     *
+     * MEASURED 2026-11-12（AO01 @ 192.168.110.200，dev_version v2.0.0.2025-11-04）：
+     *   POST /login {"msgBody":{"username":"admin","password":"123456"}} -> token
+     *   GET /get_devinfo 带 Authorization: <token> -> {result:0,...}
+     *   GET /get_devinfo 带 token: <token>          -> {"message":"Token is invalid","result":1}
+     * 设备自己的 Web UI 同时设置 token 和 Authorization，但真正生效的是后者；
+     * 接口文档写的 md5(明文+lfxs) 也与固件不一致（哈希登录返回 result:3）。
+     *
+     * 放在 hashed `raw-auth-header` 之后：AE08 的哈希策略先命中；AO01 在哈希版
+     * token-header / raw-auth 都拿不到 token 后，由这一条明文 + Authorization 命中。
+     */
+    id: 'raw-auth-header-plaintext',
+    label: 'Authorization: <token>（AO01 明文口令）',
+    carrier: { kind: 'header', name: 'Authorization', prefix: '' },
+    tokenFields: ['token', 'access_token', 'accessToken'],
+    buildLoginBody: (c) => ({ username: c.username, password: c.password }),
+    extractToken: (payload) => findToken(payload, ['token', 'access_token', 'accessToken'])
+  },
+  {
     id: 'bearer-header',
     label: 'Authorization: Bearer <token>',
     carrier: { kind: 'header', name: 'Authorization', prefix: 'Bearer ' },

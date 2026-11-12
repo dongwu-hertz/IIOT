@@ -1,84 +1,57 @@
-# AO01 气井泄漏监测装置：接入评估与验证计划（2026-11-12）
+# AO01 气井泄漏监测装置：接入记录（2026-11-12 真机）
 
-业主给的接口文档：`C:\Users\wudon\Desktop\气井泄漏监测装置接口文档.md`
-目标设备：`192.168.110.200`（账号按文档 mock 为 `admin`，密码 `123456`）。
+设备：`192.168.110.200`，账号 `admin / 123456`（实测可登录）。
+固件：`dev_version v2.0.0.2025-11-04`，`web_version V1.1.0.2026-11-02`，
+MAC `32:D4:35:DC:D2:F5`。
 
-> **当前状态：设备不可达。** 2026-11-12 本机对 `192.168.110.200` 的 80/81/443/554/
-> 3000/5000/8000/8001/8080/8081/8088/8888/9000/27001/28001/28003 全部 TCP 连接超时，
-> ICMP 也不通。因此下面的结论来自**接口文档形状**与本地回归，不是真机实测。
+> 接口文档与固件有多处不一致；下面以**真机实测**为准。
 
-## 1. 结论先说
+## 1. 真机协议
 
-AO01 的协议与现有 **AE08 / FA8 声纹设备族**同源：
+| 项 | 接口文档 | 真机实测 |
+|---|---|---|
+| `/login` | `password = md5(明文 + 'lfxs')` | **明文密码**。传哈希返回 `{result:3,"Incorrect username or password.-2"}`；token 只认 `Authorization: <token>`，`token:` 头返回 `{"message":"Token is invalid","result":1}` |
+| `/get_passageway` | 0–7 共 8 路 | **只有 2 路**（`chinfoSize:2`；ch1 启用，ch2 关闭） |
+| `/get_samplingrate` | 48000/96000/192000 | 48000 |
+| `/get_alarm_audio` | `alertArray` / `dal*` | 一致；`dalStartTime` 是**秒**、`dalDuration` 是**秒**；当前 43 条 |
+| `/audio?alert_id` | `audioArray` | 一致；文件在 `dauFilePath`（如 `/mic/2026_11_06/`）+ `dauFileName` |
+| 音频下载 | `/download_audio/<name>` | 实际是 `/download_audio/<dauFilePath 去掉前导斜杠>/<dauFileName>`；返回 HTTP 200 + RIFF/WAVE |
+| `/detect_model` | `modelArray` | 3 个模型：default / default_20251015 / default_20251111 |
+| `/get_alarm_system` | `alarmparaArray` | 2 个策略（default_strategy / 1015model） |
+| `/auto_record` | 有 | 启用，间隔 0，单次 30 s |
+| `/query_detect` `/run_detect` `/stop_detect` `/channel_select` `/get_cur_ch` | 文档有 | 当前固件返回 **405 / SPA HTML**，未实现；web bundle 里虽有调用，但设备上没有对应路由 |
+| WebSocket `/features_stream` `/audio_stream` `/freq_domain` `/time_freq_domain` | 文档有 | 四个都能完成握手，但 **0 帧**。设备自己的 `/preview` 页面在 Chrome 里用 CDP 实测同样 0 帧；`system_log` 里 TORCH 模型仍在每 10 s 输出 `noise_val/leakage_val/airflow_val` |
 
-- `/login` 的请求体是 `{ msgBody: { username, password: md5(明文 + 'lfxs') } }`；
-- 会话 token 在 `msgBody.token`，受保护请求带 `token: <token>` 头；
-- `/get_devinfo`、`/get_passageway`、`/get_samplingrate`、`/get_network`、
-  `/get_timeset`、`/set_passageway`、`/audio_stream`、`/freq_domain`、
-  `/time_freq_domain` 的路径与包络都与 AE08 一致。
+## 2. 已接入（真机验证）
 
-因此**不需要新增 `DeviceKind`**：按现有 `acousticBox` 接入即可。已用文档里的逐字段
-形状做了一条端到端回归 `tests/ao01-integration.test.ts`：
+- **认证**：新增 `raw-auth-header-plaintext` 候选（明文口令 + `Authorization: <token>`）。
+  AO01 自动识别为 `acousticBox`，无需新增 `DeviceKind`。
+- **2 路通道**：`replaceForDevice()` 现在会删除设备未返回的多余通道；添加时 seed 的
+  8 路被真机 2 路替换。真机添加结果：CH1 `ch1` 启用、CH2 `ch2` 关闭。
+- **告警录音**：`alertArray` / `dal*` 映射进 `recordings`；再按 `dalId` 调
+  `GET /audio?alert_id` 取文件名；播放/下载走 `/download_audio/<相对路径>`。
+  - 真机 `syncDeviceRecordings()`：43 条，1.2 s 完成；
+  - 单条 10 s WAV 下载成功（1,920,044 字节，RIFF/WAVE，可播放）。
+- **回归测试**：
+  - `tests/ao01-integration.test.ts`：自动识别 + 明文认证 + 2 路通道取代 8 路 seed；
+  - `tests/ao01-alarm-mapping.test.ts`：`alertArray` / `dal*` / `/audio?alert_id` /
+    `recordings` 行映射（含 `dalAbnoType=1` 不当作 SPL 位）。
 
-- 自动识别为 `acousticBox`；
-- 设备名取设备自己的 `devname`（`AO01`）；
-- 身份取 `dev_mac`；
-- `/get_passageway` 的 8 路里 `dchEn=1` 落在 `dchId=4/7`（CH5/CH8），落库为
-  `channelIndex=[4,7]`，名称 `name5/name8`，传感器类型 0/1；
-- 认证策略落库为 `token-header`。
+## 3. 未接入 / 设备侧限制
 
-## 2. 文档里与 AE08 不同、需要真机确认的地方
+- **实时监测没有数据**：四个 WebSocket 在设备自己的 web UI 里也不推帧。这是固件 /
+  设备侧问题，不是本软件的接入问题；实时监测页会显示 2 路通道，但波形、频谱、时频图
+  与四张指标卡会是空态，直到固件修复或提供别的实时接口。
+- **「告警」页没有 AO01 泄漏事件**：AO01 的 `dalAbnoType` 是 0/1 事件标志，不是 AE08
+  的 14 位故障位图；硬套会显示成错误的 SPL 告警。目前 43 条泄漏告警只进「录音/录像」
+  页（可播放）。如果要在「告警」页显示「气体泄漏」类型，需要新增独立的 alarm
+  source/type，而不是复用现有位图。
+- **告警参数 / 检测模型 / 自动录音**没有 UI 映射；`/query_detect` 等当前固件不可用。
+- `/system_log` 里的 `leakage_val` 不是正式 API，未接。
 
-| 项 | AO01 文档 | 软件现状 | 风险 |
-|---|---|---|---|
-| `/features_stream` | **文档未列出** | 实时监测的四张指标卡（声压级/平稳度/能量比/主频）依赖它 | 可能四张卡无数据；音频/频谱/时频图不受影响 |
-| `/channel_select` | **文档未列出** | 切通道时软件会调它（失败只记日志，不阻断开流） | 特征流/频谱跟随设备当前通道，切页签可能不切数据 |
-| `/get_alarm_audio` | 返回 `msgBody.alertArray`，字段 `dalId/dalChId/dalAbnoType/dalStartTime/dalduration` | 软件按 AE08 的 `audioArray` + `dau*` 映射 | 告警库现在会同步不到；`dalAbnoType` 文档写 0 正常/1 异常，**不是** 14 位 alarm mask |
-| 告警音频文件 | `GET /audio?alert_id=<dalId>` 返回 `audioArray`（`dauFileName` 等） | 软件没有这条按 alert_id 取文件的路径 | 告警记录没有可下载文件名 |
-| `/run_detect` / `/stop_detect` / `/query_detect` | 存在；`recorder` 为通道号数组 | 软件没有接这三个接口 | 检测启停/状态可能需要；否则只能靠设备默认行为 |
-| `/detect_model` | 模型数组（`dmodelId/dmodelName`） | 软件没有接 | 告警策略/模型选择可能缺上下文 |
-| `/auto_record` | 自动录音使能/间隔/时长 | 软件没有接 | 设备侧自动录音无法从软件配置 |
-| `/get_alarm_system` | `alarmparaArray`（`dalModeId/dalModeName/dalRecord/dalDeteSen/dalId/dalName`） | 软件按 AE08 的阈值型告警参数映射 | 告警参数页可能字段对不上 |
+## 4. 下一步（可选）
 
-> 其中**告警模型**是最需要真机数据的一项：`dalAbnoType=1` 究竟代表「异常/泄漏」还是
-> 某个模型 id，文档没有给出枚举；按现有 `AlarmType` 的 14 位 bitmask 硬套会显示成
-> 错误的告警类型，所以没有在设备上线前猜。
-
-## 3. 设备上线后的验证步骤（按顺序）
-
-1. 确认能 ping 通 `192.168.110.200`，且 80 端口可连；
-2. 跑通用诊断（只读，不改设备）：
-
-   ```powershell
-   $env:ACOUSTIC_BOX_PASSWORD = '123456'
-   node scripts/protocol-diagnose.cjs --ip 192.168.110.200 --user admin
-   ```
-
-3. 用 `admin/123456` 在软件里「添加设备」——不需要选机型，自动识别应显示
-   「已识别为：声纹设备」，设备名 `AO01`；
-4. 抓取下面几条原始响应（只读）：
-
-   - `POST /login`（确认 token 在 `msgBody.token`）
-   - `GET /get_devinfo`
-   - `GET /get_passageway`
-   - `GET /detect_model`
-   - `GET /query_detect`
-   - `PUT /get_alarm_audio`（`msgBody:{page_start:0,page_size:10}`）
-   - 对一条告警 id 执行 `GET /audio?alert_id=<dalId>`
-   - `/audio_stream`、`/freq_domain`、`/time_freq_domain` 各抓一帧（确认帧格式与 AE08
-     的 Float32/JPEG 假设一致）
-
-5. 依据真实响应补：
-   - `extractAlarmAudio` / `mapAlarmRecording` 的 AO01 分支（或新增独立告警模型）；
-   - `/audio?alert_id` 的下载路径；
-   - `/run_detect` / `/stop_detect` / `/query_detect` 的启停与状态；
-   - 若确实没有 `/features_stream`：实时监测页对 AO01 隐藏四张指标卡并说明原因，
-     而不是让它们永远空着。
-
-## 4. 当前已经交付的
-
-- `tests/ao01-integration.test.ts`：文档形状下的自动识别 + 添加 + 通道表回归；
-- 本文档：兼容性结论、差异清单、上线后的抓包与补丁顺序。
-
-未交付：告警库/检测启停/自动录音/检测模型的接线 —— 需要设备在线后的真实响应，
-按本仓库「不猜设备字段」的规矩，先不写。
+1. 新增 `gasLeak` 告警类型/source，把 `alertArray` 同时写入 `alarms` 表并在「告警」页
+   显示「气体泄漏」；
+2. 若厂商提供实时泄漏值/模型输出的正式接口，再接实时卡片（当前只有日志里有）；
+3. 告警参数页按 AO01 的 `alarmparaArray`（模型 + 灵敏度 + 录音）单独适配。

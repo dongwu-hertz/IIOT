@@ -1,14 +1,17 @@
 /**
- * AO01 气井泄漏监测装置：按接口文档的**真实形状**跑一遍自动识别 + 添加 + 通道表。
+ * AO01 气井泄漏监测装置：自动识别 + 添加 + 2 路通道表的端到端回归。
  *
- * WHY THIS FILE EXISTS
- * 业主 2026-11-12 给了一份 AO01 的接口文档（`/login` 用 msgBody + md5(密码+lfxs)，
- * `/get_devinfo` / `/get_passageway` / `/get_samplingrate` 的包络都与 AE08 同族）。
- * 这台设备不在现场网络里（192.168.110.200 当前不可达），所以先用文档里的**逐字段
- * 形状**做一次端到端回归：自动识别是否认得出、通道表是否按 dchEn 落库、设备名是否
- * 来自设备自己的 devname。
+ * 业主 2026-11-12 给了接口文档；当天设备 `192.168.110.200` 上线后实测：
  *
- * 它证明的是「协议形状兼容」；真机的流格式与告警行仍需设备上线后抓包验证。
+ *   - `/login` 的密码是**明文**（`{"msgBody":{"username":"admin","password":"123456"}}`），
+ *     不是文档写的 `md5(明文 + 'lfxs')`；传哈希会得到 `result:3` 且没有 token。
+ *   - `/get_devinfo` -> devname `AO01`、dev_mac、dev_version `v2.0.0.2025-11-04`。
+ *   - `/get_passageway` -> **只有 2 路**（`chinfoSize:2`，ch1 启用、ch2 关闭），
+ *     不是 AE08 的固定 8 路。
+ *   - `/get_samplingrate` -> 48000。
+ *
+ * 这条用例把上述形状固定下来：自动识别必须认成 `acousticBox`，认证必须选中
+ * `token-header-plaintext`，添加时 seed 的 8 路必须被设备真实的 2 路**替换掉**。
  */
 
 import { strict as assert } from 'node:assert'
@@ -33,23 +36,35 @@ interface FakeAo01 {
   close(): Promise<void>
 }
 
-/** 文档里的 AO01 设备：只接受 `token:` 头，返回 msgBody 包络。 */
+/** 真机复刻：明文口令；受保护接口只接受 `Authorization: <token>`；2 路通道。 */
 async function startAo01(): Promise<FakeAo01> {
   let logins = 0
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     const send = (status: number, body: unknown): void => {
       response.writeHead(status, { 'content-type': 'application/json' })
       response.end(JSON.stringify(body))
     }
+    const raw = await new Promise<string>((resolve) => {
+      let text = ''
+      request.on('data', (chunk) => { text += chunk })
+      request.on('end', () => resolve(text))
+    })
 
     if (request.method === 'POST' && url.pathname === '/login') {
       logins += 1
+      let body: { msgBody?: { password?: unknown } } = {}
+      try { body = JSON.parse(raw || '{}') } catch {}
+      // 只认明文 123456；哈希版本必须被拒绝，才能证明候选策略真的分得开。
+      if (body.msgBody?.password !== '123456') {
+        send(200, { result: 3, message: 'Incorrect username or password.-2' })
+        return
+      }
       send(200, { result: 0, message: 'ok', msgBody: { token: 'AO01-TOKEN' } })
       return
     }
-    // 文档：受保护接口要求会话；这里只接受 token 头（与 AE08 真机一致）。
-    if (request.headers.token !== 'AO01-TOKEN') {
+    // 真机只认 Authorization: <token>，token: 头会返回 Token is invalid。
+    if (request.headers.authorization !== 'AO01-TOKEN') {
       send(401, { result: 2, message: 'auth failed' })
       return
     }
@@ -59,9 +74,9 @@ async function startAo01(): Promise<FakeAo01> {
         message: 'ok',
         msgBody: {
           devname: 'AO01',
-          dev_version: 'V1.0.0_20261101',
+          dev_version: 'v2.0.0.2025-11-04',
           dev_mac: '02:11:22:33:44:55',
-          web_version: 'WEBV1.0.0'
+          web_version: 'V1.1.0.2026-11-02'
         }
       })
       return
@@ -71,23 +86,17 @@ async function startAo01(): Promise<FakeAo01> {
         result: 0,
         message: 'ok',
         msgBody: {
-          chinfoSize: 8,
+          chinfoSize: 2,
           chinfoArray: [
-            { dchAlarmPara: '1', dchEn: 0, dchId: 0, dchName: 'name1', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 0, dchId: 1, dchName: 'name2', dchSensorType: 1 },
-            { dchAlarmPara: '1', dchEn: 0, dchId: 2, dchName: 'name3', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 0, dchId: 3, dchName: 'name4', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 1, dchId: 4, dchName: 'name5', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 0, dchId: 5, dchName: 'name6', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 0, dchId: 6, dchName: 'name7', dchSensorType: 0 },
-            { dchAlarmPara: '1', dchEn: 1, dchId: 7, dchName: 'name8', dchSensorType: 1 }
+            { dchAlarmPara: 2, dchEn: 1, dchId: 0, dchName: 'ch1', dchSensorType: 0 },
+            { dchAlarmPara: 2, dchEn: 0, dchId: 1, dchName: 'ch2', dchSensorType: 0 }
           ]
         }
       })
       return
     }
     if (url.pathname === '/get_samplingrate') {
-      send(200, { result: 0, message: 'ok', msgBody: { samplingrate: 96000 } })
+      send(200, { result: 0, message: 'ok', msgBody: { samplingrate: 48000 } })
       return
     }
     send(404, { result: 1, message: 'not found' })
@@ -123,8 +132,8 @@ function createService(): { service: DeviceService; db: ReturnType<typeof openDa
   return { service, db }
 }
 
-describe('AO01 气井泄漏监测装置（接口文档形状）', () => {
-  it('自动识别为声纹设备，并按 dchEn 落库 8 路通道（CH5 / CH8 启用）', async () => {
+describe('AO01 气井泄漏监测装置（真机形状）', () => {
+  it('自动识别为声纹设备，明文口令认证，2 路通道取代 seed 的 8 路', async () => {
     const fake = await startAo01()
     try {
       const { service, db } = createService()
@@ -139,18 +148,22 @@ describe('AO01 气井泄漏监测装置（接口文档形状）', () => {
         assert.equal(added.kind, 'acousticBox')
         assert.equal(added.name, 'AO01')
         assert.equal(added.deviceUid, 'mac:02:11:22:33:44:55')
-        assert.equal(new DeviceRepository(db).getAuthStrategy(added.id), 'token-header')
+        assert.equal(
+          new DeviceRepository(db).getAuthStrategy(added.id),
+          'raw-auth-header-plaintext'
+        )
 
         const channels = service.getChannels(added.id)
-        assert.equal(channels.length, 8)
+        assert.equal(channels.length, 2)
+        assert.deepEqual(channels.map((channel) => channel.channelIndex), [0, 1])
         assert.deepEqual(
           channels.filter((channel) => channel.enabled).map((channel) => channel.channelIndex),
-          [4, 7]
+          [0]
         )
-        assert.equal(channels[4]?.channelName, 'name5')
-        assert.equal(channels[7]?.channelName, 'name8')
-        assert.equal(channels[7]?.sensorType, 1)
-        assert.ok(fake.loginCount() >= 1)
+        assert.equal(channels[0]?.channelName, 'ch1')
+        assert.equal(channels[1]?.channelName, 'ch2')
+        // 明文候选被真的试过（第一次哈希被拒，第二次明文成功）。
+        assert.ok(fake.loginCount() >= 2)
       } finally {
         db.close()
       }
