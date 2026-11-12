@@ -5066,3 +5066,67 @@ npm run dist:win:signed
 - 安装包未在客户现场安装复测；
 - 相机固件在 RTSP + 多路 WebSocket 下 HTTP 变慢仍是设备侧事实；
 - 64 通道相机的型号 / 通道数未建模。
+
+
+---
+
+## WW. 第 56 轮的发布（v1.0.28，2026-11-12）
+
+业主 2026-11-12：「还有一个192.168.110.200 的泄漏检测设备 需要接入」→ 设备上线后
+真机抓包，接入 AO01 气井泄漏监测装置并出签名包。
+
+### WW.1 交付
+
+| 项 | 值 |
+|---|---|
+| 版本 | `1.0.28`（`package.json` version，`releaseDate` 2026-11-12） |
+| 安装包 | `release/HAIS-1.0.28-2026-11-12-x64-setup.exe` |
+| 大小 / sha256 | 128,219,408 字节 · `4446C060C88F759E1F4A97AA70EA928493028047711E2A4A53F5C527C23F8F7E` |
+| 签名主体 | `CN="Shanghai Hertzinno Technology Co., Ltd."`（颁发者 `Certum Code Signing 2021 CA`） |
+| 指纹 / 到期 | `F88A2FCEE6553908220C031FBFC2D412CB341DC3` · 2027-09-03 |
+| 时间戳 | ✅ `CN=DigiCert SHA256 RSA4096 Timestamp Responder 2026 1`（RFC 3161） |
+| 打包产物验证 | 严格签名模式 `verify:packaged` → **26 通过 / 0 失败**（应用内版本号 1.0.28） |
+
+上一版签名包已移到 `release-1.0.27-2026-11-11/` 留档。
+
+### WW.2 这一版包含什么（v1.0.27 之后）
+
+- **AO01 接入**（`fb20c4a`）：
+  - 新增 `raw-auth-header-plaintext`：AO01 的 `/login` 是**明文口令**，token 只认
+    `Authorization: <token>`；文档写的 md5版本在真机上返回 result 3；
+  - `AuthStrategyResolver.verify` 拒绝 `result != 0` / `Token is invalid` 的 200 响应，
+    不再把错误载体当成成功；
+  - `replaceForDevice` 删除设备未返回的多余通道：AO01 真机只有 2 路，添加时 seed
+    的 8 路被替换为 CH1（启用）/ CH2（关闭）；
+  - `alertArray` / `dal*` 告警映射 + `GET /audio?alert_id` 取文件名 +
+    `/download_audio/<相对路径>` 下载。真机 43 条告警录音 1.2 s 同步完成，
+    单条 10 s WAV 下载成功（1,920,044 字节，RIFF/WAVE，可播放）。
+- v1.0.27 的通道刷新修复、v1.0.26 的相机认证/模式显示、局放「泄漏量 0」修复照旧。
+
+### WW.3 真机验证
+
+- 设备 `192.168.110.200`，`dev_version v2.0.0.2025-11-04`，
+  `web_version V1.1.0.2026-11-02`；
+- 自动识别为 `acousticBox`，名称 `AO01`，认证策略 `raw-auth-header-plaintext`；
+- 2 路通道：`ch1` 启用、`ch2` 关闭；
+- `syncDeviceRecordings()` 43 条，1.2 s；
+- 音频下载：200 + RIFF/WAVE，可播放。
+
+### WW.4 设备侧限制（不是本软件能修的）
+
+- `/features_stream`、`/audio_stream`、`/freq_domain`、`/time_freq_domain` 四个
+  WebSocket 都能握手，但 **0 帧**；设备自己的 `/preview` 页面在 Chrome 里用 CDP
+  实测同样 0 帧。实时监测页会显示 2 路通道，但波形/频谱/时频/四张指标卡是空态。
+- `/query_detect`、`/run_detect`、`/stop_detect`、`/channel_select`、`/get_cur_ch`
+  在当前固件上返回 405 / SPA HTML，未实现。
+- 「告警」页仍不显示 AO01 泄漏事件：`dalAbnoType` 是 0/1 事件标志，不是 AE08 的
+  14 位故障位图；43 条告警目前在「录音/录像」页可见并可播放。若要在「告警」页新增
+  「气体泄漏」类型，需要独立的 alarm source/type，不能硬套 SPL。
+- 告警参数 / 检测模型 / 自动录音未做 UI 映射。
+
+### WW.5 未验证
+
+- 没有在安装好的 GUI 里逐页点 AO01（服务层已用真实设备验证：添加、2 路通道、
+  43 条告警同步、WAV 下载）；
+- 实时监测图表因设备不推流，无法验证有数据的外观；
+- 告警参数/模型/自动录音页面未接。
