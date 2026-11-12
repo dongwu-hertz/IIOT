@@ -25,6 +25,19 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(map, /data-map-sonar-no-point/)
   })
 
+  it('embeds the device-location map inside the Auscultation Box detail card', () => {
+    const map = read('src/renderer/src/components/DeviceLocationMap.vue')
+    assert.match(map, /data-device-location-map/)
+    assert.match(map, /data-device-location-tiles/)
+    assert.match(map, /viewTiles/)
+    assert.match(map, /offsetMapPoint/)
+    assert.match(map, /alarmHorizontal/)
+    const card = read('src/renderer/src/components/DeviceInstallationCard.vue')
+    assert.match(card, /showMap\?: boolean/)
+    assert.match(card, /<DeviceLocationMap/)
+    const detail = read('src/renderer/src/views/DeviceDetailView.vue')
+    assert.match(detail, /:show-map="device\.kind === 'auscultationBox'"/)
+  })
   it('only airSonar gets the PTZ tab; AO01/other devices do not', () => {
     const detail = read('src/renderer/src/views/DeviceDetailView.vue')
     assert.match(detail, /AIR_SONAR_TABS/)
@@ -62,6 +75,11 @@ describe('SN-16 sonar map and alarm profile', () => {
       assert.ok(mapUi)
       assert.equal(typeof mapUi.sonarDirection, 'string', `${locale} missing sonarDirection`)
       assert.equal(typeof mapUi.sonarNoPoint, 'string', `${locale} missing sonarNoPoint`)
+      const installUi = (catalogue as unknown as Record<string, Record<string, unknown>>).installUi
+      assert.ok(installUi)
+      for (const key of ['mapNoPoint', 'mapHint', 'openMap', 'mapRange', 'mapDirection', 'mapNoAzimuth']) {
+        assert.equal(typeof installUi[key], 'string', `${locale} missing installUi.${key}`)
+      }
       const e2Ui = (catalogue as unknown as Record<string, Record<string, unknown>>).e2Ui
       assert.ok(e2Ui)
       assert.equal(typeof e2Ui.outcomeDbThreshold, 'string', `${locale} missing outcomeDbThreshold`)

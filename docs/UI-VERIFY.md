@@ -5494,3 +5494,46 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
   16 通道补齐、E2 登录并发/双摘要、DB 阈值、六语言目录。
 - 真机/开发构建探针：234 PTZ 配置成功且 channelCount=16；234 页签仅 PTZ；AO01 无 PTZ；
   地图方向线/范围存在；打包 `verify:packaged` 26/0。
+
+---
+
+## DDD. 第 63 轮的发布（v1.0.37，2026-11-12）
+
+业主 2026-11-12：
+> Device location / Auscultation Box 这个产品应该把地图放在这个页面，你看看怎么做。
+
+### DDD.1 交付
+
+- 版本：1.0.37（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.37-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,240,984 字节 / 2F85DDF452C432714B5D048D32A4EFFF9EAF9A9D88B6C772E76EC66C6E120C70
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.37
+- 上一版归档：release-1.0.36-2026-11-12/
+
+### DDD.2 设备详情里的内嵌地图
+
+- 新增 `DeviceLocationMap.vue`：直接嵌在 Device location / Address info 卡片里，
+  不再只给「在地图信息里查看」的文字链接。
+- 地图以设备点位为中心、16 级缩放，复用地图页同一套：
+  - `viewTiles()` 在线/离线瓦片（瓦片失败自动露出经纬度网格，不白屏）；
+  - `projectToViewport()` 同一套 Web Mercator 投影；
+  - `offsetMapPoint()` 同一套 100 m / ±18° 声源范围。
+- 方向优先取最近一条告警原文的 `horizontal`，没有告警时取安装方位角；
+  没有方位角时不猜 0°，而是显示「未录入方位角」。
+- 没有点位时显示明确提示与入口：
+  「未录入点位，无法在地图上定位该设备」+「打开地图信息」。
+- `DeviceInstallationCard` 增加 `showMap` / `deviceName` 可选属性；
+  `DeviceDetailView` 对 `kind === 'auscultationBox'` 打开它。
+- 实测（临时给 234 录入 31.2/121.4、方位 90°）：
+  - `[data-device-location-map]` 存在；
+  - 瓦片层 15 张 `<img>`；
+  - 方向线与 ±18° 扇区存在；
+  - 底部显示 `31.2, 121.4`、`Direction 96°`（最近告警原文的 horizontal）。
+  - 测试后已清空 234 的临时点位。
+
+### DDD.3 测试
+
+- `test:inproc`：**134 文件 / 2520 通过 / 77 失败**，29 个失败文件集合与上一轮一致。
+- `tests/sonar-map-alarm.test.ts` 增加内嵌地图、卡片属性、详情页传参、六语言目录断言。
+- `verify:packaged` 26/0；安装包签名 Valid。

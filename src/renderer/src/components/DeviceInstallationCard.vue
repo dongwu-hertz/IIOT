@@ -27,6 +27,7 @@ import { useI18n } from 'vue-i18n'
 import type { DeviceInstallation } from '@shared/domain/models'
 import { hasInstallation, isPointComplete } from '@shared/domain/device-installation'
 import { deviceMapLink, isMappable } from '@renderer/lib/deviceMapLink'
+import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 
 const props = defineProps<{
   installation?: DeviceInstallation
@@ -37,6 +38,9 @@ const props = defineProps<{
    * 两个调用点（设备详情页 / 实时检测页）都传得出来，所以实际不会缺席。
    */
   deviceId?: string
+  /** `true` 时在点位文字下方嵌入设备位置地图（Auscultation Box 设备详情）。 */
+  showMap?: boolean
+  deviceName?: string
 }>()
 
 const { t } = useI18n()
@@ -137,6 +141,13 @@ async function copyPoint(): Promise<void> {
         </dd>
       </div>
     </dl>
+
+    <DeviceLocationMap
+      v-if="showMap"
+      :installation="installation"
+      :device-id="deviceId"
+      :device-name="deviceName"
+    />
   </section>
 </template>
 

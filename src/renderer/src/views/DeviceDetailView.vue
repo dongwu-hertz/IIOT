@@ -621,7 +621,12 @@ const webUiAddress = computed(() => {
           录入在「添加设备」与设备管理页的「编辑」两处，这里是**同一份数据的只读视图** ——
           卡片本身与实时检测页（声呐那一支）共用，所以两页不可能显示成两个样子。
         -->
-        <DeviceInstallationCard :installation="device.installation" :device-id="device.id" />
+        <DeviceInstallationCard
+          :installation="device.installation"
+          :device-id="device.id"
+          :device-name="device.name"
+          :show-map="device.kind === 'auscultationBox'"
+        />
 
         <DeviceProfileCard :department="device.department" :attributes="device.attributes" />
       </template>
@@ -692,7 +697,12 @@ const webUiAddress = computed(() => {
           </dl>
         </section>
 
-        <DeviceInstallationCard :installation="device.installation" :device-id="device.id" />
+        <DeviceInstallationCard
+          :installation="device.installation"
+          :device-id="device.id"
+          :device-name="device.name"
+          :show-map="device.kind === 'auscultationBox'"
+        />
 
         <DeviceProfileCard :department="device.department" :attributes="device.attributes" />
 
