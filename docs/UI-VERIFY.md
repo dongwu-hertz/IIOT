@@ -5408,3 +5408,89 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
   AO01 hideSpl、相机 AUTH_FAILED 重试。
 - 地图闪烁/告警通道/面板收起均用 dev build CDP 实测；相机告警配置在 235/236
   两台设备上实际打开验证。
+
+---
+
+## CCC. 第 62 轮的发布（v1.0.36，2026-11-12）
+
+业主 2026-11-12 追加（围绕 192.168.110.234 的 SN-16 枪声定位设备）：
+1. AUTH_FAILED 认证失败要处理；
+2. 16 通道设备才支持连接球机，其他设备都不支持；
+3. 192.168.110.234 是枪声定位设备；
+4. 地图上要给出声源方向线和范围；
+5. 支持联动 PTZ 相机；
+6. 告警应按 DB 值判定，或支持后分析模型。
+
+### CCC.1 交付
+
+- 版本：1.0.36（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.36-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,236,824 字节 / BE5B1EEAF204B1057F0E254282ACE460691F401B8534BFC61A4CBE18E46284B9
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.36
+- 上一版归档：release-1.0.35-2026-11-12/
+
+### CCC.2 234 = SN-16 枪声定位设备
+
+- 设备行 `dev_0mu5buev9009ukuhus`：`kind=auscultationBox`、`e2_variant=airSonar`、
+  `dev_type=AS16-auth-vertical-reverse`，PTZ 配置读出 **channelCount=16**。
+- 详情页给它的页签只有 **PTZ 联动 + 与球机对时**，不再显示听诊盒子那套参数/告警同步页签。
+- 打开 PTZ 页后本机通道行从 1 补到 **16**（`seedChannels` 只补缺失行，不覆盖已有名称/启用状态）。
+- 实测 `window.api.e2.ptz(...)` 返回成功，`cameraIp=192.168.2.64`、`cameraPort=80`、
+  `cameraUser=admin`、`cameraPasswordSet=true`、`channelCount=16`，无 AUTH_FAILED。
+
+### CCC.3 AUTH_FAILED：登录并发与摘要写法
+
+定位到两处会制造「设备明明在线，却报用户名密码错」的窗口：
+
+1. **并发登录互踢**：多个请求同时发现 token 为空时各自 `POST /login`，设备只保留最后一个
+   token，前一个请求拿着刚生成的旧 token 就被 401。
+   `E2Client` 增加 `loginInFlight`：同一时刻只发一次登录，所有调用共享同一个 Promise。
+2. **摘要写法只认上次成功那一种**：固件升级/设备恢复后摘要规则可能变化。
+   `loginOnce()` 现在优先用上次成功的写法，仍 401 时再试另一种（salted / plain），
+   成功者记住；不会因为旧写法失效就永久 AUTH_FAILED。
+3. `authorised()` 原有「401 → 清 token → 重新登录 → 重试一次」保留，和上面两条一起收口。
+
+实测：234 的 `e2.ptz` 直接返回成功；dev 日志里 234 登录成功、变体判定 `airSonar`，
+不再出现 234 的 AUTH_FAILED 健康检查失败。
+
+### CCC.4 只有 16 通道 Air Sonar 有 PTZ
+
+- `AIR_SONAR_TABS = ['ptz']` 继续只给 `e2Variant === 'airSonar'`。
+- 默认机型页签过滤增加 `tab.id !== 'ptz'`：AO01、AE08、2023 版听诊盒子等
+  **不会**再看到「PTZ 联动」页签。
+- 实测：234 详情只有 `PTZ linkage` / `Sync time with dome`；
+  AO01 详情只剩 `Channels & sample rate / Alarm parameters / Network / Time / RS485 / Push`，
+  没有 PTZ。
+
+### CCC.5 地图方向线与范围
+
+- 地图只为 `auscultationBox + e2Variant === 'airSonar'` 画声呐覆盖层：
+  - 方向：优先取**最近一条告警原文里的 `horizontal`**（设备报的声源方位角），
+    没有告警时退回安装信息里的 `azimuthDeg`；
+  - 范围：默认 **100 m**，扇区张角 **±18°**；
+  - 经纬度偏移抽到共享层 `offsetMapPoint()`，视图不再自带第二份投影算式。
+- 地图详情面板对未录入点位的 Air Sonar 显示「未录入点位，无法显示声源方向与范围」。
+- 详情面板的配置按钮对 Air Sonar 显示为 **PTZ linkage**，直接进入球机联动配置。
+- 实测（临时给 234 录入 31.2/121.4、方位 90°）：地图出现
+  `[data-map-sonar-overlay]`，`.map-sonar__direction` 与 `.map-sonar__range` 都存在；
+  测试后已清空 234 的临时点位。
+
+### CCC.6 告警按 DB 值判定
+
+- Air Sonar 的 `db_value` 已作为告警的 `spl` 落库；新增采集 `horizontal` / `vertical`。
+- 同步时从设备状态里读 `/system` 的 `db_limit`，通过 `E2SyncRequest.dbLimit` 传给同步服务：
+  有 `db_value` 且低于 `db_limit` 的日志记入 `skippedByDbThreshold`，不落成告警；
+  没有 `db_value` 时不猜，保留日志（避免把缺字段误判成低分贝）。
+- 同步结果界面新增「因 dB 值低于设备阈值跳过 N 条」。
+- 当前落地的是**设备 DB 阈值**这一支；后分析模型没有现成服务/权重，仍留给后续可插拔的
+  模型判定层，不用一个编出来的分数冒充已有能力。
+
+### CCC.7 测试
+
+- `test:inproc`：**134 文件 / 2519 通过 / 77 失败**，29 个失败文件集合与上一轮一致
+  （陈旧 KK.8 / 地图旧规格守卫），没有新增失败文件。
+- 新增 `tests/sonar-map-alarm.test.ts`：覆盖方向线/范围、Air Sonar 独占 PTZ 页签、
+  16 通道补齐、E2 登录并发/双摘要、DB 阈值、六语言目录。
+- 真机/开发构建探针：234 PTZ 配置成功且 channelCount=16；234 页签仅 PTZ；AO01 无 PTZ；
+  地图方向线/范围存在；打包 `verify:packaged` 26/0。

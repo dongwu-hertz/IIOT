@@ -13,7 +13,7 @@
 
 import type { Device } from '@shared/domain/models'
 import { readdir } from 'node:fs/promises'
-import { e2ChannelCountFromModel, type E2Variant } from '@shared/domain/e2'
+import { e2ChannelCountFromModel, E2_AIR_SONAR_CHANNEL_COUNT, type E2Variant } from '@shared/domain/e2'
 import {
   applyPtzPatch,
   buildPtzConfig,
@@ -172,6 +172,10 @@ export class E2DeviceService {
       // 型号字符串里带通道数（`AS16` ⇒ 16）：这是设备自己说的，不是我们猜的。
       const fromModel = e2ChannelCountFromModel(basic.devType)
       if (fromModel !== undefined) status.channelCount = fromModel
+      else if (variant === 'airSonar') status.channelCount = E2_AIR_SONAR_CHANNEL_COUNT
+      if (status.channelCount !== undefined) {
+        this.devices.ensureAuscultationChannels(deviceId, status.channelCount)
+      }
     } catch {
       // 设备信息读不到不影响参数：留空，不编默认值。
     }
@@ -264,6 +268,7 @@ export class E2DeviceService {
     try {
       const basic = await client.getBasic()
       channelCount = e2ChannelCountFromModel(basic.devType)
+      if (channelCount !== undefined) this.devices.ensureAuscultationChannels(deviceId, channelCount)
     } catch {
       // 设备信息读不到不影响参数：通道上限那时缺席，界面不做上限判断（不猜 16）。
     }
@@ -289,6 +294,7 @@ export class E2DeviceService {
     try {
       const basic = await client.getBasic()
       channelCount = e2ChannelCountFromModel(basic.devType)
+      if (channelCount !== undefined) this.devices.ensureAuscultationChannels(deviceId, channelCount)
     } catch {
       channelCount = undefined
     }

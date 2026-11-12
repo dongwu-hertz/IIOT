@@ -81,6 +81,7 @@ import {
   deviceMapLayout,
   mapBounds,
   mapGridSteps,
+  offsetMapPoint,
   mapProjector,
   type MapBounds,
   type MapDeviceInput
@@ -641,6 +642,93 @@ const activeDisplayMarkers = computed(() =>
 const mappedCount = computed(() =>
   floorPlanMode.value && floorPlan.value ? floorMarkers.value.length : layout.value.markers.length
 )
+/** SN-16 空气声呐的方向线/范围圈：默认 100 m，扇区张角 ±18°。 */
+const SONAR_RANGE_METERS = 100
+const SONAR_SPREAD_DEG = 18
+
+function alarmHorizontalDeg(alarm: AlarmEvent | undefined): number | undefined {
+  if (!alarm?.deviceRaw) return undefined
+  try {
+    const raw = JSON.parse(alarm.deviceRaw) as Record<string, unknown>
+    const value = Number(raw.horizontal)
+    return Number.isFinite(value) ? ((value % 360) + 360) % 360 : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 只有 Air Sonar 才画方向线/范围；中心是设备安装点位，角度优先取**最近一条告警的
+ * horizontal**（设备报的声源方向），没有告警时用安装方位角。两者都没有就不猜方向。
+ */
+const sonarOverlays = computed(() => {
+  if (floorPlanMode.value) return []
+  const overlays: Array<{
+    id: string
+    heading: number
+    start: { x: number; y: number }
+    end: { x: number; y: number }
+    area: string
+  }> = []
+  for (const device of devices.devices) {
+    if (device.kind !== 'auscultationBox' || device.e2Variant !== 'airSonar') continue
+    const installation = device.installation
+    if (
+      installation?.gisLatitude === undefined ||
+      installation?.gisLongitude === undefined
+    ) {
+      continue
+    }
+    const latest = device.id === selectedId.value ? alarms.value[0] : undefined
+    const heading = alarmHorizontalDeg(latest) ?? installation.azimuthDeg
+    if (heading === undefined) continue
+    const start = projectToViewport(
+      activeCenter.value,
+      installation.gisLatitude,
+      installation.gisLongitude,
+      CANVAS.width,
+      CANVAS.height
+    )
+    const directionEnd = offsetMapPoint(
+      installation.gisLatitude,
+      installation.gisLongitude,
+      heading,
+      SONAR_RANGE_METERS
+    )
+    const end = projectToViewport(
+      activeCenter.value,
+      directionEnd.latitude,
+      directionEnd.longitude,
+      CANVAS.width,
+      CANVAS.height
+    )
+    const arc: string[] = []
+    for (let step = -SONAR_SPREAD_DEG; step <= SONAR_SPREAD_DEG; step += SONAR_SPREAD_DEG / 4) {
+      const point = offsetMapPoint(
+        installation.gisLatitude,
+        installation.gisLongitude,
+        heading + step,
+        SONAR_RANGE_METERS
+      )
+      const projected = projectToViewport(
+        activeCenter.value,
+        point.latitude,
+        point.longitude,
+        CANVAS.width,
+        CANVAS.height
+      )
+      arc.push(`${projected.x.toFixed(1)},${projected.y.toFixed(1)}`)
+    }
+    overlays.push({
+      id: device.id,
+      heading,
+      start: { x: Math.round(start.x * 100) / 100, y: Math.round(start.y * 100) / 100 },
+      end: { x: Math.round(end.x * 100) / 100, y: Math.round(end.y * 100) / 100 },
+      area: `${start.x.toFixed(1)},${start.y.toFixed(1)} ${arc.join(' ')}`
+    })
+  }
+  return overlays
+})
 const selectedDevice = computed<Device | undefined>(() =>
   selectedId.value === '' ? undefined : devices.byId(selectedId.value)
 )
@@ -1255,6 +1343,28 @@ onBeforeUnmount(() => {
             data-map-canvas
           >
             <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" :class="{ 'map-canvas__bg--transparent': tileConfig || floorPlanMode }" />
+            <g
+              v-for="overlay in sonarOverlays"
+              :key="`sonar-${overlay.id}`"
+              class="map-sonar"
+              data-map-sonar-overlay
+            >
+              <polygon :points="overlay.area" class="map-sonar__range" />
+              <line
+                :x1="overlay.start.x"
+                :y1="overlay.start.y"
+                :x2="overlay.end.x"
+                :y2="overlay.end.y"
+                class="map-sonar__direction"
+              />
+              <text
+                :x="overlay.end.x + 8"
+                :y="overlay.end.y - 8"
+                class="map-sonar__label"
+              >
+                {{ t('mapUi.sonarDirection', { degrees: Math.round(overlay.heading), range: SONAR_RANGE_METERS }) }}
+              </text>
+            </g>
             <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。没有落点时用兜底视野
                  （`effectiveBounds`），网格与坐标刻度始终在场 —— 这就是这一页的 GIS 信息本体。 -->
             <g v-if="!floorPlanMode" class="map-grid">
@@ -1494,6 +1604,13 @@ onBeforeUnmount(() => {
               </span>
             </div>
 
+            <p
+              v-if="selectedDevice.kind === 'auscultationBox' && selectedDevice.e2Variant === 'airSonar' && selectedDevice.installation?.gisLatitude === undefined"
+              class="muted map-detail-panel__empty"
+              data-map-sonar-no-point
+            >
+              {{ t('mapUi.sonarNoPoint') }}
+            </p>
             <dl class="map-detail-panel__kv">
               <div>
                 <dt>Position</dt>
@@ -1531,6 +1648,7 @@ onBeforeUnmount(() => {
               <ul v-if="alarms.length > 0" class="map-latest-alarm__list" data-map-alarm-list>
                 <li v-for="alarm in alarms.slice(0, 3)" :key="alarm.id" data-map-alarm-row>
                   <span>{{ t('alarmsUi.columnChannel') }} CH{{ alarm.channelId + 1 }}</span>
+                  <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
                   <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
                 </li>
               </ul>
@@ -1543,7 +1661,7 @@ onBeforeUnmount(() => {
             <div class="map-detail-panel__actions">
               <RouterLink class="btn btn--primary btn--sm" :to="`/monitor?device=${selectedDevice.id}`">Live Monitor</RouterLink>
               <RouterLink class="btn btn--sm" :to="{ path: '/alarms', query: { device: selectedDevice.id } }">Alarm Center</RouterLink>
-              <button type="button" class="btn btn--sm" @click="openDeviceDetail(selectedDevice.id)">{{ t('devicesUi.configure') }}</button>
+              <button type="button" class="btn btn--sm" @click="openDeviceDetail(selectedDevice.id)">{{ selectedDevice.e2Variant === 'airSonar' ? t('ptzUi.title') : t('devicesUi.configure') }}</button>
               <button
                 v-if="selectedDevice.kind === 'auscultationBox'"
                 type="button"
@@ -2123,7 +2241,31 @@ onBeforeUnmount(() => {
   stroke-dasharray: 3 4;
 }
 
-.map-marker {
+
+.map-sonar {
+  pointer-events: none;
+}
+
+.map-sonar__range {
+  fill: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  stroke: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+
+.map-sonar__direction {
+  stroke: var(--color-accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.map-sonar__label {
+  font-size: 11px;
+  fill: var(--color-accent);
+  paint-order: stroke;
+  stroke: var(--color-bg);
+  stroke-width: 3px;
+}.map-marker {
   cursor: pointer;
 }
 

@@ -1809,6 +1809,8 @@ export const zhTW: MessageSchema = {
   },
   mapUi: {
     fitAll: '適合全部裝置',
+    sonarDirection: '聲源方向 {degrees}° · 範圍 {range} m',
+    sonarNoPoint: '未錄入點位，無法顯示聲源方向與範圍',
     canvasLabel: '裝置落點圖',
     /**
      * 地圖右上角那條半透明狀態列（業主 2026-09-19 第 11 批第 4 條：刪除「圖上 N 臺 / 共 M 臺」、
@@ -2100,6 +2102,7 @@ export const zhTW: MessageSchema = {
     outcomeSpectrograms: '時頻譜圖：存下 {saved} 張，裝置上沒有 {failed} 張（重啟後不足 10 張是正常的）。',
     outcomeSnapshots: 'PTZ 抓圖：存下 {saved} 張，裝置上沒有 {failed} 張（相機沒配對或未開啟抓圖時會是 0）。',
     outcomeBadTime: '{count} 條的時間無法解析，已跳過（沒有猜它們的時刻）。',
+    outcomeDbThreshold: '因 dB 值低於裝置閾值跳過 {count} 條',
     outcomeHint: '同步於 {time}'
   },
   playerUi: {

@@ -1632,6 +1632,8 @@ export const tr: MessageSchema = {
   },
   mapUi: {
     fitAll: 'Tüm cihazları sığdır',
+    sonarDirection: 'Kaynak yönü {degrees}° · menzil {range} m',
+    sonarNoPoint: 'Harita noktası girilmemiş; yön ve menzil gösterilemez',
     canvasLabel: 'Cihaz konumları',
     /**
      * Haritanın sağ üst köşesindeki yarı saydam durum çubuğu (11. parti, 4. madde):
@@ -1916,6 +1918,7 @@ export const tr: MessageSchema = {
     outcomeSnapshots:
       'PTZ görüntüleri: {saved} kaydedildi, {failed} cihazda yok (kamera eşlenmemişse veya görüntü alma kapalıysa 0).',
     outcomeBadTime: '{count} kaydın zamanı okunamadı ve atlandı (zamanı tahmin edilmedi).',
+    outcomeDbThreshold: 'Cihaz dB eşiğinin altında {count} kayıt atlandı',
     outcomeHint: 'Eşitleme: {time}'
   },
   playerUi: {

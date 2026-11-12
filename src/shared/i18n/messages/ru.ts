@@ -1588,6 +1588,8 @@ export const ru: MessageSchema = {
   },
   mapUi: {
     fitAll: 'Показать все устройства',
+    sonarDirection: 'Направление источника {degrees}° · дальность {range} м',
+    sonarNoPoint: 'Точка на карте не задана; направление и дальность показать нельзя',
     canvasLabel: 'Позиции устройств',
     /**
      * Полупрозрачная строка статуса в правом верхнем углу карты:
@@ -1864,6 +1866,7 @@ export const ru: MessageSchema = {
     outcomeSnapshots:
       'Снимки PTZ: сохранено {saved}, нет на устройстве {failed} (0, когда камера не спарена или снимки выключены).',
     outcomeBadTime: '{count} записей имели неразбираемое время и были пропущены (их момент не угадывался).',
+    outcomeDbThreshold: 'Пропущено записей ниже порога дБ устройства: {count}',
     outcomeHint: 'Синхронизировано в {time}'
   },
   playerUi: {

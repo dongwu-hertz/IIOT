@@ -1878,6 +1878,8 @@ export const zhCN = {
   },
   mapUi: {
     fitAll: '适合全部设备',
+    sonarDirection: '声源方向 {degrees}° · 范围 {range} m',
+    sonarNoPoint: '未录入点位，无法显示声源方向与范围',
     canvasLabel: '设备落点图',
     /**
      * 地图右上角那条半透明状态栏（业主 2026-09-19 第 11 批第 4 条：删除「图上 N 台 / 共 M 台」、
@@ -2169,6 +2171,7 @@ export const zhCN = {
     outcomeSpectrograms: '时频谱图：存下 {saved} 张，设备上没有 {failed} 张（重启后不足 10 张是正常的）。',
     outcomeSnapshots: 'PTZ 抓图：存下 {saved} 张，设备上没有 {failed} 张（相机没配对或未开启抓图时会是 0）。',
     outcomeBadTime: '{count} 条的时间无法解析，已跳过（没有猜它们的时刻）。',
+    outcomeDbThreshold: '因 dB 值低于设备阈值跳过 {count} 条',
     outcomeHint: '同步于 {time}'
   },
   playerUi: {

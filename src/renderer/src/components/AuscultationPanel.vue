@@ -103,12 +103,15 @@ onBeforeUnmount(() => e2Realtime.release())
 async function sync(): Promise<void> {
   syncing.value = true
   outcome.value = null
+  const rawDbLimit = Number(status.value?.params.db_limit)
+  const dbLimit = Number.isFinite(rawDbLimit) && rawDbLimit > 0 ? rawDbLimit : undefined
   const result = await callApi(() =>
     window.api.e2.syncAlarms(props.deviceId, {
       // 条数用设备状态里给的上限口径；这里传 200 是"一次一页"的默认值。
       limit: 200,
       downloadAudio: true,
-      downloadSpectrograms: withSpectrograms.value
+      downloadSpectrograms: withSpectrograms.value,
+      ...(dbLimit !== undefined ? { dbLimit } : {})
     })
   )
   syncing.value = false
@@ -432,6 +435,9 @@ function paramLabel(key: string): string {
             saved: outcome.spectrogramsSaved,
             failed: outcome.spectrogramsFailed
           }) }}
+        </p>
+        <p v-if="outcome.skippedByDbThreshold > 0" class="sync-line sync-warning">
+          {{ t('e2Ui.outcomeDbThreshold', { count: outcome.skippedByDbThreshold }) }}
         </p>
         <p v-if="outcome.skippedBadTime > 0" class="sync-line sync-warning">
           {{ t('e2Ui.outcomeBadTime', { count: outcome.skippedBadTime }) }}

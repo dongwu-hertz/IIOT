@@ -1769,6 +1769,8 @@ export interface E2SyncRequest {
   since?: number
   downloadAudio?: boolean
   downloadSpectrograms?: boolean
+  /** Air Sonar 的 dB 门槛（来自设备 /system 的 db_limit）：低于它的日志不落成告警。 */
+  dbLimit?: number
 }
 
 /**
@@ -1783,6 +1785,8 @@ export interface E2SyncOutcome {
   logsSeen: number
   skippedBySince: number
   skippedBadTime: number
+  /** Air Sonar：因 db_value 低于设备 db_limit 而未落成告警的条数。 */
+  skippedByDbThreshold: number
   alarmsCreated: number
   alarmsExisting: number
   filesMissing: number

@@ -1665,6 +1665,8 @@ presets, the licence boundaries
   },
   mapUi: {
     fitAll: 'Fit all devices',
+    sonarDirection: 'Source direction {degrees}° · range {range} m',
+    sonarNoPoint: 'No map point recorded, so direction and range cannot be shown',
     canvasLabel: 'Device positions',
     /**
      * The translucent status bar in the map's top-right corner (owner batch 11, item 4):
@@ -1951,6 +1953,7 @@ presets, the licence boundaries
     outcomeSnapshots:
       'PTZ snapshots: {saved} saved, {failed} not on the device (0 when the camera is unpaired or snapshots are off).',
     outcomeBadTime: '{count} entries had an unparsable time and were skipped (their moment was not guessed).',
+    outcomeDbThreshold: 'Skipped {count} record(s) below the device dB threshold',
     outcomeHint: 'Synced at {time}'
   },
   playerUi: {

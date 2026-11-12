@@ -202,6 +202,25 @@ export function deviceMapLayout(
  * 为什么不让调用方直接写一个步长：视野小到一个厂区（0.01°）与大到跨省（5°）时，
  * 同一个步长不是密到糊成一片就是稀到没有参照。
  */
+/**
+ * 以某点为起点，按方位角与米数算偏移后的经纬度。
+ *
+ * 只用于 SN-16 的方向线/范围圈；放在共享层是为了避免视图里再写一份 cos(纬度) 投影算式。
+ * 小范围（几十~几百米）下球面近似足够，不引入第二个大地测量库。
+ */
+export function offsetMapPoint(
+  latitude: number,
+  longitude: number,
+  bearingDeg: number,
+  metres: number
+): { latitude: number; longitude: number } {
+  const bearing = (bearingDeg * Math.PI) / 180
+  const cosLat = Math.max(0.01, Math.cos((latitude * Math.PI) / 180))
+  return {
+    latitude: latitude + (Math.cos(bearing) * metres) / 111_320,
+    longitude: longitude + (Math.sin(bearing) * metres) / (111_320 * cosLat)
+  }
+}
 export function mapGridSteps(bounds: MapBounds, maxLines = 6): { lat: number[]; lon: number[] } {
   const niceStep = (span: number): number => {
     const target = span / Math.max(1, maxLines - 1)

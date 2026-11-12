@@ -1628,6 +1628,8 @@ export const es: MessageSchema = {
   },
   mapUi: {
     fitAll: 'Ajustar todos los dispositivos',
+    sonarDirection: 'Dirección de la fuente {degrees}° · alcance {range} m',
+    sonarNoPoint: 'No hay punto de mapa registrado; no se puede mostrar dirección ni alcance',
     canvasLabel: 'Posiciones de los equipos',
     /**
      * La barra de estado translúcida de la esquina superior derecha del mapa (lote 11, punto 4):
@@ -1913,6 +1915,7 @@ export const es: MessageSchema = {
     outcomeSnapshots:
       'Capturas PTZ: {saved} guardadas, {failed} ausentes (0 si la cámara no está emparejada o la captura está desactivada).',
     outcomeBadTime: '{count} registros tenían una hora ilegible y se omitieron (no se adivinó su momento).',
+    outcomeDbThreshold: 'Se omitieron {count} registro(s) por debajo del umbral de dB del dispositivo',
     outcomeHint: 'Sincronizado a las {time}'
   },
   playerUi: {

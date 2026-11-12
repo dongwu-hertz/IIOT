@@ -190,7 +190,9 @@ const visibleTabs = computed(() => {
   // 推送设备：最小页签集（概览 + push），**必须显式分支** —— 默认分支会把 FA8 的六个
   // 设备协议页签也分给它，而它在那些端点上全部不存在（点开就是 404 → 被读成离线）。
   if (kind === 'pushDevice') return TABS.filter((tab) => PUSH_DEVICE_TABS.includes(tab.id))
-  return TABS.filter((tab) => !AUSCULTATION_TABS.includes(tab.id) && !CAMERA_TABS.includes(tab.id))
+  return TABS.filter(
+    (tab) => tab.id !== 'ptz' && !AUSCULTATION_TABS.includes(tab.id) && !CAMERA_TABS.includes(tab.id)
+  )
 })
 
 /**

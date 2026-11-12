@@ -72,6 +72,8 @@ export interface E2SyncRequest {
   downloadAudio?: boolean
   /** 下载时频谱图（默认**关**，理由见文件头）。 */
   downloadSpectrograms?: boolean
+  /** Air Sonar 的 dB 门槛（来自设备 /system 的 db_limit）。 */
+  dbLimit?: number
 }
 
 /**
@@ -114,6 +116,10 @@ export class E2SyncService {
     const limit = clampInt(request.limit, E2_SYNC_DEFAULT_LIMIT, 1, 1000)
     const downloadAudio = request.downloadAudio !== false
     const downloadSpectrograms = request.downloadSpectrograms === true
+    const dbLimit =
+      request.dbLimit !== undefined && Number.isFinite(request.dbLimit) && request.dbLimit > 0
+        ? request.dbLimit
+        : undefined
 
     /**
      * **先确定变体**：日志端点与文件下载路径都按变体取（2023 版 `/alarm_log_all` +
@@ -128,6 +134,7 @@ export class E2SyncService {
       logsSeen: 0,
       skippedBySince: 0,
       skippedBadTime: 0,
+      skippedByDbThreshold: 0,
       alarmsCreated: 0,
       alarmsExisting: 0,
       filesMissing: 0,
@@ -159,6 +166,16 @@ export class E2SyncService {
         continue
       }
       outcome.logsSeen += 1
+
+      // Air Sonar 的告警判定：设备给了 db_value 和设备自己的 db_limit 时，
+      // 低于门槛的日志只算背景，不落成告警。没有 db_value 时不猜，保留日志。
+      if (variant === 'airSonar' && dbLimit !== undefined) {
+        const dbValue = entry.values.db_value
+        if (dbValue !== undefined && dbValue < dbLimit) {
+          outcome.skippedByDbThreshold += 1
+          continue
+        }
+      }
 
       const filesMissing = entry.filesStatus === 0
       if (filesMissing) outcome.filesMissing += 1

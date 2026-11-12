@@ -164,7 +164,10 @@ const VALUE_KEYS: readonly string[] = [
   'main_frequency',
   'hpss',
   'sc_ratio',
-  'oeh_ratio'
+  'oeh_ratio',
+  // Air Sonar：声源方向的水平/垂直方位角（手册字段名就是 horizontal/vertical）。
+  'horizontal',
+  'vertical'
 ]
 
 function asNumber(value: unknown): number | undefined {
@@ -187,6 +190,8 @@ export class E2Client {
   private readonly portPair: { web: number; api: number }
   private baseUrl: string
   private token?: string
+  /** 同一时间的多个请求只发一次登录；并发登录会让设备把前一个 token 作废。 */
+  private loginInFlight?: Promise<string>
   /**
    * 这一台是**哪一代**（见 `@shared/domain/e2.ts` 的变体表）。
    *
@@ -403,8 +408,19 @@ export class E2Client {
    * 不把它伪装成认证失败 —— 两者的排查方向完全不同。
    */
   async login(options: { signal?: AbortSignal } = {}): Promise<string> {
+    if (this.loginInFlight) return this.loginInFlight
+    const pending = this.loginOnce(options).finally(() => {
+      this.loginInFlight = undefined
+    })
+    this.loginInFlight = pending
+    return pending
+  }
+
+  private async loginOnce(options: { signal?: AbortSignal } = {}): Promise<string> {
+    // 上一次成功的写法优先，但**不是唯一候选**：固件升级/设备恢复后摘要规则可能变，
+    // 只试旧写法会把「换了一种正确写法」误报成 AUTH_FAILED。两种都试，成功者记住。
     const styles: E2PasswordStyle[] = this.passwordStyle
-      ? [this.passwordStyle]
+      ? [this.passwordStyle, this.passwordStyle === 'salted' ? 'plain' : 'salted']
       : ['salted', 'plain']
     const bases = this.loginBaseCandidates()
 

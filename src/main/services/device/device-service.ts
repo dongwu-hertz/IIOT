@@ -1170,6 +1170,18 @@ export class DeviceService extends EventEmitter {
     return info
   }
 
+  /**
+   * 确保听诊盒子族本机通道行与设备事实一致（SN-16 是 16 通道）。
+   *
+   * 只在设备自己报出通道数时调用；`seedChannels` 是 INSERT OR IGNORE，不会覆盖已有名称、
+   * 启用状态或告警配置绑定，只补缺失的通道行。
+   */
+  ensureAuscultationChannels(deviceId: string, channelCount: number): void {
+    const device = this.get(deviceId)
+    if (device.kind !== 'auscultationBox') return
+    if (!Number.isFinite(channelCount) || channelCount <= 0) return
+    this.devices.seedChannels(deviceId, Math.trunc(channelCount), Date.now())
+  }
   /** Refresh the cached channel rows from GET /get_passageway (spec 11.1). */
   async refreshChannels(id: string): Promise<Channel[]> {
     const device = this.get(id)
