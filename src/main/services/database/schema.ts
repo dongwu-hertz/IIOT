@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 
 export interface Migration {
   version: number
@@ -1092,6 +1092,23 @@ export const MIGRATIONS: readonly Migration[] = [
       db.exec(`
         ALTER TABLE devices ADD COLUMN department TEXT;
         ALTER TABLE devices ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '';
+      `)
+    }
+  },
+  {
+    version: 21,
+    name: 'device-floor-position',
+    up: (db) => {
+      /**
+       * 平面图部署坐标（业主 2026-11-12）：设备在导入的平面图上的归一化位置。
+       * 0 = 左/上边缘，1 = 右/下边缘；NULL = 还没在平面图上部署。
+       *
+       * 与 GIS 经纬度分开存：真实点位和平面图位置是两套坐标，换一张平面图时
+       * 仍按比例复用旧位置，不应该把真实 GIS 覆盖掉。
+       */
+      db.exec(`
+        ALTER TABLE devices ADD COLUMN floor_x REAL;
+        ALTER TABLE devices ADD COLUMN floor_y REAL;
       `)
     }
   }

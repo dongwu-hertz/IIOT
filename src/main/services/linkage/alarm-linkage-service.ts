@@ -26,7 +26,7 @@ import type {
 import { parseRecipientList } from '@shared/domain/alarm-linkage'
 import { AppError, ErrorCodes } from '@shared/errors'
 import { appLog, deviceLog } from '../logging/logger'
-import { AlarmLinkageEngine, type LinkageTriggerSource } from './alarm-linkage-engine'
+import { AlarmLinkageEngine, type LinkageCandidate, type LinkageTriggerSource } from './alarm-linkage-engine'
 import { DetectLogsPollSource, type PollCursorStore, type DetectLogsPollSourceOptions } from './detect-logs-poll-source'
 import { DetectFeedbackTriggerSource, type DetectFeedbackEventSource, type DetectFeedbackSourceOptions } from './detect-feedback-source'
 import { PendingAlarmStore } from './pending-alarm-store'
@@ -51,6 +51,7 @@ import type { StorageService } from '../storage/storage-service'
 import type { RecordingRepository } from '../database/alarm-repository'
 import type { DeviceService } from '../device/device-service'
 import type { SettingsService } from '../settings/settings-service'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 
 /** 设置表里存 SMTP 口令的凭据项 id（与设备口令共用同一个 DPAPI 存储）。 */
 export const SMTP_SECRET_ID = 'smtp'
@@ -81,6 +82,8 @@ export interface AlarmLinkageServiceOptions {
    * 注入不了的时候退化为一段中性文本（弹窗仍然出现，只是不翻译）。
    */
   text?: (key: string, params: Record<string, string>) => string
+  /** AO01 等非相机源的告警落库回调（由组合根接到 AlarmService）。 */
+  recordGasLeakAlarm?: (candidate: LinkageCandidate) => void
   /** 触发源可注入（测试用假实现）。 */
   createPollSource?: (options: DetectLogsPollSourceOptions) => LinkageTriggerSource
   createFeedbackSource?: (options: DetectFeedbackSourceOptions) => LinkageTriggerSource
@@ -237,8 +240,15 @@ export class AlarmLinkageService extends EventEmitter {
 
     const pollOptions: DetectLogsPollSourceOptions = {
       devices: () =>
-        options.devices.list().map((device) => ({ id: device.id, name: device.name, kind: device.kind })),
-      fetchLogs: (deviceId: string) => options.devices.cameraDetectLogs(deviceId),
+        options.devices
+          .list()
+          .map((device) => ({ id: device.id, name: device.name, kind: device.kind, firmwareVersion: device.firmwareVersion })),
+      fetchLogs: (deviceId: string) => {
+        const device = options.devices.get(deviceId)
+        return isGasLeakMonitor(device)
+          ? options.devices.gasLeakAlerts(deviceId)
+          : options.devices.cameraDetectLogs(deviceId)
+      },
       intervalMs: () => options.settings.get().alarmLinkage.pollIntervalSeconds * 1000,
       cursors: this.cursors
     }
@@ -284,6 +294,13 @@ export class AlarmLinkageService extends EventEmitter {
   start(): void {
     if (this.started) return
     this.started = true
+    this.pollSource.onCandidate((candidate) => {
+      // AO01 的 alertArray 经 DeviceService.gasLeakAlerts() 变成与相机日志同形；
+      // 在引擎观察前先落 alarms 行，地图/告警中心才能看到未确认告警。
+      if (candidate.detectMode === 2 && candidate.alarmFlag === true) {
+        this.options.recordGasLeakAlarm?.(candidate)
+      }
+    })
     void this.pending.load()
     this.engine.registerSource(this.pollSource)
     this.engine.registerSource(this.feedbackSource)

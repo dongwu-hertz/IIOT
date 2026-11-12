@@ -1389,6 +1389,8 @@ export const es: MessageSchema = {
     errLatitude: 'La latitud debe estar entre -90 y 90',
     errLongitude: 'La longitud debe estar entre -180 y 180',
     errAzimuth: 'El azimut debe estar entre 0 y 360 (escriba 0 para 360)',
+    errFloorX: 'La coordenada X del plano debe estar entre 0 y 1',
+    errFloorY: 'La coordenada Y del plano debe estar entre 0 y 1',
     /* La interfaz ya no lo muestra (punto 10); el dominio sigue validándolo (§15.49). */
     errSoundLevel: 'El nivel de referencia debe estar entre -50 y 200 dB',
     point: 'Punto',
@@ -1610,7 +1612,22 @@ export const es: MessageSchema = {
       nodata: 'Sin datos'
     }
   },
+  floorPlanUi: {
+    importButton: 'Importar plano',
+    replaceButton: 'Reemplazar plano',
+    removeButton: 'Eliminar plano',
+    modeFloor: 'Modo plano',
+    modeGis: 'Mapa GIS',
+    dragHint: 'Arrastra los iconos de los dispositivos al plano; suelta para guardar',
+    imported: 'Plano importado: {name}',
+    importFailed: 'No se pudo importar el plano',
+    storageFailed: 'No se pudo guardar el plano; prueba una imagen más pequeña',
+    removed: 'Plano eliminado',
+    saved: 'Posición guardada para {name}',
+    saveFailed: 'No se pudo guardar la posición del dispositivo'
+  },
   mapUi: {
+    fitAll: 'Ajustar todos los dispositivos',
     canvasLabel: 'Posiciones de los equipos',
     /**
      * La barra de estado translúcida de la esquina superior derecha del mapa (lote 11, punto 4):

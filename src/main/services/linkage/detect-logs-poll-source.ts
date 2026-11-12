@@ -41,6 +41,7 @@
 import type { Device } from '@shared/domain/models'
 import type { Fa371DetectLog } from '@shared/domain/fa371'
 import { leakMetricsForMode, linkAgeEventIdentity, type LinkageTriggerSourceKind } from '@shared/domain/alarm-linkage'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import { resolveDischargeTypeKey } from '@shared/domain/fa371'
 import type { Fa371ApiClient } from '../device/fa371/fa371-api-client'
 import { appLog, deviceLog } from '../logging/logger'
@@ -105,7 +106,7 @@ export interface PollLogsFetcher {
 
 export interface DetectLogsPollSourceOptions {
   /** 参与轮询的设备；每次 tick 重新读，所以设备增删立即生效。 */
-  devices: () => Array<Pick<Device, 'id' | 'name' | 'kind'>>
+  devices: () => Array<Pick<Device, 'id' | 'name' | 'kind' | 'firmwareVersion'>>
   /** 取一批日志。 */
   fetchLogs: PollLogsFetcher
   /**
@@ -241,6 +242,7 @@ export function toCandidate(
     at: log.startTime !== undefined ? log.startTime : log.startTimeRaw !== undefined ? log.startTimeRaw * 1000 : observedAt,
     observedAt
   }
+  if (log.channelIndex !== undefined) candidate.channelIndex = log.channelIndex
   if (log.isAlarm !== undefined) candidate.alarmFlag = log.isAlarm
   if (log.alarmLevelRaw !== undefined) candidate.alarmLevelRaw = log.alarmLevelRaw
   if (log.alarmStrategyId !== undefined) candidate.strategyId = log.alarmStrategyId
@@ -393,13 +395,12 @@ export class DetectLogsPollSource implements LinkageTriggerSource {
     this.errors.clear()
   }
 
-  private devices(): Array<Pick<Device, 'id' | 'name' | 'kind'>> {
+  private devices(): Array<Pick<Device, 'id' | 'name' | 'kind' | 'firmwareVersion'>> {
     const all = this.options.devices()
-    // 只有声学相机有 `detect_logs`；声纹设备的调用会得到一个 HTML 页面
-    // （见 `Fa371ApiClient.call` 的说明），所以这里先按设备族过滤。
-    return all.filter((device) => device.kind === 'acousticCamera')
+    // 声学相机有 detect_logs；AO01 气井泄漏装置没有该端点，但它的 alertArray
+    // 由 DeviceService.gasLeakAlerts() 归一成同一形状，继续走同一个轮询/去重/联动引擎。
+    return all.filter((device) => device.kind === 'acousticCamera' || isGasLeakMonitor(device))
   }
-
   private stopTimer(): void {
     if (!this.timer) return
     const clear = this.options.clearIntervalImpl ?? clearInterval

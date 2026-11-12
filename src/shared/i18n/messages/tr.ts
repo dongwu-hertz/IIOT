@@ -1394,6 +1394,8 @@ export const tr: MessageSchema = {
     errLatitude: 'Enlem -90 ile 90 arasında olmalı',
     errLongitude: 'Boylam -180 ile 180 arasında olmalı',
     errAzimuth: 'Azimut 0 ile 360 arasında olmalı (360 için 0 yazın)',
+    errFloorX: 'Kat planı X koordinatı 0 ile 1 arasında olmalıdır',
+    errFloorY: 'Kat planı Y koordinatı 0 ile 1 arasında olmalıdır',
     /* Arayüzde artık gösterilmiyor (10. madde); alan doğrulaması sürüyor (§15.49). */
     errSoundLevel: 'Referans düzey -50 ile 200 dB arasında olmalı',
     point: 'Nokta',
@@ -1614,7 +1616,22 @@ export const tr: MessageSchema = {
       nodata: 'Veri yok'
     }
   },
+  floorPlanUi: {
+    importButton: 'Kat planı içe aktar',
+    replaceButton: 'Kat planını değiştir',
+    removeButton: 'Kat planını kaldır',
+    modeFloor: 'Kat planı modu',
+    modeGis: 'GIS haritası',
+    dragHint: 'Cihaz simgelerini kat planına sürükleyin; bırakınca otomatik kaydedilir',
+    imported: 'Kat planı içe aktarıldı: {name}',
+    importFailed: 'Kat planı içe aktarılamadı',
+    storageFailed: 'Kat planı kaydedilemedi; daha küçük bir görsel deneyin',
+    removed: 'Kat planı kaldırıldı',
+    saved: '{name} konumu kaydedildi',
+    saveFailed: 'Cihaz konumu kaydedilemedi'
+  },
   mapUi: {
+    fitAll: 'Tüm cihazları sığdır',
     canvasLabel: 'Cihaz konumları',
     /**
      * Haritanın sağ üst köşesindeki yarı saydam durum çubuğu (11. parti, 4. madde):

@@ -1628,6 +1628,8 @@ export const zhCN = {
     errLatitude: '纬度需在 -90 到 90 之间',
     errLongitude: '经度需在 -180 到 180 之间',
     errAzimuth: '方位角需在 0 到 360 之间（360 请写 0）',
+    errFloorX: '平面图横坐标需在 0 到 1 之间',
+    errFloorY: '平面图纵坐标需在 0 到 1 之间',
     /*
      * 基准声压级**界面已经不显示**（业主 2026-09-18 第 10 条），但这条错误文案留着：
      * `parseInstallation()` 仍然解析并把 `soundLevelDb` 写进库（v11 的列还在，API 也还在，
@@ -1860,7 +1862,22 @@ export const zhCN = {
       nodata: '无数据'
     }
   },
+  floorPlanUi: {
+    importButton: '导入平面图',
+    replaceButton: '更换平面图',
+    removeButton: '移除平面图',
+    modeFloor: '平面图模式',
+    modeGis: 'GIS 地图',
+    dragHint: '拖动设备图标到平面图上的位置，松手自动保存',
+    imported: '平面图已导入：{name}',
+    importFailed: '平面图导入失败',
+    storageFailed: '平面图无法保存，请换一张较小的图片',
+    removed: '平面图已移除',
+    saved: '{name} 的位置已保存',
+    saveFailed: '设备位置保存失败'
+  },
   mapUi: {
+    fitAll: '适合全部设备',
     canvasLabel: '设备落点图',
     /**
      * 地图右上角那条半透明状态栏（业主 2026-09-19 第 11 批第 4 条：删除「图上 N 台 / 共 M 台」、

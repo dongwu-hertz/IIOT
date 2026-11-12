@@ -105,6 +105,8 @@ export interface LinkageCandidate {
   observedAt: number
   alarmLevelRaw?: number
   strategyId?: number
+  /** 设备侧通道号（AO01 的气井告警需要它落 alarms 行；相机日志通常为 0）。 */
+  channelIndex?: number
   /** 相机判定的检测模式（1 局放 / 2 泄漏 / 3 机械）与放电类型键（2026-09-23 真机字段）。 */
   detectMode?: number
   dischargeTypeKey?: string

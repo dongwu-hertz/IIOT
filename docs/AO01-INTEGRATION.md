@@ -67,3 +67,14 @@ MAC `32:D4:35:DC:D2:F5`。
   survived navigation and were playing on return.
 - The camera cell status badge title now carries the main-process diagnostic, so an
   error is explainable instead of only showing "Stream error".
+
+---
+
+## 2026-11-12 补充：AO01 告警进入统一联动与地图
+
+- DeviceService.gasLeakAlerts()：轮询 PUT /get_alarm_audio 的 alertArray，按 dalAbnoType
+  0/1 判定异常；映射成 Fa371DetectLog 形状后复用现有告警轮询游标。
+- AlarmService.recordGasLeakAlarm()：AO01 告警落 alarms 行，alarmMask=0（不伪造 14 位
+  位图），severity='critical'，deviceReason='AO01 gas leak'。
+- 地图页订阅 onLinkagePending，告警落库后刷新 alarmFacts，设备标记变红。
+- 首次启动只建立基线，不弹历史告警；基线之后的新告警才走弹窗/提示/录像/邮件联动。

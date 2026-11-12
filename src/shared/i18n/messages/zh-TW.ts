@@ -1559,6 +1559,8 @@ export const zhTW: MessageSchema = {
     errLatitude: '緯度需在 -90 到 90 之間',
     errLongitude: '經度需在 -180 到 180 之間',
     errAzimuth: '方位角需在 0 到 360 之間（360 請寫 0）',
+    errFloorX: '平面圖橫座標需在 0 到 1 之間',
+    errFloorY: '平面圖縱座標需在 0 到 1 之間',
     /*
      * 基準聲壓級**介面已經不顯示**（業主 2026-09-18 第 10 條），但這條錯誤文案留著：
      * `parseInstallation()` 仍然解析並把 `soundLevelDb` 寫進庫（v11 的列還在，API 也還在，
@@ -1791,7 +1793,22 @@ export const zhTW: MessageSchema = {
       nodata: '無資料'
     }
   },
+  floorPlanUi: {
+    importButton: '匯入平面圖',
+    replaceButton: '更換平面圖',
+    removeButton: '移除平面圖',
+    modeFloor: '平面圖模式',
+    modeGis: 'GIS 地圖',
+    dragHint: '拖動裝置圖示到平面圖上的位置，放開即自動儲存',
+    imported: '平面圖已匯入：{name}',
+    importFailed: '平面圖匯入失敗',
+    storageFailed: '平面圖無法儲存，請換一張較小的圖片',
+    removed: '平面圖已移除',
+    saved: '{name} 的位置已儲存',
+    saveFailed: '裝置位置儲存失敗'
+  },
   mapUi: {
+    fitAll: '適合全部裝置',
     canvasLabel: '裝置落點圖',
     /**
      * 地圖右上角那條半透明狀態列（業主 2026-09-19 第 11 批第 4 條：刪除「圖上 N 臺 / 共 M 臺」、

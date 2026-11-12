@@ -58,6 +58,8 @@ export interface MapMarker {
   y: number
   latitude: number
   longitude: number
+  /** 平面图模式：这个标记是否已经真正部署（false = 临时网格位置）。 */
+  floorPlaced?: boolean
 }
 
 export interface DeviceMapLayout {

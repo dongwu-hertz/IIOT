@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Application service container and composition root.
  *
  * Everything is constructed once, in dependency order, and disposed in reverse.
@@ -15,6 +15,7 @@ import path from 'node:path'
 import { existsSync } from 'node:fs'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 import type { RealtimeFeature } from '@shared/domain/models'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import type { Fa371StreamPreview } from '@shared/domain/fa371-stream'
 
 import { openDatabase, SCHEMA_VERSION } from './database/schema'
@@ -855,6 +856,19 @@ export async function initServices(): Promise<AppServices> {
     devices: deviceService,
     resolveSource: (deviceId) => cameraLive.currentSource(deviceId),
     streamEvents: fa371Streams,
+    /** AO01 气井泄漏告警：在联动引擎观察前先落一条未确认 alarms 行，地图才会变红。 */
+    recordGasLeakAlarm: (candidate) => {
+      const device = deviceService.get(candidate.deviceId)
+      if (!isGasLeakMonitor(device)) return
+      alarmService.recordGasLeakAlarm({
+        deviceId: candidate.deviceId,
+        channelId: candidate.channelIndex ?? 0,
+        timestamp: candidate.at,
+        ...(candidate.identity.logId !== undefined ? { alertId: candidate.identity.logId } : {}),
+        ...(candidate.metrics?.alarmDb !== undefined ? { spl: candidate.metrics.alarmDb } : {}),
+        raw: JSON.stringify({ source: candidate.source, identity: candidate.identity, at: candidate.at })
+      })
+    },
     text: (key, params) => {
       // 2026-09-23：弹窗文案真的来自共享消息目录（此前弹窗上显示的是目录键名）。
       // 语言 = 渲染层上报的界面语言（`ui-locale.ts`）；时刻从 ISO 转成可读格式。

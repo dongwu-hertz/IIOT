@@ -5269,3 +5269,71 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
   KK.8 守卫），无新增。
 - map-picker 定向测试 4/4 通过；新增断言覆盖 `panMapCenter()`、`pointerdown` 拖拽和
   `contextmenu.prevent` 右键确认。
+
+---
+
+## AAA. 第 60 轮的发布（v1.0.33，2026-11-12）
+
+业主 2026-11-12 追加：
+1. MAP 界面应该默认把最多的设备放进地图，并支持导入平面地图、用平面图部署设备；
+2. Recording 里的 playback，左侧按钮点击就应该播放；
+3. 气井泄漏出现告警时应该有弹窗，并且在地图上显示红色。
+
+### AAA.1 交付
+
+- 版本：1.0.33（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.33-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,234,256 字节 / F7672D90A4D22A382D05588581D7FDBDDC8F69EF775E759AF1EC0BE8E7BB024C
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，2027-09-03 到期，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged 26 通过 / 0 失败，应用内版本 1.0.33
+- 上一版归档：release-1.0.32-2026-11-12/
+
+### AAA.2 MAP：默认视野、平面图导入、平面图部署
+
+- GIS 模式默认调用 fitAllDevices()：按所有有完整 GIS 点位的设备计算 Web Mercator
+  中心与缩放，打开地图就把最多的已定位设备装进视野；工具条保留「适合全部设备」按钮。
+- 导入平面图：图片以 data URL 存进 IndexedDB（hais-floor-plan），重启后自动恢复；
+  渲染层不发起任何 fetch/XHR，图片走 img + data:。
+- 有平面图时进入平面图模式：所有设备都画在图上；没有 floorX/floorY 的设备先在底部
+  按网格临时排列（仍可见），拖动图标即部署。拖动结束调用 devices.update，把归一化
+  坐标写入 devices.floor_x / floor_y（schema v21）。
+- 切换 GIS 地图 / 平面图、更换 / 移除平面图都在工具条；换图后旧设备位置按归一化
+  比例复用，不覆盖真实 GIS 经纬度。
+- 设备表 5 台、GIS 只录了 1 台时：GIS 模式最多显示 1 个真实点位；导入平面图后
+  5 台全部进入地图（其中 4 台先是临时位置），这正对应「默认最多设备」的落地方式。
+
+### AAA.3 Recording playback：左侧播放键
+
+- 录制列表左侧的图标改成真正的 button，点击直接打开播放器；
+- 点击同一行也会重新挂载 RecordingPlayer（playerNonce），不会因为「已经是当前选中行」
+  而点不动；
+- 用户点击才自动播放（:auto-load="playerAutoPlay"）；页面初次默认选中第一行只加载/展示
+  播放器，不主动出声。
+
+实测：Recordings 页有 30 行、30 个左侧按钮；点击左侧按钮后 audio.player__audio
+出现且 paused=false，即真实开始播放。
+
+### AAA.4 AO01 气井泄漏：弹窗 + 地图红色
+
+- 轮询源现在包含 AO01（不只 acousticCamera）；DeviceService.gasLeakAlerts() 用
+  PUT /get_alarm_audio 的 alertArray，把 dalAbnoType=1 的行映射成与相机检测日志同形的
+  候选事件（detectMode=2，alarmLevelRaw=3，channelIndex 保留）。
+- 告警联动服务在引擎观察前先把 AO01 告警落进 alarms 表：alarmMask=0（不伪造 SPL 等
+  14 位告警位），deviceAlarmValue=1，deviceReason='AO01 gas leak'，severity='critical'，
+  acknowledged=0；随后走同一个 AlarmLinkageEngine 的 critical 弹窗与其它联动动作。
+- 设备地图通过 window.events.onLinkagePending 刷新告警事实；新告警落库后对应标记
+  立刻变红，状态栏未确认告警数同步增加。
+- 首次启动建立基线，不弹历史 43 条；只有基线之后的新告警才弹窗/落库，避免重启刷屏。
+
+实测：
+- 开发构建日志显示 AO01 已加入轮询设备，首次建立基线 fetched=12、baselineLogId=46；
+- 手工插入一条 AO01 测试告警后，地图 AO01 标记 data-marker-tone="alarm"、
+  class 含 map-marker--alarm，状态栏告警数=1；测试行随后已删除；
+- 弹窗路径由 AlarmLinkageEngine 的既有 popup 动作承载；真实 AO01 新告警的现场弹窗
+  未等到设备自然产生。
+
+### AAA.5 测试
+
+- test:inproc：132 文件 / 2509 通过 / 77 失败，失败文件集合与上一轮一致（29 个陈旧
+  KK.8 守卫），无新增失败文件。
+- 新增 floor-plan / gas-leak-alarm 定向测试；地图、播放、告警落库均已用 dev build CDP 实测。

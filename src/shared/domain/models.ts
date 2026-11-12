@@ -185,6 +185,13 @@ export interface DeviceInstallation {
   gisLongitude?: number
   azimuthDeg?: number
   soundLevelDb?: number
+  /**
+   * 平面图部署坐标（业主 2026-11-12）：相对当前平面图左上角的**归一化**坐标，
+   * `0..1`。它与 GIS 经纬度是两套坐标：一台设备可以同时有真实 GIS 点位与
+   * 平面图位置；平面图换图后仍按比例落在新图上。
+   */
+  floorX?: number
+  floorY?: number
 }
 
 /** 安装信息的取值范围（界面与主进程共用同一套判据，见 `device-installation.ts`）。 */
@@ -193,6 +200,9 @@ export const DEVICE_INSTALLATION_LIMITS = {
   latitudeMax: 90,
   longitudeMin: -180,
   longitudeMax: 180,
+  /** 平面图归一化坐标：0 = 左/上边缘，1 = 右/下边缘。 */
+  floorMin: 0,
+  floorMax: 1,
   azimuthMin: 0,
   azimuthMax: 360,
   soundLevelMin: -50,

@@ -534,6 +534,8 @@ export interface Fa371DetectionResult {
 
 export interface Fa371DetectLog {
   id?: number
+  /** 设备侧通道号（AO01 告警行有；相机检测日志不填）。 */
+  channelIndex?: number
   /** 检测模式原始取值；§8.3 C16 说示例 `2` 的枚举含义未说明，故不做键映射。 */
   detectMode?: number
   status?: number
@@ -659,6 +661,8 @@ export interface Fa371AlarmConditionDischarge {
 
 export interface Fa371AlarmCondition {
   id?: number
+  /** 设备侧通道号（AO01 告警行有；相机检测日志不填）。 */
+  channelIndex?: number
   name?: string
   /** dB 告警值（合法区间未说明，§8.3 C28）。 */
   decibelThreshold?: number
@@ -692,6 +696,8 @@ export interface Fa371AlarmConditionPage {
 
 export interface Fa371NcFile {
   id?: number
+  /** 设备侧通道号（AO01 告警行有；相机检测日志不填）。 */
+  channelIndex?: number
   fileName?: string
   /** 原始字节数。单位手册未说明（§8.3 C32）。 */
   fileSizeRaw?: number

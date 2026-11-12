@@ -29,6 +29,8 @@ export type InstallationErrorKey =
   | 'installUi.errLongitude'
   | 'installUi.errAzimuth'
   | 'installUi.errSoundLevel'
+  | 'installUi.errFloorX'
+  | 'installUi.errFloorY'
 
 /**
  * 把输入（可能是 `''`、`'31.2'`、`null`、数字）变成一个数或"没有填"。
@@ -82,6 +84,25 @@ export function parseAzimuth(input: unknown): InstallationFieldResult {
   return { ok: true, value }
 }
 
+/** 平面图横坐标：归一化 `[0, 1]`（0 = 左边缘，1 = 右边缘）。 */
+export function parseFloorX(input: unknown): InstallationFieldResult {
+  const value = parseInstallationNumber(input)
+  if (value === undefined) return { ok: true, value: undefined }
+  if (value === null) return { ok: false, reasonKey: 'installUi.errFloorX' }
+  const { floorMin, floorMax } = DEVICE_INSTALLATION_LIMITS
+  if (value < floorMin || value > floorMax) return { ok: false, reasonKey: 'installUi.errFloorX' }
+  return { ok: true, value }
+}
+
+/** 平面图纵坐标：归一化 `[0, 1]`（0 = 上边缘，1 = 下边缘）。 */
+export function parseFloorY(input: unknown): InstallationFieldResult {
+  const value = parseInstallationNumber(input)
+  if (value === undefined) return { ok: true, value: undefined }
+  if (value === null) return { ok: false, reasonKey: 'installUi.errFloorY' }
+  const { floorMin, floorMax } = DEVICE_INSTALLATION_LIMITS
+  if (value < floorMin || value > floorMax) return { ok: false, reasonKey: 'installUi.errFloorY' }
+  return { ok: true, value }
+}
 /** 基准声压级：[-50, 200] dB（范围是给"输错了"留的护栏，不是物理断言）。 */
 export function parseSoundLevel(input: unknown): InstallationFieldResult {
   const value = parseInstallationNumber(input)
@@ -108,13 +129,17 @@ export function parseInstallation(input: {
   gisLongitude?: unknown
   azimuthDeg?: unknown
   soundLevelDb?: unknown
+  floorX?: unknown
+  floorY?: unknown
 }): InstallationParseResult {
   const installation: DeviceInstallation = {}
   const fields: Array<[keyof DeviceInstallation, InstallationFieldResult]> = [
     ['gisLatitude', parseLatitude(input.gisLatitude)],
     ['gisLongitude', parseLongitude(input.gisLongitude)],
     ['azimuthDeg', parseAzimuth(input.azimuthDeg)],
-    ['soundLevelDb', parseSoundLevel(input.soundLevelDb)]
+    ['soundLevelDb', parseSoundLevel(input.soundLevelDb)],
+    ['floorX', parseFloorX(input.floorX)],
+    ['floorY', parseFloorY(input.floorY)]
   ]
   for (const [key, result] of fields) {
     if (!result.ok) return { ok: false, installation, reasonKey: result.reasonKey }
@@ -135,7 +160,9 @@ export function hasInstallation(installation: DeviceInstallation | undefined): b
     installation.gisLatitude !== undefined ||
     installation.gisLongitude !== undefined ||
     installation.azimuthDeg !== undefined ||
-    installation.soundLevelDb !== undefined
+    installation.soundLevelDb !== undefined ||
+    installation.floorX !== undefined ||
+    installation.floorY !== undefined
   )
 }
 

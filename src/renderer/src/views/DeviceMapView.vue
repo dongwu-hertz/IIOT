@@ -72,13 +72,14 @@
  * 地图比例、SVG 画布、瓦片排布与相关测试都**不动**。
  */
 
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import type { AlarmEvent, Device } from '@shared/domain/models'
 import type { E2SyncOutcome } from '@shared/ipc/contract'
 import {
   deviceMapLayout,
+  mapBounds,
   mapGridSteps,
   mapProjector,
   type MapBounds,
@@ -88,6 +89,8 @@ import { isPointComplete } from '@shared/domain/device-installation'
 import {
   MAX_TILE_ZOOM,
   MIN_TILE_ZOOM,
+  latToWorldY,
+  lonToWorldX,
   defaultMapTilesConfig,
   TILE_SIZE,
   clampTileZoom,
@@ -103,6 +106,12 @@ import {
 import { toFileUrl } from '@renderer/lib/fileUrl'
 import { deviceMapFocusId } from '@renderer/lib/deviceMapLink'
 import { useDevicesStore } from '@renderer/stores/devices'
+import {
+  clearFloorPlan,
+  loadFloorPlan,
+  saveFloorPlan,
+  type FloorPlanRecord
+} from '@renderer/lib/floorPlanStore'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
@@ -121,7 +130,10 @@ import {
   ZoomOut,
   LocateFixed,
   TriangleAlert,
-  X
+  X,
+  ImagePlus,
+  Trash2,
+  Maximize
 } from 'lucide-vue-next'
 
 const { t } = useI18n()
@@ -153,6 +165,27 @@ const alarmsLoading = ref(false)
 const syncing = ref(false)
 const syncOutcome = ref<E2SyncOutcome | null>(null)
 const actionError = ref('')
+
+// ---------------------------------------------------------------------------
+// 平面图底图与设备部署（业主 2026-11-12）
+// ---------------------------------------------------------------------------
+/**
+ * 导入的平面图保存在 IndexedDB（见 floorPlanStore.ts）。设备位置不放在图片里：
+ * 每台设备的 installation.floorX/floorY 是相对图片的归一化坐标，换图后仍按比例复用。
+ */
+const floorPlan = ref<FloorPlanRecord | null>(null)
+const floorPlanMode = ref(false)
+const floorPlanBusy = ref(false)
+const floorPlanNotice = ref('')
+const floorPlanInput = ref<HTMLInputElement | null>(null)
+const floorDraft = ref<Record<string, { x: number; y: number }>>({})
+const floorDrag = {
+  active: false,
+  id: '',
+  pointerId: -1,
+  moved: false,
+  element: null as Element | null
+}
 
 /**
  * 每台设备的告警事实（第 14 条的落点颜色与第 17 条的设备列表都要它）。
@@ -428,6 +461,7 @@ function zoomBy(delta: number): void {
 }
 
 function onMapWheel(event: WheelEvent): void {
+  if (floorPlanMode.value) return
   if (!tileConfig.value) return
   event.preventDefault()
   zoomBy(event.deltaY < 0 ? 1 : -1)
@@ -442,6 +476,7 @@ const drag = {
 }
 
 function onMapPointerDown(event: PointerEvent): void {
+  if (floorPlanMode.value) return
   if (!tileConfig.value || event.button !== 0) return
   drag.active = true
   drag.startX = event.clientX
@@ -452,7 +487,7 @@ function onMapPointerDown(event: PointerEvent): void {
 }
 
 function onMapPointerMove(event: PointerEvent): void {
-  if (!drag.active || !drag.center) return
+  if (floorPlanMode.value || !drag.active || !drag.center) return
   const target = event.currentTarget as HTMLElement | null
   if (!target) return
   const rect = target.getBoundingClientRect()
@@ -464,7 +499,7 @@ function onMapPointerMove(event: PointerEvent): void {
 }
 
 function onMapPointerUp(event: PointerEvent): void {
-  if (!drag.active) return
+  if (floorPlanMode.value || !drag.active) return
   drag.active = false
   drag.center = null
   const target = event.currentTarget as HTMLElement | null
@@ -493,12 +528,38 @@ function resetMapView(): void {
 }
 
 /**
+ * 把全部有 GIS 点位的设备装进当前视野（业主 2026-11-12：地图界面默认显示最多设备）。
+ *
+ * 用 Web Mercator 的世界像素宽度反推缩放级别：在 zoom 0 下算一次世界宽高，再找
+ * 能容纳画布可用区域的最大 2 的幂。这是地图页的默认视角；`?device=` 指向单台时
+ * 仍由 `centerOnDevice()` 覆盖为单台居中。
+ */
+function fitAllDevices(): void {
+  const bounds = mapBounds(mapInputs.value)
+  if (!bounds) {
+    resetMapView()
+    return
+  }
+  const centerLatitude = (bounds.minLat + bounds.maxLat) / 2
+  const centerLongitude = (bounds.minLon + bounds.maxLon) / 2
+  const worldWidth = Math.abs(lonToWorldX(bounds.maxLon, 0) - lonToWorldX(bounds.minLon, 0))
+  const worldHeight = Math.abs(latToWorldY(bounds.maxLat, 0) - latToWorldY(bounds.minLat, 0))
+  const usableWidth = Math.max(1, CANVAS.width - MAP_PADDING * 2)
+  const usableHeight = Math.max(1, CANVAS.height - MAP_PADDING * 2)
+  const ratio = Math.min(
+    usableWidth / Math.max(worldWidth, 1e-9),
+    usableHeight / Math.max(worldHeight, 1e-9)
+  )
+  const zoom = clampTileZoom(Math.floor(Math.log2(Math.max(ratio, 1))))
+  mapView.value = { latitude: centerLatitude, longitude: centerLongitude, zoom }
+}
+/**
  * 显示用落点：离线模式沿用原来的"按设备范围铺满"；在线模式用 Web Mercator 投影。
  * 两种模式共用同一套 SVG 标记与色调，只是坐标来源不同。
  */
 const displayMarkers = computed(() => {
   const config = tileConfig.value
-  if (!config) return layout.value.markers
+  if (!config) return layout.value.markers.map((marker) => ({ ...marker, floorPlaced: true }))
   return mapInputs.value
     .filter(
       (device): device is MapDeviceInput & { latitude: number; longitude: number } =>
@@ -518,11 +579,68 @@ const displayMarkers = computed(() => {
         x: Math.round(point.x * 100) / 100,
         y: Math.round(point.y * 100) / 100,
         latitude: device.latitude,
-        longitude: device.longitude
+        longitude: device.longitude,
+        floorPlaced: true
       }
     })
 })
 
+/**
+ * 平面图模式下的落点：有 floorX/floorY 的设备按归一化位置画；没有部署的先在底部
+ * 按网格排一个临时位置，保证默认能看到最多设备。拖动后调用 devices.update
+ * 把归一化坐标写回 installation，下一次打开就在真实位置。
+ */
+const floorMarkers = computed(() => {
+  const unplaced = devices.devices.filter((device) => {
+    const installation = device.installation
+    return (
+      installation?.floorX === undefined ||
+      installation?.floorY === undefined ||
+      !Number.isFinite(installation.floorX) ||
+      !Number.isFinite(installation.floorY)
+    )
+  })
+  const autoIndex = new Map<string, number>()
+  unplaced.forEach((device, index) => autoIndex.set(device.id, index))
+  const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, unplaced.length))))
+  const rows = Math.max(1, Math.ceil(Math.max(1, unplaced.length) / columns))
+
+  return devices.devices.map((device) => {
+    const draft = floorDraft.value[device.id]
+    const fx = draft?.x ?? device.installation?.floorX
+    const fy = draft?.y ?? device.installation?.floorY
+    const placed =
+      fx !== undefined && fy !== undefined && Number.isFinite(fx) && Number.isFinite(fy)
+    let x: number
+    let y: number
+    if (placed) {
+      x = Math.max(0, Math.min(CANVAS.width, fx * CANVAS.width))
+      y = Math.max(0, Math.min(CANVAS.height, fy * CANVAS.height))
+    } else {
+      const index = autoIndex.get(device.id) ?? 0
+      const column = index % columns
+      const row = Math.floor(index / columns)
+      x = ((column + 0.5) / columns) * CANVAS.width
+      y = CANVAS.height - 42 - (rows - 1 - row) * 40
+    }
+    return {
+      id: device.id,
+      name: device.name,
+      x: Math.round(x * 100) / 100,
+      y: Math.round(y * 100) / 100,
+      latitude: device.installation?.gisLatitude,
+      longitude: device.installation?.gisLongitude,
+      floorPlaced: placed
+    }
+  })
+})
+const activeDisplayMarkers = computed(() =>
+  floorPlanMode.value && floorPlan.value ? floorMarkers.value : displayMarkers.value
+)
+
+const mappedCount = computed(() =>
+  floorPlanMode.value && floorPlan.value ? floorMarkers.value.length : layout.value.markers.length
+)
 const selectedDevice = computed<Device | undefined>(() =>
   selectedId.value === '' ? undefined : devices.byId(selectedId.value)
 )
@@ -559,7 +677,7 @@ function matchesMapFilter(device: Device): boolean {
 
 const filteredDisplayMarkers = computed(() => {
   const term = mapSearch.value.trim().toLocaleLowerCase()
-  return displayMarkers.value.filter((marker) => {
+  return activeDisplayMarkers.value.filter((marker) => {
     const device = devices.byId(marker.id)
     if (!device || !matchesMapFilter(device)) return false
     return term === '' || device.name.toLocaleLowerCase().includes(term) || (device.ip ?? '').toLocaleLowerCase().includes(term)
@@ -586,7 +704,7 @@ const selectedLatestAlarm = computed<AlarmEvent | undefined>(() => alarms.value[
 /** 图上每一个标记的色调（按 id 查一次，模板里不用重复算）。 */
 const markerTones = computed<Record<string, 'alarm' | 'online' | 'offline'>>(() => {
   const out: Record<string, 'alarm' | 'online' | 'offline'> = {}
-  for (const marker of displayMarkers.value) {
+  for (const marker of activeDisplayMarkers.value) {
     const device = devices.byId(marker.id)
     out[marker.id] = device ? markerTone(device) : 'offline'
   }
@@ -695,7 +813,7 @@ function closeHover(): void {
 const hoverStyle = computed(() => {
   const device = hoveredDevice.value
   if (!device) return {}
-  const marker = displayMarkers.value.find((item) => item.id === device.id)
+  const marker = activeDisplayMarkers.value.find((item) => item.id === device.id)
   if (!marker) return {}
   return {
     left: `${((marker.x / CANVAS.width) * 100).toFixed(3)}%`,
@@ -759,11 +877,152 @@ async function syncNow(): Promise<void> {
   await loadDeviceAlarmFacts()
 }
 
+// ---------------------------------------------------------------------------
+// 平面图导入 / 设备部署
+// ---------------------------------------------------------------------------
+function fileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function imageSize(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    image.onerror = () => reject(new Error('image decode failed'))
+    image.src = dataUrl
+  })
+}
+
+function selectFloorPlanFile(): void {
+  floorPlanInput.value?.click()
+}
+
+async function onFloorPlanSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    floorPlanNotice.value = t('floorPlanUi.importFailed')
+    return
+  }
+  floorPlanBusy.value = true
+  floorPlanNotice.value = ''
+  try {
+    const dataUrl = await fileAsDataUrl(file)
+    const size = await imageSize(dataUrl)
+    const record: FloorPlanRecord = {
+      name: file.name,
+      dataUrl,
+      width: size.width,
+      height: size.height,
+      importedAt: Date.now()
+    }
+    if (!(await saveFloorPlan(record))) {
+      floorPlanNotice.value = t('floorPlanUi.storageFailed')
+      return
+    }
+    floorPlan.value = record
+    floorPlanMode.value = true
+    floorDraft.value = {}
+    floorPlanNotice.value = t('floorPlanUi.imported', { name: file.name })
+  } catch {
+    floorPlanNotice.value = t('floorPlanUi.importFailed')
+  } finally {
+    floorPlanBusy.value = false
+  }
+}
+
+async function removeFloorPlanImage(): Promise<void> {
+  await clearFloorPlan()
+  floorPlan.value = null
+  floorPlanMode.value = false
+  floorDraft.value = {}
+  floorPlanNotice.value = t('floorPlanUi.removed')
+}
+
+function toggleFloorPlanMode(): void {
+  if (!floorPlan.value) return
+  floorPlanMode.value = !floorPlanMode.value
+}
+
+/**
+ * 拖动平面图上的设备标记：pointerdown 先选中设备，pointermove 实时更新草稿位置，
+ * pointerup 才写库（不把每一帧都过一遍 IPC 与 SQLite）。
+ */
+function onMarkerPointerDown(deviceId: string, event: PointerEvent): void {
+  if (floorPlanMode.value) onFloorMarkerPointerDown(deviceId, event)
+}
+
+function onFloorMarkerPointerDown(deviceId: string, event: PointerEvent): void {
+  if (!floorPlanMode.value || !floorPlan.value || event.button !== 0) return
+  event.stopPropagation()
+  event.preventDefault()
+  floorDrag.active = true
+  floorDrag.id = deviceId
+  floorDrag.pointerId = event.pointerId
+  floorDrag.moved = false
+  floorDrag.element = event.currentTarget as Element
+  selectDevice(deviceId)
+  floorDrag.element.setPointerCapture?.(event.pointerId)
+}
+
+function onFloorPointerMove(event: PointerEvent): void {
+  if (!floorDrag.active) return
+  const frame = event.currentTarget as HTMLElement | null
+  if (!frame) return
+  const rect = frame.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
+  floorDraft.value = { ...floorDraft.value, [floorDrag.id]: { x, y } }
+  floorDrag.moved = true
+}
+
+async function onFloorPointerUp(event: PointerEvent): Promise<void> {
+  if (!floorDrag.active) return
+  const id = floorDrag.id
+  const moved = floorDrag.moved
+  const point = floorDraft.value[id]
+  floorDrag.active = false
+  floorDrag.id = ''
+  floorDrag.element?.releasePointerCapture?.(event.pointerId)
+  floorDrag.element = null
+  if (!moved || point === undefined) return
+  const updated = await devices.update({
+    id,
+    installation: { floorX: point.x, floorY: point.y }
+  })
+  if (updated) {
+    const next = { ...floorDraft.value }
+    delete next[id]
+    floorDraft.value = next
+    floorPlanNotice.value = t('floorPlanUi.saved', { name: updated.name })
+  } else {
+    floorPlanNotice.value = t('floorPlanUi.saveFailed')
+  }
+}
+let unsubscribeAlarmPending: (() => void) | undefined
+
 onMounted(async () => {
   // 地图配置与开关都在设置里；进这一页也要能自己读到（settings 是共享 store，不会重复请求）。
   if (!settings.loaded) await settings.load()
   if (devices.devices.length === 0) await devices.load()
+  const storedFloorPlan = await loadFloorPlan()
+  if (storedFloorPlan) {
+    floorPlan.value = storedFloorPlan
+    floorPlanMode.value = true
+  }
   await loadDeviceAlarmFacts()
+  // 气井泄漏告警落库后，主进程会推 pending 快照；地图上那台设备要立刻变红。
+  unsubscribeAlarmPending = window.events.onLinkagePending(() => {
+    void loadDeviceAlarmFacts()
+  })
   /*
    * `?device=<id>` 的定位（业主第 10 批第 7 条后半：地址信息要「支持 GIS 显示」）。
    *
@@ -784,7 +1043,14 @@ onMounted(async () => {
     selectDevice(focused.id)
     // 在线底图下，时区中心不一定看得到这一台；?device= 要把它居中。
     centerOnDevice(focused.id)
+  } else if (!floorPlanMode.value) {
+    // 默认把全部有 GIS 点位的设备装进视野（业主 2026-11-12：默认显示最多设备）。
+    fitAllDevices()
   }
+})
+
+onBeforeUnmount(() => {
+  unsubscribeAlarmPending?.()
 })
 
 </script>
@@ -792,6 +1058,7 @@ onMounted(async () => {
 <template>
   <div class="page map-page">
     <p v-if="actionError" class="alert alert--danger" role="alert">{{ actionError }}</p>
+    <p v-if="floorPlanNotice" class="alert alert--success" role="status">{{ floorPlanNotice }}</p>
 
     <EmptyState v-if="devices.devices.length === 0" :title="t('devices.empty')" />
 
@@ -823,20 +1090,30 @@ onMounted(async () => {
           而**画布本身照旧画出来**（空的经纬度网格）—— 地图区不该在"还没有点位"时整块消失，
           那看起来像页面坏了。所以画布的条件是"这一页有设备"，而不是"图上有落点"。
         -->
-        <div
+                <div
           class="map-canvas-frame"
-          :class="{ 'map-canvas-frame--tile': tileConfig }"
+          :class="{ 'map-canvas-frame--tile': tileConfig && !floorPlanMode }"
           data-map-canvas-frame
-          :data-map-tiles-enabled="tileConfig ? 'yes' : 'no'"
-          :data-map-zoom="tileConfig ? mapZoom : null"
-          :data-map-center="tileConfig ? activeCenter.latitude.toFixed(5) + ',' + activeCenter.longitude.toFixed(5) : null"
-          :data-map-timezone="tileConfig ? systemTimeZone : null"
+          :data-map-tiles-enabled="tileConfig && !floorPlanMode ? 'yes' : 'no'"
+          :data-map-floor-plan="floorPlan ? 'yes' : 'no'"
+          :data-map-floor-mode="floorPlanMode ? 'yes' : 'no'"
+          :data-map-zoom="tileConfig && !floorPlanMode ? mapZoom : null"
+          :data-map-center="tileConfig && !floorPlanMode ? activeCenter.latitude.toFixed(5) + ',' + activeCenter.longitude.toFixed(5) : null"
+          :data-map-timezone="tileConfig && !floorPlanMode ? systemTimeZone : null"
           @wheel="onMapWheel"
           @pointerdown="onMapPointerDown"
-          @pointermove="onMapPointerMove"
-          @pointerup="onMapPointerUp"
-          @pointercancel="onMapPointerUp"
+          @pointermove="floorPlanMode ? onFloorPointerMove($event) : onMapPointerMove($event)"
+          @pointerup="floorPlanMode ? onFloorPointerUp($event) : onMapPointerUp($event)"
+          @pointercancel="floorPlanMode ? onFloorPointerUp($event) : onMapPointerUp($event)"
         >
+          <input
+            ref="floorPlanInput"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/bmp"
+            style="display: none"
+            data-map-floor-plan-input
+            @change="onFloorPlanSelected"
+          />
           <div class="map-toolbar" data-map-toolbar @pointerdown.stop @wheel.stop>
             <div class="map-toolbar__search-wrap">
               <Search class="map-toolbar__search-icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -874,7 +1151,51 @@ onMounted(async () => {
                 <WifiOff :size="15" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <button type="button" class="btn btn--icon map-icon-btn" title="Center map" aria-label="Center map" @click="resetMapView">
+            <button
+              type="button"
+              class="btn btn--icon map-icon-btn"
+              data-action="import-floor-plan"
+              :title="floorPlan ? t('floorPlanUi.replaceButton') : t('floorPlanUi.importButton')"
+              :aria-label="floorPlan ? t('floorPlanUi.replaceButton') : t('floorPlanUi.importButton')"
+              :disabled="floorPlanBusy"
+              @click="selectFloorPlanFile"
+            >
+              <ImagePlus :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <button
+              v-if="floorPlan"
+              type="button"
+              class="btn btn--icon map-icon-btn"
+              :class="{ 'btn--primary': floorPlanMode }"
+              data-action="toggle-floor-plan"
+              :title="floorPlanMode ? t('floorPlanUi.modeGis') : t('floorPlanUi.modeFloor')"
+              :aria-label="floorPlanMode ? t('floorPlanUi.modeGis') : t('floorPlanUi.modeFloor')"
+              @click="toggleFloorPlanMode"
+            >
+              <ImagePlus :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <button
+              v-if="floorPlan"
+              type="button"
+              class="btn btn--icon map-icon-btn"
+              data-action="remove-floor-plan"
+              :title="t('floorPlanUi.removeButton')"
+              :aria-label="t('floorPlanUi.removeButton')"
+              @click="removeFloorPlanImage"
+            >
+              <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <button
+              v-if="!floorPlanMode"
+              type="button"
+              class="btn btn--icon map-icon-btn"
+              data-action="fit-all-devices"
+              :title="t('mapUi.fitAll')"
+              :aria-label="t('mapUi.fitAll')"
+              @click="fitAllDevices"
+            >
+              <Maximize :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>            <button type="button" class="btn btn--icon map-icon-btn" title="Center map" aria-label="Center map" @click="resetMapView">
               <Crosshair :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
@@ -884,7 +1205,15 @@ onMounted(async () => {
             瓦片是普通 <img>（connect-src 仍是 none，因此不能变成 fetch 数据通道）；
             署名固定在地图右下角，放大/缩小/拖拽在控制条与画布手势上。
           -->
-          <div v-if="tileConfig" class="map-tile-layer" data-map-tiles>
+          <img
+            v-if="floorPlanMode && floorPlan"
+            class="map-floor-plan"
+            :src="floorPlan.dataUrl"
+            alt=""
+            draggable="false"
+            data-map-floor-plan-image
+          />
+          <div v-if="tileConfig && !floorPlanMode" class="map-tile-layer" data-map-tiles>
             <img
               v-for="tile in tilePlacements"
               :key="tile.key"
@@ -925,10 +1254,10 @@ onMounted(async () => {
             :aria-label="t('mapUi.canvasLabel')"
             data-map-canvas
           >
-            <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" :class="{ 'map-canvas__bg--transparent': tileConfig }" />
+            <rect x="0" y="0" :width="CANVAS.width" :height="CANVAS.height" class="map-canvas__bg" :class="{ 'map-canvas__bg--transparent': tileConfig || floorPlanMode }" />
             <!-- 经纬度网格：视野小时步长自动变小（`mapGridSteps`）。没有落点时用兜底视野
                  （`effectiveBounds`），网格与坐标刻度始终在场 —— 这就是这一页的 GIS 信息本体。 -->
-            <g class="map-grid">
+            <g v-if="!floorPlanMode" class="map-grid">
               <line
                 v-for="latitude in grid.lat"
                 :key="`lat-${latitude}`"
@@ -971,13 +1300,18 @@ onMounted(async () => {
               class="map-marker"
               :class="[
                 `map-marker--${markerTones[marker.id]}`,
-                { 'map-marker--active': marker.id === selectedId }
+                {
+                  'map-marker--active': marker.id === selectedId,
+                  'map-marker--floor-unplaced': floorPlanMode && marker.floorPlaced === false
+                }
               ]"
               :transform="`translate(${marker.x} ${marker.y})`"
               role="button"
               tabindex="0"
               :data-map-marker="marker.id"
               :data-marker-tone="markerTones[marker.id]"
+              :data-floor-placed="marker.floorPlaced === undefined ? null : String(marker.floorPlaced)"
+              @pointerdown="onMarkerPointerDown(marker.id, $event)"
               @click="selectDevice(marker.id)"
               @mouseenter="openHover(marker.id)"
               @mouseleave="closeHover()"
@@ -992,14 +1326,18 @@ onMounted(async () => {
             </g>
           </svg>
 
+          <div v-if="floorPlanMode" class="map-floor-plan-hint" data-map-floor-plan-hint>
+            {{ t('floorPlanUi.dragHint') }}
+          </div>
+
           <!--
             署名与缩放控制放在 SVG **外面**（同一层、z-index 更高）：
             它们在瓦片层之上、可点；瓦片本身永远不会被控制条挡住。
           -->
-          <div v-if="tileConfig?.attribution" class="map-attribution" data-map-attribution>
+          <div v-if="tileConfig?.attribution && !floorPlanMode" class="map-attribution" data-map-attribution>
             {{ tileConfig?.attribution }}
           </div>
-          <div class="map-zoom-controls" data-map-zoom-controls @pointerdown.stop @wheel.stop>
+          <div v-if="!floorPlanMode" class="map-zoom-controls" data-map-zoom-controls @pointerdown.stop @wheel.stop>
             <button
               type="button"
               class="btn btn--icon map-icon-btn"
@@ -1101,9 +1439,9 @@ onMounted(async () => {
             :aria-label="t('mapUi.statusLabel')"
             data-map-statusbar
           >
-            <span class="map-status__item" data-map-status-mapped :title="t('mapUi.statusMapped', { count: layout.markers.length })">
+            <span class="map-status__item" data-map-status-mapped :title="t('mapUi.statusMapped', { count: mappedCount })">
               <MapPin :size="14" :stroke-width="1.8" aria-hidden="true" />
-              <strong>{{ layout.markers.length }}</strong>
+              <strong>{{ mappedCount }}</strong>
             </span>
             <span class="map-status__item" data-map-status-total :title="t('mapUi.statusTotal', { count: devices.devices.length })">
               <Monitor :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -1522,6 +1860,39 @@ onMounted(async () => {
   cursor: grabbing;
 }
 
+.map-floor-plan {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+.map-floor-plan-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg) 86%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.map-marker--floor-unplaced {
+  opacity: 0.78;
+}
+
+.map-marker--floor-unplaced .map-marker__dot {
+  stroke-dasharray: 3 2;
+}
 .map-tile-layer {
   position: absolute;
   inset: 0;

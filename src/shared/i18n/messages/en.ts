@@ -1427,6 +1427,8 @@ presets, the licence boundaries
     errLatitude: 'Latitude must be between -90 and 90',
     errLongitude: 'Longitude must be between -180 and 180',
     errAzimuth: 'Azimuth must be between 0 and 360 (write 0 for 360)',
+    errFloorX: 'Floor-plan X must be between 0 and 1',
+    errFloorY: 'Floor-plan Y must be between 0 and 1',
     /* UI removed (item 10) but the domain still parses the field — see §15.49. */
     errSoundLevel: 'Reference level must be between -50 and 200 dB',
     point: 'Point',
@@ -1647,7 +1649,22 @@ presets, the licence boundaries
       nodata: 'No data'
     }
   },
+  floorPlanUi: {
+    importButton: 'Import floor plan',
+    replaceButton: 'Replace floor plan',
+    removeButton: 'Remove floor plan',
+    modeFloor: 'Floor plan mode',
+    modeGis: 'GIS map',
+    dragHint: 'Drag device icons onto the floor plan; release to save automatically',
+    imported: 'Floor plan imported: {name}',
+    importFailed: 'Floor plan import failed',
+    storageFailed: 'Could not save the floor plan; try a smaller image',
+    removed: 'Floor plan removed',
+    saved: 'Position saved for {name}',
+    saveFailed: 'Could not save the device position'
+  },
   mapUi: {
+    fitAll: 'Fit all devices',
     canvasLabel: 'Device positions',
     /**
      * The translucent status bar in the map's top-right corner (owner batch 11, item 4):

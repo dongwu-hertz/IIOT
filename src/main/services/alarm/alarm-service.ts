@@ -119,6 +119,27 @@ export class AlarmService {
     return record
   }
 
+  recordGasLeakAlarm(input: {
+    deviceId: string
+    channelId: number
+    timestamp: number
+    alertId?: number
+    spl?: number
+    raw?: string
+  }): { id: string; created: boolean } {
+    return this.alarms.insert({
+      deviceId: input.deviceId,
+      channelId: input.channelId,
+      timestamp: input.timestamp,
+      alarmMask: 0,
+      severity: 'critical',
+      source: 'fa8',
+      deviceAlarmValue: 1,
+      deviceReason: 'AO01 gas leak',
+      ...(input.spl !== undefined ? { spl: input.spl } : {}),
+      ...(input.raw !== undefined ? { deviceRaw: input.raw } : {})
+    })
+  }
   /** Retention sweep for alarm rows, mirroring the recording retention window. */
   pruneOlderThan(cutoff: number): number {
     return this.alarms.deleteOlderThan(cutoff)

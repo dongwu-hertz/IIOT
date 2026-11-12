@@ -49,6 +49,8 @@ import { FetchHttpTransport, type HttpTransport } from './http-transport'
 import type { CredentialStore } from './credential-store'
 import {
   looksLikeHertzinnoDevice,
+  extractAlarmAudio,
+  mapAlarmRecording,
   mapChannels,
   mapDeviceInfo,
   mapSampleRate,
@@ -58,6 +60,7 @@ import type { DeviceRepository, ChannelRepository } from '../database/device-rep
 import { AUSCULTATION_CHANNEL_COUNT } from '../database/device-repository'
 import { e2ChannelCountFromModel, E2_AIR_SONAR_CHANNEL_COUNT, type E2Variant } from '@shared/domain/e2'
 import { parseInstallation } from '@shared/domain/device-installation'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import {
   MQTT_TELEMETRY_TOPIC,
   PUSH_SECRET_BYTES,
@@ -1290,6 +1293,45 @@ export class DeviceService extends EventEmitter {
    * 于是事件身份里的 `startTime` 永远是设备原样的值，轮询与 WebSocket
    * 两个源因此必然拼出同一个身份。
    */
+  /**
+   * AO01 气井泄漏装置的告警行（`PUT /get_alarm_audio` -> `alertArray`）。
+   *
+   * 映射成与相机 `detect_logs` 相同的 `Fa371DetectLog` 形状，这样告警联动引擎的
+   * 轮询、游标去重、弹窗与冷却规则一套代码复用，不需要第二套判定。
+   * `dalAbnoType` 0 正常 / 1 异常；只有 1 才带 `isAlarm`，异常统一按 critical 弹窗。
+   */
+  async gasLeakAlerts(deviceId: string): Promise<Fa371DetectLog[]> {
+    const device = this.get(deviceId)
+    if (!isGasLeakMonitor(device)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, '该设备不是 AO01 气井泄漏监测装置', deviceId)
+    }
+    const raw = await this.withStatusTracking(device, () =>
+      this.clientFor(device).queryAlarmAudio({ pageStart: 0, pageSize: 12 })
+    )
+    const rows = extractAlarmAudio(raw)
+    const logs: Fa371DetectLog[] = []
+    for (const row of rows) {
+      const mapped = mapAlarmRecording(row)
+      if (!mapped || mapped.remoteId === undefined) continue
+      const source = row as Record<string, unknown>
+      const rawStart = Number(source.dalStartTime)
+      const abnormal = Number(source.dalAbnoType) === 1
+      const log: Fa371DetectLog = {
+        id: mapped.remoteId,
+        channelIndex: mapped.channelIndex,
+        startTime: mapped.alarmTime,
+        timeUnit: 'epoch_milliseconds',
+        resultFiles: {},
+        detectMode: 2,
+        isAlarm: abnormal
+      }
+      if (Number.isFinite(rawStart)) log.startTimeRaw = rawStart
+      if (abnormal) log.alarmLevelRaw = 3
+      if (mapped.spl !== undefined) log.lastAlarmDb = mapped.spl
+      logs.push(log)
+    }
+    return logs
+  }
   async cameraDetectLogs(deviceId: string): Promise<Fa371DetectLog[]> {
     const device = this.get(deviceId)
     if (device.kind !== 'acousticCamera') {

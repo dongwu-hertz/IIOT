@@ -67,6 +67,9 @@ interface DeviceRow {
   gis_longitude: number | null
   azimuth_deg: number | null
   sound_level_db: number | null
+  /** v21：平面图部署坐标（归一化 0..1），NULL = 未部署。 */
+  floor_x: number | null
+  floor_y: number | null
   /** v20：归属部门（自由文本，空 = 未录入）。 */
   department: string | null
   /** v20：自定义属性 JSON（`[{key,value}]`；空串 = 未录入）。 */
@@ -133,6 +136,8 @@ function toDevice(row: DeviceRow): Device {
   if (row.gis_longitude !== null) installation.gisLongitude = row.gis_longitude
   if (row.azimuth_deg !== null) installation.azimuthDeg = row.azimuth_deg
   if (row.sound_level_db !== null) installation.soundLevelDb = row.sound_level_db
+  if (row.floor_x !== null) installation.floorX = row.floor_x
+  if (row.floor_y !== null) installation.floorY = row.floor_y
   if (hasInstallation(installation)) device.installation = installation
   const department = normaliseDepartment(row.department)
   if (department !== undefined) device.department = department
@@ -345,9 +350,10 @@ export class DeviceRepository {
              id, device_uid, kind, name, ip_address, http_port, mac_address,
              connection_type, status, created_at, updated_at,
              gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+             floor_x, floor_y,
              department, attributes_json, ingest_plan
            ) VALUES (?, ?, 'pushDevice', ?, NULL, NULL, NULL,
-                     'LAN', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                     'LAN', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -361,6 +367,8 @@ export class DeviceRepository {
           installation.gisLongitude ?? null,
           installation.azimuthDeg ?? null,
           installation.soundLevelDb ?? null,
+          installation.floorX ?? null,
+          installation.floorY ?? null,
           normaliseDepartment(input.department) ?? null,
           serialiseDeviceAttributes(input.attributes),
           serialiseIngestPlan(input.ingest)
@@ -456,8 +464,9 @@ export class DeviceRepository {
              connection_type, firmware_version, fpga_version, web_version,
              status, last_seen, created_at, updated_at,
              gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+             floor_x, floor_y,
              department, attributes_json, ingest_plan
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -478,6 +487,8 @@ export class DeviceRepository {
           installation.gisLongitude ?? null,
           installation.azimuthDeg ?? null,
           installation.soundLevelDb ?? null,
+          installation.floorX ?? null,
+          installation.floorY ?? null,
           normaliseDepartment(input.department) ?? null,
           serialiseDeviceAttributes(input.attributes),
           serialiseIngestPlan(input.ingest)
@@ -567,6 +578,7 @@ export class DeviceRepository {
         `UPDATE devices
             SET name = ?, ip_address = ?, http_port = ?, updated_at = ?,
                 gis_latitude = ?, gis_longitude = ?, azimuth_deg = ?, sound_level_db = ?,
+                floor_x = ?, floor_y = ?,
                 department = ?, attributes_json = ?, ingest_plan = ?
           WHERE id = ?`
       )
@@ -579,6 +591,8 @@ export class DeviceRepository {
         pick('gisLongitude'),
         pick('azimuthDeg'),
         pick('soundLevelDb'),
+        pick('floorX'),
+        pick('floorY'),
         nextDepartment,
         nextAttributes,
         nextIngest,

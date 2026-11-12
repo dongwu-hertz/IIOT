@@ -64,6 +64,10 @@ const notice = ref('')
 
 /** Currently selected recording in the master-detail workspace. */
 const playingId = ref('')
+/** 强制重挂播放器：同一行再次点击也要从头播放，而不是只是选中。 */
+const playerNonce = ref(0)
+/** 只有用户点行/播放键才自动出声；页面初始选中第一行时只加载元数据，不自动播。 */
+const playerAutoPlay = ref(false)
 
 /** Video preview uses the existing loopback HTTP URL so Range seeking keeps working. */
 const videoUrl = ref('')
@@ -150,7 +154,7 @@ async function load(): Promise<void> {
     videoUrl.value = ''
     videoError.value = ''
     const first = items.value[0]
-    if (first) await openPlayer(first)
+    if (first) await openPlayer(first, false)
   }
 }
 
@@ -237,8 +241,10 @@ async function addToSamples(recording: Recording): Promise<void> {
  *     `<video>` 自己拉字节流，支持 Range 拖动）。
  * 拿不到地址时**明说无法播放**，而不是打开一个永远空着的播放器。
  */
-async function openPlayer(recording: Recording): Promise<void> {
+async function openPlayer(recording: Recording, autoPlay = true): Promise<void> {
   playingId.value = recording.id
+  playerAutoPlay.value = autoPlay
+  playerNonce.value += 1
   videoTitle.value = formatDateTime(recording.startTime)
   videoUrl.value = ''
   videoError.value = ''
@@ -383,7 +389,13 @@ watch(
             @click="openPlayer(recording)"
             @keydown.enter="openPlayer(recording)"
           >
-            <div class="recording-row__icon" :class="{ 'recording-row__icon--video': isVideoRecording(recording) }" aria-hidden="true">
+            <button
+              type="button"
+              class="recording-row__icon"
+              :class="{ 'recording-row__icon--video': isVideoRecording(recording) }"
+              :aria-label="t('recordingsUi.playLabel', { time: formatDateTime(recording.startTime) })"
+              @click.stop="openPlayer(recording)"
+            >
               <svg v-if="isVideoRecording(recording)" width="16" height="16" viewBox="0 0 16 16">
                 <rect x="2.5" y="4" width="8.5" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
                 <path d="M11 6.2l2.5-1.5v6.6L11 9.8z" fill="currentColor"/>
@@ -391,7 +403,7 @@ watch(
               <svg v-else width="16" height="16" viewBox="0 0 16 16">
                 <path d="M3 9V7m2 5V4m2 9V3m2 8V5m2 4V7m2 1V6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
               </svg>
-            </div>
+            </button>
 
             <div class="recording-row__body">
               <div class="recording-row__top">
@@ -489,12 +501,12 @@ watch(
 
           <div class="recordings-preview__scroll">
             <div v-if="isVideoRecording(playingRecording)" class="video-preview-shell">
-              <video v-if="videoUrl" class="video-player" :src="videoUrl" controls autoplay></video>
+              <video v-if="videoUrl" class="video-player" :src="videoUrl" controls :autoplay="playerAutoPlay"></video>
               <p v-else-if="videoError" class="alert alert--danger" role="alert">{{ videoError }}</p>
               <p v-else class="muted" role="status">{{ t('recordingsUi.videoLoading') }}</p>
             </div>
 
-            <RecordingPlayer v-else :recording-id="playingRecording.id" />
+            <RecordingPlayer v-else :key="`${playingRecording.id}:${playerNonce}`" :recording-id="playingRecording.id" :auto-load="playerAutoPlay" />
 
             <section class="recording-facts">
               <div class="recording-fact">
@@ -649,6 +661,9 @@ watch(
 }
 
 .recording-row__icon {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
   width: 32px;
   height: 32px;
   border-radius: 9px;
