@@ -500,6 +500,15 @@ export const zhCN = {
    * wording is identical rather than duplicating strings.
    */
   devicesUi: {
+    profileSection: '归属与属性',
+    profileSectionHint: '部门与自定义属性只保存在本机，用于资产与运维归档；不会写入设备固件。',
+    department: '部门',
+    departmentPlaceholder: '例如：运维一部',
+    attributes: '属性',
+    addAttribute: '添加属性',
+    attributeKey: '属性名',
+    attributeValue: '属性值',
+    noAttributes: '尚未添加属性',
     addButton: '添加设备',
     noticeAdded: '设备已添加',
     kindPushDevice: '推送设备',
@@ -777,6 +786,16 @@ export const zhCN = {
     videoUnavailable: '该录像无法在内置播放器中播放（本地文件缺失或格式不受支持）。'
   },
 
+  mapPickerUi: {
+    title: '在地图上选点',
+    hint: '点击地图选择设备点位',
+    offlineHint: '在线底图未启用：仍可点击网格选点。',
+    selected: '已选：{lat}, {lon}',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    confirm: '使用此点位',
+    pickButton: '在地图上选点'
+  },
   gasLeakUi: {
     title: '气井泄漏监测',
     badge: '设备端检测',

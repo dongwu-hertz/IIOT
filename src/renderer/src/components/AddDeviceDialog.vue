@@ -35,6 +35,7 @@ import { useDevicesStore } from '@renderer/stores/devices'
 import { useIngestStore } from '@renderer/stores/ingest'
 import { useSettingsStore } from '@renderer/stores/settings'
 import AppModal from '@renderer/components/AppModal.vue'
+import MapPointPicker from '@renderer/components/MapPointPicker.vue'
 import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -98,6 +99,7 @@ function emptyForm(): FormState {
 }
 
 const form = reactive<FormState>(emptyForm())
+const mapPickerOpen = ref(false)
 const formError = ref('')
 const probing = ref(false)
 const adding = ref(false)
@@ -111,6 +113,18 @@ const probeError = ref('')
  * 操作员要么每次点开看一眼、要么永远不知道里面有没有东西。
  */
 const installationOpen = ref(false)
+
+function coordinateInput(value: string): number | undefined {
+  const text = value.trim()
+  if (text === '') return undefined
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function onMapPointPicked(point: { latitude: number; longitude: number }): void {
+  form.installation.gisLatitude = point.latitude.toFixed(6)
+  form.installation.gisLongitude = point.longitude.toFixed(6)
+}
 
 /** 收起状态下那一行小结：没填 / 填了什么（只报"有没有点位"，不在这里堆坐标）。 */
 const installationSummary = computed(() => {
@@ -780,8 +794,26 @@ watch(
               <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
             </label>
           </div>
+          <div class="form-actions">
+            <button
+              type="button"
+              class="btn btn--sm"
+              data-action="pick-device-point"
+              @click="mapPickerOpen = true"
+            >
+              {{ t('mapPickerUi.pickButton') }}
+            </button>
+          </div>
         </div>
       </section>
+
+      <MapPointPicker
+        :open="mapPickerOpen"
+        :latitude="coordinateInput(form.installation.gisLatitude)"
+        :longitude="coordinateInput(form.installation.gisLongitude)"
+        @close="mapPickerOpen = false"
+        @pick="onMapPointPicked"
+      />
 
       <!--
         **推流接入**（业主 20260921 第 12 条：这一块只在 HTTP/MQTT 模式出现；IP 地址模式

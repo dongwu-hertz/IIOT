@@ -100,6 +100,12 @@ export function isDeviceKind(value: unknown): value is DeviceKind {
   return typeof value === 'string' && (DEVICE_KINDS as readonly string[]).includes(value)
 }
 
+/** 设备自定义属性：一个可排序的 key/value 列表（部门是单独的结构化字段）。 */
+export interface DeviceAttribute {
+  key: string
+  value: string
+}
+
 export interface Device {
   /** Local primary key. */
   id: string
@@ -128,6 +134,10 @@ export interface Device {
   lastSeen?: number
   /** 安装信息（见 `DeviceInstallation`）：点位 / 朝向 / 基准分贝。 */
   installation?: DeviceInstallation
+  /** 归属部门（自由文本，最长见 `DEVICE_DEPARTMENT_MAX_LENGTH`）。 */
+  department?: string
+  /** 自定义属性（例如资产编号、巡检责任人）；空数组与缺席同义。 */
+  attributes?: DeviceAttribute[]
   /**
    * 听诊盒子族**是哪一代**（`auscultation` = 2023 版听诊盒子，`airSonar` = SN-16 空气声呐）。
    *
@@ -226,6 +236,10 @@ export interface AddDeviceInput {
    * 其他机型留空。校验规则见 `@shared/domain/device-installation`。
    */
   installation?: DeviceInstallation
+  /** 归属部门（可选；编辑对话框里也可以补）。 */
+  department?: string
+  /** 自定义属性（可选；按 key 去重，见 `device-profile.ts`）。 */
+  attributes?: DeviceAttribute[]
   /**
    * 接入方案（业主 2026-09-19 第 13 批第 3、4 条；20260921 第 12 条改语义）。
    *
@@ -256,6 +270,10 @@ export interface UpdateDeviceInput {
   password?: string
   /** 安装信息：**部分更新**（`undefined` = 不动这一项，`null` = 清空这一项）。 */
   installation?: Partial<Record<keyof DeviceInstallation, number | null>>
+  /** 部门：`undefined` = 不动，`null` / 空串 = 清空。 */
+  department?: string | null
+  /** 自定义属性：`undefined` = 不动，`null` / 空数组 = 清空。 */
+  attributes?: DeviceAttribute[] | null
   /** 接入方案：**省略 = 不动这一项**（见 `AddDeviceInput.ingest`）。 */
   ingest?: DeviceIngestPlan
 }

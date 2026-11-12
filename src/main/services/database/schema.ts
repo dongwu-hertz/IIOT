@@ -19,7 +19,7 @@ import Database from 'better-sqlite3'
 import type { Database as SqliteDatabase } from 'better-sqlite3'
 
 /** Current schema version. Bump together with a new entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 export interface Migration {
   version: number
@@ -1075,6 +1075,23 @@ export const MIGRATIONS: readonly Migration[] = [
 
         CREATE INDEX IF NOT EXISTS idx_camera_alarm_regions_device
           ON camera_alarm_regions (device_id, area_index);
+      `)
+    }
+  },
+  {
+    version: 20,
+    name: 'device-department-attributes',
+    up: (db) => {
+      /**
+       * 设备管理的手工元数据（业主 2026-11-12）：部门与自定义属性。
+       *
+       * 部门是一列文本；属性是 JSON 数组（`[{key,value}]`），读出时统一过
+       * `parseDeviceAttributes()`，坏 JSON 当空列表而不是让设备列表读不出来。
+       * 两者都允许为空，且与设备协议无关。
+       */
+      db.exec(`
+        ALTER TABLE devices ADD COLUMN department TEXT;
+        ALTER TABLE devices ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '';
       `)
     }
   }

@@ -440,6 +440,15 @@ export const tr: MessageSchema = {
   },
 
   devicesUi: {
+    profileSection: 'Sahiplik ve öznitelikler',
+    profileSectionHint: 'Departman ve özel öznitelikler varlık ve operasyon kayıtları için yerel olarak saklanır; cihaz yazılımına yazılmaz.',
+    department: 'Departman',
+    departmentPlaceholder: 'örn. Operasyon',
+    attributes: 'Öznitelikler',
+    addAttribute: 'Öznitelik ekle',
+    attributeKey: 'Öznitelik adı',
+    attributeValue: 'Öznitelik değeri',
+    noAttributes: 'Henüz öznitelik yok',
     addButton: 'Cihaz ekle',
     noticeAdded: 'Cihaz eklendi',
     kindPushDevice: 'Gönderme cihazı',
@@ -677,6 +686,16 @@ export const tr: MessageSchema = {
     videoUnavailable: 'Bu kayıt yerleşik oynatıcıda oynatılamıyor (yerel dosya eksik ya da biçim desteklenmiyor).'
   },
 
+  mapPickerUi: {
+    title: 'Haritada nokta seç',
+    hint: 'Cihaz konumunu seçmek için haritaya tıklayın',
+    offlineHint: 'Çevrimiçi alt harita kapalı; yine de ızgaraya tıklayarak nokta seçebilirsiniz.',
+    selected: 'Seçilen: {lat}, {lon}',
+    zoomIn: 'Yakınlaştır',
+    zoomOut: 'Uzaklaştır',
+    confirm: 'Bu noktayı kullan',
+    pickButton: 'Haritada seç'
+  },
   gasLeakUi: {
     title: 'Gaz kuyusu kaçak izleme',
     badge: 'Cihaz üzerinde algılama',

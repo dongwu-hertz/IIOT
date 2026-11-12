@@ -101,12 +101,13 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
    * 差别逐条：多了「序号」；「设备IP」→「IP地址」、「是否在线」→「状态」、
    * 「设备通道」→「通道数」；「配置」拆成「设置」与「删除」两个图标列。
    */
-  it('表头正好是那十列，且顺序一致', () => {
+  it('表头正好是那十一列，且顺序一致', () => {
     const head = between(devicesViewCode, '<thead>', '</thead>', '设备表表头')
     const keys = [...head.matchAll(/t\('([\w.]+)'\)/g)].map((match) => match[1])
     assert.deepEqual(keys, [
       'devicesUi.indexColumn',
       'devices.name',
+      'devicesUi.department',
       'devicesUi.ipColumn',
       'addDeviceUi.kindLabel',
       'devicesUi.onlineColumn',
@@ -122,6 +123,7 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     const expected = [
       '序号',
       '设备名称',
+      '部门',
       'IP地址',
       '设备类型',
       '状态',
@@ -134,6 +136,7 @@ describe('设备表：一列一个事实，顺序按业主给的清单', () => {
     const actual = [
       messageAt('zh-CN', 'devicesUi.indexColumn'),
       messageAt('zh-CN', 'devices.name'),
+      messageAt('zh-CN', 'devicesUi.department'),
       messageAt('zh-CN', 'devicesUi.ipColumn'),
       messageAt('zh-CN', 'addDeviceUi.kindLabel'),
       messageAt('zh-CN', 'devicesUi.onlineColumn'),

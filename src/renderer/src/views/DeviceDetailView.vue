@@ -43,6 +43,7 @@ import MaintenanceSection from '@renderer/components/device-config/MaintenanceSe
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import CameraControlPanel from '@renderer/components/CameraControlPanel.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
+import DeviceProfileCard from '@renderer/components/DeviceProfileCard.vue'
 import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
 import AirSonarPtzPanel from '@renderer/components/AirSonarPtzPanel.vue'
 import { callApi } from '@renderer/lib/result'
@@ -616,6 +617,8 @@ const webUiAddress = computed(() => {
           卡片本身与实时检测页（声呐那一支）共用，所以两页不可能显示成两个样子。
         -->
         <DeviceInstallationCard :installation="device.installation" :device-id="device.id" />
+
+        <DeviceProfileCard :department="device.department" :attributes="device.attributes" />
       </template>
 
       <!-- 通道与采样率 -->
@@ -685,6 +688,8 @@ const webUiAddress = computed(() => {
         </section>
 
         <DeviceInstallationCard :installation="device.installation" :device-id="device.id" />
+
+        <DeviceProfileCard :department="device.department" :attributes="device.attributes" />
 
         <AirSonarPtzPanel :device-id="props.id" />
       </template>

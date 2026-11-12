@@ -28,6 +28,11 @@ import type {
 } from '@shared/domain/models'
 import { CHANNEL_COUNT, SensorType as SensorTypeEnum, isDeviceKind } from '@shared/domain/models'
 import { hasInstallation } from '@shared/domain/device-installation'
+import {
+  normaliseDepartment,
+  parseDeviceAttributes,
+  serialiseDeviceAttributes
+} from '@shared/domain/device-profile'
 import { isE2Variant, type E2Variant } from '@shared/domain/e2'
 import {
   isPushSecret,
@@ -62,6 +67,10 @@ interface DeviceRow {
   gis_longitude: number | null
   azimuth_deg: number | null
   sound_level_db: number | null
+  /** v20：归属部门（自由文本，空 = 未录入）。 */
+  department: string | null
+  /** v20：自定义属性 JSON（`[{key,value}]`；空串 = 未录入）。 */
+  attributes_json: string
   /** v12：听诊盒子族的两代协议（`auscultation` / `airSonar`），NULL = 还没读到过。 */
   e2_variant: string | null
   /**
@@ -125,6 +134,10 @@ function toDevice(row: DeviceRow): Device {
   if (row.azimuth_deg !== null) installation.azimuthDeg = row.azimuth_deg
   if (row.sound_level_db !== null) installation.soundLevelDb = row.sound_level_db
   if (hasInstallation(installation)) device.installation = installation
+  const department = normaliseDepartment(row.department)
+  if (department !== undefined) device.department = department
+  const attributes = parseDeviceAttributes(row.attributes_json)
+  if (attributes.length > 0) device.attributes = attributes
   /*
    * 听诊盒子族的代次（v12）：只认得出两代之一才给这一格。认不出的字符串（别人动过的库、
    * 以后多出来的一代）当"没读到过"处理 —— 界面据此不会给一台认不出的设备套上 PTZ 配置页。
@@ -331,9 +344,10 @@ export class DeviceRepository {
           `INSERT INTO devices (
              id, device_uid, kind, name, ip_address, http_port, mac_address,
              connection_type, status, created_at, updated_at,
-             gis_latitude, gis_longitude, azimuth_deg, sound_level_db, ingest_plan
+             gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+             department, attributes_json, ingest_plan
            ) VALUES (?, ?, 'pushDevice', ?, NULL, NULL, NULL,
-                     'LAN', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?)`
+                     'LAN', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -347,6 +361,8 @@ export class DeviceRepository {
           installation.gisLongitude ?? null,
           installation.azimuthDeg ?? null,
           installation.soundLevelDb ?? null,
+          normaliseDepartment(input.department) ?? null,
+          serialiseDeviceAttributes(input.attributes),
           serialiseIngestPlan(input.ingest)
         )
     })
@@ -439,8 +455,9 @@ export class DeviceRepository {
              id, device_uid, kind, name, ip_address, http_port, mac_address,
              connection_type, firmware_version, fpga_version, web_version,
              status, last_seen, created_at, updated_at,
-             gis_latitude, gis_longitude, azimuth_deg, sound_level_db, ingest_plan
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?, ?)`
+             gis_latitude, gis_longitude, azimuth_deg, sound_level_db,
+             department, attributes_json, ingest_plan
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LAN', ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -461,6 +478,8 @@ export class DeviceRepository {
           installation.gisLongitude ?? null,
           installation.azimuthDeg ?? null,
           installation.soundLevelDb ?? null,
+          normaliseDepartment(input.department) ?? null,
+          serialiseDeviceAttributes(input.attributes),
           serialiseIngestPlan(input.ingest)
         )
       if (kind === 'acousticBox') this.seedChannels(id, identity.channelCount ?? CHANNEL_COUNT, timestamp)
@@ -530,12 +549,25 @@ export class DeviceRepository {
     const nextIngest =
       input.ingest === undefined ? serialiseIngestPlan(existing.ingest) : serialiseIngestPlan(input.ingest)
 
+    /*
+     * 部门 / 属性：与安装信息同一条"缺席 = 不动，null/空 = 清空"的规矩。
+     * 改名顺手把部门抹掉是这类部分更新最典型的回归。
+     */
+    const nextDepartment =
+      input.department === undefined
+        ? (normaliseDepartment(existing.department) ?? null)
+        : (normaliseDepartment(input.department) ?? null)
+    const nextAttributes =
+      input.attributes === undefined
+        ? serialiseDeviceAttributes(existing.attributes)
+        : serialiseDeviceAttributes(input.attributes)
+
     this.db
       .prepare(
         `UPDATE devices
             SET name = ?, ip_address = ?, http_port = ?, updated_at = ?,
                 gis_latitude = ?, gis_longitude = ?, azimuth_deg = ?, sound_level_db = ?,
-                ingest_plan = ?
+                department = ?, attributes_json = ?, ingest_plan = ?
           WHERE id = ?`
       )
       .run(
@@ -547,6 +579,8 @@ export class DeviceRepository {
         pick('gisLongitude'),
         pick('azimuthDeg'),
         pick('soundLevelDb'),
+        nextDepartment,
+        nextAttributes,
         nextIngest,
         input.id
       )

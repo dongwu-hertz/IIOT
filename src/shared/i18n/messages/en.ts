@@ -437,6 +437,15 @@ presets, the licence boundaries
   },
 
   devicesUi: {
+    profileSection: 'Ownership and attributes',
+    profileSectionHint: 'Department and custom attributes are stored locally for asset and operations records; they are not written to device firmware.',
+    department: 'Department',
+    departmentPlaceholder: 'e.g. Operations',
+    attributes: 'Attributes',
+    addAttribute: 'Add attribute',
+    attributeKey: 'Attribute name',
+    attributeValue: 'Attribute value',
+    noAttributes: 'No attributes yet',
     addButton: 'Add device',
     noticeAdded: 'Device added',
     kindPushDevice: 'Push device',
@@ -678,6 +687,16 @@ presets, the licence boundaries
     videoUnavailable: 'This recording cannot be played in the built-in player (the local file is missing or the format is unsupported).'
   },
 
+  mapPickerUi: {
+    title: 'Pick a point on the map',
+    hint: 'Click the map to choose the device location',
+    offlineHint: 'Online base map is disabled; you can still click the grid to pick a point.',
+    selected: 'Selected: {lat}, {lon}',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    confirm: 'Use this point',
+    pickButton: 'Pick on map'
+  },
   gasLeakUi: {
     title: 'Gas well leak monitoring',
     badge: 'On-device detection',

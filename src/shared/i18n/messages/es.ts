@@ -433,6 +433,15 @@ export const es: MessageSchema = {
   },
 
   devicesUi: {
+    profileSection: 'Pertenencia y atributos',
+    profileSectionHint: 'El departamento y los atributos personalizados se guardan localmente para el inventario y las operaciones; no se escriben en el firmware del dispositivo.',
+    department: 'Departamento',
+    departmentPlaceholder: 'p. ej. Operaciones',
+    attributes: 'Atributos',
+    addAttribute: 'Añadir atributo',
+    attributeKey: 'Nombre del atributo',
+    attributeValue: 'Valor del atributo',
+    noAttributes: 'Aún no hay atributos',
     addButton: 'Añadir equipo',
     noticeAdded: 'Equipo añadido',
     kindPushDevice: 'Equipo de envío',
@@ -671,6 +680,16 @@ export const es: MessageSchema = {
     videoUnavailable: 'Esta grabación no se puede reproducir en el reproductor integrado (falta el archivo local o el formato no es compatible).'
   },
 
+  mapPickerUi: {
+    title: 'Elegir un punto en el mapa',
+    hint: 'Haz clic en el mapa para elegir la ubicación del dispositivo',
+    offlineHint: 'El mapa base en línea está desactivado; aún puedes hacer clic en la cuadrícula para elegir un punto.',
+    selected: 'Seleccionado: {lat}, {lon}',
+    zoomIn: 'Acercar',
+    zoomOut: 'Alejar',
+    confirm: 'Usar este punto',
+    pickButton: 'Elegir en el mapa'
+  },
   gasLeakUi: {
     title: 'Vigilancia de fugas en pozos de gas',
     badge: 'Detección en el dispositivo',

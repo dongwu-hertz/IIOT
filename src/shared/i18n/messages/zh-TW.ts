@@ -433,6 +433,15 @@ export const zhTW: MessageSchema = {
     }
   },
   devicesUi: {
+    profileSection: '歸屬與屬性',
+    profileSectionHint: '部門與自訂屬性只保存在本機，用於資產與運維歸檔；不會寫入裝置韌體。',
+    department: '部門',
+    departmentPlaceholder: '例如：運維一部',
+    attributes: '屬性',
+    addAttribute: '新增屬性',
+    attributeKey: '屬性名稱',
+    attributeValue: '屬性值',
+    noAttributes: '尚未新增屬性',
     addButton: '新增裝置',
     noticeAdded: '裝置已新增',
     kindPushDevice: '推送裝置',
@@ -708,6 +717,16 @@ export const zhTW: MessageSchema = {
     videoUnavailable: '該錄影無法在內建播放器中播放（本地檔案缺失或格式不受支援）。'
   },
 
+  mapPickerUi: {
+    title: '在地圖上選點',
+    hint: '點擊地圖選擇裝置點位',
+    offlineHint: '線上底圖未啟用：仍可點擊網格選點。',
+    selected: '已選：{lat}, {lon}',
+    zoomIn: '放大',
+    zoomOut: '縮小',
+    confirm: '使用此點位',
+    pickButton: '在地圖上選點'
+  },
   gasLeakUi: {
     title: '氣井洩漏監測',
     badge: '裝置端偵測',

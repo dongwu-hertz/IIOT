@@ -10,9 +10,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import type { AlarmQuery } from '@shared/domain/models'
-import type { Device } from '@shared/domain/models'
+import type { AlarmQuery, Device, DeviceAttribute } from '@shared/domain/models'
 import { isPointComplete, parseInstallation } from '@shared/domain/device-installation'
+import { normaliseDeviceAttributes } from '@shared/domain/device-profile'
 import {
   deviceIngestPlanProblems,
   usesIngest,
@@ -28,6 +28,7 @@ import AppModal from '@renderer/components/AppModal.vue'
 import EmptyState from '@renderer/components/EmptyState.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
 import DevicePushEndpoint from '@renderer/components/DevicePushEndpoint.vue'
+import MapPointPicker from '@renderer/components/MapPointPicker.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -67,10 +68,14 @@ interface EditInstallationForm {
   azimuthDeg: string
 }
 
+type EditAttributeRow = DeviceAttribute
+
 const editForm = ref({
   name: '',
   ip: '',
   httpPort: 80,
+  department: '',
+  attributes: [] as EditAttributeRow[],
   /**
    * 凭据（业主 2026-09-18 第 10 条）：用户名从库里读出来填上，**口令永远是空的**
    * （我们从不回显口令；空框 = 不改，见 `UpdateDeviceInput.password`）。
@@ -85,6 +90,7 @@ const editForm = ref({
 })
 const editError = ref('')
 const editSaving = ref(false)
+const mapPickerOpen = ref(false)
 /** 密码框是否明文显示（第 10 条要的"支持显示密码"）。每次打开对话框都回到隐藏。 */
 const editPasswordShown = ref(false)
 
@@ -111,6 +117,26 @@ const editShowsPushEndpoint = computed(() => {
 /** 数值 → 输入框文字；没录过就是空串（不是 `0`，也不是 `'undefined'`）。 */
 function installationInput(value: number | undefined): string {
   return value === undefined ? '' : String(value)
+}
+
+function addAttributeRow(): void {
+  editForm.value.attributes.push({ key: '', value: '' })
+}
+
+function removeAttributeRow(index: number): void {
+  editForm.value.attributes.splice(index, 1)
+}
+
+function coordinateInput(value: string): number | undefined {
+  const text = value.trim()
+  if (text === '') return undefined
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function onMapPointPicked(point: { latitude: number; longitude: number }): void {
+  editForm.value.installation.gisLatitude = point.latitude.toFixed(6)
+  editForm.value.installation.gisLongitude = point.longitude.toFixed(6)
 }
 
 /** Remove confirmation state. */
@@ -305,6 +331,8 @@ function startEdit(device: Device): void {
     // （OS keyring，渲染层拿不到），所以这里没有办法"回显当前值"。
     username: '',
     password: '',
+    department: device.department ?? '',
+    attributes: (device.attributes ?? []).map((attribute) => ({ ...attribute })),
     installation: {
       gisLatitude: installationInput(installation?.gisLatitude),
       gisLongitude: installationInput(installation?.gisLongitude),
@@ -382,6 +410,8 @@ async function submitEdit(): Promise<void> {
   const updated = await devices.update({
     id: target.id,
     name: editForm.value.name.trim(),
+    department: editForm.value.department.trim() || null,
+    attributes: normaliseDeviceAttributes(editForm.value.attributes),
     ...(pushDevice
       ? {
           // `ingest` 在推送设备分支里一定已构造并过了校验（上面的早退保证了这一点）。
@@ -493,6 +523,7 @@ function onAdded(deviceId: string): void {
           <tr>
             <th scope="col" class="devices-table__num devices-table__index">{{ t('devicesUi.indexColumn') }}</th>
             <th scope="col">{{ t('devices.name') }}</th>
+            <th scope="col">{{ t('devicesUi.department') }}</th>
             <th scope="col">{{ t('devicesUi.ipColumn') }}</th>
             <th scope="col">{{ t('addDeviceUi.kindLabel') }}</th>
             <th scope="col">{{ t('devicesUi.onlineColumn') }}</th>
@@ -543,6 +574,7 @@ function onAdded(deviceId: string): void {
                 {{ t('installUi.point') }}
               </span>
             </td>
+            <td class="muted" data-device-department>{{ device.department && device.department.trim() !== '' ? device.department : '—' }}</td>
             <td>
               <!--
                 **双击** IP 打开设备自己的 Web 界面（业主 2026-09-17 第 4 条）。
@@ -809,6 +841,77 @@ function onAdded(deviceId: string): void {
             <span class="field-hint">{{ t('installUi.azimuthHint') }}</span>
           </label>
         </div>
+        <div class="form-actions">
+          <button
+            type="button"
+            class="btn btn--sm"
+            data-action="pick-device-point"
+            @click="mapPickerOpen = true"
+          >
+            {{ t('mapPickerUi.pickButton') }}
+          </button>
+        </div>
+      </fieldset>
+
+      <!--
+        归属与自定义属性（业主 2026-11-12）：部门是结构化字段，属性是可增删的
+        key/value 列表。两者都由 `device-profile.ts` 归一化，保存时与名称/GIS 一起写入。
+      -->
+      <fieldset class="device-profile">
+        <legend class="field-label">{{ t('devicesUi.profileSection') }}</legend>
+        <p class="field-hint">{{ t('devicesUi.profileSectionHint') }}</p>
+        <label class="field">
+          <span class="field-label">{{ t('devicesUi.department') }}</span>
+          <input
+            v-model="editForm.department"
+            class="input"
+            type="text"
+            autocomplete="off"
+            :placeholder="t('devicesUi.departmentPlaceholder')"
+            data-device-department
+          />
+        </label>
+
+        <div class="attribute-editor">
+          <div class="attribute-editor__head">
+            <span class="field-label">{{ t('devicesUi.attributes') }}</span>
+            <button type="button" class="btn btn--sm" data-action="add-device-attribute" @click="addAttributeRow">
+              {{ t('devicesUi.addAttribute') }}
+            </button>
+          </div>
+          <p v-if="editForm.attributes.length === 0" class="muted">{{ t('devicesUi.noAttributes') }}</p>
+          <div
+            v-for="(attribute, index) in editForm.attributes"
+            :key="index"
+            class="attribute-editor__row"
+            data-device-attribute
+          >
+            <input
+              v-model="attribute.key"
+              class="input"
+              type="text"
+              autocomplete="off"
+              :placeholder="t('devicesUi.attributeKey')"
+              :aria-label="t('devicesUi.attributeKey')"
+            />
+            <input
+              v-model="attribute.value"
+              class="input"
+              type="text"
+              autocomplete="off"
+              :placeholder="t('devicesUi.attributeValue')"
+              :aria-label="t('devicesUi.attributeValue')"
+            />
+            <button
+              type="button"
+              class="btn btn--ghost btn--sm"
+              data-action="remove-device-attribute"
+              @click="removeAttributeRow(index)"
+            >
+              {{ t('common.delete') }}
+            </button>
+          </div>
+        </div>
       </fieldset>
 
       <p v-if="editError" class="alert alert--danger" role="alert">{{ editError }}</p>
@@ -835,6 +938,14 @@ function onAdded(deviceId: string): void {
         </button>
       </template>
     </AppModal>
+
+    <MapPointPicker
+      :open="mapPickerOpen"
+      :latitude="coordinateInput(editForm.installation.gisLatitude)"
+      :longitude="coordinateInput(editForm.installation.gisLongitude)"
+      @close="mapPickerOpen = false"
+      @pick="onMapPointPicked"
+    />
 
     <!-- Removal is destructive and drops stored credentials, so it must be confirmed. -->
     <AppModal v-model="removeOpen" :title="t('devicesUi.deleteTitle')" width="420px">
@@ -1125,5 +1236,33 @@ function onAdded(deviceId: string): void {
 .confirm-text {
   font-size: 12.5px;
   line-height: 1.7;
+}
+.device-profile {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.attribute-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.attribute-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.attribute-editor__row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 2fr) auto;
+  gap: var(--space-2);
+  align-items: center;
 }
 </style>
