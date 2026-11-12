@@ -133,6 +133,7 @@ import CameraDetectDownloadDialog from '@renderer/components/CameraDetectDownloa
 import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import SonarOverviewPanel from '@renderer/components/SonarOverviewPanel.vue'
+import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 import GasLeakMonitorPanel from '@renderer/components/GasLeakMonitorPanel.vue'
 
@@ -2812,6 +2813,11 @@ const sessionLabel = computed(() => {
               describe the wrong device family.
             -->
             <template v-if="isVoiceprint">
+      <DeviceLocationMap
+        :installation="selectedDevice?.installation"
+        :device-id="selectedDevice?.id"
+        :device-name="selectedDevice?.name"
+      />
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
               <!--
@@ -2941,6 +2947,12 @@ const sessionLabel = computed(() => {
         <!-- Top: live video + camera controls. -->
         <div class="camera-split camera-split--top">
           <div class="camera-split__main">
+            <DeviceLocationMap
+              :installation="selectedDevice?.installation"
+              :device-id="selectedDevice?.id"
+              :device-name="selectedDevice?.name"
+            />
+
             <section class="card camera-live">
               <div
                 ref="stageEl"
@@ -4196,9 +4208,14 @@ const sessionLabel = computed(() => {
         但都是 0 帧，设备自己的 /preview 页面也一样。这一支只显示设备端回传的泄漏
         告警录音，以及同步入口；详细边界见 `docs/AO01-INTEGRATION.md`。
       -->
-      <template v-else-if="isGasLeak">
+            <template v-else-if="isGasLeak">
+        <DeviceLocationMap
+          :installation="selectedDevice?.installation"
+          :device-id="selectedDevice?.id"
+          :device-name="selectedDevice?.name"
+        />
         <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
-      </template>
+            </template>
 
       <!--
         ---- 声呐（SN-16 空气声呐 / 2023 版听诊盒子）-----------------------------

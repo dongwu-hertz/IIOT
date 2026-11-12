@@ -181,7 +181,8 @@ export const useDevicesStore = defineStore('devices', () => {
     loading.value = false
     if (!result.success) {
       error.value = resultMessage(result)
-      reportReadError(READ_ERROR_IDS.status, error.value)
+      // 单台设备认证失败不是应用登录失败：不上顶栏，留在设备页就地反馈。
+      reportReadError(READ_ERROR_IDS.status, result.error?.code === 'AUTH_FAILED' ? '' : error.value)
       return
     }
     error.value = ''
@@ -231,7 +232,8 @@ export const useDevicesStore = defineStore('devices', () => {
     channelsLoading.value = { ...channelsLoading.value, [deviceId]: false }
     if (!result.success) {
       error.value = resultMessage(result)
-      reportReadError(READ_ERROR_IDS.channels, error.value)
+      // 同上：设备凭据错误不要污染设置页/顶栏的系统消息。
+      reportReadError(READ_ERROR_IDS.channels, result.error?.code === 'AUTH_FAILED' ? '' : error.value)
       return
     }
     channels.value = { ...channels.value, [deviceId]: unwrap(result) ?? [] }

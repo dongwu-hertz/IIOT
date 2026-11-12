@@ -5537,3 +5537,51 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
 - `test:inproc`：**134 文件 / 2520 通过 / 77 失败**，29 个失败文件集合与上一轮一致。
 - `tests/sonar-map-alarm.test.ts` 增加内嵌地图、卡片属性、详情页传参、六语言目录断言。
 - `verify:packaged` 26/0；安装包签名 Valid。
+
+---
+
+## EEE. 第 64 轮的发布（v1.0.38，2026-11-12）
+
+业主 2026-11-12：
+> Authentication failed. Check the username and password. (AUTH_FAILED) 在设置界面有这个问题。
+> 2. 在 liveview 界面也应该把地图关联起来。
+
+### EEE.1 交付
+
+- 版本：1.0.38（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.38-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,240,976 字节 / E42855B4AE171CB9F66EE32CD6C93A599CB046A180AE22AAF3FA3E0523625441
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.38
+- 上一版归档：release-1.0.37-2026-11-12/
+
+### EEE.2 设置页的 AUTH_FAILED
+
+- 根因是**设备读失败**（某台设备凭据/token 被拒）被 `stores/devices.ts` 报进顶栏「系统消息」；
+  操作员切到设置页时，这条全局消息仍然挂在右上角，看起来像设置页/当前账号认证失败。
+- 现在 `refreshStatus` 与 `loadChannels` 遇到 `AUTH_FAILED` 时：
+  - 保留 `devices.error` 供设备页/详情页就地显示；
+  - **不再**写进顶栏系统消息；
+  - 主进程日志仍保留完整诊断。
+- 其他错误（超时、网络、设备返回错误等）仍按原规则进入系统消息。
+- 实测：进入设置页及切换 Account / Alarms / About 页签，均无 AUTH_FAILED 文案。
+
+### EEE.3 Live monitoring 关联地图
+
+- `MonitorView` 引入同一个 `DeviceLocationMap`：
+  - 相机分支：在左列直播视频上方显示所选相机的位置地图；
+  - 声纹设备分支：显示所选设备的位置地图；
+  - AO01 气井泄漏分支：显示位置地图；
+  - SN-16 声呐分支原本已有 `SonarOverviewPanel` 的 GIS 地图，保持不重复堆叠。
+- 地图仍以设备自己的 `installation` 为准；无点位时显示「未录入点位」和地图入口；
+  有点位时显示瓦片、设备标记、方向线和 100 m / ±18° 范围扇区。
+- 实测：依次打开相机 / AO01 / AE08 的 Live monitoring，页面均出现
+  `[data-device-location-map]`；当前这些测试设备未录入点位，因此显示空态提示。
+  进入 Settings 后无 AUTH_FAILED。
+
+### EEE.4 测试
+
+- `test:inproc`：**134 文件 / 2522 通过 / 77 失败**，29 个失败文件集合与上一轮一致。
+- 新增守卫：Live monitoring 至少三处 `<DeviceLocationMap>`；设备 store 对
+  `AUTH_FAILED` 不写全局系统消息。
+- `verify:packaged` 26/0；安装包签名 Valid。

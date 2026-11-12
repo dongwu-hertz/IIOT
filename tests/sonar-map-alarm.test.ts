@@ -38,6 +38,18 @@ describe('SN-16 sonar map and alarm profile', () => {
     const detail = read('src/renderer/src/views/DeviceDetailView.vue')
     assert.match(detail, /:show-map="device\.kind === 'auscultationBox'"/)
   })
+  it('associates the selected device location map with Live monitoring', () => {
+    const monitor = read('src/renderer/src/views/MonitorView.vue')
+    assert.match(monitor, /import DeviceLocationMap/)
+    const uses = monitor.match(/<DeviceLocationMap/g) ?? []
+    assert.ok(uses.length >= 3, 'camera / voiceprint / gas-leak branches should embed the map')
+  })
+
+  it('does not surface a single device AUTH_FAILED as a global Settings notice', () => {
+    const store = read('src/renderer/src/stores/devices.ts')
+    assert.match(store, /READ_ERROR_IDS\.status, result\.error\?\.code === 'AUTH_FAILED'/)
+    assert.match(store, /READ_ERROR_IDS\.channels, result\.error\?\.code === 'AUTH_FAILED'/)
+  })
   it('only airSonar gets the PTZ tab; AO01/other devices do not', () => {
     const detail = read('src/renderer/src/views/DeviceDetailView.vue')
     assert.match(detail, /AIR_SONAR_TABS/)
