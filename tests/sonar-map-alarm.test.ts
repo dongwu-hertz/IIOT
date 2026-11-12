@@ -52,6 +52,7 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(panel, /data-sonar-sync-recordings/)
     assert.match(panel, /latestAlarmDirection/)
     assert.match(panel, /sonarUi\.realtimeOff/)
+    assert.match(panel, /localRecordingContainer !== undefined/)
   })
   it('does not surface a single device AUTH_FAILED as a global Settings notice', () => {
     const store = read('src/renderer/src/stores/devices.ts')

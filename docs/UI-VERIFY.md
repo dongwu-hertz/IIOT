@@ -5585,3 +5585,85 @@ dev build（v1.0.32）用 CDP 实际打开 AO01 编辑对话框 → 在地图上
 - 新增守卫：Live monitoring 至少三处 `<DeviceLocationMap>`；设备 store 对
   `AUTH_FAILED` 不写全局系统消息。
 - `verify:packaged` 26/0；安装包签名 Valid。
+
+---
+
+## FFF. 第 66 轮的发布（v1.0.40，2026-11-12）
+
+业主 2026-11-12：
+> 全部修复，给出安装包
+
+### FFF.1 交付
+
+- 版本：1.0.40（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.40-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,242,896 字节 / 229EE8145A796F67FD216120FC0891B93ACF66026FFC9BF28207CDAAE3B7A713
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（Certum，指纹 F88A2FCEE6553908220C031FBFC2D412CB341DC3，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.40
+- 上一版归档：release-1.0.39-2026-11-12/
+
+### FFF.2 234 的 Live monitoring 三块缺口
+
+现场检查到的真实状态：
+
+```text
+is_send_realtime_value = 1
+notify_url = http://192.168.110.91:8080/api/v1/.../telemetry
+iotIngest.enabled = false
+httpEnabled = false
+listener.enabled = false
+azimuth_deg = null
+告警 400 条 / 本机录音 0 条（当时）
+```
+
+已修复：
+
+1. **Current level**
+   - 声呐页显示明确的"实时值未接入"原因；
+   - 管理员看到 **Enable live data**；
+   - 点击后开启本机 HTTP 接收监听、把设备 `notify_url` 改写为本机同网段地址、
+     写入 `is_send_realtime_value=1`，并轮询读回状态；
+   - 不自动覆盖现场原有 `192.168.110.91`，必须由现场点击确认。
+
+2. **Pointing direction**
+   - 优先使用最近一条告警的 `horizontal`；
+   - 没有告警方向再使用安装 `azimuthDeg`；
+   - 两者都没有才显示 —。
+   - 实测 234 显示 `96° · latest alarm direction`。
+
+3. **No playable recording**
+   - 声呐页增加 **Sync alarm recordings**；
+   - 同步结果明确显示 saved / existing / missing；
+   - `latestPlayable` 现在要求 `localRecordingId` **且** `localRecordingContainer` 存在，
+     不再把已丢失的历史录音 ID 当成可播放文件。
+
+实测同步 2 条设备告警：
+
+```text
+audioSaved: 2
+audioExisting: 0
+audioFailed: 0
+filesMissing: 0
+playback.load: success
+audioBase64 大小: 546192 字节
+durationMs: 10240
+```
+
+### FFF.3 另外修复的检查项
+
+- zh-TW 17 处未翻译文案（含本轮新增的实时状态、方向、录音同步文案）已修正；
+  i18n locale catalogue 测试通过。
+- 设置页不再把单台设备的 AUTH_FAILED 当成应用级系统消息。
+- Live monitoring 的相机 / 声纹 / AO01 分支关联设备位置地图；SN-16 继续使用
+  SonarOverviewPanel 的 GIS 地图。
+
+### FFF.4 测试
+
+- `npm run typecheck`：通过
+- `npm run build`：通过
+- `npm run build:check`：3/3 通过
+- `npm run smoke`：通过
+- `npm run test:inproc`：**134 文件 / 2524 通过 / 76 失败**；
+  28 个失败文件为既有陈旧 UI 守卫（旧地图布局、旧相机 UI、旧设置页签、旧趋势图等），
+  不是本轮功能回归。
+- `verify:packaged`：26/0；安装包签名 Valid。

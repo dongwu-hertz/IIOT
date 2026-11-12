@@ -125,7 +125,16 @@ async function enableRealtime(): Promise<void> {
       return
     }
     callbackNotice.value = t('sonarUi.waitingRealtime')
-    await loadCallback()
+    // 设备写入成功不等于监听已经起来（端口/地址可能失败）：
+    // 等几轮读回，避免界面一直停在「未接入」。
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await loadCallback()
+      if (callbackReady.value) break
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    }
+    if (!callbackReady.value && callback.value?.listener?.error) {
+      callbackError.value = callback.value.listener.error
+    }
   } finally {
     callbackBusy.value = false
   }
@@ -187,7 +196,11 @@ const audioPlaying = ref(false)
 const audioError = ref('')
 
 /** 最近一条**有可播放录音**的告警。 */
-const latestPlayable = computed(() => alarms.value.find((alarm) => alarm.localRecordingId))
+const latestPlayable = computed(() =>
+  alarms.value.find(
+    (alarm) => alarm.localRecordingId !== undefined && alarm.localRecordingContainer !== undefined
+  )
+)
 
 async function toggleAudio(): Promise<void> {
   audioError.value = ''
