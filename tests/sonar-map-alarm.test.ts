@@ -45,6 +45,14 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.ok(uses.length >= 3, 'camera / voiceprint / gas-leak branches should embed the map')
   })
 
+  it('explains and can repair the Live monitoring gaps for SN-16', () => {
+    const panel = read('src/renderer/src/components/SonarOverviewPanel.vue')
+    assert.match(panel, /data-sonar-enable-callback/)
+    assert.match(panel, /setRealtimeCallback/)
+    assert.match(panel, /data-sonar-sync-recordings/)
+    assert.match(panel, /latestAlarmDirection/)
+    assert.match(panel, /sonarUi\.realtimeOff/)
+  })
   it('does not surface a single device AUTH_FAILED as a global Settings notice', () => {
     const store = read('src/renderer/src/stores/devices.ts')
     assert.match(store, /READ_ERROR_IDS\.status, result\.error\?\.code === 'AUTH_FAILED'/)
@@ -91,6 +99,11 @@ describe('SN-16 sonar map and alarm profile', () => {
       assert.ok(installUi)
       for (const key of ['mapNoPoint', 'mapHint', 'openMap', 'mapRange', 'mapDirection', 'mapNoAzimuth']) {
         assert.equal(typeof installUi[key], 'string', `${locale} missing installUi.${key}`)
+      }
+      const sonarUi = (catalogue as unknown as Record<string, Record<string, unknown>>).sonarUi
+      assert.ok(sonarUi)
+      for (const key of ['realtimeOff', 'enableRealtime', 'waitingRealtime', 'fromLatestAlarm', 'syncRecordings', 'syncingRecordings', 'recordSyncDone']) {
+        assert.equal(typeof sonarUi[key], 'string', `${locale} missing sonarUi.${key}`)
       }
       const e2Ui = (catalogue as unknown as Record<string, Record<string, unknown>>).e2Ui
       assert.ok(e2Ui)

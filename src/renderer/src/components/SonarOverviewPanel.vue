@@ -19,12 +19,16 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AlarmEvent } from '@shared/domain/models'
+import type { E2SyncOutcome } from '@shared/ipc/contract'
+import type { E2RealtimeCallbackStatus } from '@shared/domain/e2-callback'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
 import { callApi, unwrap } from '@renderer/lib/result'
 import { alarmTypeLabel } from '@renderer/lib/labels'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
+import { useSessionStore } from '@renderer/stores/session'
+import { resultMessage } from '@renderer/lib/result'
 
 const props = defineProps<{ deviceId: string }>()
 
@@ -32,6 +36,7 @@ const { t } = useI18n()
 const devices = useDevicesStore()
 const e2Realtime = useE2RealtimeStore()
 const uiRefresh = useUiRefreshStore()
+const session = useSessionStore()
 
 const device = computed(() => devices.byId(props.deviceId))
 
@@ -71,6 +76,85 @@ async function loadAlarms(): Promise<void> {
 
 /** 最近一次告警（query 按时间倒序，第一条就是）。 */
 const latestAlarm = computed(() => alarms.value[0])
+/** 最近一条告警里的声源方位（设备原文 horizontal；取不到就不猜）。 */
+const latestAlarmDirection = computed(() => {
+  const raw = latestAlarm.value?.deviceRaw
+  if (!raw) return undefined
+  try {
+    const value = Number((JSON.parse(raw) as Record<string, unknown>).horizontal)
+    return Number.isFinite(value) ? ((value % 360) + 360) % 360 : undefined
+  } catch {
+    return undefined
+  }
+})
+
+/** 指向方向：优先最近告警，其次安装方位角。 */
+const direction = computed(() => latestAlarmDirection.value ?? azimuth.value)
+
+const callback = ref<E2RealtimeCallbackStatus | null>(null)
+const callbackBusy = ref(false)
+const callbackError = ref('')
+const callbackNotice = ref('')
+const recordSyncBusy = ref(false)
+const recordSyncError = ref('')
+const recordSyncNotice = ref('')
+
+const callbackReady = computed(
+  () => callback.value?.pointsToUs === true && callback.value?.isSendRealtimeValue === 1
+)
+
+async function loadCallback(): Promise<void> {
+  const result = await callApi(() => window.api.e2.realtimeCallback(props.deviceId))
+  if (!result.success) {
+    callbackError.value = resultMessage(result)
+    return
+  }
+  callbackError.value = ''
+  callback.value = unwrap(result) ?? null
+}
+
+async function enableRealtime(): Promise<void> {
+  if (callbackBusy.value) return
+  callbackBusy.value = true
+  callbackError.value = ''
+  callbackNotice.value = ''
+  try {
+    const result = await callApi(() => window.api.e2.setRealtimeCallback(props.deviceId, true))
+    if (!result.success) {
+      callbackError.value = resultMessage(result)
+      return
+    }
+    callbackNotice.value = t('sonarUi.waitingRealtime')
+    await loadCallback()
+  } finally {
+    callbackBusy.value = false
+  }
+}
+
+async function syncRecordings(): Promise<void> {
+  if (recordSyncBusy.value) return
+  recordSyncBusy.value = true
+  recordSyncError.value = ''
+  recordSyncNotice.value = ''
+  try {
+    const result = await callApi(() =>
+      window.api.e2.syncAlarms(props.deviceId, { limit: 200, downloadAudio: true })
+    )
+    if (!result.success) {
+      recordSyncError.value = resultMessage(result)
+      return
+    }
+    const outcome = unwrap(result) as E2SyncOutcome | undefined
+    await loadAlarms()
+    recordSyncNotice.value = t('sonarUi.recordSyncDone', {
+      saved: outcome?.audioSaved ?? 0,
+      existing: outcome?.audioExisting ?? 0,
+      missing: outcome?.filesMissing ?? 0
+    })
+  } finally {
+    recordSyncBusy.value = false
+  }
+}
 
 /** 最近告警的抓图（SN-16 的告警快照；设备没抓就老实说没有）。 */
 const latestSnapshotUrl = ref('')
@@ -137,11 +221,14 @@ async function toggleAudio(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 onMounted(async () => {
+  e2Realtime.acquire()
+  await loadCallback()
   await loadAlarms()
   await loadLatestSnapshot(latestAlarm.value)
 })
 
 onBeforeUnmount(() => {
+  e2Realtime.release()
   if (audioEl.value) audioEl.value.pause()
   if (audioUrl.value !== '') URL.revokeObjectURL(audioUrl.value)
 })
@@ -173,7 +260,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             <line v-for="y in 5" :key="`h${y}`" x1="0" :y1="y * 144" x2="1280" :y2="y * 144" />
           </g>
           <!-- 设备标记：居中，箭头指向安装方位角（0 = 正北 = 上方）。 -->
-          <g :transform="`rotate(${azimuth ?? 0} 640 360)`">
+          <g :transform="`rotate(${direction ?? 0} 640 360)`">
             <line x1="640" y1="360" x2="640" y2="270" stroke="var(--color-accent)" stroke-width="3" />
             <path d="M640 258 l10 18 h-20 Z" fill="var(--color-accent)" />
           </g>
@@ -198,8 +285,29 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           <dt>{{ t('sonarUi.currentSpl') }}</dt>
           <dd>{{ currentSpl === undefined ? '—' : `${formatNumber(currentSpl, 1)} dB` }}</dd>
           <dt>{{ t('sonarUi.azimuth') }}</dt>
-          <dd>{{ azimuth === undefined ? '—' : `${formatNumber(azimuth, 0)}°` }}</dd>
+          <dd>
+            {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
+            <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
+          </dd>
         </dl>
+        <div v-if="!callbackReady" class="sonar-now__hint" data-sonar-realtime-off>
+          <p class="muted">{{ t('sonarUi.realtimeOff') }}</p>
+          <button
+            v-if="session.isAdmin"
+            type="button"
+            class="btn btn--sm"
+            :disabled="callbackBusy"
+            data-sonar-enable-callback
+            @click="enableRealtime"
+          >
+            {{ callbackBusy ? t('common.loading') : t('sonarUi.enableRealtime') }}
+          </button>
+        </div>
+        <p v-else-if="currentSpl === undefined" class="muted" data-sonar-realtime-waiting>
+          {{ t('sonarUi.waitingRealtime') }}
+        </p>
+        <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
+        <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
         <button
           type="button"
           class="btn btn--sm"
@@ -210,6 +318,20 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           @click="toggleAudio"
         >
           {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
+        </button>
+        <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>
+          {{ t('sonarUi.noAudio') }}
+        </p>
+        <p v-if="recordSyncError" class="alert alert--danger" role="alert">{{ recordSyncError }}</p>
+        <p v-if="recordSyncNotice" class="muted" role="status">{{ recordSyncNotice }}</p>
+        <button
+          type="button"
+          class="btn btn--sm btn--ghost"
+          :disabled="recordSyncBusy"
+          data-sonar-sync-recordings
+          @click="syncRecordings"
+        >
+          {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
         </button>
         <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
         <!-- 播放器元素不进可视布局：按钮与状态就是它的界面。 -->
@@ -225,7 +347,10 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
           <dl class="sonar-latest__facts">
             <dt>{{ t('sonarUi.alarmDirection') }}</dt>
-            <dd>{{ azimuth === undefined ? '—' : `${formatNumber(azimuth, 0)}°` }}</dd>
+          <dd>
+            {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
+            <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
+          </dd>
             <dt>{{ t('sonarUi.alarmSpl') }}</dt>
             <dd>{{ latestAlarm.spl === undefined ? '—' : `${formatNumber(latestAlarm.spl, 1)} dB` }}</dd>
             <dt>{{ t('sonarUi.alarmType') }}</dt>
