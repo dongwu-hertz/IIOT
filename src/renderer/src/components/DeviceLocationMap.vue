@@ -34,6 +34,8 @@ const props = defineProps<{
   showDirection?: boolean
   /** 气井泄漏的 CH + 气井编号/名称标签。 */
   alarmChannelLabels?: readonly { channelId: number; label: string }[]
+  /** 方向扇面的总张角（度）。空气声呐 1° 分辨率传 1；缺省保持既有的 36°。 */
+  sectorWidthDeg?: number
 }>()
 
 const { t } = useI18n()
@@ -43,7 +45,7 @@ const WIDTH = 960
 const HEIGHT = 540
 const DEFAULT_ZOOM = 16
 const RANGE_METRES = 100
-const SPREAD_DEG = 18
+const DEFAULT_SECTOR_WIDTH_DEG = 36
 
 const zoom = ref(DEFAULT_ZOOM)
 
@@ -131,7 +133,9 @@ const directionEnd = computed(() => {
 const sectorPoints = computed(() => {
   if (!hasPoint.value || heading.value === undefined) return ''
   const points: string[] = [`${marker.value.x},${marker.value.y}`]
-  for (let step = -SPREAD_DEG; step <= SPREAD_DEG; step += SPREAD_DEG / 6) {
+  const width = Math.max(0.1, props.sectorWidthDeg ?? DEFAULT_SECTOR_WIDTH_DEG)
+  const half = width / 2
+  for (let step = -half; step <= half; step += width / 6) {
     const point = offsetMapPoint(
       props.installation?.gisLatitude as number,
       props.installation?.gisLongitude as number,

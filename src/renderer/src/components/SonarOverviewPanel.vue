@@ -496,6 +496,7 @@ function selectAlarm(alarm: AlarmEvent): void {
           :installation="device?.installation"
           :device-id="props.deviceId"
           :device-name="device?.name"
+          :sector-width-deg="1"
         />
       </section>
 
@@ -755,6 +756,7 @@ function selectAlarm(alarm: AlarmEvent): void {
             :installation="device?.installation"
             :device-id="device?.id"
             :device-name="device?.name"
+            :sector-width-deg="1"
           />
           <section class="sonar-settings__section" data-sonar-calibration-setting>
             <h4>{{ t('sonarUi.calibrationAngle') }}</h4>

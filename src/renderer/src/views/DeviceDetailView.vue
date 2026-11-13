@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Device detail — 设备概览 + 设备配置（Phase 9）+ 设备维护（Phase 10）。
  *
@@ -626,6 +626,7 @@ const webUiAddress = computed(() => {
           :device-id="device.id"
           :device-name="device.name"
           :show-map="device.kind === 'auscultationBox'"
+          :sector-width-deg="device.e2Variant === 'airSonar' ? 1 : undefined"
         />
 
         <DeviceProfileCard :department="device.department" :attributes="device.attributes" />
@@ -702,6 +703,7 @@ const webUiAddress = computed(() => {
           :device-id="device.id"
           :device-name="device.name"
           :show-map="device.kind === 'auscultationBox'"
+          :sector-width-deg="device.e2Variant === 'airSonar' ? 1 : undefined"
         />
 
         <DeviceProfileCard :department="device.department" :attributes="device.attributes" />

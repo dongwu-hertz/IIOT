@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 地址信息只读卡片（业主 2026-09-17 第 1 条；2026-09-18 第 7 / 10 条改名并把
  * **基准声压级删掉**）：点位（GIS 经纬度）/ 方位角。
@@ -40,6 +40,8 @@ const props = defineProps<{
   deviceId?: string
   /** `true` 时在点位文字下方嵌入设备位置地图（Auscultation Box 设备详情）。 */
   showMap?: boolean
+  /** 方向扇面总张角；16 路空气声呐传 1°。 */
+  sectorWidthDeg?: number
   deviceName?: string
 }>()
 
@@ -147,6 +149,7 @@ async function copyPoint(): Promise<void> {
       :installation="installation"
       :device-id="deviceId"
       :device-name="deviceName"
+      :sector-width-deg="sectorWidthDeg"
     />
   </section>
 </template>

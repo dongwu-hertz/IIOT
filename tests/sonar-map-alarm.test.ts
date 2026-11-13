@@ -18,6 +18,7 @@ describe('SN-16 sonar map and alarm profile', () => {
   it('draws a direction line and range overlay for airSonar devices', () => {
     const map = read('src/renderer/src/views/DeviceMapView.vue')
     assert.match(map, /SONAR_RANGE_METERS/)
+    assert.match(map, /SONAR_SPREAD_DEG = 0\.5/)
     assert.match(map, /alarmHorizontalDeg/)
     assert.match(map, /sonarOverlays/)
     assert.match(map, /data-map-sonar-overlay/)
@@ -45,6 +46,7 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.ok(uses.length >= 1, 'gas-leak branch should embed the map')
     const sonar = read('src/renderer/src/components/SonarOverviewPanel.vue')
     assert.match(sonar, /<DeviceLocationMap/)
+    assert.match(sonar, /sector-width-deg="1"/)
   })
 
   it('explains and can repair the Live monitoring gaps for SN-16', () => {

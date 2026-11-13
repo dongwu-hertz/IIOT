@@ -645,7 +645,7 @@ const mappedCount = computed(() =>
 )
 /** SN-16 空气声呐的方向线/范围圈：默认 100 m，扇区张角 ±18°。 */
 const SONAR_RANGE_METERS = 100
-const SONAR_SPREAD_DEG = 18
+const SONAR_SPREAD_DEG = 0.5
 
 function alarmHorizontalDeg(alarm: AlarmEvent | undefined): number | undefined {
   if (!alarm?.deviceRaw) return undefined
