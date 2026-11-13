@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 设备位置内嵌地图（设备详情页「Device location」卡片）。
  *
@@ -167,13 +167,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <section class="device-location-map" data-device-location-map>
-    <div v-if="!hasPoint" class="device-location-map__empty" data-device-location-empty>
-      <p class="device-location-map__empty-title">{{ t('installUi.mapNoPoint') }}</p>
-      <p class="muted">{{ t('installUi.mapHint') }}</p>
-      <RouterLink v-if="deviceId" class="btn btn--sm" :to="mapLink">
-        {{ t('installUi.openMap') }}
-      </RouterLink>
-    </div>
+    <div v-if="!hasPoint" class="device-location-map__empty" data-device-location-empty></div>
 
     <template v-else>
       <div class="device-location-map__canvas">

@@ -5897,3 +5897,40 @@ Trend query: totalRows 143 / 1 file / 10 s bucket
 - 目标测试 sonar-map-alarm / i18n：37/37 通过
 - npm run test:inproc：134 文件 / 2527 通过 / 75 失败；27 个失败文件为既有陈旧 UI 守卫
 - verify:packaged：26/0；安装包签名 Valid
+
+---
+
+## WW. 第 71 轮的发布（v1.0.46，2026-11-13）
+
+
+业主 2026-11-13：
+> No map point recorded, so this device cannot be located
+> Enter latitude, longitude and azimuth under Devices → Edit → Address info
+> 这个内容都删除掉。
+
+### WW.1 交付
+
+- 版本：1.0.46（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.46-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,229,496 字节 / 9A893D2DF9C8528EF4427E9C5BDDA050BCAD0EBB55D9E925CC211ADB4828244F
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（指纹 DB24261F59F98579A03CB6E9D965866FD109077F，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged 26 通过 / 0 失败，应用内版本 1.0.46
+- 上一版归档：release-1.0.45-2026-11-12/
+
+
+### WW.2 变更
+
+- DeviceLocationMap 无点位时的空态内容整体删除：
+  - 删除 installUi.mapNoPoint 文案；
+  - 删除 installUi.mapHint 指引；
+  - 删除无点位时的 Open map 跳转按钮；
+- 空态仅保留无内容的占位容器，不再显示「未记录点位 / 去设备编辑地址」的提示；
+- 有点位时地图、方向线、范围扇区、缩放和 Auto focus 行为不变。
+
+### WW.3 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm / i18n：37/37 通过
+- verify:packaged：26/0；安装包签名 Valid
+
