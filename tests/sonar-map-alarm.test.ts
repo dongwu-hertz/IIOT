@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -66,6 +66,8 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(panel, /data-sonar-audio-channel/)
     assert.doesNotMatch(panel, /data-sonar-device-status/)
     assert.match(panel, /data-sonar-alarm-detail/)
+    assert.match(panel, /selectedDirection/)
+    assert.match(panel, /calibratedDirectionOf/)
     assert.match(panel, /RecordingPlayer/)
     assert.doesNotMatch(panel, /data-sonar-history-apply/)
     assert.match(panel, /data-sonar-ptz-camera/)
@@ -73,6 +75,7 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(panel, /startAudio\(props\.deviceId, audioChannel\.value\)/)
     assert.match(monitor, /channel-tabs--header/)
     assert.match(monitor, /monitor-head__status--voiceprint/)
+    assert.match(monitor, /selectedDevice\?\.kind === 'acousticBox'/)
     assert.doesNotMatch(monitor, /data-monitor-session-badge/)
     assert.doesNotMatch(panel, /activeView/)
     const locationMap = read('src/renderer/src/components/DeviceLocationMap.vue')
@@ -85,7 +88,7 @@ describe('SN-16 sonar map and alarm profile', () => {
     const audioService = read('src/main/services/device/e2/e2-audio-stream-service.ts')
     assert.match(audioService, /audio_stream/)
     assert.match(audioService, /getInt16/)
-    assert.match(panel, /latestAlarmDirection/)
+    assert.match(panel, /calibratedDirectionOf/)
     assert.match(panel, /localRecordingContainer !== undefined/)
   })
   it('does not surface a single device AUTH_FAILED as a global Settings notice', () => {

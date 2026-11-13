@@ -177,18 +177,18 @@ function alarmAzimuthOf(alarm: AlarmEvent | undefined): number | undefined {
   }
 }
 
-const latestAlarmDirection = computed(() => alarmAzimuthOf(latestAlarm.value))
+function calibratedDirectionOf(alarm: AlarmEvent | undefined): number | undefined {
+  const relative = alarmAzimuthOf(alarm)
+  if (relative === undefined) return alarm ? installationAzimuth.value : azimuth.value
+  return ((relative + installationAzimuth.value) % 360 + 360) % 360
+}
+
 /** 设备安装方位：作为告警相对角度的校准偏移。 */
 const installationAzimuth = computed(() => device.value?.installation?.azimuthDeg ?? 0)
 
 /** 实时声压 / 告警方向：设备原文 relative + 安装方位 = 软件校准后的方向。 */
-const calibratedDirection = computed(() => {
-  const relative = latestAlarmDirection.value
-  if (relative === undefined) return azimuth.value
-  return ((relative + installationAzimuth.value) % 360 + 360) % 360
-})
-
-const direction = computed(() => calibratedDirection.value)
+const direction = computed(() => calibratedDirectionOf(latestAlarm.value))
+const selectedDirection = computed(() => calibratedDirectionOf(selectedAlarm.value))
 
 const e2Status = ref<E2DeviceStatus | null>(null)
 
@@ -360,13 +360,16 @@ async function syncRecordings(): Promise<void> {
 /** 最近告警的抓图（SN-16 的告警快照；设备没抓就老实说没有）。 */
 const latestSnapshotUrl = ref('')
 const latestSnapshotState = ref<'idle' | 'ok' | 'missing'>('idle')
+let snapshotSeq = 0
 
 async function loadLatestSnapshot(alarm: AlarmEvent | undefined): Promise<void> {
+  const seq = ++snapshotSeq
   latestSnapshotUrl.value = ''
   latestSnapshotState.value = 'idle'
   if (!alarm) return
   // 抓图是 E2（听诊盒子族）的能力；其它来源的告警没有这条路。
   const result = await callApi(() => window.api.e2.alarmSnapshots(alarm.deviceId, alarm.id))
+  if (seq !== snapshotSeq) return
   const view = result.success ? unwrap(result) : undefined
   const url = view?.state === 'ok' ? view.files[0]?.url ?? '' : ''
   if (url !== '') {
@@ -445,6 +448,11 @@ onMounted(async () => {
 watch(
   () => props.deviceId,
   async () => {
+    selectedAlarm.value = undefined
+    latestAlarm.value = undefined
+    latestSnapshotUrl.value = ''
+    latestSnapshotState.value = 'idle'
+    alarmOffset.value = 0
     await stopPtzLive()
     selectedPtzCameraId.value = ''
     await loadPtz()
@@ -684,7 +692,7 @@ function selectAlarm(alarm: AlarmEvent): void {
             <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
             <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</span>
             <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
-            <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
+            <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(calibratedDirectionOf(alarm), 0) }}°</span>
           </li>
         </ul>
 
@@ -717,7 +725,7 @@ function selectAlarm(alarm: AlarmEvent): void {
           </div>
           <div class="sonar-alarm-detail__facts">
             <div><span>{{ t('sonarUi.alarmTime') }}</span><strong>{{ formatDateTime(selectedAlarm.timestamp) }}</strong></div>
-            <div><span>{{ t('sonarUi.alarmDirection') }}</span><strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong></div>
+            <div><span>{{ t('sonarUi.alarmDirection') }}</span><strong>{{ selectedDirection === undefined ? '—' : `${formatNumber(selectedDirection, 0)}°` }}</strong></div>
             <div><span>{{ t('sonarUi.alarmType') }}</span><strong>{{ selectedAlarm.alarmTypes.length > 0 ? selectedAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</strong></div>
           </div>
           <RecordingPlayer v-if="selectedAlarm.localRecordingId" :recording-id="selectedAlarm.localRecordingId" auto-load />

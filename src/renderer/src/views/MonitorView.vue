@@ -3511,7 +3511,7 @@ const voiceprintHeaderDate = computed(() => formatDateTime(monitor.now))
           （时间轴回放原来挂在图下，业主 20260921 又要求撤掉 —— 趋势 X 轴的缩放/平移
           已覆盖"按时间找段"；见下方原位置的注释。）
       -->
-      <section class="chart-panel card trend-panel">
+      <section v-if="selectedDevice?.kind === 'acousticBox'" class="chart-panel card trend-panel">
         <div class="section-header">
           <h3 class="section-title">{{ t('monitorUi.trendSection') }}</h3>
           <div class="trend-panel__header-actions">
