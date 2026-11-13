@@ -85,6 +85,10 @@ onBeforeUnmount(revoke)
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
 }
 
 .sonar-preview-label {
