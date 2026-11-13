@@ -49,6 +49,8 @@ const center = ref<MapCenter>({ latitude: 30, longitude: 110, zoom: DEFAULT_ZOOM
 const marker = ref<{ latitude: number; longitude: number } | null>(null)
 const tileErrors = ref<Record<string, boolean>>({})
 const dragging = ref(false)
+const manualLatitude = ref('')
+const manualLongitude = ref('')
 let lastPointer: { x: number; y: number } | null = null
 let dragMoved = false
 
@@ -179,6 +181,25 @@ function onContextMenu(event: MouseEvent): void {
   emit('pick', point)
   emit('close')
 }
+function applyManualCoordinates(): void {
+  const latitude = Number(manualLatitude.value)
+  const longitude = Number(manualLongitude.value)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return
+  marker.value = { latitude, longitude }
+  center.value = { latitude, longitude, zoom: center.value.zoom }
+}
+
+watch(marker, (point) => {
+  if (point === null) {
+    manualLatitude.value = ''
+    manualLongitude.value = ''
+    return
+  }
+  manualLatitude.value = point.latitude.toFixed(6)
+  manualLongitude.value = point.longitude.toFixed(6)
+})
+
 function zoomBy(delta: number): void {
   center.value = {
     ...center.value,
@@ -243,6 +264,35 @@ function confirm(): void {
         </div>
       </div>
 
+      <div class="map-picker__manual" data-map-manual-coordinates>
+        <label class="field">
+          <span class="field-label">{{ t('installUi.latitude') }}</span>
+          <input
+            v-model="manualLatitude"
+            class="input mono"
+            type="text"
+            inputmode="decimal"
+            data-map-manual-latitude
+            @change="applyManualCoordinates"
+            @keydown.enter.prevent="applyManualCoordinates"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">{{ t('installUi.longitude') }}</span>
+          <input
+            v-model="manualLongitude"
+            class="input mono"
+            type="text"
+            inputmode="decimal"
+            data-map-manual-longitude
+            @change="applyManualCoordinates"
+            @keydown.enter.prevent="applyManualCoordinates"
+          />
+        </label>
+        <button type="button" class="btn btn--sm" data-map-manual-apply @click="applyManualCoordinates">
+          {{ t('mapPickerUi.locate') }}
+        </button>
+      </div>
       <p v-if="!tileConfig.enabled" class="muted map-picker__offline">
         {{ t('mapPickerUi.offlineHint') }}
       </p>
@@ -338,5 +388,15 @@ function confirm(): void {
 .map-picker__hint {
   margin: 0;
   font-size: 12.5px;
+}
+.map-picker__manual {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.map-picker__manual .field {
+  margin: 0;
+  flex: 1;
 }
 </style>

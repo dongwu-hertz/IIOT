@@ -736,6 +736,7 @@ presets, the licence boundaries
   },
 
   mapPickerUi: {
+    locate: 'Locate',
     title: 'Pick a point on the map',
     hint: 'Drag with the left mouse button to move the map; right-click to confirm the point.',
     offlineHint: 'Online base map is disabled; you can still click the grid to pick a point.',

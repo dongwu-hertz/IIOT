@@ -625,7 +625,7 @@ const webUiAddress = computed(() => {
           :installation="device.installation"
           :device-id="device.id"
           :device-name="device.name"
-          :show-map="device.kind === 'auscultationBox'"
+          :show-map="false"
           :sector-width-deg="device.e2Variant === 'airSonar' ? 1 : undefined"
         />
 
@@ -702,7 +702,7 @@ const webUiAddress = computed(() => {
           :installation="device.installation"
           :device-id="device.id"
           :device-name="device.name"
-          :show-map="device.kind === 'auscultationBox'"
+          :show-map="false"
           :sector-width-deg="device.e2Variant === 'airSonar' ? 1 : undefined"
         />
 

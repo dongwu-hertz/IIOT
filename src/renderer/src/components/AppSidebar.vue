@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Main navigation (spec section 8.1).
  *
@@ -54,7 +54,6 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { path: '/', labelKey: 'app.nav.overview', icon: 'M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z' },
   /**
    * 地图信息（GIS）（业主 2026-09-17 第 8 批建的页；**2026-09-18 第 10 批第 12 条改了名字与位置**）。
    *
@@ -72,6 +71,7 @@ const NAV_ITEMS: NavItem[] = [
     labelKey: 'app.nav.map',
     icon: 'M10 17.6s6-5.5 6-9.7a6 6 0 10-12 0c0 4.2 6 9.7 6 9.7zM10 8a1.8 1.8 0 100 3.6A1.8 1.8 0 0010 8z'
   },
+  { path: '/', labelKey: 'app.nav.overview', icon: 'M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z' },
   {
     path: '/devices',
     labelKey: 'app.nav.devices',

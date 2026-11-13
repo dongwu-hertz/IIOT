@@ -735,6 +735,7 @@ export const tr: MessageSchema = {
   },
 
   mapPickerUi: {
+    locate: 'Konumlandır',
     title: 'Haritada nokta seç',
     hint: 'Haritayı sol düğmeyle sürükleyin; noktayı onaylamak için sağ tıklayın.',
     offlineHint: 'Çevrimiçi alt harita kapalı; yine de ızgaraya tıklayarak nokta seçebilirsiniz.',

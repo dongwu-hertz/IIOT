@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Device store (spec section 8).
  *
  * Setup-style Pinia store. Every action funnels failures into a human-readable
@@ -244,6 +244,8 @@ export const useDevicesStore = defineStore('devices', () => {
      * 读的（`DevicesView` / `AddDeviceDialog`），而它历史上就**没有**在读成功时清空 ——
      * 清它会把别的失败一起抹掉（那是另一个缺陷，见 §15.47 的"还没做"）。
      */
+    // 成功读取后清掉上一次通道读取留下的就地错误，避免设备管理页显示过期的 AUTH_FAILED。
+    error.value = ''
     reportReadError(READ_ERROR_IDS.channels, '')
   }
 

@@ -1,4 +1,4 @@
-import { strict as assert } from 'node:assert'
+﻿import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -37,7 +37,8 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(card, /showMap\?: boolean/)
     assert.match(card, /<DeviceLocationMap/)
     const detail = read('src/renderer/src/views/DeviceDetailView.vue')
-    assert.match(detail, /:show-map="device\.kind === 'auscultationBox'"/)
+    assert.match(detail, /:show-map="false"/)
+    assert.doesNotMatch(detail, /device\\.kind === 'auscultationBox'/)
   })
   it('associates the selected device location map with Live monitoring', () => {
     const monitor = read('src/renderer/src/views/MonitorView.vue')

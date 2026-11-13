@@ -729,6 +729,7 @@ export const es: MessageSchema = {
   },
 
   mapPickerUi: {
+    locate: 'Ubicar',
     title: 'Elegir un punto en el mapa',
     hint: 'Arrastra con el botón izquierdo para mover el mapa; haz clic derecho para confirmar el punto.',
     offlineHint: 'El mapa base en línea está desactivado; aún puedes hacer clic en la cuadrícula para elegir un punto.',
