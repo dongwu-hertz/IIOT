@@ -36,14 +36,11 @@ import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.
 
 const props = defineProps<{
   deviceId: string
-  activeView?: 'location' | 'ptz'
   settingsOpen?: boolean
 }>()
 const emit = defineEmits<{
-  'update:activeView': [value: 'location' | 'ptz']
   'update:settingsOpen': [value: boolean]
 }>()
-
 const { t } = useI18n()
 const devices = useDevicesStore()
 const e2Realtime = useE2RealtimeStore()
@@ -52,12 +49,6 @@ const session = useSessionStore()
 
 const device = computed(() => devices.byId(props.deviceId))
 
-/** 左上视图：设备位置 GIS / 已联动的 PTZ 相机；由页头 Online LAN 栏的双向按钮控制。 */
-const activeView = computed({
-  get: () => props.activeView ?? 'location',
-  set: (value: 'location' | 'ptz') => emit('update:activeView', value)
-})
-/** 标题栏齿轮：设备信息 + 地址信息默认收起；齿轮也在页头 Online LAN 栏。 */
 const settingsOpen = computed({
   get: () => props.settingsOpen ?? false,
   set: (value: boolean) => emit('update:settingsOpen', value)
@@ -175,6 +166,12 @@ const ptz = ref<E2PtzConfig | null>(null)
 async function loadPtz(): Promise<void> {
   const result = await callApi(() => window.api.e2.ptz(props.deviceId))
   ptz.value = result.success ? unwrap(result) ?? null : null
+}
+/** 右侧 PTZ 卡的两个内容：实时预览 / 告警视频。 */
+const ptzPreviewMode = ref<'live' | 'alarm'>('live')
+
+function togglePtzPreviewMode(): void {
+  ptzPreviewMode.value = ptzPreviewMode.value === 'live' ? 'alarm' : 'live'
 }
 const callback = ref<E2RealtimeCallbackStatus | null>(null)
 const callbackBusy = ref(false)
@@ -361,24 +358,43 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
     <div class="sonar-board">
       <section class="card sonar-view" data-sonar-map>
         <div class="section-header">
-          <h3 class="section-title">{{ activeView === 'location' ? t('sonarUi.mapTitle') : t('sonarUi.ptzPreviewTitle') }}</h3>
-          <span v-if="activeView === 'ptz' && ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
+          <h3 class="section-title">{{ t('sonarUi.mapTitle') }}</h3>
         </div>
         <DeviceLocationMap
-          v-show="activeView === 'location'"
           :installation="device?.installation"
           :device-id="props.deviceId"
           :device-name="device?.name"
         />
-        <div v-show="activeView === 'ptz'" class="sonar-ptz-view" data-sonar-ptz-preview>
-          <div class="sonar-ptz__placeholder">
-            <p v-if="ptz?.enabled">{{ t('sonarUi.ptzPreviewReserved') }}</p>
-            <p v-else class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
-          </div>
-        </div>
       </section>
-
       <div class="sonar-side">
+        <section class="card sonar-ptz" data-sonar-ptz-preview>
+          <div class="section-header">
+            <h3 class="section-title">
+              {{ ptzPreviewMode === 'live' ? t('sonarUi.ptzLivePreview') : t('sonarUi.ptzAlarmVideo') }}
+            </h3>
+            <div class="sonar-ptz__head-actions">
+              <span v-if="ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
+              <button
+                type="button"
+                class="btn btn--sm btn--icon"
+                :title="ptzPreviewMode === 'live' ? t('sonarUi.ptzAlarmVideo') : t('sonarUi.ptzLivePreview')"
+                :aria-label="ptzPreviewMode === 'live' ? t('sonarUi.ptzAlarmVideo') : t('sonarUi.ptzLivePreview')"
+                data-sonar-ptz-mode-toggle
+                @click="togglePtzPreviewMode"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 8h14m0 0-3-3m3 3-3 3M20 16H6m0 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="sonar-ptz__preview">
+            <p v-if="!ptz?.enabled" class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
+            <p v-else-if="ptzPreviewMode === 'live'">{{ t('sonarUi.ptzLiveReserved') }}</p>
+            <p v-else>{{ t('sonarUi.ptzAlarmReserved') }}</p>
+          </div>
+        </section>
+
         <section class="card sonar-device" data-sonar-now>
           <div class="section-header">
             <h3 class="section-title">{{ t('sonarUi.deviceTitle') }}</h3>
@@ -894,5 +910,46 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 .sonar-device,
 .sonar-history {
   height: 100%;
+}
+/* 右侧：PTZ 预览在上，Device 与 Alarm history 在下方等分。 */
+.sonar-side {
+  grid-template-rows: minmax(150px, 34%) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.sonar-ptz {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sonar-ptz__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sonar-ptz__preview {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  text-align: center;
+}
+
+.sonar-ptz__preview p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+@media (max-width: 1000px) {
+  .sonar-side {
+    grid-template-rows: minmax(220px, auto) minmax(320px, auto) minmax(320px, auto);
+  }
 }
 </style>

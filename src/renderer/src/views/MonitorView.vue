@@ -148,7 +148,6 @@ const monitor = useMonitorStore()
 const linkage = useAlarmLinkageStore()
 
 const selectedDeviceId = ref('')
-const sonarActiveView = ref<'location' | 'ptz'>('location')
 const sonarSettingsOpen = ref(false)
 const activeChannelIndex = ref(0)
 
@@ -1587,9 +1586,6 @@ const isCamera = computed(() => selectedDevice.value?.kind === 'acousticCamera')
  * 就是这件事的说明（`monitorUi.sonarLiveUnwired`）。
  */
 const isSonar = computed(() => selectedDevice.value?.kind === 'auscultationBox')
-const sonarViewToggleLabel = computed(() =>
-  t(sonarActiveView.value === 'location' ? 'sonarUi.switchToPtz' : 'sonarUi.switchToLocation')
-)
 
 /**
  * 气井泄漏（AO01）：协议上是 acousticBox，但固件不推实时音频/频谱。
@@ -2857,18 +2853,6 @@ const sessionLabel = computed(() => {
                 绿点/灰点已于 2026-09-21 第二批第 15 条删掉）。
               -->
               <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
-              <button
-                type="button"
-                class="btn btn--sm btn--icon monitor-head__action"
-                :title="sonarViewToggleLabel"
-                :aria-label="sonarViewToggleLabel"
-                data-sonar-view-toggle
-                @click="sonarActiveView = sonarActiveView === 'location' ? 'ptz' : 'location'"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M4 8h14m0 0-3-3m3 3-3 3M20 16H6m0 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </button>
               <button
                 type="button"
                 class="btn btn--sm btn--icon monitor-head__action"
@@ -4274,7 +4258,6 @@ const sessionLabel = computed(() => {
           实现与诚实边界都在 `SonarOverviewPanel.vue` 的文件头。
         -->
         <SonarOverviewPanel
-          v-model:active-view="sonarActiveView"
           v-model:settings-open="sonarSettingsOpen"
           :device-id="selectedDeviceId"
         />

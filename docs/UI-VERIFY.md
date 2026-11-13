@@ -5934,3 +5934,48 @@ Trend query: totalRows 143 / 1 file / 10 s bucket
 - 目标测试 sonar-map-alarm / i18n：37/37 通过
 - verify:packaged：26/0；安装包签名 Valid
 
+
+---
+
+## XX. 第 72 轮的发布（v1.0.47，2026-11-13）
+
+
+业主 2026-11-13：
+> Device location 位置不变，右侧 Device 信息上面还是增加 PTZ 的实时预览窗口。
+> 把切换按钮放在右侧 PTZ 的界面上，点击两个显示内容进行切换。
+
+### XX.1 交付
+
+- 版本：1.0.47（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.47-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,228,160 字节 / 13A674034558ABABE1C07784D01882F6764F8B27DCD9885AA6F198D51B255686
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（指纹 DB24261F59F98579A03CB6E9D965866FD109077F，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged 26 通过 / 0 失败，应用内版本 1.0.47
+- 上一版归档：release-1.0.46-2026-11-12/
+
+
+### XX.2 变更
+
+- 左侧 Device location GIS 地图固定显示，不再作为可切换视图；
+- 右侧列顶部新增 PTZ 预览卡（位于 Device 卡上方）：
+  - 默认显示 PTZ live preview；
+  - 卡内双向按钮切换到 PTZ alarm video；
+  - 两种内容共用同一 PTZ 卡，不再切换左侧地图；
+- 右侧行高：PTZ 约 34%，Device 与 Alarm history 各占剩余一半并保持等高；
+- 页头 Online / LAN 栏只保留 SETTINGS 齿轮，删除原地图/PTZ 切换按钮。
+
+实测（1920 视口）：
+
+- 地图 display=block（固定）；
+- PTZ 卡 top=139.7、height=199.6；
+- Device 卡 top=355.3、height=177.7；
+- Alarm history top=549.1、height=177.7；
+- PTZ 切换后标题从 PTZ live preview 变为 PTZ alarm video，地图保持显示。
+
+### XX.3 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm / i18n：37/37 通过
+- verify:packaged：26/0；安装包签名 Valid
+
