@@ -529,6 +529,8 @@ export const es: MessageSchema = {
     ptzLiveReserved: 'La vista previa PTZ en vivo se mostrará aquí.',
     ptzAlarmReserved: 'El vídeo de alarma PTZ se mostrará aquí.',
     calibratedDirection: 'Dirección calibrada',
+    calibrationAngle: 'Ángulo de calibración',
+    calibrationSaved: 'Calibración guardada',
     installationOffset: 'Desplazamiento de instalación {degrees}°',
     callbackConnected: 'Conectado',
     callbackDisconnected: 'No conectado',

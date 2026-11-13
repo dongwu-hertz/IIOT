@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -20,7 +20,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AlarmEvent } from '@shared/domain/models'
 import type { E2DeviceStatus, E2SyncOutcome } from '@shared/ipc/contract'
-import type { E2RealtimeCallbackStatus } from '@shared/domain/e2-callback'
 import type { E2PtzConfig } from '@shared/domain/e2-ptz'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
@@ -219,56 +218,40 @@ const ptzPreviewMode = ref<'live' | 'alarm'>('live')
 function togglePtzPreviewMode(): void {
   ptzPreviewMode.value = ptzPreviewMode.value === 'live' ? 'alarm' : 'live'
 }
-const callback = ref<E2RealtimeCallbackStatus | null>(null)
-const callbackBusy = ref(false)
-const callbackError = ref('')
-const callbackNotice = ref('')
 const recordSyncBusy = ref(false)
 const recordSyncError = ref('')
 const recordSyncNotice = ref('')
-
-const callbackReady = computed(
-  () => callback.value?.pointsToUs === true && callback.value?.isSendRealtimeValue === 1
+/** 指南针校准：直接编辑设备安装方位角（持久化到设备记录）。 */
+const calibrationDeg = ref(0)
+const calibrationBusy = ref(false)
+const calibrationMessage = ref('')
+watch(
+  () => device.value?.installation?.azimuthDeg,
+  (value) => {
+    calibrationDeg.value = value ?? 0
+  },
+  { immediate: true }
 )
 
-async function loadCallback(): Promise<void> {
-  const result = await callApi(() => window.api.e2.realtimeCallback(props.deviceId))
-  if (!result.success) {
-    callbackError.value = resultMessage(result)
-    return
-  }
-  callbackError.value = ''
-  callback.value = unwrap(result) ?? null
-}
-
-async function enableRealtime(): Promise<void> {
-  if (callbackBusy.value) return
-  callbackBusy.value = true
-  callbackError.value = ''
-  callbackNotice.value = ''
+async function saveCalibration(): Promise<void> {
+  if (calibrationBusy.value) return
+  const raw = Number(calibrationDeg.value)
+  if (!Number.isFinite(raw)) return
+  const degrees = ((raw % 360) + 360) % 360
+  calibrationBusy.value = true
+  calibrationMessage.value = ''
   try {
-    const result = await callApi(() => window.api.e2.setRealtimeCallback(props.deviceId, true))
-    if (!result.success) {
-      callbackError.value = resultMessage(result)
-      return
-    }
-    callbackNotice.value = t('sonarUi.waitingRealtime')
-    // 设备写入成功不等于监听已经起来（端口/地址可能失败）：
-    // 等几轮读回，避免界面一直停在「未接入」。
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      await loadCallback()
-  await loadPtz()
-      if (callbackReady.value) break
-      await new Promise((resolve) => setTimeout(resolve, 400))
-    }
-    if (!callbackReady.value && callback.value?.listener?.error) {
-      callbackError.value = callback.value.listener.error
-    }
+    const result = await callApi(() =>
+      window.api.devices.update({
+        id: props.deviceId,
+        installation: { azimuthDeg: degrees }
+      })
+    )
+    calibrationMessage.value = result.success ? t('sonarUi.calibrationSaved') : resultMessage(result)
   } finally {
-    callbackBusy.value = false
+    calibrationBusy.value = false
   }
 }
-
 async function syncRecordings(): Promise<void> {
   if (recordSyncBusy.value) return
   recordSyncBusy.value = true
@@ -369,7 +352,6 @@ onMounted(async () => {
       liveAudio.push(event.samples, event.sampleRate)
     }
   })
-  await loadCallback()
   await loadPtz()
   await loadStatus()
   await loadAlarms()
@@ -469,80 +451,83 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
               </svg>
               <strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong>
               <span class="muted">{{ t('sonarUi.calibratedDirection') }}</span>
+              <label class="sonar-compass__calibration">
+                <span>{{ t('sonarUi.calibrationAngle') }}</span>
+                <input
+                  v-model.number="calibrationDeg"
+                  type="number"
+                  min="0"
+                  max="359"
+                  step="1"
+                  class="input sonar-compass__calibration-input"
+                  :disabled="!session.isAdmin || calibrationBusy"
+                  data-sonar-calibration-input
+                  @change="saveCalibration"
+                />
+                <span>°</span>
+              </label>
+              <span v-if="calibrationMessage" class="muted sonar-compass__calibration-message">{{ calibrationMessage }}</span>
             </div>
           </div>
           <p class="sonar-device__calibration">
             {{ t('sonarUi.installationOffset', { degrees: formatNumber(installationAzimuth, 0) }) }}
           </p>
 
-          <div class="sonar-device__callback" data-sonar-callback>
-            <div class="sonar-device__callback-head">
-              <strong>{{ t('e2CallbackUi.title') }}</strong>
-              <span class="badge" :class="callbackReady ? 'badge--success' : 'badge--warning'">
-                {{ callbackReady ? t('sonarUi.callbackConnected') : t('sonarUi.callbackDisconnected') }}
-              </span>
-            </div>
-            <p v-if="callbackReady" class="muted">
-              {{ t('e2CallbackUi.listening', { port: callback?.listener.port ?? '—' }) }}
-            </p>
-            <p v-else class="muted">{{ t('sonarUi.realtimeOff') }}</p>
-            <button
-              v-if="!callbackReady && session.isAdmin"
-              type="button"
-              class="btn btn--sm btn--primary"
-              :disabled="callbackBusy"
-              data-sonar-enable-callback
-              @click="enableRealtime"
+          <div class="sonar-device__audio-toolbar">
+            <span class="sonar-device__audio-label">{{ t('sonarUi.audioChannel') }}</span>
+            <select
+              v-model.number="audioChannel"
+              class="select sonar-device__audio-select"
+              :disabled="liveAudioBusy"
+              data-sonar-audio-channel
+              @change="onAudioChannelChange"
             >
-              {{ callbackBusy ? t('common.loading') : t('sonarUi.enableRealtime') }}
-            </button>
-            <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
-            <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
-          </div>
-
-          <div class="sonar-device__audio-row">
-            <label class="field">
-              <span class="field-label">{{ t('sonarUi.audioChannel') }}</span>
-              <select v-model.number="audioChannel" class="select" :disabled="liveAudioBusy" data-sonar-audio-channel @change="onAudioChannelChange">
-                <option v-for="channel in audioChannelCount" :key="channel" :value="channel">CH{{ channel }}</option>
-              </select>
-            </label>
-            <span v-if="liveAudioEnabled" class="badge badge--accent">
-              {{ t('sonarUi.pullingAudio', { channel: liveAudioChannel ?? audioChannel }) }}
-            </span>
-          </div>
-
-          <div class="sonar-device__actions">
+              <option v-for="channel in audioChannelCount" :key="channel" :value="channel">CH{{ channel }}</option>
+            </select>
             <button
               type="button"
-              class="btn sonar-device__action-button"
+              class="btn btn--icon sonar-device__tool-button"
               :class="{ 'btn--danger': audioPlaying }"
               :disabled="audioBusy || !latestPlayable"
-              :title="latestPlayable ? '' : t('sonarUi.noAudio')"
+              :title="latestPlayable ? (audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio')) : t('sonarUi.noAudio')"
+              :aria-label="audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio')"
               data-sonar-audio
               @click="toggleAudio"
             >
-              {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M8 5.5v13l10-6.5-10-6.5Z" fill="currentColor" />
+              </svg>
             </button>
             <button
               type="button"
-              class="btn btn--primary sonar-device__action-button"
+              class="btn btn--primary btn--icon sonar-device__tool-button"
               :disabled="liveAudioBusy"
+              :title="liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio')"
+              :aria-label="liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio')"
               data-sonar-live-audio
               @click="toggleLiveAudio"
             >
-              {{ liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio') }}
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
             </button>
             <button
               type="button"
-              class="btn sonar-device__action-button"
+              class="btn btn--icon sonar-device__tool-button"
               :disabled="recordSyncBusy"
+              :title="recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings')"
+              :aria-label="recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings')"
               data-sonar-sync-recordings
               @click="syncRecordings"
             >
-              {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 7v5h-5M4 17v-5h5M6.1 8.5A7 7 0 0 1 19.6 11M17.9 15.5A7 7 0 0 1 4.4 13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
             </button>
           </div>
+          <p v-if="liveAudioEnabled" class="muted sonar-device__pulling">
+            {{ t('sonarUi.pullingAudio', { channel: liveAudioChannel ?? audioChannel }) }}
+          </p>
           <p v-if="liveAudioError" class="alert alert--danger" role="alert">{{ liveAudioError }}</p>
           <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>{{ t('sonarUi.noAudio') }}</p>
           <p v-if="recordSyncError" class="alert alert--danger" role="alert">{{ recordSyncError }}</p>
@@ -1184,5 +1169,71 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
   .sonar-bottom {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+.sonar-compass__calibration {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+
+.sonar-compass__calibration-input {
+  width: 48px;
+  height: 23px;
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+
+.sonar-compass__calibration-message {
+  max-width: 110px;
+  font-size: 10px;
+  text-align: center;
+}
+
+.sonar-device__audio-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.sonar-device__audio-label {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.sonar-device__audio-select {
+  flex: 0 0 78px;
+  width: 78px;
+  height: 32px;
+  padding: 3px 6px;
+}
+
+.sonar-device__tool-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.sonar-device__pulling {
+  margin: 2px 0 4px;
+  font-size: 11px;
+}
+/* 与声学相机页修改后的卡片间距一致（8px）。 */
+.sonar-shell,
+.sonar-board,
+.sonar-side,
+.sonar-bottom {
+  gap: 8px;
+}
+
+.sonar-bottom {
+  margin-top: 8px;
 }
 </style>

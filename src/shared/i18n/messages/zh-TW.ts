@@ -568,6 +568,8 @@ export const zhTW: MessageSchema = {
     ptzLiveReserved: 'PTZ 即時預覽將在此顯示。',
     ptzAlarmReserved: 'PTZ 告警影片將在此顯示。',
     calibratedDirection: '校準方向',
+    calibrationAngle: '校準角度',
+    calibrationSaved: '校準已儲存',
     installationOffset: '安裝偏移 {degrees}°',
     callbackConnected: '已連線',
     callbackDisconnected: '未連線',

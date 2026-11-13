@@ -635,6 +635,8 @@ export const zhCN = {
     ptzLiveReserved: 'PTZ 实时预览将在此显示。',
     ptzAlarmReserved: 'PTZ 告警视频将在此显示。',
     calibratedDirection: '校准方向',
+    calibrationAngle: '校准角度',
+    calibrationSaved: '校准已保存',
     installationOffset: '安装偏移 {degrees}°',
     callbackConnected: '已连接',
     callbackDisconnected: '未连接',

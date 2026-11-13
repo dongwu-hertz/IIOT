@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -42,7 +42,7 @@ describe('SN-16 sonar map and alarm profile', () => {
     const monitor = read('src/renderer/src/views/MonitorView.vue')
     assert.match(monitor, /import DeviceLocationMap/)
     const uses = monitor.match(/<DeviceLocationMap/g) ?? []
-    assert.ok(uses.length >= 2, 'camera / gas-leak branches should embed the map')
+    assert.ok(uses.length >= 1, 'gas-leak branch should embed the map')
     const sonar = read('src/renderer/src/components/SonarOverviewPanel.vue')
     assert.match(sonar, /<DeviceLocationMap/)
   })
@@ -50,8 +50,6 @@ describe('SN-16 sonar map and alarm profile', () => {
   it('explains and can repair the Live monitoring gaps for SN-16', () => {
     const panel = read('src/renderer/src/components/SonarOverviewPanel.vue')
     const monitor = read('src/renderer/src/views/MonitorView.vue')
-    assert.match(panel, /data-sonar-enable-callback/)
-    assert.match(panel, /setRealtimeCallback/)
     assert.match(panel, /data-sonar-sync-recordings/)
     assert.match(panel, /data-sonar-live-audio/)
     assert.match(panel, /data-sonar-ptz-preview/)
@@ -61,11 +59,13 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.doesNotMatch(monitor, /data-sonar-view-toggle/)
     assert.match(panel, /data-sonar-ptz-mode-toggle/)
     assert.match(panel, /data-sonar-compass/)
-    assert.match(panel, /data-sonar-callback/)
+    assert.match(panel, /data-sonar-calibration-input/)
+    assert.match(panel, /sonar-device__audio-toolbar/)
     assert.match(panel, /data-sonar-audio-channel/)
     assert.match(panel, /data-sonar-device-status/)
     assert.match(panel, /startAudio\(props\.deviceId, audioChannel\.value\)/)
     assert.match(monitor, /channel-tabs--header/)
+    assert.match(monitor, /monitor-head__status--voiceprint/)
     assert.doesNotMatch(monitor, /data-monitor-session-badge/)
     assert.doesNotMatch(panel, /activeView/)
     const locationMap = read('src/renderer/src/components/DeviceLocationMap.vue')
@@ -79,7 +79,6 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(audioService, /audio_stream/)
     assert.match(audioService, /getInt16/)
     assert.match(panel, /latestAlarmDirection/)
-    assert.match(panel, /sonarUi\.realtimeOff/)
     assert.match(panel, /localRecordingContainer !== undefined/)
   })
   it('does not surface a single device AUTH_FAILED as a global Settings notice', () => {

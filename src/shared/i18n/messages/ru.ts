@@ -509,6 +509,8 @@ export const ru: MessageSchema = {
     ptzLiveReserved: 'Здесь будет показано живое PTZ-видео.',
     ptzAlarmReserved: 'Здесь будет показано видео тревоги PTZ.',
     calibratedDirection: 'Калиброванное направление',
+    calibrationAngle: 'Угол калибровки',
+    calibrationSaved: 'Калибровка сохранена',
     installationOffset: 'Смещение установки {degrees}°',
     callbackConnected: 'Подключено',
     callbackDisconnected: 'Не подключено',

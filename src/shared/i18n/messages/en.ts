@@ -538,6 +538,8 @@ presets, the licence boundaries
     ptzLiveReserved: 'PTZ live preview will be shown here.',
     ptzAlarmReserved: 'PTZ alarm video will be shown here.',
     calibratedDirection: 'Calibrated direction',
+    calibrationAngle: 'Calibration angle',
+    calibrationSaved: 'Calibration saved',
     installationOffset: 'Installation offset {degrees}°',
     callbackConnected: 'Connected',
     callbackDisconnected: 'Not connected',

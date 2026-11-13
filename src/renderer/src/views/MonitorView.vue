@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Realtime monitoring (spec section 9.1) — REAL device data.
  *
@@ -2781,7 +2781,7 @@ const enabledChannelSummary = computed(() => {
             </label>
           </Teleport>
 
-          <div v-if="selectedDevice" class="monitor-head__status">
+          <div v-if="selectedDevice" class="monitor-head__status" :class="{ 'monitor-head__status--voiceprint': isVoiceprint }">
             <StatusBadge
               :status="selectedDevice.status"
               :connection-type="isVoiceprint ? undefined : selectedDevice.connectionType"
@@ -2938,11 +2938,7 @@ const enabledChannelSummary = computed(() => {
         <!-- Top: live video + camera controls. -->
         <div class="camera-split camera-split--top">
           <div class="camera-split__main">
-            <DeviceLocationMap
-              :installation="selectedDevice?.installation"
-              :device-id="selectedDevice?.id"
-              :device-name="selectedDevice?.name"
-            />
+
 
             <section class="card camera-live">
               <div
@@ -4266,7 +4262,7 @@ const enabledChannelSummary = computed(() => {
  * 由 `.app-content` 的内边距独家决定这件事没有被这次重排改变。
  */
 .camera-board {
-  --camera-card-gap: var(--space-4);
+  --camera-card-gap: calc(var(--space-4) * 0.5);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: var(--camera-card-gap);
@@ -4299,7 +4295,7 @@ const enabledChannelSummary = computed(() => {
  * 维持 --space-5 不动。
  */
 .camera-board--voiceprint {
-  --camera-card-gap: calc(var(--space-5) * 0.1);
+  --camera-card-gap: calc(var(--space-5) * 0.03);
 }
 
 /* 无论并排成几列都必须占满整幅宽的两块：设备头 / 相机分支的 65/35 两列容器。 */
@@ -6187,5 +6183,9 @@ const enabledChannelSummary = computed(() => {
 
 .channel-tabs--header .channel-tab {
   min-width: 64px;
+}
+.monitor-head__status--voiceprint {
+  flex: 1 1 0;
+  justify-content: center;
 }
 </style>

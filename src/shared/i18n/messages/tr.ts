@@ -536,6 +536,8 @@ export const tr: MessageSchema = {
     ptzLiveReserved: 'PTZ canlı önizleme burada gösterilecek.',
     ptzAlarmReserved: 'PTZ alarm videosu burada gösterilecek.',
     calibratedDirection: 'Kalibre edilmiş yön',
+    calibrationAngle: 'Kalibrasyon açısı',
+    calibrationSaved: 'Kalibrasyon kaydedildi',
     installationOffset: 'Kurulum sapması {degrees}°',
     callbackConnected: 'Bağlı',
     callbackDisconnected: 'Bağlı değil',
