@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * ③b 时间轴回放（业主 2026-09-17）—— 实时监测页上"这台设备本机录了什么"的一条时间轴。
  *
@@ -37,7 +37,6 @@ import {
 import {
   recordingSegments,
   timelineLimits,
-  timelineWindow
 } from '@renderer/lib/recordingTimeline'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
@@ -56,6 +55,8 @@ const { t } = useI18n()
  * （像素只有一千多个），而一次拉 2000 条会把 IPC 和渲染都拖慢。更早的录像去录像页看。
  */
 const TIMELINE_LIMIT = 200
+/** 时间轴默认显示 1 小时（产品要求 2026-11-13）。 */
+const DEFAULT_WINDOW_MS = 3_600_000
 
 const recordings = ref<Recording[]>([])
 const loading = ref(false)
@@ -69,7 +70,22 @@ const trackWidth = ref(0)
 let drag: { startX: number; startWindow: TimeWindow } | null = null
 
 const segments = computed(() => recordingSegments(recordings.value))
-const limits = computed(() => timelineLimits(segments.value, Date.now()))
+const limits = computed(() => {
+  const now = Date.now()
+  const base = timelineLimits(segments.value, now)
+  return {
+    ...base,
+    minMs: Math.min(base.minMs, now - DEFAULT_WINDOW_MS),
+    maxMs: Math.max(base.maxMs, now)
+  }
+})
+
+function initialWindow(): TimeWindow {
+  const now = Date.now()
+  const latestEnd = segments.value.reduce((latest, segment) => Math.max(latest, segment.endMs), 0)
+  const endMs = Math.max(now, latestEnd)
+  return { startMs: endMs - DEFAULT_WINDOW_MS, endMs }
+}
 const placed = computed<PlacedSegment[]>(() =>
   placeSegments(viewWindow.value, trackWidth.value, segments.value)
 )
@@ -112,7 +128,7 @@ async function load(): Promise<void> {
     recordings.value = []
     selectedId.value = ''
     error.value = ''
-    viewWindow.value = timelineWindow([], Date.now())
+    viewWindow.value = clampWindow(initialWindow(), limits.value)
     return
   }
   loading.value = true
@@ -124,14 +140,14 @@ async function load(): Promise<void> {
   if (!result.success) {
     error.value = resultMessage(result)
     recordings.value = []
-    viewWindow.value = timelineWindow([], Date.now())
+    viewWindow.value = clampWindow(initialWindow(), limits.value)
     return
   }
   error.value = ''
   const page: RecordingPage | undefined = unwrap(result)
   recordings.value = page?.items ?? []
   selectedId.value = ''
-  viewWindow.value = timelineWindow(recordingSegments(recordings.value), Date.now())
+  viewWindow.value = clampWindow(initialWindow(), limits.value)
 }
 
 /**

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 繁體中文（台灣）。
  *
  * Typed against `MessageSchema`, which is derived from the Simplified Chinese
@@ -2186,6 +2186,11 @@ export const zhTW: MessageSchema = {
     loading: '正在載入錄音…',
     reload: '重新載入',
     play: '播放錄音',
+    pause: '暫停',
+    seek: '播放進度',
+    volume: '音量大小',
+    mute: '靜音',
+    unmute: '取消靜音',
     release: '關閉播放',
     downloading: '正在從裝置下載並解碼音訊，約 {size}，請稍候…',
     autoplayBlocked: '已載入完成，瀏覽器未自動播放，請點選下方播放按鈕。',

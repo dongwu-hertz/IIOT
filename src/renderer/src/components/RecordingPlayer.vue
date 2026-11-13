@@ -57,6 +57,12 @@ const error = ref('')
 const data = ref<PlaybackData | null>(null)
 const objectUrl = ref('')
 const audioEl = ref<HTMLAudioElement | null>(null)
+const playing = ref(false)
+const currentSec = ref(0)
+const durationSec = ref(0)
+const volumePercent = ref(100)
+const muted = ref(false)
+const volumeOpen = ref(false)
 /** Set when the browser refused the programmatic play() after loading. */
 const autoplayBlocked = ref(false)
 /**
@@ -165,6 +171,9 @@ async function load(): Promise<void> {
   error.value = ''
   autoplayBlocked.value = false
   leadShort.value = ''
+  playing.value = false
+  currentSec.value = 0
+  durationSec.value = 0
 
   const result = await callApi(() => window.api.playback.load(id))
   if (!result.success) {
@@ -206,6 +215,7 @@ async function load(): Promise<void> {
   await applyAnchor(element)
   try {
     await element.play()
+    playing.value = true
   } catch {
     // Chromium's transient-activation window can expire during a multi-second
     // download; the native controls are right there, so surface a hint instead
@@ -222,6 +232,9 @@ function release(): void {
   error.value = ''
   autoplayBlocked.value = false
   leadShort.value = ''
+  playing.value = false
+  currentSec.value = 0
+  durationSec.value = 0
 }
 
 // A new recording id means the loaded clip (and its object URL) is stale.
@@ -318,6 +331,51 @@ const spectrumRange = computed(() =>
   spectrumRangeLabel(spectrumMaxHz(data.value?.spectrum ?? [], data.value?.spectrumBinHz ?? 0))
 )
 
+function togglePlayback(): void {
+  const element = audioEl.value
+  if (!element) return
+  if (element.paused) {
+    void element.play().then(() => { playing.value = true }).catch(() => { playing.value = false })
+  } else {
+    element.pause()
+    playing.value = false
+  }
+}
+
+function onLoadedMetadata(): void {
+  const element = audioEl.value
+  durationSec.value = element && Number.isFinite(element.duration) ? element.duration : 0
+}
+
+function onTimeUpdate(): void {
+  const element = audioEl.value
+  currentSec.value = element && Number.isFinite(element.currentTime) ? element.currentTime : 0
+}
+
+function seekTo(event: Event): void {
+  const element = audioEl.value
+  if (!element) return
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  element.currentTime = Math.min(value, durationSec.value || value)
+}
+
+function setVolume(event: Event): void {
+  const element = audioEl.value
+  if (!element) return
+  const percent = Math.max(0, Math.min(100, Number((event.target as HTMLInputElement).value)))
+  volumePercent.value = percent
+  element.muted = percent === 0
+  muted.value = element.muted
+  element.volume = percent / 100
+}
+
+function toggleMute(): void {
+  const element = audioEl.value
+  if (!element) return
+  element.muted = !element.muted
+  muted.value = element.muted
+}
 defineExpose({ load, release })
 </script>
 
@@ -362,7 +420,81 @@ defineExpose({ load, release })
       <p v-if="error" class="alert alert--danger" role="alert">{{ error }}</p>
 
       <template v-if="data">
-        <audio ref="audioEl" class="player__audio" controls :src="objectUrl"></audio>
+        <div class="player__transport">
+          <button
+            type="button"
+            class="player__transport-button"
+            :aria-label="playing ? t('playerUi.pause') : t('playerUi.play')"
+            :title="playing ? t('playerUi.pause') : t('playerUi.play')"
+            @click="togglePlayback"
+          >
+            <svg v-if="playing" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <rect x="3" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" />
+              <rect x="9.5" y="2.5" width="3.5" height="11" rx="1" fill="currentColor" />
+            </svg>
+            <svg v-else viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M4 2.8 13 8 4 13.2Z" fill="currentColor" />
+            </svg>
+          </button>
+          <span class="player__time">{{ formatDuration(currentSec * 1000) }}</span>
+          <input
+            class="player__seek"
+            type="range"
+            min="0"
+            :max="durationSec || 0"
+            step="0.1"
+            :value="currentSec"
+            :aria-label="t('playerUi.seek')"
+            @input="seekTo"
+          />
+          <span class="player__time">{{ formatDuration(durationSec * 1000) }}</span>
+          <div class="player__volume-wrap">
+            <button
+              type="button"
+              class="player__transport-button"
+              :aria-label="muted ? t('playerUi.unmute') : t('playerUi.mute')"
+              :title="muted ? t('playerUi.unmute') : t('playerUi.mute')"
+              @click="toggleMute"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M2.5 6h2.8L8.5 3.2v9.6L5.3 10H2.5Z" fill="currentColor" />
+                <path v-if="!muted" d="M10.2 5.1a4 4 0 0 1 0 5.8M11.9 3.3a6.4 6.4 0 0 1 0 9.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                <path v-else d="m10.2 6 3.2 3.2M13.4 6l-3.2 3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="player__volume-toggle"
+              :aria-label="t('playerUi.volume')"
+              :title="t('playerUi.volume')"
+              @click="volumeOpen = !volumeOpen"
+            >
+              <span class="player__volume-caret">▾</span>
+            </button>
+            <div v-if="volumeOpen" class="player__volume-pop" @click.stop>
+              <input
+                class="player__volume-slider"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                :value="volumePercent"
+                :aria-label="t('playerUi.volume')"
+                @input="setVolume"
+              />
+            </div>
+          </div>
+        </div>
+        <audio
+          ref="audioEl"
+          class="player__audio"
+          :src="objectUrl"
+          @loadedmetadata="onLoadedMetadata"
+          @timeupdate="onTimeUpdate"
+          @play="playing = true"
+          @pause="playing = false"
+          @ended="playing = false"
+        ></audio>
 
         <dl class="kv player__facts">
           <div class="kv__item">
@@ -508,5 +640,91 @@ defineExpose({ load, release })
 
 .player__hint {
   font-size: 11.5px;
+}
+.player__transport {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+}
+
+.player__transport-button {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.player__transport-button:hover {
+  border-color: var(--color-accent);
+}
+
+.player__time {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.player__seek {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--color-accent);
+}
+
+.player__volume-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.player__volume-toggle {
+  width: 14px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.player__volume-caret {
+  font-size: 10px;
+}
+
+.player__volume-pop {
+  position: absolute;
+  right: -4px;
+  bottom: calc(100% + 6px);
+  width: 34px;
+  height: 132px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-md);
+  z-index: 5;
+}
+
+.player__volume-slider {
+  width: 20px;
+  height: 112px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: var(--color-accent);
+}
+
+.player__audio {
+  display: none;
 }
 </style>
