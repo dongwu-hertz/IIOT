@@ -509,6 +509,8 @@ export const ru: MessageSchema = {
     deviceInfoTitle: 'Информация об устройстве',
     deviceTitle: 'Устройство',
     settingsTitle: 'Настройки устройства',
+    switchToPtz: 'Переключить на PTZ-камеру',
+    switchToLocation: 'Переключить на местоположение устройства',
     viewSwitch: 'Переключение вида',
     deviceInfoIp: 'IP-адрес',
     deviceInfoStatus: 'Состояние',

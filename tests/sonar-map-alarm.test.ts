@@ -1,4 +1,4 @@
-import { strict as assert } from 'node:assert'
+﻿import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -47,16 +47,17 @@ describe('SN-16 sonar map and alarm profile', () => {
 
   it('explains and can repair the Live monitoring gaps for SN-16', () => {
     const panel = read('src/renderer/src/components/SonarOverviewPanel.vue')
+    const monitor = read('src/renderer/src/views/MonitorView.vue')
     assert.match(panel, /data-sonar-enable-callback/)
     assert.match(panel, /setRealtimeCallback/)
     assert.match(panel, /data-sonar-sync-recordings/)
     assert.match(panel, /data-sonar-live-audio/)
     assert.match(panel, /data-sonar-ptz-preview/)
     assert.match(panel, /data-sonar-device-info/)
-    assert.match(panel, /data-sonar-settings-toggle/)
+    assert.match(monitor, /data-sonar-settings-toggle/)
     assert.match(panel, /data-sonar-settings-panel/)
-    assert.match(panel, /data-sonar-view-location/)
-    assert.match(panel, /data-sonar-view-ptz/)
+    assert.match(monitor, /data-sonar-view-toggle/)
+    assert.doesNotMatch(panel, /data-sonar-view-location/)
     const locationMap = read('src/renderer/src/components/DeviceLocationMap.vue')
     assert.match(locationMap, /data-location-zoom-in/)
     assert.match(locationMap, /data-location-auto/)

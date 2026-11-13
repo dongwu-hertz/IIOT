@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Realtime monitoring (spec section 9.1) — REAL device data.
  *
@@ -148,6 +148,8 @@ const monitor = useMonitorStore()
 const linkage = useAlarmLinkageStore()
 
 const selectedDeviceId = ref('')
+const sonarActiveView = ref<'location' | 'ptz'>('location')
+const sonarSettingsOpen = ref(false)
 const activeChannelIndex = ref(0)
 
 /**
@@ -1585,6 +1587,9 @@ const isCamera = computed(() => selectedDevice.value?.kind === 'acousticCamera')
  * 就是这件事的说明（`monitorUi.sonarLiveUnwired`）。
  */
 const isSonar = computed(() => selectedDevice.value?.kind === 'auscultationBox')
+const sonarViewToggleLabel = computed(() =>
+  t(sonarActiveView.value === 'location' ? 'sonarUi.switchToPtz' : 'sonarUi.switchToLocation')
+)
 
 /**
  * 气井泄漏（AO01）：协议上是 acousticBox，但固件不推实时音频/频谱。
@@ -2852,6 +2857,33 @@ const sessionLabel = computed(() => {
                 绿点/灰点已于 2026-09-21 第二批第 15 条删掉）。
               -->
               <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
+              <button
+                type="button"
+                class="btn btn--sm btn--icon monitor-head__action"
+                :title="sonarViewToggleLabel"
+                :aria-label="sonarViewToggleLabel"
+                data-sonar-view-toggle
+                @click="sonarActiveView = sonarActiveView === 'location' ? 'ptz' : 'location'"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 8h14m0 0-3-3m3 3-3 3M20 16H6m0 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="btn btn--sm btn--icon monitor-head__action"
+                :class="{ 'is-active': sonarSettingsOpen }"
+                :title="t('sonarUi.settingsTitle')"
+                :aria-label="t('sonarUi.settingsTitle')"
+                :aria-expanded="sonarSettingsOpen"
+                data-sonar-settings-toggle
+                @click="sonarSettingsOpen = !sonarSettingsOpen"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
+                  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
             </template>
             <template v-else>
               <!--
@@ -4241,7 +4273,11 @@ const sessionLabel = computed(() => {
           + 右栏（当前分贝/方位/播放录音 + 最近一次告警）+ 下方全部历史告警。
           实现与诚实边界都在 `SonarOverviewPanel.vue` 的文件头。
         -->
-        <SonarOverviewPanel :device-id="selectedDeviceId" />
+        <SonarOverviewPanel
+          v-model:active-view="sonarActiveView"
+          v-model:settings-open="sonarSettingsOpen"
+          :device-id="selectedDeviceId"
+        />
 
 
         <AuscultationPanel :device-id="selectedDeviceId" />

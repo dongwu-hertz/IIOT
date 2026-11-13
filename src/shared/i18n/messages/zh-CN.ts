@@ -635,6 +635,8 @@ export const zhCN = {
     deviceInfoTitle: '设备信息',
     deviceTitle: '设备',
     settingsTitle: '设备设置',
+    switchToPtz: '切换到 PTZ 相机',
+    switchToLocation: '切换到设备位置',
     viewSwitch: '视图切换',
     deviceInfoIp: 'IP 地址',
     deviceInfoStatus: '状态',

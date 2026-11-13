@@ -536,6 +536,8 @@ export const tr: MessageSchema = {
     deviceInfoTitle: 'Cihaz bilgileri',
     deviceTitle: 'Cihaz',
     settingsTitle: 'Cihaz ayarları',
+    switchToPtz: 'PTZ kamerasına geç',
+    switchToLocation: 'Cihaz konumuna geç',
     viewSwitch: 'Görünüm değiştir',
     deviceInfoIp: 'IP adresi',
     deviceInfoStatus: 'Durum',

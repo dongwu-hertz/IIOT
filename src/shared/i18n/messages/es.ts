@@ -529,6 +529,8 @@ export const es: MessageSchema = {
     deviceInfoTitle: 'Información del dispositivo',
     deviceTitle: 'Dispositivo',
     settingsTitle: 'Ajustes del dispositivo',
+    switchToPtz: 'Cambiar a cámara PTZ',
+    switchToLocation: 'Cambiar a ubicación del dispositivo',
     viewSwitch: 'Cambiar vista',
     deviceInfoIp: 'Dirección IP',
     deviceInfoStatus: 'Estado',

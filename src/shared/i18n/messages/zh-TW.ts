@@ -568,6 +568,8 @@ export const zhTW: MessageSchema = {
     deviceInfoTitle: '裝置資訊',
     deviceTitle: '裝置',
     settingsTitle: '裝置設定',
+    switchToPtz: '切換到 PTZ 相機',
+    switchToLocation: '切換到裝置位置',
     viewSwitch: '檢視切換',
     deviceInfoIp: 'IP 位址',
     deviceInfoStatus: '狀態',

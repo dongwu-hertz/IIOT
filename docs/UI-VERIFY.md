@@ -5850,3 +5850,50 @@ Trend query: totalRows 143 / 1 file / 10 s bucket
 - 目标测试 sonar-map-alarm / i18n：37/37 通过
 - npm run test:inproc：134 文件 / 2527 通过 / 75 失败；27 个失败文件为既有陈旧 UI 守卫（本轮新增布局后未同步的旧断言）
 - verify:packaged：26/0；安装包签名 Valid
+
+---
+
+## IV. 第 70 轮的发布（v1.0.45，2026-11-13）
+
+业主 2026-11-13：
+> 1. 按钮应该挪到 Online LAN 这个栏目里。
+> 2. PTZ 和地图切换应该是增加一个双向按钮切换，而不是现在的两个 tab 切换。
+
+### IV.1 交付
+
+- 版本：1.0.45（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.45-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,229,696 字节 / 212B86A227DBF154E642E71F1A4B9DDD2DA68A62C6D2454AD59E4358D2DBBEF6
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（指纹 DB24261F59F98579A03CB6E9D965866FD109077F，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.45
+- 上一版归档：release-1.0.44-2026-11-12/
+
+### IV.2 按钮归位
+
+- 声呐页头原有工具栏已删除；
+- 两个操作按钮移动到状态栏 `Online / LAN` 同一行（`.monitor-head__status`）：
+  - 地图 / PTZ 单向切换按钮；
+  - SETTINGS 齿轮；
+- 按钮在状态徽标、通道数、SN-16 徽标之后，随页头一起显示；
+- 原左右两个 tab（`data-sonar-view-location` / `data-sonar-view-ptz`）已删除。
+
+### IV.3 双向切换
+
+- 使用一个双向箭头按钮在 Device location 与 PTZ camera 之间切换；
+- 按钮 tooltip 按当前视图动态变化：
+  - 当前地图：`Switch to PTZ camera`
+  - 当前 PTZ：`Switch to Device location`
+- 点击后在左侧同一个视图卡内切换，右侧 Device / Alarm history 不重建；
+- 实测：
+  - 页头状态栏存在 `[data-sonar-view-toggle]` 与 `[data-sonar-settings-toggle]`；
+  - 旧 tab 数量 = 0；
+  - 点击后 PTZ 容器 `display:grid`、地图 `display:none`；
+  - 再次点击恢复地图。
+
+### IV.4 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm / i18n：37/37 通过
+- npm run test:inproc：134 文件 / 2527 通过 / 75 失败；27 个失败文件为既有陈旧 UI 守卫
+- verify:packaged：26/0；安装包签名 Valid

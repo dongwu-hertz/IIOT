@@ -34,7 +34,15 @@ import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 
-const props = defineProps<{ deviceId: string }>()
+const props = defineProps<{
+  deviceId: string
+  activeView?: 'location' | 'ptz'
+  settingsOpen?: boolean
+}>()
+const emit = defineEmits<{
+  'update:activeView': [value: 'location' | 'ptz']
+  'update:settingsOpen': [value: boolean]
+}>()
 
 const { t } = useI18n()
 const devices = useDevicesStore()
@@ -42,10 +50,18 @@ const e2Realtime = useE2RealtimeStore()
 const uiRefresh = useUiRefreshStore()
 const session = useSessionStore()
 
-const device = computed(() => devices.byId(props.deviceId))/** 左上视图：设备位置 GIS / 已联动的 PTZ 相机。 */
-const activeView = ref<'location' | 'ptz'>('location')
-/** 标题栏齿轮：设备信息 + 地址信息默认收起。 */
-const settingsOpen = ref(false)
+const device = computed(() => devices.byId(props.deviceId))
+
+/** 左上视图：设备位置 GIS / 已联动的 PTZ 相机；由页头 Online LAN 栏的双向按钮控制。 */
+const activeView = computed({
+  get: () => props.activeView ?? 'location',
+  set: (value: 'location' | 'ptz') => emit('update:activeView', value)
+})
+/** 标题栏齿轮：设备信息 + 地址信息默认收起；齿轮也在页头 Online LAN 栏。 */
+const settingsOpen = computed({
+  get: () => props.settingsOpen ?? false,
+  set: (value: boolean) => emit('update:settingsOpen', value)
+})
 
 
 // ---------------------------------------------------------------------------
@@ -342,48 +358,6 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 
 <template>
   <div class="sonar-shell">
-    <div class="sonar-toolbar" data-sonar-toolbar>
-      <div class="sonar-view-switch" role="tablist" :aria-label="t('sonarUi.viewSwitch')">
-        <button
-          type="button"
-          role="tab"
-          class="sonar-view-switch__button"
-          :class="{ 'is-active': activeView === 'location' }"
-          :aria-selected="activeView === 'location'"
-          data-sonar-view-location
-          @click="activeView = 'location'"
-        >
-          {{ t('sonarUi.mapTitle') }}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="sonar-view-switch__button"
-          :class="{ 'is-active': activeView === 'ptz' }"
-          :aria-selected="activeView === 'ptz'"
-          data-sonar-view-ptz
-          @click="activeView = 'ptz'"
-        >
-          {{ t('sonarUi.ptzPreviewTitle') }}
-        </button>
-      </div>
-      <button
-        type="button"
-        class="btn btn--sm btn--icon sonar-settings-toggle"
-        :class="{ 'is-active': settingsOpen }"
-        :title="t('sonarUi.settingsTitle')"
-        :aria-label="t('sonarUi.settingsTitle')"
-        :aria-expanded="settingsOpen"
-        data-sonar-settings-toggle
-        @click="settingsOpen = !settingsOpen"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
-          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
-    </div>
-
     <div class="sonar-board">
       <section class="card sonar-view" data-sonar-map>
         <div class="section-header">

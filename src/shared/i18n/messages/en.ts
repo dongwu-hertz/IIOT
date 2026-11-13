@@ -538,6 +538,8 @@ presets, the licence boundaries
     deviceInfoTitle: 'Device information',
     deviceTitle: 'Device',
     settingsTitle: 'Device settings',
+    switchToPtz: 'Switch to PTZ camera',
+    switchToLocation: 'Switch to Device location',
     viewSwitch: 'View switch',
     deviceInfoIp: 'IP address',
     deviceInfoStatus: 'Status',
