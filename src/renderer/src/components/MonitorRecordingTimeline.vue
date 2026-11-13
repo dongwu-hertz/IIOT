@@ -247,13 +247,9 @@ const canStepNext = computed(
 
 <template>
   <section class="card mtl">
-    <div class="section-header">
+    <div class="section-header mtl__header">
       <h3 class="section-title">{{ t('monitorUi.playbackSection') }}</h3>
-      <span class="muted mtl__hint">{{ t('monitorUi.playbackLocalOnly') }}</span>
-    </div>
-
-    <div class="btn-row">
-      <button
+      <div class="btn-row mtl__controls">      <button
         type="button"
         class="btn btn--sm"
         :disabled="!canStepPrevious"
@@ -272,7 +268,7 @@ const canStepNext = computed(
       </button>
       <span class="muted mtl__window">
         {{ t('monitorUi.playbackWindow', { from: timeLabel(viewWindow.startMs), to: timeLabel(viewWindow.endMs) }) }}
-      </span>
+      </span>      </div>
     </div>
 
     <p v-if="error" class="alert alert--danger" role="alert">{{ error }}</p>
@@ -409,5 +405,15 @@ const canStepNext = computed(
   transform: translateX(-50%);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+.mtl__header {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.mtl__controls {
+  margin-left: auto;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
 }
 </style>

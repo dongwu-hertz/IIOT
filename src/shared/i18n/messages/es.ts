@@ -574,6 +574,8 @@ export const es: MessageSchema = {
     historyPageSize: 'Tamaño de página',
     historyApply: 'Aplicar',
     acousticEvent: 'Evento acústico',
+    alarmSnapshot: 'Captura de alarma',
+    openAlarm: 'Abrir detalles de alarma',
     waveformPreview: 'Vista previa de forma de onda',
     spectrumSnapshot: 'Instantánea de espectro',
     noWaveform: 'Sin forma de onda',

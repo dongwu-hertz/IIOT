@@ -87,7 +87,6 @@ import {
   type MapDeviceInput
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
-import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import {
   MAX_TILE_ZOOM,
   MIN_TILE_ZOOM,
@@ -119,6 +118,7 @@ import { useDeviceDetailDialogStore } from '@renderer/stores/deviceDetailDialog'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import EmptyState from '@renderer/components/EmptyState.vue'
+import CameraVideoWall from '@renderer/components/CameraVideoWall.vue'
 import StatusBadge from '@renderer/components/StatusBadge.vue'
 import {
   Search,
@@ -164,47 +164,6 @@ const MAP_PADDING = 48
 const selectedId = ref('')
 const alarms = ref<AlarmEvent[]>([])
 const alarmsLoading = ref(false)
-/** 地图页的新版块：全局当前告警 / 历史告警。 */
-const dashboardCurrentAlarms = ref<AlarmEvent[]>([])
-const dashboardHistoryAlarms = ref<AlarmEvent[]>([])
-const dashboardAlarmsLoading = ref(false)
-
-function mapDeviceName(alarm: AlarmEvent): string {
-  return devices.byId(alarm.deviceId)?.name ?? alarm.deviceId
-}
-
-function mapAlarmChannel(alarm: AlarmEvent): string {
-  const channel = devices.channelsOf(alarm.deviceId).find((item) => item.channelIndex === alarm.channelId)
-  const well = channel?.channelName?.trim()
-  return `CH${alarm.channelId + 1}${well ? ` · ${well}` : ''}`
-}
-
-async function loadDashboardAlarms(): Promise<void> {
-  dashboardAlarmsLoading.value = true
-  try {
-    const [current, history] = await Promise.all([
-      callApi(() => window.api.alarms.query({ acknowledged: false, limit: 20 })),
-      callApi(() => window.api.alarms.query({ limit: 50 }))
-    ])
-    dashboardCurrentAlarms.value = current.success ? (unwrap(current)?.items ?? []) : []
-    dashboardHistoryAlarms.value = history.success ? (unwrap(history)?.items ?? []) : []
-    const gasLeakIds = [
-      ...new Set(
-        [...dashboardCurrentAlarms.value, ...dashboardHistoryAlarms.value]
-          .map((alarm) => alarm.deviceId)
-          .filter((id) => isGasLeakMonitor(devices.byId(id)))
-      )
-    ]
-    await Promise.all(gasLeakIds.map((id) => devices.loadChannels(id, true)))
-  } finally {
-    dashboardAlarmsLoading.value = false
-  }
-}
-
-function focusMapDevice(deviceId: string): void {
-  selectDevice(deviceId)
-  centerOnDevice(deviceId)
-}
 const syncing = ref(false)
 const syncOutcome = ref<E2SyncOutcome | null>(null)
 const actionError = ref('')
@@ -1149,11 +1108,9 @@ onMounted(async () => {
     floorPlanMode.value = true
   }
   await loadDeviceAlarmFacts()
-  await loadDashboardAlarms()
   // 气井泄漏告警落库后，主进程会推 pending 快照；地图上那台设备要立刻变红。
   unsubscribeAlarmPending = window.events.onLinkagePending(() => {
     void loadDeviceAlarmFacts()
-    void loadDashboardAlarms()
   })
   /*
    * `?device=<id>` 的定位（业主第 10 批第 7 条后半：地址信息要「支持 GIS 显示」）。
@@ -1725,57 +1682,9 @@ onBeforeUnmount(() => {
         <!-- 「点一个标记查看这台设备…」只在**图上有落点**时才有意义。 -->
         <p v-if="layout.markers.length > 0" class="muted map-panel__hint">{{ t('mapUi.selectHint') }}</p>
       </section>
-      <aside class="card map-feed map-feed--current" data-map-current-alarms>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('mapUi.alarmsTitle') }}</h3>
-          <span class="muted">{{ dashboardCurrentAlarms.length }}</span>
-        </div>
-        <p v-if="dashboardAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
-        <p v-else-if="dashboardCurrentAlarms.length === 0" class="muted">{{ t('mapUi.noAlarms') }}</p>
-        <ul v-else class="map-feed__list">
-          <li v-for="alarm in dashboardCurrentAlarms" :key="alarm.id" data-map-current-alarm-row @click="focusMapDevice(alarm.deviceId)">
-            <div class="map-feed__row-head"><strong>{{ mapDeviceName(alarm) }}</strong><span class="badge badge--danger">{{ alarm.severity }}</span></div>
-            <div class="map-feed__row-meta"><span>{{ mapAlarmChannel(alarm) }}</span><span>{{ formatDateTime(alarm.timestamp) }}</span></div>
-          </li>
-        </ul>
-      </aside>
-        </div>
-
-        <div class="map-dashboard__bottom">
-          <section class="card map-feed map-feed--history" data-map-history>
-            <div class="section-header">
-              <h3 class="section-title">{{ t('mapUi.historyAlarmsTitle') }}</h3>
-              <span class="muted">{{ dashboardHistoryAlarms.length }}</span>
-            </div>
-            <ul v-if="dashboardHistoryAlarms.length > 0" class="map-feed__list">
-              <li v-for="alarm in dashboardHistoryAlarms" :key="alarm.id" data-map-history-row @click="focusMapDevice(alarm.deviceId)">
-                <div class="map-feed__row-head"><strong>{{ mapDeviceName(alarm) }}</strong><span class="muted">{{ formatDateTime(alarm.timestamp) }}</span></div>
-                <div class="map-feed__row-meta"><span>{{ mapAlarmChannel(alarm) }}</span><span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span></div>
-              </li>
-            </ul>
-            <p v-else class="muted">{{ t('mapUi.noAlarms') }}</p>
-          </section>
-
-          <aside class="card map-feed map-feed--devices" data-map-devices>
-            <div class="section-header">
-              <h3 class="section-title">{{ t('mapUi.devicesTitle') }}</h3>
-              <span class="muted">{{ devices.devices.length }}</span>
-            </div>
-            <ul class="map-feed__list">
-              <li v-for="device in devices.devices" :key="device.id" data-map-device-row @click="focusMapDevice(device.id)">
-                <div class="map-feed__row-head"><strong>{{ device.name }}</strong><StatusBadge :status="device.status" :connection-type="device.connectionType" /></div>
-                <div class="map-feed__row-meta"><span class="mono">{{ device.ip || '—' }}</span><span class="muted">{{ devices.channelsOf(device.id).length }} CH</span></div>
-              </li>
-            </ul>
-          </aside>
+      <CameraVideoWall :active-device-id="selectedId || undefined" auto-play />
         </div>
       </div>
-
-      <!--
-        GIS 页面只负责“设备在哪里、哪里有异常、如何快速进入下一步”。
-        完整设备管理、告警处置与实时分析分别留在 Device Management / Alarm Center / Live Monitor，
-        避免在地图页复制三套工作台。
-      -->
     </template>
   </div>
 </template>
@@ -2560,5 +2469,20 @@ onBeforeUnmount(() => {
 .map-dashboard__top .map-feed--current .map-feed__list {
   min-height: 0;
   overflow-y: auto;
+}
+/* 2026-11-13：总览页改为 GIS 信息 + 下方整幅宽视频墙。 */
+.map-dashboard__top {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.map-dashboard__top > .map-panel {
+  width: 100%;
+}
+
+.map-dashboard__bottom {
+  display: none;
 }
 </style>

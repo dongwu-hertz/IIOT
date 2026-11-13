@@ -1,4 +1,4 @@
-import { strict as assert } from 'node:assert'
+﻿import { strict as assert } from 'node:assert'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -63,10 +63,11 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(panel, /sonar-device__audio-toolbar/)
     assert.match(panel, /data-sonar-audio-channel/)
     assert.doesNotMatch(panel, /data-sonar-device-status/)
-    assert.match(panel, /MonitorRecordingTimeline/)
+    assert.match(panel, /data-sonar-alarm-detail/)
+    assert.match(panel, /RecordingPlayer/)
+    assert.doesNotMatch(panel, /data-sonar-history-apply/)
     assert.match(panel, /data-sonar-ptz-camera/)
-    assert.match(panel, /sonar-map-preview-grid/)
-    assert.match(panel, /SonarAlarmWaveform/)
+    assert.doesNotMatch(panel, /sonar-map-preview-grid/)
     assert.match(panel, /startAudio\(props\.deviceId, audioChannel\.value\)/)
     assert.match(monitor, /channel-tabs--header/)
     assert.match(monitor, /monitor-head__status--voiceprint/)

@@ -680,6 +680,8 @@ export const zhCN = {
     historyPageSize: '每页数量',
     historyApply: '应用',
     acousticEvent: '声学事件',
+    alarmSnapshot: '告警抓拍图',
+    openAlarm: '查看告警详情',
     waveformPreview: '波形预览',
     spectrumSnapshot: '频谱快照',
     noWaveform: '暂无波形',

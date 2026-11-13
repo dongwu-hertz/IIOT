@@ -581,6 +581,8 @@ export const tr: MessageSchema = {
     historyPageSize: 'Sayfa boyutu',
     historyApply: 'Uygula',
     acousticEvent: 'Akustik olay',
+    alarmSnapshot: 'Alarm anlık görüntüsü',
+    openAlarm: 'Alarm ayrıntılarını aç',
     waveformPreview: 'Dalga formu önizlemesi',
     spectrumSnapshot: 'Spektrum anlık görüntüsü',
     noWaveform: 'Dalga formu yok',

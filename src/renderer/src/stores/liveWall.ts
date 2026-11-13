@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 多路实时视频墙的会话状态：档位、格子分配、出声格、当前格。
  *
  * 为什么是 Pinia store + localStorage
@@ -18,7 +18,7 @@
  *   「设备离线」并交给视图去停。绝不留一个指向已删设备的死 `<video>`。
  */
 
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { Device } from '@shared/domain/models'
 import {
@@ -60,7 +60,7 @@ import {
   type WallQueueItem
 } from '@renderer/lib/cameraWall'
 import { isManualRtspId, type ManualRtspSource } from '@shared/domain/rtsp-source'
-import type { CameraCellViewMode } from '@shared/domain/camera-cell-view'
+import { isCameraCellViewMode, type CameraCellViewMode } from '@shared/domain/camera-cell-view'
 import {
   MAX_CUSTOM_VIEWS,
   bindViewToDevices,
@@ -91,6 +91,78 @@ function writeStoredLayout(layout: CameraWallLayout): void {
     // 记不住偏好不应该让切换偏好本身失败。
   }
 }
+/**
+ * 画面墙配置（格子分配 + 每格视图）的持久化键。
+ *
+ * 产品要求（2026-11-13）：「配置好后需要保存配置，每次打开都应该自动开始播放」。
+ * 只持久化**在册设备/相机**的格子与视图；手填 RTSP 源仍只存内存（里面可能有明文口令，
+ * 与 store 文件头原来的安全取舍一致）。
+ */
+export const CAMERA_WALL_STATE_STORAGE_KEY = 'hertzinno.cameraWall.state'
+
+interface StoredWallState {
+  layout: CameraWallLayout
+  slots: (string | null)[]
+  views?: (CameraCellViewMode | null)[]
+  activeSlot?: number
+  division?: CameraDivision | null
+}
+
+function normaliseStoredSlots(
+  slots: unknown,
+  layout: CameraWallLayout
+): (string | null)[] {
+  const size = cameraCellCount(layout)
+  const source = Array.isArray(slots) ? slots : []
+  const out: (string | null)[] = []
+  for (let index = 0; index < size; index += 1) {
+    const value = source[index]
+    // 手填源不在磁盘上恢复：它没有可验证的凭据来源，恢复只会得到一格坏源。
+    out.push(typeof value === 'string' && value !== '' && !isManualRtspId(value) ? value : null)
+  }
+  return out
+}
+
+function readStoredWallState(): CameraWallModel | null {
+  try {
+    const raw = window.localStorage.getItem(CAMERA_WALL_STATE_STORAGE_KEY)
+    if (raw === null) return null
+    const parsed = JSON.parse(raw) as Partial<StoredWallState>
+    if (!isCameraWallLayout(parsed.layout)) return null
+    const model = createCameraWallModel(parsed.layout)
+    const views = Array.isArray(parsed.views)
+      ? parsed.views.map((view) => (isCameraCellViewMode(view) ? view : null))
+      : []
+    return {
+      ...model,
+      slots: normaliseStoredSlots(parsed.slots, parsed.layout),
+      views,
+      activeSlot:
+        typeof parsed.activeSlot === 'number' && Number.isInteger(parsed.activeSlot)
+          ? Math.min(Math.max(0, parsed.activeSlot), cameraCellCount(parsed.layout) - 1)
+          : 0,
+      division: parsed.division ?? null
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeStoredWallState(model: CameraWallModel): void {
+  try {
+    const state: StoredWallState = {
+      layout: model.layout,
+      slots: model.slots.map((id) => (id !== null && !isManualRtspId(id) ? id : null)),
+      views: model.views?.slice() ?? [],
+      activeSlot: model.activeSlot,
+      division: model.division ?? null
+    }
+    window.localStorage.setItem(CAMERA_WALL_STATE_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // 配置保存失败不应影响正在播放的画面墙。
+  }
+}
+
 
 /**
  * 视图对象的 localStorage 键。
@@ -145,7 +217,14 @@ export const useCameraWallStore = defineStore('cameraWall', () => {
    * 返回**新对象**，整体替换比深层响应式代理更容易推理，也避免把响应式代理传进
    * 纯函数（那会让「就地修改 store」这种毛病变得可能）。
    */
-  const model = ref<CameraWallModel>(createCameraWallModel(readStoredLayout()))
+  const model = ref<CameraWallModel>(readStoredWallState() ?? createCameraWallModel(readStoredLayout()))
+
+  // 每次格子/视图/档位变化都落盘：总览页重新打开时按同一份配置恢复并自动起播。
+  watch(
+    model,
+    (next) => writeStoredWallState(next),
+    { deep: true }
+  )
 
   /** 设备列表。由 `bindDevices()` 注入，见文件头。 */
   const deviceList = ref<readonly Device[]>([])

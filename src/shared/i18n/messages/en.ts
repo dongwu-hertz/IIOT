@@ -583,6 +583,8 @@ presets, the licence boundaries
     historyPageSize: 'Page size',
     historyApply: 'Apply',
     acousticEvent: 'Acoustic event',
+    alarmSnapshot: 'Alarm snapshot',
+    openAlarm: 'Open alarm details',
     waveformPreview: 'Waveform preview',
     spectrumSnapshot: 'Spectrum snapshot',
     noWaveform: 'No waveform',

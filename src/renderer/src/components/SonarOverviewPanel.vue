@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -33,8 +33,7 @@ import { resultMessage } from '@renderer/lib/result'
 import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
-import SonarAlarmWaveform from '@renderer/components/SonarAlarmWaveform.vue'
-import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
+import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
 
 const props = defineProps<{
   deviceId: string
@@ -86,6 +85,7 @@ const alarmFrom = ref('')
 const alarmTo = ref('')
 const alarmLoading = ref(false)
 const latestAlarm = ref<AlarmEvent | undefined>()
+const selectedAlarm = ref<AlarmEvent | undefined>()
 
 const alarmPage = computed(() => Math.floor(alarmOffset.value / alarmPageSize.value) + 1)
 const alarmPageCount = computed(() => Math.max(1, Math.ceil(alarmsTotal.value / alarmPageSize.value)))
@@ -93,6 +93,7 @@ const alarmPageCount = computed(() => Math.max(1, Math.ceil(alarmsTotal.value / 
 async function loadLatestAlarm(): Promise<void> {
   const result = await callApi(() => window.api.alarms.query({ deviceId: props.deviceId, limit: 1 }))
   latestAlarm.value = result.success ? unwrap(result)?.items?.[0] : undefined
+  if (!selectedAlarm.value) selectedAlarm.value = latestAlarm.value
 }
 
 async function loadAlarms(): Promise<void> {
@@ -477,7 +478,11 @@ watch(
   }
 )
 // 最近一条变了（新告警进来）就换抓图。
-watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
+watch(selectedAlarm, (alarm) => void loadLatestSnapshot(alarm))
+
+function selectAlarm(alarm: AlarmEvent): void {
+  selectedAlarm.value = alarm
+}
 </script>
 
 <template>
@@ -492,14 +497,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           :device-id="props.deviceId"
           :device-name="device?.name"
         />
-              <div class="sonar-map-preview-grid">
-          <SonarAlarmWaveform :alarm="latestAlarm" />
-          <div class="sonar-spectrum-preview" data-sonar-spectrum-snapshot>
-            <span class="sonar-preview-label">{{ t('sonarUi.spectrumSnapshot') }}</span>
-            <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" alt="" />
-            <p v-else class="muted">{{ t('sonarUi.noSnapshot') }}</p>
-          </div>
-        </div></section>
+      </section>
 
       <div class="sonar-side">
         <section class="card sonar-ptz" data-sonar-ptz-preview>
@@ -659,11 +657,11 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
                 <div class="sonar-history__filters">
           <label class="field">
             <span class="field-label">{{ t('sonarUi.historyFrom') }}</span>
-            <input v-model="alarmFrom" type="date" class="input" data-sonar-history-from />
+            <input v-model="alarmFrom" type="date" class="input" data-sonar-history-from @change="applyAlarmFilters" />
           </label>
           <label class="field">
             <span class="field-label">{{ t('sonarUi.historyTo') }}</span>
-            <input v-model="alarmTo" type="date" class="input" data-sonar-history-to />
+            <input v-model="alarmTo" type="date" class="input" data-sonar-history-to @change="applyAlarmFilters" />
           </label>
           <label class="field">
             <span class="field-label">{{ t('sonarUi.historyPageSize') }}</span>
@@ -674,9 +672,6 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
               <option :value="200">200</option>
             </select>
           </label>
-          <button type="button" class="btn btn--sm" data-sonar-history-apply @click="applyAlarmFilters">
-            {{ t('sonarUi.historyApply') }}
-          </button>
         </div></div>
 
 
@@ -684,7 +679,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         <p v-if="alarmLoading && alarms.length === 0" class="muted">{{ t('common.loading') }}</p>
         <p v-else-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
         <ul v-else class="sonar-history__list">
-          <li v-for="alarm in alarms" :key="alarm.id">
+          <li v-for="alarm in alarms" :key="alarm.id" :class="{ 'sonar-history__row--selected': selectedAlarm?.id === alarm.id }" data-sonar-history-row @click="selectAlarm(alarm)">
             <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
             <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</span>
             <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
@@ -703,7 +698,32 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         </div>
       </section>
 
-      <MonitorRecordingTimeline :device-id="props.deviceId" />
+      <section class="card sonar-alarm-detail" data-sonar-alarm-detail>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('sonarUi.alarmSnapshot') }}</h3>
+          <RouterLink
+            v-if="selectedAlarm"
+            class="btn btn--sm"
+            :to="{ path: '/alarms', query: { device: props.deviceId, alarm: selectedAlarm.id } }"
+          >
+            {{ t('sonarUi.openAlarm') }}
+          </RouterLink>
+        </div>
+        <template v-if="selectedAlarm">
+          <div class="sonar-alarm-detail__media">
+            <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" alt="" data-sonar-alarm-snapshot />
+            <p v-else class="muted">{{ t('sonarUi.noSnapshot') }}</p>
+          </div>
+          <div class="sonar-alarm-detail__facts">
+            <div><span>{{ t('sonarUi.alarmTime') }}</span><strong>{{ formatDateTime(selectedAlarm.timestamp) }}</strong></div>
+            <div><span>{{ t('sonarUi.alarmDirection') }}</span><strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong></div>
+            <div><span>{{ t('sonarUi.alarmType') }}</span><strong>{{ selectedAlarm.alarmTypes.length > 0 ? selectedAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</strong></div>
+          </div>
+          <RecordingPlayer v-if="selectedAlarm.localRecordingId" :recording-id="selectedAlarm.localRecordingId" auto-load />
+          <p v-else class="muted">{{ t('sonarUi.noAudio') }}</p>
+        </template>
+        <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
+      </section>
     </div>
     <div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
       <section class="card sonar-settings" role="dialog" aria-modal="true" data-sonar-settings-panel>
@@ -1416,34 +1436,9 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 .sonar-settings__section[data-sonar-calibration-setting] {
   grid-column: 1 / -1;
 }
-.sonar-map-preview-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
-  margin-top: 8px;
-}
 
-.sonar-spectrum-preview {
-  min-width: 0;
-  padding: 6px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-subtle);
-}
 
-.sonar-spectrum-preview img {
-  display: block;
-  width: 100%;
-  max-height: 90px;
-  margin-top: 4px;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-}
 
-.sonar-spectrum-preview p {
-  margin: 4px 0 0;
-  font-size: 11px;
-}
 
 .sonar-board {
   height: auto;
@@ -1540,10 +1535,92 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
   padding-top: calc(var(--space-3) - 2px);
 }
 
-.sonar-map-preview-grid {
-  min-height: 92px;
-}
 .sonar-ptz__preview {
   margin-top: -2px;
+}
+.sonar-history > .section-header {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.sonar-history__filters {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.sonar-history__filters .field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.sonar-history__filters .field-label {
+  white-space: nowrap;
+}
+
+.sonar-history__filters .input {
+  width: 108px;
+}
+
+.sonar-history__filters .select {
+  width: 58px;
+}
+
+.sonar-history__row--selected {
+  border-color: var(--color-accent);
+  background: var(--color-bg-subtle);
+}
+
+.sonar-alarm-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sonar-alarm-detail__media {
+  flex: 1;
+  min-height: 100px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+}
+
+.sonar-alarm-detail__media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+.sonar-alarm-detail__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.sonar-alarm-detail__facts div {
+  min-width: 0;
+}
+
+.sonar-alarm-detail__facts span {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+}
+
+.sonar-alarm-detail__facts strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
 }
 </style>

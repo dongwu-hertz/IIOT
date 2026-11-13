@@ -554,6 +554,8 @@ export const ru: MessageSchema = {
     historyPageSize: 'Размер страницы',
     historyApply: 'Применить',
     acousticEvent: 'Акустическое событие',
+    alarmSnapshot: 'Снимок тревоги',
+    openAlarm: 'Открыть детали тревоги',
     waveformPreview: 'Предпросмотр формы волны',
     spectrumSnapshot: 'Снимок спектра',
     noWaveform: 'Нет формы волны',

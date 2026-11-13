@@ -613,6 +613,8 @@ export const zhTW: MessageSchema = {
     historyPageSize: '每頁數量',
     historyApply: '套用',
     acousticEvent: '聲學事件',
+    alarmSnapshot: '告警擷取圖',
+    openAlarm: '查看告警詳情',
     waveformPreview: '波形預覽',
     spectrumSnapshot: '頻譜快照',
     noWaveform: '暫無波形',
