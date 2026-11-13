@@ -135,6 +135,7 @@ import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import SonarOverviewPanel from '@renderer/components/SonarOverviewPanel.vue'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import GasLeakMonitorPanel from '@renderer/components/GasLeakMonitorPanel.vue'
+import GasLeakAlarmHistory from '@renderer/components/GasLeakAlarmHistory.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -149,6 +150,7 @@ const linkage = useAlarmLinkageStore()
 
 const selectedDeviceId = ref('')
 const sonarSettingsOpen = ref(false)
+const cameraControlPanel = ref<InstanceType<typeof CameraControlPanel> | null>(null)
 const activeChannelIndex = ref(0)
 
 /**
@@ -2836,21 +2838,6 @@ const enabledChannelSummary = computed(() => {
                 绿点/灰点已于 2026-09-21 第二批第 15 条删掉）。
               -->
               <span class="badge">{{ t('monitorUi.sonarFamilyBadge') }}</span>
-              <button
-                type="button"
-                class="btn btn--sm btn--icon monitor-head__action"
-                :class="{ 'is-active': sonarSettingsOpen }"
-                :title="t('sonarUi.settingsTitle')"
-                :aria-label="t('sonarUi.settingsTitle')"
-                :aria-expanded="sonarSettingsOpen"
-                data-sonar-settings-toggle
-                @click="sonarSettingsOpen = !sonarSettingsOpen"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
-                  <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </button>
             </template>
             <template v-else>
               <!--
@@ -2873,6 +2860,37 @@ const enabledChannelSummary = computed(() => {
           </div>
 
           <div class="spacer"></div>
+
+          <button
+            v-if="isSonar"
+            type="button"
+            class="btn btn--sm btn--icon monitor-head__action"
+            :class="{ 'is-active': sonarSettingsOpen }"
+            :title="t('sonarUi.settingsTitle')"
+            :aria-label="t('sonarUi.settingsTitle')"
+            :aria-expanded="sonarSettingsOpen"
+            data-sonar-settings-toggle
+            @click="sonarSettingsOpen = !sonarSettingsOpen"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button
+            v-else-if="isCamera"
+            type="button"
+            class="btn btn--sm btn--icon monitor-head__action"
+            :title="t('cameraControlUi.settingsTitle')"
+            :aria-label="t('cameraControlUi.settingsTitle')"
+            data-camera-settings-toggle
+            @click="cameraControlPanel?.openDetectionSettings()"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
 
           <!--
             「开始监测 / 停止监测」按钮**删掉了**（业主 2026-09-19 第 13 批第 3 条）：
@@ -3233,6 +3251,8 @@ const enabledChannelSummary = computed(() => {
 
           <div class="camera-split__side">
             <CameraControlPanel
+              ref="cameraControlPanel"
+              :show-settings-button="false"
               :device-id="selectedDeviceId"
               :sections="['mode', 'detect', 'preset']"
               :alarm-count="cameraAlarmUnacknowledgedCount"
@@ -4204,16 +4224,19 @@ const enabledChannelSummary = computed(() => {
       -->
             <template v-else-if="isGasLeak">
         <div class="gas-leak-layout">
-          <DeviceLocationMap
-            :installation="selectedDevice?.installation"
-            :device-id="selectedDevice?.id"
-            :device-name="selectedDevice?.name"
-            :show-direction="false"
-            :alarm-channel-labels="gasLeakChannelLabels"
-          />
-          <div class="gas-leak-layout__info">
-            <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
+          <div class="gas-leak-layout__top">
+            <DeviceLocationMap
+              :installation="selectedDevice?.installation"
+              :device-id="selectedDevice?.id"
+              :device-name="selectedDevice?.name"
+              :show-direction="false"
+              :alarm-channel-labels="gasLeakChannelLabels"
+            />
+            <div class="gas-leak-layout__info">
+              <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
+            </div>
           </div>
+          <GasLeakAlarmHistory :device-id="selectedDeviceId" :channels="channels" />
         </div>
       </template>
 
@@ -6229,6 +6252,37 @@ const enabledChannelSummary = computed(() => {
 
 @media (max-width: 1000px) {
   .gas-leak-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.gas-leak-layout {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.gas-leak-layout__top {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
+.gas-leak-layout__info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  .gas-leak-layout__top {
     grid-template-columns: minmax(0, 1fr);
   }
 }

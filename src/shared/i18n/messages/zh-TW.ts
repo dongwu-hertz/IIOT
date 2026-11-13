@@ -765,6 +765,13 @@ export const zhTW: MessageSchema = {
   gasLeakUi: {
     title: '氣井洩漏監測',
     badge: '裝置端偵測',
+    panelTitle: '洩漏檢測',
+    manualRecording: '手動錄音',
+    syncAudio: '同步音訊',
+    audioSynced: '音訊同步完成：儲存 {count} 條',
+    playAudio: '播放錄音',
+    stopAudio: '停止音訊',
+    noAudio: '無錄音',
     noLiveStream: '目前韌體不提供即時音訊/頻譜串流；洩漏偵測在裝置端執行，結果以告警錄音回傳。下方顯示已同步到本機的洩漏告警錄音。',
     alarmCount: '累計洩漏告警',
     alarmHistory: '告警歷史',

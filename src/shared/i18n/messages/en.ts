@@ -735,6 +735,13 @@ presets, the licence boundaries
   gasLeakUi: {
     title: 'Gas well leak monitoring',
     badge: 'On-device detection',
+    panelTitle: 'Leak detection',
+    manualRecording: 'Manual recording',
+    syncAudio: 'Sync audio',
+    audioSynced: 'Audio sync complete: {count} saved',
+    playAudio: 'Play audio',
+    stopAudio: 'Stop audio',
+    noAudio: 'No audio',
     noLiveStream: 'This firmware does not provide a live audio/spectrum stream. Leak detection runs on the device and results arrive as alarm recordings. The recordings below are the leak alarms synced to this machine.',
     alarmCount: 'Leak alarms',
     alarmHistory: 'Alarm history',

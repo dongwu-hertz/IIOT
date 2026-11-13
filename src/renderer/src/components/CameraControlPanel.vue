@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 相机控制与维护面板（HERTZINNO FA371 / `acousticCamera`）。
  *
@@ -108,7 +108,11 @@ const props = defineProps<{
    * 它是界面显示 PRPD / Leakage / Mechanical 的权威值；设备 work_mode 只用于一致性核对。
    */
   configuredWorkMode?: Fa371WorkModeValue
+  /** Hide the panel-local gear when the page hosts it in its top bar. */
+  showSettingsButton?: boolean
 }>()
+
+defineExpose({ openDetectionSettings })
 
 const emit = defineEmits<{
   /** 首次读取到设备实际 work_mode；父页面只做一致性核对，不用它反复改显示模式。 */
@@ -120,6 +124,7 @@ const emit = defineEmits<{
   (event: 'alarmStrategyConfig'): void
   (event: 'alarmRegionConfig'): void
 }>()
+
 
 const activeSections = computed<readonly CameraControlSection[]>(
   () => props.sections ?? ALL_SECTIONS
@@ -1391,7 +1396,7 @@ watch(
             <span>{{ alarmCount }}</span>
           </span>
           <button
-            v-if="realtimeLayout"
+            v-if="realtimeLayout && showSettingsButton !== false"
             type="button"
             class="cctl__icon-button"
             :class="{ 'cctl__icon-button--active': detectionSettingsOpen }"

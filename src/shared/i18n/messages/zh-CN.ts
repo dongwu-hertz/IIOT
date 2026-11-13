@@ -834,6 +834,13 @@ export const zhCN = {
   gasLeakUi: {
     title: '气井泄漏监测',
     badge: '设备端检测',
+    panelTitle: '泄漏检测',
+    manualRecording: '手动录音',
+    syncAudio: '同步音频',
+    audioSynced: '音频同步完成：保存 {count} 条',
+    playAudio: '播放录音',
+    stopAudio: '停止音频',
+    noAudio: '无录音',
     noLiveStream: '当前固件不提供实时音频/频谱流；泄漏检测在设备端运行，结果以告警录音回传。下面显示已同步到本机的泄漏告警录音。',
     alarmCount: '累计泄漏告警',
     alarmHistory: '告警历史',

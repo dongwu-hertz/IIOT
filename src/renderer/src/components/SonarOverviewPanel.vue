@@ -486,43 +486,32 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             </select>
             <button
               type="button"
-              class="btn btn--icon sonar-device__tool-button"
+              class="btn btn--sm sonar-device__text-button"
               :class="{ 'btn--danger': audioPlaying }"
               :disabled="audioBusy || !latestPlayable"
-              :title="latestPlayable ? (audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio')) : t('sonarUi.noAudio')"
-              :aria-label="audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio')"
+              :title="latestPlayable ? '' : t('sonarUi.noAudio')"
               data-sonar-audio
               @click="toggleAudio"
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M8 5.5v13l10-6.5-10-6.5Z" fill="currentColor" />
-              </svg>
+              {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
             </button>
             <button
               type="button"
-              class="btn btn--primary btn--icon sonar-device__tool-button"
+              class="btn btn--sm btn--primary sonar-device__text-button"
               :disabled="liveAudioBusy"
-              :title="liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio')"
-              :aria-label="liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio')"
               data-sonar-live-audio
               @click="toggleLiveAudio"
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              {{ liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio') }}
             </button>
             <button
               type="button"
-              class="btn btn--icon sonar-device__tool-button"
+              class="btn btn--sm sonar-device__text-button"
               :disabled="recordSyncBusy"
-              :title="recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings')"
-              :aria-label="recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings')"
               data-sonar-sync-recordings
               @click="syncRecordings"
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M20 7v5h-5M4 17v-5h5M6.1 8.5A7 7 0 0 1 19.6 11M17.9 15.5A7 7 0 0 1 4.4 13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
             </button>
           </div>
           <p v-if="liveAudioEnabled" class="muted sonar-device__pulling">
@@ -1235,5 +1224,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 
 .sonar-bottom {
   margin-top: 8px;
+}
+.sonar-device__audio-toolbar {
+  flex-wrap: wrap;
+}
+
+.sonar-device__text-button {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  line-height: 1.2;
+  white-space: normal;
 }
 </style>

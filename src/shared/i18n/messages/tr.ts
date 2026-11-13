@@ -734,6 +734,13 @@ export const tr: MessageSchema = {
   gasLeakUi: {
     title: 'Gaz kuyusu kaçak izleme',
     badge: 'Cihaz üzerinde algılama',
+    panelTitle: 'Kaçak algılama',
+    manualRecording: 'Manuel kayıt',
+    syncAudio: 'Sesi senkronize et',
+    audioSynced: 'Ses senkronizasyonu tamamlandı: {count} kaydedildi',
+    playAudio: 'Sesi oynat',
+    stopAudio: 'Sesi durdur',
+    noAudio: 'Ses yok',
     noLiveStream: 'Bu yazılım canlı ses/tayf akışı sağlamıyor. Kaçak algılama cihazda çalışır ve sonuçlar alarm kayıtları olarak gelir. Aşağıda bu bilgisayara eşitlenen kaçak alarmları gösterilir.',
     alarmCount: 'Kaçak alarmları',
     alarmHistory: 'Alarm geçmişi',

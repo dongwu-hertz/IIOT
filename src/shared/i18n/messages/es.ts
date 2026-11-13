@@ -728,6 +728,13 @@ export const es: MessageSchema = {
   gasLeakUi: {
     title: 'Vigilancia de fugas en pozos de gas',
     badge: 'Detección en el dispositivo',
+    panelTitle: 'Detección de fugas',
+    manualRecording: 'Grabación manual',
+    syncAudio: 'Sincronizar audio',
+    audioSynced: 'Sincronización de audio completada: {count} guardados',
+    playAudio: 'Reproducir audio',
+    stopAudio: 'Detener audio',
+    noAudio: 'Sin audio',
     noLiveStream: 'Este firmware no ofrece audio/espectro en vivo. La detección se ejecuta en el dispositivo y los resultados llegan como grabaciones de alarma. Abajo están las alarmas de fuga sincronizadas con este equipo.',
     alarmCount: 'Alarmas de fuga',
     alarmHistory: 'Historial de alarmas',
