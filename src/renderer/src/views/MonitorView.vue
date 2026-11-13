@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Realtime monitoring (spec section 9.1) — REAL device data.
  *
@@ -3250,6 +3250,7 @@ const voiceprintHeaderDate = computed(() => formatDateTime(monitor.now))
                 <span class="camera-controls__live-dot" :class="{ 'camera-controls__live-dot--on': cameraStatus === 'playing' }" :title="cameraStatusLabel" aria-hidden="true"></span>
               </div>
             </section>
+            <DeviceSplTrendPanel :device-id="selectedDeviceId" />
           </div>
 
           <div class="camera-split__side">

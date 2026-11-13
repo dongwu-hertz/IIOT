@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -34,6 +34,7 @@ import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 import RecordingPlayer from '@renderer/components/RecordingPlayer.vue'
+import DeviceSplTrendPanel from '@renderer/components/DeviceSplTrendPanel.vue'
 
 const props = defineProps<{
   deviceId: string
@@ -734,7 +735,8 @@ function selectAlarm(alarm: AlarmEvent): void {
         <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
       </section>
     </div>
-    <div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
+        <DeviceSplTrendPanel :device-id="props.deviceId" />
+<div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
       <section class="card sonar-settings" role="dialog" aria-modal="true" data-sonar-settings-panel>
         <div class="sonar-settings__head">
           <h3 class="section-title">{{ t('sonarUi.settingsTitle') }}</h3>

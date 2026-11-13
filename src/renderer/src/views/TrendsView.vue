@@ -194,7 +194,7 @@ const autoBucketText = computed(() => {
 const selectedDevice = computed(() => devices.byId(selectedDeviceId.value))
 
 /** Acoustic cameras currently persist the two metrics that can be derived honestly from FFT data. */
-const CAMERA_TREND_METRICS = new Set<TrendMetric>(['mainFrequency', 'bandEnergyRatio'])
+const CAMERA_TREND_METRICS = new Set<TrendMetric>(['spl', 'mainFrequency', 'bandEnergyRatio'])
 const availableMetricOrder = computed<TrendMetric[]>(() =>
   selectedDevice.value?.kind === 'acousticCamera'
     ? metricOrder.value.filter((key) => CAMERA_TREND_METRICS.has(key))
@@ -212,7 +212,10 @@ const availableMetricOrder = computed<TrendMetric[]>(() =>
  * 实现成这一个 computed 而不是拆文件：两种形态共享筛选栏、图表构建与告警卡，
  * 只有"通道有没有"分叉，分叉点全在这一个判据上。
  */
-const isMultiChannel = computed(() => selectedDevice.value?.kind === 'acousticBox')
+const isMultiChannel = computed(() => {
+  const device = selectedDevice.value
+  return device?.kind === 'acousticBox' || (device?.kind === 'auscultationBox' && device.e2Variant === 'airSonar')
+})
 
 /** 历史查询用的通道项：带上状态，未启用/未知都要在文字里标出来。 */
 interface ChannelOption {
