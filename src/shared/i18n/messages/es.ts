@@ -565,7 +565,12 @@ export const es: MessageSchema = {
     alarmType: 'Tipo de alarma',
     alarmTime: 'Hora de la alarma',
     noAlarms: 'Aún no hay registros de alarma de este equipo.',
-    history: 'Historial de alarmas'
+    history: 'Historial de alarmas',
+    historyFrom: 'Desde',
+    historyTo: 'Hasta',
+    historyPageSize: 'Tamaño de página',
+    historyApply: 'Aplicar',
+    acousticEvent: 'Evento acústico',
   },
   alarmsUi: {
     countSummary: '{total} registros, {selected} seleccionados',

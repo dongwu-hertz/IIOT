@@ -574,7 +574,12 @@ presets, the licence boundaries
     alarmType: 'Alarm type',
     alarmTime: 'Alarm time',
     noAlarms: 'No alarm records for this device yet.',
-    history: 'Alarm history'
+    history: 'Alarm history',
+    historyFrom: 'From',
+    historyTo: 'To',
+    historyPageSize: 'Page size',
+    historyApply: 'Apply',
+    acousticEvent: 'Acoustic event',
   },
   alarmsUi: {
     countSummary: '{total} records, {selected} selected',

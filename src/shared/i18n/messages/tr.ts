@@ -572,7 +572,12 @@ export const tr: MessageSchema = {
     alarmType: 'Alarm tipi',
     alarmTime: 'Alarm zamanı',
     noAlarms: 'Bu cihaz için henüz alarm kaydı yok.',
-    history: 'Alarm geçmişi'
+    history: 'Alarm geçmişi',
+    historyFrom: 'Başlangıç',
+    historyTo: 'Bitiş',
+    historyPageSize: 'Sayfa boyutu',
+    historyApply: 'Uygula',
+    acousticEvent: 'Akustik olay',
   },
   alarmsUi: {
     countSummary: '{total} kayıt, {selected} tanesi seçili',

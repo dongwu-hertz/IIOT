@@ -671,7 +671,12 @@ export const zhCN = {
     alarmType: '告警类型',
     alarmTime: '告警时间',
     noAlarms: '这台设备还没有告警记录。',
-    history: '历史告警'
+    history: '历史告警',
+    historyFrom: '从',
+    historyTo: '至',
+    historyPageSize: '每页数量',
+    historyApply: '应用',
+    acousticEvent: '声学事件',
   },
   alarmsUi: {
     countSummary: '共 {total} 条记录，已选 {selected} 条',

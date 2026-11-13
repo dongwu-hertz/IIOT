@@ -545,7 +545,12 @@ export const ru: MessageSchema = {
     alarmType: 'Тип тревоги',
     alarmTime: 'Время тревоги',
     noAlarms: 'Записей тревог для этого устройства пока нет.',
-    history: 'История тревог'
+    history: 'История тревог',
+    historyFrom: 'С',
+    historyTo: 'По',
+    historyPageSize: 'Размер страницы',
+    historyApply: 'Применить',
+    acousticEvent: 'Акустическое событие',
   },
   alarmsUi: {
     countSummary: '{total} записей, выбрано {selected}',

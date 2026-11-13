@@ -604,7 +604,12 @@ export const zhTW: MessageSchema = {
     alarmType: '告警類型',
     alarmTime: '告警時間',
     noAlarms: '這臺裝置還沒有告警記錄。',
-    history: '歷史告警'
+    history: '歷史告警',
+    historyFrom: '從',
+    historyTo: '到',
+    historyPageSize: '每頁數量',
+    historyApply: '套用',
+    acousticEvent: '聲學事件',
   },
   alarmsUi: {
     countSummary: '共 {total} 條記錄，已選 {selected} 條',

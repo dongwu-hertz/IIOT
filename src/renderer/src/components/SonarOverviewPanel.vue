@@ -76,12 +76,61 @@ const currentSpl = computed(() => {
 // ---------------------------------------------------------------------------
 
 const alarms = ref<AlarmEvent[]>([])
+const alarmsTotal = ref(0)
+const alarmPageSize = ref(20)
+const alarmOffset = ref(0)
+const alarmFrom = ref('')
+const alarmTo = ref('')
+const alarmLoading = ref(false)
+const latestAlarm = ref<AlarmEvent | undefined>()
+
+const alarmPage = computed(() => Math.floor(alarmOffset.value / alarmPageSize.value) + 1)
+const alarmPageCount = computed(() => Math.max(1, Math.ceil(alarmsTotal.value / alarmPageSize.value)))
+
+async function loadLatestAlarm(): Promise<void> {
+  const result = await callApi(() => window.api.alarms.query({ deviceId: props.deviceId, limit: 1 }))
+  latestAlarm.value = result.success ? unwrap(result)?.items?.[0] : undefined
+}
 
 async function loadAlarms(): Promise<void> {
   if (!props.deviceId) return
-  const result = await callApi(() => window.api.alarms.query({ deviceId: props.deviceId, limit: 200 }))
-  alarms.value = result.success ? (unwrap(result)?.items ?? []) : []
+  alarmLoading.value = true
+  try {
+    const from = alarmFrom.value === '' ? undefined : new Date(`${alarmFrom.value}T00:00:00`).getTime()
+    const to = alarmTo.value === '' ? undefined : new Date(`${alarmTo.value}T23:59:59.999`).getTime()
+    const result = await callApi(() => window.api.alarms.query({
+      deviceId: props.deviceId,
+      limit: alarmPageSize.value,
+      offset: alarmOffset.value,
+      ...(from !== undefined ? { from } : {}),
+      ...(to !== undefined ? { to } : {})
+    }))
+    alarms.value = result.success ? (unwrap(result)?.items ?? []) : []
+    alarmsTotal.value = result.success ? (unwrap(result)?.total ?? alarms.value.length) : 0
+  } finally {
+    alarmLoading.value = false
+  }
 }
+
+function applyAlarmFilters(): void {
+  alarmOffset.value = 0
+  void loadAlarms()
+}
+
+function previousAlarmPage(): void {
+  if (alarmOffset.value === 0) return
+  alarmOffset.value = Math.max(0, alarmOffset.value - alarmPageSize.value)
+  void loadAlarms()
+}
+
+function nextAlarmPage(): void {
+  if (alarmPage.value >= alarmPageCount.value) return
+  alarmOffset.value += alarmPageSize.value
+  void loadAlarms()
+}
+
+/** 最近一次告警（独立于筛选/翻页，始终取全库最新一条）。 */
+
 
 /**
  * 轻量轮询：只拉最近 5 条告警元数据，不下载音频。
@@ -99,13 +148,12 @@ async function pollLatestAlarms(): Promise<void> {
     const result = await callApi(() =>
       window.api.e2.syncAlarms(props.deviceId, { limit: 5, downloadAudio: false })
     )
-    if (result.success) await loadAlarms()
+    if (result.success) await Promise.all([loadLatestAlarm(), loadAlarms()])
   } finally {
     alarmPolling = false
   }
 }
 /** 最近一次告警（query 按时间倒序，第一条就是）。 */
-const latestAlarm = computed(() => alarms.value[0])
 /** 最近告警的声压级；实时回调没到时用它作为「最近一次」读数，并明确标注。 */
 const latestAlarmSpl = computed(() => latestAlarm.value?.spl)
 const displaySpl = computed(() => currentSpl.value ?? latestAlarmSpl.value)
@@ -266,6 +314,7 @@ async function syncRecordings(): Promise<void> {
       return
     }
     const outcome = unwrap(result) as E2SyncOutcome | undefined
+    await loadLatestAlarm()
     await loadAlarms()
     recordSyncNotice.value = t('sonarUi.recordSyncDone', {
       saved: outcome?.audioSaved ?? 0,
@@ -354,6 +403,7 @@ onMounted(async () => {
   })
   await loadPtz()
   await loadStatus()
+  await loadLatestAlarm()
   await loadAlarms()
   await loadLatestSnapshot(latestAlarm.value)
   alarmPollTimer = window.setInterval(() => void pollLatestAlarms(), 5_000)
@@ -451,28 +501,8 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
               </svg>
               <strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong>
               <span class="muted">{{ t('sonarUi.calibratedDirection') }}</span>
-              <label class="sonar-compass__calibration">
-                <span>{{ t('sonarUi.calibrationAngle') }}</span>
-                <input
-                  v-model.number="calibrationDeg"
-                  type="number"
-                  min="0"
-                  max="359"
-                  step="1"
-                  class="input sonar-compass__calibration-input"
-                  :disabled="!session.isAdmin || calibrationBusy"
-                  data-sonar-calibration-input
-                  @change="saveCalibration"
-                />
-                <span>°</span>
-              </label>
-              <span v-if="calibrationMessage" class="muted sonar-compass__calibration-message">{{ calibrationMessage }}</span>
             </div>
           </div>
-          <p class="sonar-device__calibration">
-            {{ t('sonarUi.installationOffset', { degrees: formatNumber(installationAzimuth, 0) }) }}
-          </p>
-
           <div class="sonar-device__audio-toolbar">
             <span class="sonar-device__audio-label">{{ t('sonarUi.audioChannel') }}</span>
             <select
@@ -530,16 +560,20 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             <template v-if="latestAlarm">
               <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" class="sonar-latest__image" alt="" />
               <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
-              <dl class="sonar-latest__facts">
-                <dt>{{ t('sonarUi.alarmDirection') }}</dt>
-                <dd>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</dd>
-                <dt>{{ t('sonarUi.alarmSpl') }}</dt>
-                <dd>{{ latestAlarm.spl === undefined ? '—' : `${formatNumber(latestAlarm.spl, 1)} dB` }}</dd>
-                <dt>{{ t('sonarUi.alarmType') }}</dt>
-                <dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</dd>
-                <dt>{{ t('sonarUi.alarmTime') }}</dt>
-                <dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd>
-              </dl>
+              <RouterLink
+                class="sonar-device__latest-link"
+                :to="{ path: '/alarms', query: { device: props.deviceId, alarm: latestAlarm.id } }"
+                data-sonar-latest-link
+              >
+                <dl class="sonar-latest__facts">
+                  <dt>{{ t('sonarUi.alarmTime') }}</dt>
+                  <dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd>
+                  <dt>{{ t('sonarUi.alarmDirection') }}</dt>
+                  <dd>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</dd>
+                  <dt>{{ t('sonarUi.alarmType') }}</dt>
+                  <dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</dd>
+                </dl>
+              </RouterLink>
             </template>
             <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
           </div>
@@ -552,17 +586,52 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
       <section class="card sonar-history" data-sonar-history>
         <div class="section-header">
           <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
-          <span class="muted">{{ alarms.length }}</span>
+          <span class="muted">{{ alarmsTotal }}</span>
         </div>
-        <p v-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
+
+        <div class="sonar-history__filters">
+          <label class="field">
+            <span class="field-label">{{ t('sonarUi.historyFrom') }}</span>
+            <input v-model="alarmFrom" type="date" class="input" data-sonar-history-from />
+          </label>
+          <label class="field">
+            <span class="field-label">{{ t('sonarUi.historyTo') }}</span>
+            <input v-model="alarmTo" type="date" class="input" data-sonar-history-to />
+          </label>
+          <label class="field">
+            <span class="field-label">{{ t('sonarUi.historyPageSize') }}</span>
+            <select v-model.number="alarmPageSize" class="select" data-sonar-history-page-size @change="applyAlarmFilters">
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+              <option :value="200">200</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn--sm" data-sonar-history-apply @click="applyAlarmFilters">
+            {{ t('sonarUi.historyApply') }}
+          </button>
+        </div>
+
+        <p v-if="alarmLoading && alarms.length === 0" class="muted">{{ t('common.loading') }}</p>
+        <p v-else-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
         <ul v-else class="sonar-history__list">
           <li v-for="alarm in alarms" :key="alarm.id">
             <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
-            <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
+            <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</span>
             <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
             <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
           </li>
         </ul>
+
+        <div class="sonar-history__pager">
+          <button type="button" class="btn btn--sm" :disabled="alarmOffset === 0 || alarmLoading" data-sonar-history-prev @click="previousAlarmPage">
+            {{ t('mapUi.pagePrev') }}
+          </button>
+          <span class="muted">{{ t('mapUi.pageStatus', { page: alarmPage, pages: alarmPageCount }) }}</span>
+          <button type="button" class="btn btn--sm" :disabled="alarmPage >= alarmPageCount || alarmLoading" data-sonar-history-next @click="nextAlarmPage">
+            {{ t('mapUi.pageNext') }}
+          </button>
+        </div>
       </section>
 
       <section class="card sonar-device-status" data-sonar-device-status>
@@ -616,6 +685,33 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             :device-id="device?.id"
             :device-name="device?.name"
           />
+          <section class="sonar-settings__section" data-sonar-calibration-setting>
+            <h4>{{ t('sonarUi.calibrationAngle') }}</h4>
+            <dl class="sonar-device-info__facts">
+              <div>
+                <dt>{{ t('sonarUi.installationOffset', { degrees: formatNumber(installationAzimuth, 0) }) }}</dt>
+                <dd>{{ formatNumber(installationAzimuth, 0) }}°</dd>
+              </div>
+              <div>
+                <dt>{{ t('sonarUi.calibrationAngle') }}</dt>
+                <dd>
+                  <input
+                    v-model.number="calibrationDeg"
+                    type="number"
+                    min="0"
+                    max="359"
+                    step="1"
+                    class="input sonar-compass__calibration-input"
+                    :disabled="!session.isAdmin || calibrationBusy"
+                    data-sonar-calibration-input
+                    @change="saveCalibration"
+                  />
+                  °
+                </dd>
+              </div>
+            </dl>
+            <p v-if="calibrationMessage" class="muted" role="status">{{ calibrationMessage }}</p>
+          </section>
         </div>
       </section>
     </div>
@@ -1235,5 +1331,38 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
   font-size: 11.5px;
   line-height: 1.2;
   white-space: normal;
+}
+.sonar-device__latest-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.sonar-device__latest-link:hover {
+  background: var(--color-bg-subtle);
+}
+
+.sonar-history__filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.sonar-history__filters .field {
+  margin: 0;
+}
+
+.sonar-history__pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.sonar-settings__section[data-sonar-calibration-setting] {
+  grid-column: 1 / -1;
 }
 </style>

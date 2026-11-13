@@ -466,6 +466,20 @@ onMounted(async () => {
       notice.value = t('alarmsUi.cameraAlarmNotFound')
     }
   }
+
+  const alarmDeepLinkId = typeof route.query.alarm === 'string' ? route.query.alarm : ''
+  if (alarmDeepLinkId !== '') {
+    let found = alarms.items.find((item) => item.id === alarmDeepLinkId)
+    if (!found) {
+      const deepLinkResult = await callApi(() =>
+        window.api.alarms.query({ deviceId: fromQuery || undefined, limit: 500 })
+      )
+      if (deepLinkResult.success) {
+        found = unwrap(deepLinkResult)?.items?.find((item) => item.id === alarmDeepLinkId)
+      }
+    }
+    if (found) openDetail(found)
+  }
 })
 
 /**
