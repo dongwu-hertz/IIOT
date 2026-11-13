@@ -19,8 +19,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AlarmEvent } from '@shared/domain/models'
-import type { E2DeviceStatus, E2SyncOutcome } from '@shared/ipc/contract'
+import type { E2DeviceStatus } from '@shared/ipc/contract'
 import type { E2PtzConfig } from '@shared/domain/e2-ptz'
+import type { CameraLiveState } from '@shared/domain/camera-live'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
@@ -32,6 +33,8 @@ import { resultMessage } from '@renderer/lib/result'
 import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
+import SonarAlarmWaveform from '@renderer/components/SonarAlarmWaveform.vue'
+import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimeline.vue'
 
 const props = defineProps<{
   deviceId: string
@@ -148,7 +151,10 @@ async function pollLatestAlarms(): Promise<void> {
     const result = await callApi(() =>
       window.api.e2.syncAlarms(props.deviceId, { limit: 5, downloadAudio: false })
     )
-    if (result.success) await Promise.all([loadLatestAlarm(), loadAlarms()])
+    if (result.success) {
+      await Promise.all([loadLatestAlarm(), loadAlarms()])
+      await loadLatestSnapshot(latestAlarm.value)
+    }
   } finally {
     alarmPolling = false
   }
@@ -184,7 +190,6 @@ const calibratedDirection = computed(() => {
 const direction = computed(() => calibratedDirection.value)
 
 const e2Status = ref<E2DeviceStatus | null>(null)
-const statusLoading = ref(false)
 
 const audioChannel = ref(1)
 const audioChannelCount = computed(() => {
@@ -195,13 +200,8 @@ const liveAudioChannel = ref<number | undefined>(undefined)
 
 
 async function loadStatus(): Promise<void> {
-  statusLoading.value = true
-  try {
-    const result = await callApi(() => window.api.e2.status(props.deviceId))
-    e2Status.value = result.success ? unwrap(result) ?? null : null
-  } finally {
-    statusLoading.value = false
-  }
+  const result = await callApi(() => window.api.e2.status(props.deviceId))
+  e2Status.value = result.success ? unwrap(result) ?? null : null
 }
 
 async function onAudioChannelChange(): Promise<void> {
@@ -262,13 +262,49 @@ async function loadPtz(): Promise<void> {
 }
 /** 右侧 PTZ 卡的两个内容：实时预览 / 告警视频。 */
 const ptzPreviewMode = ref<'live' | 'alarm'>('live')
+const ptzCameras = computed(() =>
+  devices.devices.filter((item) => item.kind === 'acousticCamera')
+)
+const selectedPtzCameraId = ref('')
+const ptzLiveState = ref<CameraLiveState | null>(null)
+const ptzLiveBusy = ref(false)
+const ptzLiveError = ref('')
+
+async function stopPtzLive(): Promise<void> {
+  const current = ptzLiveState.value
+  ptzLiveState.value = null
+  if (current?.deviceId) await callApi(() => window.api.cameraLive.stop(current.deviceId))
+}
+
+async function startPtzLive(deviceId: string): Promise<void> {
+  await stopPtzLive()
+  ptzLiveError.value = ''
+  if (deviceId === '') return
+  ptzLiveBusy.value = true
+  try {
+    const result = await callApi(() => window.api.cameraLive.start({ deviceId }))
+    if (!result.success) {
+      ptzLiveError.value = resultMessage(result)
+      return
+    }
+    ptzLiveState.value = unwrap(result) ?? null
+  } finally {
+    ptzLiveBusy.value = false
+  }
+}
 
 function togglePtzPreviewMode(): void {
   ptzPreviewMode.value = ptzPreviewMode.value === 'live' ? 'alarm' : 'live'
 }
+watch(ptzPreviewMode, (mode) => {
+  if (mode === 'alarm') {
+    void stopPtzLive()
+  } else if (selectedPtzCameraId.value !== '') {
+    void startPtzLive(selectedPtzCameraId.value)
+  }
+})
 const recordSyncBusy = ref(false)
 const recordSyncError = ref('')
-const recordSyncNotice = ref('')
 /** 指南针校准：直接编辑设备安装方位角（持久化到设备记录）。 */
 const calibrationDeg = ref(0)
 const calibrationBusy = ref(false)
@@ -304,7 +340,6 @@ async function syncRecordings(): Promise<void> {
   if (recordSyncBusy.value) return
   recordSyncBusy.value = true
   recordSyncError.value = ''
-  recordSyncNotice.value = ''
   try {
     const result = await callApi(() =>
       window.api.e2.syncAlarms(props.deviceId, { limit: 200, downloadAudio: true })
@@ -313,14 +348,9 @@ async function syncRecordings(): Promise<void> {
       recordSyncError.value = resultMessage(result)
       return
     }
-    const outcome = unwrap(result) as E2SyncOutcome | undefined
     await loadLatestAlarm()
     await loadAlarms()
-    recordSyncNotice.value = t('sonarUi.recordSyncDone', {
-      saved: outcome?.audioSaved ?? 0,
-      existing: outcome?.audioExisting ?? 0,
-      missing: outcome?.filesMissing ?? 0
-    })
+    await loadLatestSnapshot(latestAlarm.value)
   } finally {
     recordSyncBusy.value = false
   }
@@ -402,6 +432,8 @@ onMounted(async () => {
     }
   })
   await loadPtz()
+  const matchedPtzCamera = ptzCameras.value.find((camera) => camera.ip === ptz.value?.cameraIp)
+  if (!selectedPtzCameraId.value && matchedPtzCamera) selectedPtzCameraId.value = matchedPtzCamera.id
   await loadStatus()
   await loadLatestAlarm()
   await loadAlarms()
@@ -409,7 +441,22 @@ onMounted(async () => {
   alarmPollTimer = window.setInterval(() => void pollLatestAlarms(), 5_000)
 })
 
+watch(
+  () => props.deviceId,
+  async () => {
+    await stopPtzLive()
+    selectedPtzCameraId.value = ''
+    await loadPtz()
+    const matched = ptzCameras.value.find((camera) => camera.ip === ptz.value?.cameraIp)
+    if (matched) selectedPtzCameraId.value = matched.id
+    await loadStatus()
+    await loadLatestAlarm()
+    await loadAlarms()
+    await loadLatestSnapshot(latestAlarm.value)
+  }
+)
 onBeforeUnmount(() => {
+  void stopPtzLive()
   e2Realtime.release()
   unsubscribeLiveAudio?.()
   unsubscribeLiveAudio = null
@@ -445,7 +492,14 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           :device-id="props.deviceId"
           :device-name="device?.name"
         />
-      </section>
+              <div class="sonar-map-preview-grid">
+          <SonarAlarmWaveform :alarm="latestAlarm" />
+          <div class="sonar-spectrum-preview" data-sonar-spectrum-snapshot>
+            <span class="sonar-preview-label">{{ t('sonarUi.spectrumSnapshot') }}</span>
+            <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" alt="" />
+            <p v-else class="muted">{{ t('sonarUi.noSnapshot') }}</p>
+          </div>
+        </div></section>
 
       <div class="sonar-side">
         <section class="card sonar-ptz" data-sonar-ptz-preview>
@@ -453,7 +507,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             <h3 class="section-title">
               {{ ptzPreviewMode === 'live' ? t('sonarUi.ptzLivePreview') : t('sonarUi.ptzAlarmVideo') }}
             </h3>
-            <div class="sonar-ptz__head-actions">
+            <div class="sonar-ptz__head-actions">              <select
+                v-if="ptzPreviewMode === 'live'"
+                v-model="selectedPtzCameraId"
+                class="select sonar-ptz__camera-select"
+                data-sonar-ptz-camera
+                @change="startPtzLive(selectedPtzCameraId)"
+              >
+                <option value="">{{ t('sonarUi.selectCamera') }}</option>
+                <option v-for="camera in ptzCameras" :key="camera.id" :value="camera.id">{{ camera.name }}</option>
+              </select>
               <span v-if="ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
               <button
                 type="button"
@@ -470,40 +533,28 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             </div>
           </div>
           <div class="sonar-ptz__preview">
-            <p v-if="!ptz?.enabled" class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
-            <p v-else-if="ptzPreviewMode === 'live'">{{ t('sonarUi.ptzLiveReserved') }}</p>
-            <p v-else>{{ t('sonarUi.ptzAlarmReserved') }}</p>
+            <video
+              v-if="ptzPreviewMode === 'live' && ptzLiveState?.url"
+              class="sonar-ptz__video"
+              :src="ptzLiveState.url"
+              autoplay
+              muted
+              playsinline
+              controls
+              data-sonar-ptz-video
+            ></video>
+            <p v-else-if="ptzLiveBusy" class="muted">{{ t('common.loading') }}</p>
+            <p v-else-if="ptzLiveError" class="alert alert--danger">{{ ptzLiveError }}</p>
+            <p v-else-if="ptzPreviewMode === 'alarm'" class="muted">{{ t('sonarUi.ptzAlarmReserved') }}</p>
+            <p v-else-if="ptzCameras.length === 0" class="muted">{{ t('sonarUi.ptzNoCameraAvailable') }}</p>
+            <p v-else class="muted">{{ t('sonarUi.selectCameraHint') }}</p>
           </div>
         </section>
 
         <section class="card sonar-device" data-sonar-now>
-          <div class="section-header">
+          <div class="section-header sonar-device__header">
             <h3 class="section-title">{{ t('sonarUi.deviceTitle') }}</h3>
-          </div>
-
-          <div class="sonar-device__hero">
-            <div class="sonar-now__spl">
-              <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
-              <span class="sonar-now__spl-unit">dB</span>
-              <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted sonar-now__source">{{ t('sonarUi.latestAlarm') }}</span>
-            </div>
-            <div class="sonar-compass" data-sonar-compass>
-              <svg viewBox="0 0 80 80" width="80" height="80" aria-hidden="true">
-                <circle cx="40" cy="40" r="33" class="sonar-compass__ring" />
-                <text x="40" y="10" text-anchor="middle" class="sonar-compass__n">N</text>
-                <text x="73" y="44" text-anchor="middle" class="sonar-compass__tick">E</text>
-                <text x="40" y="77" text-anchor="middle" class="sonar-compass__tick">S</text>
-                <text x="7" y="44" text-anchor="middle" class="sonar-compass__tick">W</text>
-                <g :transform="`rotate(${direction ?? 0} 40 40)`">
-                  <polygon points="40,13 34,46 40,41 46,46" class="sonar-compass__needle" />
-                </g>
-                <circle cx="40" cy="40" r="3" class="sonar-compass__hub" />
-              </svg>
-              <strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong>
-              <span class="muted">{{ t('sonarUi.calibratedDirection') }}</span>
-            </div>
-          </div>
-          <div class="sonar-device__audio-toolbar">
+                    <div class="sonar-device__audio-toolbar">
             <span class="sonar-device__audio-label">{{ t('sonarUi.audioChannel') }}</span>
             <select
               v-model.number="audioChannel"
@@ -543,14 +594,37 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             >
               {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
             </button>
+          </div></div>
+
+          <div class="sonar-device__hero">
+            <div class="sonar-now__spl">
+              <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
+              <span class="sonar-now__spl-unit">dB</span>
+              <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted sonar-now__source">{{ t('sonarUi.latestAlarm') }}</span>
+            </div>
+            <div class="sonar-compass" data-sonar-compass>
+              <svg viewBox="0 0 80 80" width="80" height="80" aria-hidden="true">
+                <circle cx="40" cy="40" r="33" class="sonar-compass__ring" />
+                <text x="40" y="10" text-anchor="middle" class="sonar-compass__n">N</text>
+                <text x="73" y="44" text-anchor="middle" class="sonar-compass__tick">E</text>
+                <text x="40" y="77" text-anchor="middle" class="sonar-compass__tick">S</text>
+                <text x="7" y="44" text-anchor="middle" class="sonar-compass__tick">W</text>
+                <g :transform="`rotate(${direction ?? 0} 40 40)`">
+                  <polygon points="40,13 34,46 40,41 46,46" class="sonar-compass__needle" />
+                </g>
+                <circle cx="40" cy="40" r="3" class="sonar-compass__hub" />
+              </svg>
+              <strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong>
+              <span class="muted">{{ t('sonarUi.calibratedDirection') }}</span>
+            </div>
           </div>
+
           <p v-if="liveAudioEnabled" class="muted sonar-device__pulling">
             {{ t('sonarUi.pullingAudio', { channel: liveAudioChannel ?? audioChannel }) }}
           </p>
           <p v-if="liveAudioError" class="alert alert--danger" role="alert">{{ liveAudioError }}</p>
           <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>{{ t('sonarUi.noAudio') }}</p>
           <p v-if="recordSyncError" class="alert alert--danger" role="alert">{{ recordSyncError }}</p>
-          <p v-if="recordSyncNotice" class="muted" role="status">{{ recordSyncNotice }}</p>
           <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
 
           <div class="sonar-device__latest" data-sonar-latest>
@@ -558,21 +632,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
               <h3 class="section-title">{{ t('sonarUi.latestAlarm') }}</h3>
             </div>
             <template v-if="latestAlarm">
-              <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" class="sonar-latest__image" alt="" />
-              <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
               <RouterLink
                 class="sonar-device__latest-link"
                 :to="{ path: '/alarms', query: { device: props.deviceId, alarm: latestAlarm.id } }"
                 data-sonar-latest-link
               >
-                <dl class="sonar-latest__facts">
-                  <dt>{{ t('sonarUi.alarmTime') }}</dt>
-                  <dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd>
-                  <dt>{{ t('sonarUi.alarmDirection') }}</dt>
-                  <dd>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</dd>
-                  <dt>{{ t('sonarUi.alarmType') }}</dt>
-                  <dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</dd>
-                </dl>
+                <div class="sonar-latest__facts-horizontal">
+                  <div><dt>{{ t('sonarUi.alarmTime') }}</dt><dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd></div>
+                  <div><dt>{{ t('sonarUi.alarmDirection') }}</dt><dd>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</dd></div>
+                  <div><dt>{{ t('sonarUi.alarmType') }}</dt><dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : t('sonarUi.acousticEvent') }}</dd></div>
+                </div>
               </RouterLink>
             </template>
             <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
@@ -587,9 +656,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         <div class="section-header">
           <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
           <span class="muted">{{ alarmsTotal }}</span>
-        </div>
-
-        <div class="sonar-history__filters">
+                <div class="sonar-history__filters">
           <label class="field">
             <span class="field-label">{{ t('sonarUi.historyFrom') }}</span>
             <input v-model="alarmFrom" type="date" class="input" data-sonar-history-from />
@@ -610,7 +677,9 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           <button type="button" class="btn btn--sm" data-sonar-history-apply @click="applyAlarmFilters">
             {{ t('sonarUi.historyApply') }}
           </button>
-        </div>
+        </div></div>
+
+
 
         <p v-if="alarmLoading && alarms.length === 0" class="muted">{{ t('common.loading') }}</p>
         <p v-else-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
@@ -634,25 +703,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         </div>
       </section>
 
-      <section class="card sonar-device-status" data-sonar-device-status>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('e2Ui.statusTitle') }}</h3>
-          <button type="button" class="btn btn--sm" :disabled="statusLoading" @click="loadStatus">
-            {{ statusLoading ? t('common.loading') : t('common.refresh') }}
-          </button>
-        </div>
-        <template v-if="e2Status">
-          <dl class="sonar-device-info__facts">
-            <div><dt>{{ t('e2Ui.variant') }}</dt><dd>{{ e2Status.variant ?? '—' }}</dd></div>
-            <div><dt>{{ t('e2Ui.samplerate') }}</dt><dd>{{ e2Status.samplerate !== undefined ? `${e2Status.samplerate} Hz` : '—' }}</dd></div>
-            <div><dt>{{ t('e2Ui.channelCount') }}</dt><dd>{{ e2Status.channelCount ?? '—' }}</dd></div>
-            <div><dt>{{ t('e2Ui.deviceType') }}</dt><dd class="mono">{{ e2Status.basic.devType ?? '—' }}</dd></div>
-            <div><dt>{{ t('e2Ui.firmware') }}</dt><dd>{{ e2Status.basic.devVersion ?? '—' }}</dd></div>
-            <div><dt>{{ t('e2Ui.retention') }}</dt><dd>{{ t('e2Ui.retentionValue', { count: e2Status.alarmLogRetention }) }}</dd></div>
-          </dl>
-        </template>
-        <p v-else class="muted">{{ t('common.loading') }}</p>
-      </section>
+      <MonitorRecordingTimeline :device-id="props.deviceId" />
     </div>
     <div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
       <section class="card sonar-settings" role="dialog" aria-modal="true" data-sonar-settings-panel>
@@ -1364,5 +1415,135 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 }
 .sonar-settings__section[data-sonar-calibration-setting] {
   grid-column: 1 / -1;
+}
+.sonar-map-preview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.sonar-spectrum-preview {
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+}
+
+.sonar-spectrum-preview img {
+  display: block;
+  width: 100%;
+  max-height: 90px;
+  margin-top: 4px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.sonar-spectrum-preview p {
+  margin: 4px 0 0;
+  font-size: 11px;
+}
+
+.sonar-board {
+  height: auto;
+}
+.sonar-latest__facts-horizontal {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.sonar-latest__facts-horizontal > div {
+  min-width: 0;
+}
+
+.sonar-latest__facts-horizontal dt {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.sonar-latest__facts-horizontal dd {
+  margin: 2px 0 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sonar-ptz__camera-select {
+  max-width: 150px;
+  height: 26px;
+  padding: 2px 5px;
+  font-size: 11px;
+}
+
+.sonar-ptz__video {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+  border-radius: var(--radius-sm);
+}
+
+.sonar-history > .section-header {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sonar-history > .section-header .sonar-history__filters {
+  margin-left: auto;
+  margin-bottom: 0;
+}
+.sonar-view > .device-location-map {
+  margin-top: 0;
+}
+
+.sonar-ptz__preview {
+  position: relative;
+  overflow: hidden;
+}
+.sonar-device__header {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sonar-device__header .sonar-device__audio-toolbar {
+  flex: 1;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0;
+  min-width: 0;
+}
+
+.sonar-device__header .sonar-device__audio-label {
+  display: none;
+}
+
+.sonar-device__header .sonar-device__audio-select {
+  width: 64px;
+  height: 26px;
+  padding: 2px 4px;
+  font-size: 10.5px;
+}
+
+.sonar-device__header .sonar-device__text-button {
+  min-height: 26px;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.sonar-ptz__preview {
+  padding-top: calc(var(--space-3) - 2px);
+}
+
+.sonar-map-preview-grid {
+  min-height: 92px;
+}
+.sonar-ptz__preview {
+  margin-top: -2px;
 }
 </style>
