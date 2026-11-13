@@ -2707,7 +2707,7 @@ const enabledChannelSummary = computed(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page monitor-page" :class="{ 'monitor-page--voiceprint': isVoiceprint }">
     <EmptyState
       v-if="devices.devices.length === 0"
       :title="t('monitorUi.noDeviceTitle')"
@@ -6187,5 +6187,13 @@ const enabledChannelSummary = computed(() => {
 .monitor-head__status--voiceprint {
   flex: 1 1 0;
   justify-content: center;
+}
+/* 各产品实时预览页内部的顶层卡片间距：相机/声呐/气井统一 8px，8 通道为原来的 30%。 */
+.page.monitor-page {
+  gap: 8px;
+}
+
+.page.monitor-page--voiceprint {
+  gap: 6px;
 }
 </style>
