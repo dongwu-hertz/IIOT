@@ -730,6 +730,7 @@ export const es: MessageSchema = {
     badge: 'Detección en el dispositivo',
     noLiveStream: 'Este firmware no ofrece audio/espectro en vivo. La detección se ejecuta en el dispositivo y los resultados llegan como grabaciones de alarma. Abajo están las alarmas de fuga sincronizadas con este equipo.',
     alarmCount: 'Alarmas de fuga',
+    alarmHistory: 'Historial de alarmas',
     latestAlarm: 'Última',
     none: 'Ninguna',
     channels: 'Canales activos',
@@ -1708,6 +1709,7 @@ export const es: MessageSchema = {
     colAlarms: 'Sin confirmar',
     /** Lista de alarmas (segunda). */
     alarmsTitle: 'Alarmas',
+    historyAlarmsTitle: 'Historial de alarmas',
     alarmsFor: 'Equipo seleccionado: {name}',
     /** Lista de datos en vivo (tercera). */
     /**

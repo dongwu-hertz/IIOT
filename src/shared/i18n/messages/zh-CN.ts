@@ -836,6 +836,7 @@ export const zhCN = {
     badge: '设备端检测',
     noLiveStream: '当前固件不提供实时音频/频谱流；泄漏检测在设备端运行，结果以告警录音回传。下面显示已同步到本机的泄漏告警录音。',
     alarmCount: '累计泄漏告警',
+    alarmHistory: '告警历史',
     latestAlarm: '最近一次',
     none: '暂无',
     channels: '启用通道',
@@ -1962,6 +1963,7 @@ export const zhCN = {
     colAlarms: '未确认告警',
     /** 告警列表（第二张）。 */
     alarmsTitle: '告警列表',
+    historyAlarmsTitle: '历史告警',
     alarmsFor: '选中设备：{name}',
     /** 实时数据列表（第三张）。 */
     /**

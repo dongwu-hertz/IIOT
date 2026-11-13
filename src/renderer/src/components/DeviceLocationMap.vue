@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 设备位置内嵌地图（设备详情页「Device location」卡片）。
  *
@@ -30,6 +30,10 @@ const props = defineProps<{
   installation?: DeviceInstallation
   deviceId?: string
   deviceName?: string
+  /** 气井泄漏等无方向设备：不画方位线、范围扇区和方位文字。 */
+  showDirection?: boolean
+  /** 气井泄漏的 CH + 气井编号/名称标签。 */
+  alarmChannelLabels?: readonly { channelId: number; label: string }[]
 }>()
 
 const { t } = useI18n()
@@ -104,6 +108,7 @@ function alarmHorizontal(alarm: AlarmEvent | undefined): number | undefined {
 
 /** 告警方向优先；没有告警时用安装方位角。没有方向就不画线，不猜 0°。 */
 const heading = computed(() => {
+  if (props.showDirection === false) return undefined
   const relative = alarmHorizontal(latestAlarm.value)
   const offset = props.installation?.azimuthDeg
   if (relative === undefined) return offset
@@ -217,6 +222,9 @@ onBeforeUnmount(() => {
             {{ t('installUi.mapRange', { range: RANGE_METRES }) }}
           </text>
         </svg>
+        <div v-if="alarmChannelLabels?.length" class="device-location-map__channel-labels" data-location-channel-labels>
+          <span v-for="item in alarmChannelLabels" :key="item.channelId" class="badge">CH{{ item.channelId + 1 }} · {{ item.label }}</span>
+        </div>
         <div class="device-location-map__controls" @pointerdown.stop @wheel.stop>
           <button type="button" :title="t('mapPickerUi.zoomIn')" :aria-label="t('mapPickerUi.zoomIn')" data-location-zoom-in @click="zoomIn">+</button>
           <button type="button" :title="t('mapPickerUi.zoomOut')" :aria-label="t('mapPickerUi.zoomOut')" data-location-zoom-out @click="zoomOut">−</button>
@@ -225,8 +233,10 @@ onBeforeUnmount(() => {
       </div>
       <div class="device-location-map__footer">
         <span class="mono">{{ installation?.gisLatitude }}, {{ installation?.gisLongitude }}</span>
+        <template v-if="showDirection !== false">
         <span v-if="heading !== undefined">{{ t('installUi.mapDirection', { degrees: Math.round(heading) }) }}</span>
         <span v-else class="muted">{{ t('installUi.mapNoAzimuth') }}</span>
+        </template>
         <RouterLink v-if="deviceId" class="btn btn--sm btn--ghost" :to="mapLink">
           {{ t('installUi.viewOnMap') }}
         </RouterLink>
@@ -374,5 +384,15 @@ onBeforeUnmount(() => {
 
 .device-location-map__footer .btn {
   margin-left: auto;
+}
+.device-location-map__channel-labels {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 150px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  pointer-events: none;
 }
 </style>

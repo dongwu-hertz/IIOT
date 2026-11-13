@@ -563,6 +563,13 @@ watch(
 
 /** Channels reported by the device; falls back to the fixed 0-7 index range. */
 const channels = computed<Channel[]>(() => devices.channelsOf(selectedDeviceId.value))
+/** 气井泄漏的两路通道：CH + 气井编号/名称，供地图与告警信息共用。 */
+const gasLeakChannelLabels = computed(() =>
+  channels.value.map((channel) => ({
+    channelId: channel.channelIndex,
+    label: channel.channelName?.trim() || '—'
+  }))
+)
 
 interface ChannelTab {
   index: number
@@ -2814,7 +2821,7 @@ const enabledChannelSummary = computed(() => {
               声呐（SN-16 空气声呐）：这一族**有**通道（16 路），但没有我们已经接入的实时流，
               所以这里给通道数 + 一句"实时流未接入"，而不是一个永远停在"监测已停止"的按钮。
             -->
-            <template v-else-if="isGasLeak">
+<template v-else-if="isGasLeak">
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
               <span class="badge">{{ t('gasLeakUi.badge') }}</span>
@@ -4196,13 +4203,19 @@ const enabledChannelSummary = computed(() => {
         告警录音，以及同步入口；详细边界见 `docs/AO01-INTEGRATION.md`。
       -->
             <template v-else-if="isGasLeak">
-        <DeviceLocationMap
-          :installation="selectedDevice?.installation"
-          :device-id="selectedDevice?.id"
-          :device-name="selectedDevice?.name"
-        />
-        <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
-            </template>
+        <div class="gas-leak-layout">
+          <DeviceLocationMap
+            :installation="selectedDevice?.installation"
+            :device-id="selectedDevice?.id"
+            :device-name="selectedDevice?.name"
+            :show-direction="false"
+            :alarm-channel-labels="gasLeakChannelLabels"
+          />
+          <div class="gas-leak-layout__info">
+            <GasLeakMonitorPanel :device-id="selectedDeviceId" :channels="channels" />
+          </div>
+        </div>
+      </template>
 
       <!--
         ---- 声呐（SN-16 空气声呐 / 2023 版听诊盒子）-----------------------------
@@ -6186,6 +6199,8 @@ const enabledChannelSummary = computed(() => {
 }
 .monitor-head__status--voiceprint {
   flex: 1 1 0;
+  align-self: center;
+  align-items: center;
   justify-content: center;
 }
 /* 各产品实时预览页内部的顶层卡片间距：相机/声呐/气井统一 8px，8 通道为原来的 30%。 */
@@ -6195,5 +6210,26 @@ const enabledChannelSummary = computed(() => {
 
 .page.monitor-page--voiceprint {
   gap: 6px;
+}
+.gas-leak-layout {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+}
+
+.gas-leak-layout__info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  .gas-leak-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

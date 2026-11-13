@@ -767,6 +767,7 @@ export const zhTW: MessageSchema = {
     badge: '裝置端偵測',
     noLiveStream: '目前韌體不提供即時音訊/頻譜串流；洩漏偵測在裝置端執行，結果以告警錄音回傳。下方顯示已同步到本機的洩漏告警錄音。',
     alarmCount: '累計洩漏告警',
+    alarmHistory: '告警歷史',
     latestAlarm: '最近一筆告警',
     none: '暫無',
     channels: '啟用通道',
@@ -1893,6 +1894,7 @@ export const zhTW: MessageSchema = {
     colAlarms: '未確認告警',
     /** 告警列表（第二張）。 */
     alarmsTitle: '警報列表',
+    historyAlarmsTitle: '歷史告警',
     alarmsFor: '選中裝置：{name}',
     /** 實時資料列表（第三張）。 */
     /**

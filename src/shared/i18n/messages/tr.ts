@@ -736,6 +736,7 @@ export const tr: MessageSchema = {
     badge: 'Cihaz üzerinde algılama',
     noLiveStream: 'Bu yazılım canlı ses/tayf akışı sağlamıyor. Kaçak algılama cihazda çalışır ve sonuçlar alarm kayıtları olarak gelir. Aşağıda bu bilgisayara eşitlenen kaçak alarmları gösterilir.',
     alarmCount: 'Kaçak alarmları',
+    alarmHistory: 'Alarm geçmişi',
     latestAlarm: 'Son',
     none: 'Yok',
     channels: 'Etkin kanallar',
@@ -1711,6 +1712,7 @@ export const tr: MessageSchema = {
     colAlarms: 'Onaylanmamış',
     /** Alarm listesi (ikinci). */
     alarmsTitle: 'Alarmlar',
+    historyAlarmsTitle: 'Alarm geçmişi',
     alarmsFor: 'Seçili cihaz: {name}',
     /** Canlı veri listesi (üçüncü). */
     /**

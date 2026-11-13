@@ -737,6 +737,7 @@ presets, the licence boundaries
     badge: 'On-device detection',
     noLiveStream: 'This firmware does not provide a live audio/spectrum stream. Leak detection runs on the device and results arrive as alarm recordings. The recordings below are the leak alarms synced to this machine.',
     alarmCount: 'Leak alarms',
+    alarmHistory: 'Alarm history',
     latestAlarm: 'Latest',
     none: 'None',
     channels: 'Enabled channels',
@@ -1746,6 +1747,7 @@ presets, the licence boundaries
     colAlarms: 'Unacknowledged',
     /** Alarm list (second). */
     alarmsTitle: 'Alarms',
+    historyAlarmsTitle: 'Alarm history',
     alarmsFor: 'Selected device: {name}',
     /** Live data list (third). */
     /**

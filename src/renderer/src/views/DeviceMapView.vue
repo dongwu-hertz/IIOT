@@ -87,6 +87,7 @@ import {
   type MapDeviceInput
 } from '@shared/domain/device-map'
 import { isPointComplete } from '@shared/domain/device-installation'
+import { isGasLeakMonitor } from '@shared/domain/gas-leak'
 import {
   MAX_TILE_ZOOM,
   MIN_TILE_ZOOM,
@@ -163,6 +164,47 @@ const MAP_PADDING = 48
 const selectedId = ref('')
 const alarms = ref<AlarmEvent[]>([])
 const alarmsLoading = ref(false)
+/** 地图页的新版块：全局当前告警 / 历史告警。 */
+const dashboardCurrentAlarms = ref<AlarmEvent[]>([])
+const dashboardHistoryAlarms = ref<AlarmEvent[]>([])
+const dashboardAlarmsLoading = ref(false)
+
+function mapDeviceName(alarm: AlarmEvent): string {
+  return devices.byId(alarm.deviceId)?.name ?? alarm.deviceId
+}
+
+function mapAlarmChannel(alarm: AlarmEvent): string {
+  const channel = devices.channelsOf(alarm.deviceId).find((item) => item.channelIndex === alarm.channelId)
+  const well = channel?.channelName?.trim()
+  return `CH${alarm.channelId + 1}${well ? ` · ${well}` : ''}`
+}
+
+async function loadDashboardAlarms(): Promise<void> {
+  dashboardAlarmsLoading.value = true
+  try {
+    const [current, history] = await Promise.all([
+      callApi(() => window.api.alarms.query({ acknowledged: false, limit: 20 })),
+      callApi(() => window.api.alarms.query({ limit: 50 }))
+    ])
+    dashboardCurrentAlarms.value = current.success ? (unwrap(current)?.items ?? []) : []
+    dashboardHistoryAlarms.value = history.success ? (unwrap(history)?.items ?? []) : []
+    const gasLeakIds = [
+      ...new Set(
+        [...dashboardCurrentAlarms.value, ...dashboardHistoryAlarms.value]
+          .map((alarm) => alarm.deviceId)
+          .filter((id) => isGasLeakMonitor(devices.byId(id)))
+      )
+    ]
+    await Promise.all(gasLeakIds.map((id) => devices.loadChannels(id, true)))
+  } finally {
+    dashboardAlarmsLoading.value = false
+  }
+}
+
+function focusMapDevice(deviceId: string): void {
+  selectDevice(deviceId)
+  centerOnDevice(deviceId)
+}
 const syncing = ref(false)
 const syncOutcome = ref<E2SyncOutcome | null>(null)
 const actionError = ref('')
@@ -1107,9 +1149,11 @@ onMounted(async () => {
     floorPlanMode.value = true
   }
   await loadDeviceAlarmFacts()
+  await loadDashboardAlarms()
   // 气井泄漏告警落库后，主进程会推 pending 快照；地图上那台设备要立刻变红。
   unsubscribeAlarmPending = window.events.onLinkagePending(() => {
     void loadDeviceAlarmFacts()
+    void loadDashboardAlarms()
   })
   /*
    * `?device=<id>` 的定位（业主第 10 批第 7 条后半：地址信息要「支持 GIS 显示」）。
@@ -1158,6 +1202,8 @@ onBeforeUnmount(() => {
         `.map-canvas-frame` 是**定比例的那一层**（`aspect-ratio: 16 / 9`），SVG 填满它；
         两者比例必须一致（`CANVAS` 也是 16:9），否则图上会出现两条留白边。
       -->
+      <div class="map-dashboard">
+        <div class="map-dashboard__top">
       <section class="map-panel" data-map-panel :aria-label="t('app.nav.map')">
         <!--
           **这一块上面原来有三样东西，业主 2026-09-19 第 11 批第 4 条点名全删**：
@@ -1679,6 +1725,51 @@ onBeforeUnmount(() => {
         <!-- 「点一个标记查看这台设备…」只在**图上有落点**时才有意义。 -->
         <p v-if="layout.markers.length > 0" class="muted map-panel__hint">{{ t('mapUi.selectHint') }}</p>
       </section>
+      <aside class="card map-feed map-feed--current" data-map-current-alarms>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('mapUi.alarmsTitle') }}</h3>
+          <span class="muted">{{ dashboardCurrentAlarms.length }}</span>
+        </div>
+        <p v-if="dashboardAlarmsLoading" class="muted">{{ t('common.loading') }}</p>
+        <p v-else-if="dashboardCurrentAlarms.length === 0" class="muted">{{ t('mapUi.noAlarms') }}</p>
+        <ul v-else class="map-feed__list">
+          <li v-for="alarm in dashboardCurrentAlarms" :key="alarm.id" data-map-current-alarm-row @click="focusMapDevice(alarm.deviceId)">
+            <div class="map-feed__row-head"><strong>{{ mapDeviceName(alarm) }}</strong><span class="badge badge--danger">{{ alarm.severity }}</span></div>
+            <div class="map-feed__row-meta"><span>{{ mapAlarmChannel(alarm) }}</span><span>{{ formatDateTime(alarm.timestamp) }}</span></div>
+          </li>
+        </ul>
+      </aside>
+        </div>
+
+        <div class="map-dashboard__bottom">
+          <section class="card map-feed map-feed--history" data-map-history>
+            <div class="section-header">
+              <h3 class="section-title">{{ t('mapUi.historyAlarmsTitle') }}</h3>
+              <span class="muted">{{ dashboardHistoryAlarms.length }}</span>
+            </div>
+            <ul v-if="dashboardHistoryAlarms.length > 0" class="map-feed__list">
+              <li v-for="alarm in dashboardHistoryAlarms" :key="alarm.id" data-map-history-row @click="focusMapDevice(alarm.deviceId)">
+                <div class="map-feed__row-head"><strong>{{ mapDeviceName(alarm) }}</strong><span class="muted">{{ formatDateTime(alarm.timestamp) }}</span></div>
+                <div class="map-feed__row-meta"><span>{{ mapAlarmChannel(alarm) }}</span><span>{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span></div>
+              </li>
+            </ul>
+            <p v-else class="muted">{{ t('mapUi.noAlarms') }}</p>
+          </section>
+
+          <aside class="card map-feed map-feed--devices" data-map-devices>
+            <div class="section-header">
+              <h3 class="section-title">{{ t('mapUi.devicesTitle') }}</h3>
+              <span class="muted">{{ devices.devices.length }}</span>
+            </div>
+            <ul class="map-feed__list">
+              <li v-for="device in devices.devices" :key="device.id" data-map-device-row @click="focusMapDevice(device.id)">
+                <div class="map-feed__row-head"><strong>{{ device.name }}</strong><StatusBadge :status="device.status" :connection-type="device.connectionType" /></div>
+                <div class="map-feed__row-meta"><span class="mono">{{ device.ip || '—' }}</span><span class="muted">{{ devices.channelsOf(device.id).length }} CH</span></div>
+              </li>
+            </ul>
+          </aside>
+        </div>
+      </div>
 
       <!--
         GIS 页面只负责“设备在哪里、哪里有异常、如何快速进入下一步”。
@@ -2365,4 +2456,109 @@ onBeforeUnmount(() => {
   background: var(--color-text-tertiary);
 }
 
+/* 2026-11-13：地图 70% + 当前告警 30%；下方历史告警 + 设备列表。 */
+.map-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.map-dashboard__top,
+.map-dashboard__bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
+.map-feed {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.map-dashboard__top .map-feed {
+  height: 100%;
+}
+
+.map-dashboard__bottom .map-feed {
+  height: 320px;
+}
+
+.map-feed__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.map-feed__list > li {
+  padding: 7px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  cursor: pointer;
+}
+
+.map-feed__list > li:hover {
+  border-color: var(--color-accent);
+}
+
+.map-feed__row-head,
+.map-feed__row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.map-feed__row-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-feed__row-meta {
+  margin-top: 3px;
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+}
+
+@media (max-width: 1100px) {
+  .map-dashboard__top,
+  .map-dashboard__bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .map-dashboard__top .map-feed,
+  .map-dashboard__bottom .map-feed {
+    height: 320px;
+  }
+}
+/* 顶部右栏与 16:9 地图同高（右栏宽 30%，高 = 0.3W × 1.3125）。 */
+.map-dashboard__top {
+  align-items: start;
+}
+
+.map-dashboard__top .map-feed--current {
+  height: auto;
+  aspect-ratio: 1 / 1.3125;
+}
+
+.map-dashboard__top .map-feed--current .map-feed__list {
+  min-height: 0;
+  overflow-y: auto;
+}
 </style>
