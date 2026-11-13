@@ -2713,6 +2713,8 @@ const enabledChannelSummary = computed(() => {
   return t('channelState.enabledSummary', { enabled, total: list.length })
 })
 
+const voiceprintHeaderDate = computed(() => formatDateTime(monitor.now))
+
 </script>
 
 <template>
@@ -2791,6 +2793,7 @@ const enabledChannelSummary = computed(() => {
           </Teleport>
 
           <div v-if="selectedDevice" class="monitor-head__status" :class="{ 'monitor-head__status--voiceprint': isVoiceprint }">
+            <strong v-if="isVoiceprint" class="monitor-head__device-name">{{ selectedDevice.name }}</strong>
             <StatusBadge
               :status="selectedDevice.status"
               :connection-type="isVoiceprint ? undefined : selectedDevice.connectionType"
@@ -2817,7 +2820,7 @@ const enabledChannelSummary = computed(() => {
             -->
             <template v-if="isVoiceprint">
               <span class="muted">{{ channelHint }}</span>
-              <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
+              <span class="muted">{{ voiceprintHeaderDate }}</span>
             </template>
             <!--
               声呐（SN-16 空气声呐）：这一族**有**通道（16 路），但没有我们已经接入的实时流，
@@ -6302,5 +6305,10 @@ const enabledChannelSummary = computed(() => {
 
 .gas-leak-layout__info > .gas-leak {
   height: 100%;
+}
+.monitor-head__device-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 </style>
