@@ -45,6 +45,13 @@ export interface E2RealtimeValueEvent {
   value: E2RealtimeValue
 }
 
+/** 实时音频一帧（SN-16 `/audio_stream`：16-bit 小端 PCM，解码后归一化到 ±1）。 */
+export interface E2AudioFrameEvent {
+  deviceId: string
+  at: number
+  sampleRate: number
+  samples: number[]
+}
 export type E2CallbackParseResult =
   | { kind: 'realtimeValue'; value: E2RealtimeValue }
   | { kind: 'alarm' }

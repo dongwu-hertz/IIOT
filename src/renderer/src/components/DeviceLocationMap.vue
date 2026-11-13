@@ -11,7 +11,7 @@
  *
  * 这一段只负责**显示**：录入仍在设备管理的编辑对话框，避免同一份点位出现第三套输入框。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AlarmEvent, DeviceInstallation } from '@shared/domain/models'
 import { isPointComplete } from '@shared/domain/device-installation'
@@ -37,9 +37,11 @@ const settings = useSettingsStore()
 
 const WIDTH = 960
 const HEIGHT = 540
-const ZOOM = 16
+const DEFAULT_ZOOM = 16
 const RANGE_METRES = 100
 const SPREAD_DEG = 18
+
+const zoom = ref(DEFAULT_ZOOM)
 
 const hasPoint = computed(
   () =>
@@ -61,9 +63,9 @@ const tilePlacements = computed(() => {
     {
       latitude: props.installation?.gisLatitude as number,
       longitude: props.installation?.gisLongitude as number,
-      zoom: ZOOM
+      zoom: zoom.value
     },
-    ZOOM,
+    zoom.value,
     WIDTH,
     HEIGHT
   )
@@ -78,7 +80,7 @@ function hideFailedTile(key: string): void {
 const centre = computed(() => ({
   latitude: props.installation?.gisLatitude as number,
   longitude: props.installation?.gisLongitude as number,
-  zoom: ZOOM
+  zoom: zoom.value
 }))
 
 /** 最近一条告警（只取一条；方向以设备原文的 horizontal 为准）。 */
@@ -134,17 +136,35 @@ const sectorPoints = computed(() => {
 
 const mapLink = computed(() => deviceMapLink(props.deviceId ?? ''))
 
+function zoomIn(): void {
+  zoom.value = Math.min(18, zoom.value + 1)
+}
+
+function zoomOut(): void {
+  zoom.value = Math.max(2, zoom.value - 1)
+}
+
+async function autoAdjust(): Promise<void> {
+  zoom.value = 16
+  await loadLatestAlarm()
+}
+
+let alarmRefreshTimer: number | undefined
+
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
   await loadLatestAlarm()
+  alarmRefreshTimer = window.setInterval(() => void loadLatestAlarm(), 5_000)
 })
 
 watch(
   () => props.deviceId,
   () => void loadLatestAlarm()
 )
+onBeforeUnmount(() => {
+  if (alarmRefreshTimer !== undefined) window.clearInterval(alarmRefreshTimer)
+})
 </script>
-
 <template>
   <section class="device-location-map" data-device-location-map>
     <div v-if="!hasPoint" class="device-location-map__empty" data-device-location-empty>
@@ -198,6 +218,11 @@ watch(
             {{ t('installUi.mapRange', { range: RANGE_METRES }) }}
           </text>
         </svg>
+        <div class="device-location-map__controls" @pointerdown.stop @wheel.stop>
+          <button type="button" :title="t('mapPickerUi.zoomIn')" :aria-label="t('mapPickerUi.zoomIn')" data-location-zoom-in @click="zoomIn">+</button>
+          <button type="button" :title="t('mapPickerUi.zoomOut')" :aria-label="t('mapPickerUi.zoomOut')" data-location-zoom-out @click="zoomOut">−</button>
+          <button type="button" :title="t('mapUi.autoFocus')" :aria-label="t('mapUi.autoFocus')" data-location-auto @click="autoAdjust">{{ t('mapUi.autoFocus') }}</button>
+        </div>
       </div>
       <div class="device-location-map__footer">
         <span class="mono">{{ installation?.gisLatitude }}, {{ installation?.gisLongitude }}</span>
@@ -309,6 +334,35 @@ watch(
   fill: var(--color-accent);
 }
 
+.device-location-map__controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.device-location-map__controls button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.device-location-map__controls button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
 .device-location-map__footer {
   display: flex;
   flex-wrap: wrap;

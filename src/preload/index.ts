@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Preload — the ONLY bridge between the renderer and the main process.
  *
  * Security posture:
@@ -67,7 +67,7 @@ import type {
   SpectrumFrameEvent,
   StreamStatusEvent
 } from '@shared/domain/monitoring'
-import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
+import type { E2AudioFrameEvent, E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 import type {
   AddDeviceInput,
   AlarmQuery,
@@ -222,6 +222,8 @@ const api: RendererApi = {
       ipcRenderer.invoke(IpcChannels.E2_PTZ_UPDATE, deviceId, patch),
     syncNvtTime: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.E2_NVT_TIME_SYNC, deviceId),
+    startAudio: (deviceId: string) => ipcRenderer.invoke(IpcChannels.E2_AUDIO_START, deviceId),
+    stopAudio: (deviceId: string) => ipcRenderer.invoke(IpcChannels.E2_AUDIO_STOP, deviceId),
     /** 某条告警的抓图（本机文件，回环地址）+ 关掉端点。 */
     alarmSnapshots: (deviceId: string, alarmId: string) =>
       ipcRenderer.invoke(IpcChannels.E2_ALARM_SNAPSHOTS, deviceId, alarmId),
@@ -670,6 +672,9 @@ ealtime_value：主进程 HTTP 回调监听收到后推给渲染层。 */
 const onE2RealtimeValue = (callback: (event: E2RealtimeValueEvent) => void): Unsubscribe =>
   subscribe(PushChannels.E2_REALTIME_CALLBACK_VALUE, callback)
 
+const onE2AudioFrame = (callback: (event: E2AudioFrameEvent) => void): Unsubscribe =>
+  subscribe(PushChannels.E2_AUDIO_FRAME, callback)
+
 /**
  * 检测结果文件的下载进度（阶段，不是百分比）。
  *
@@ -730,6 +735,7 @@ contextBridge.exposeInMainWorld('events', {
   onNetworkProgress,
   onLinkagePending,
   onE2RealtimeValue,
+  onE2AudioFrame,
   onEventCenterDownloadProgress,
   onCameraUpgradeProgress,
   onMapTileCacheProgress,

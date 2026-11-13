@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Electron main process entry.
  *
  * Window security settings are deliberate, not defaults:
@@ -22,7 +22,7 @@ import { probeFfmpeg } from './services/media/ffmpeg'
 import { registerLinkagePopupScheme, LINKAGE_POPUP_SCHEME } from './services/linkage/linkage-actions'
 import { DEVICE_STATUS_CHANNEL, PushChannels } from '@shared/ipc/contract'
 import type { PendingAlarmSnapshot } from '@shared/ipc/contract'
-import type { E2RealtimeValueEvent } from '@shared/domain/e2-callback'
+import type { E2AudioFrameEvent, E2RealtimeValueEvent } from '@shared/domain/e2-callback'
 import type { SessionInfo } from '@shared/domain/auth'
 
 let mainWindow: BrowserWindow | undefined
@@ -699,6 +699,12 @@ if (!gotTheLock) {
       services.iotIngest.on('e2-realtime', (event: E2RealtimeValueEvent) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send(PushChannels.E2_REALTIME_CALLBACK_VALUE, event)
+        }
+      })
+
+      services.e2Audio.on('frame', (event: E2AudioFrameEvent) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(PushChannels.E2_AUDIO_FRAME, event)
         }
       })
 

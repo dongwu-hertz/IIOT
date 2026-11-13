@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Alarm records (spec section 10.1) — 界面上的名字是「告警中心」
  * （业主 2026-09-19：「告警记录修改为 告警中心」）。
@@ -95,6 +95,17 @@ interface UnifiedAlarmRow {
   camera: PendingAlarmRecord | null
 }
 
+/** SN-16 告警原文里的声源方位角；不是这一族/没有原文就返回 undefined。 */
+function alarmAzimuth(alarm: AlarmEvent): number | undefined {
+  if (!alarm.deviceRaw) return undefined
+  try {
+    const value = Number((JSON.parse(alarm.deviceRaw) as Record<string, unknown>).horizontal)
+    return Number.isFinite(value) ? ((value % 360) + 360) % 360 : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const mergedRows = computed<UnifiedAlarmRow[]>(() => {
   const boxRows: UnifiedAlarmRow[] = rows.value.map((alarm) => ({
     key: `box:${alarm.id}`,
@@ -107,6 +118,9 @@ const mergedRows = computed<UnifiedAlarmRow[]>(() => {
     metricsText: [
       alarm.spl !== undefined ? `${formatNumber(alarm.spl, 1)} dB` : '',
       alarm.mainFrequency !== undefined ? `${formatNumber(alarm.mainFrequency, 0)} Hz` : '',
+      alarmAzimuth(alarm) !== undefined
+        ? `${t('sonarUi.alarmDirection')} ${formatNumber(alarmAzimuth(alarm), 0)}°`
+        : '',
       // 业主 2026-09-24 声纹设备告警指标口径：告警类型/声压级/主频/频带能量比。
       // （频谱差异度不在告警记录里——它在实时特征流里；不在这里编一个值。）
       alarm.bandEnergyRatio !== undefined && Number.isFinite(alarm.bandEnergyRatio)
@@ -1128,6 +1142,10 @@ function openDevice(deviceId: string): void {
               <div class="summary-item">
                 <span class="summary-item__label">{{ t('alarmsUi.columnChannel') }}</span>
                 <strong class="summary-item__value">{{ channelLabel(detail.channelId) }}</strong>
+              </div>
+              <div v-if="alarmAzimuth(detail) !== undefined" class="summary-item">
+                <span class="summary-item__label">{{ t('sonarUi.alarmDirection') }}</span>
+                <strong class="summary-item__value summary-item__metric">{{ formatNumber(alarmAzimuth(detail), 0) }}°</strong>
               </div>
               <div class="summary-item">
                 <span class="summary-item__label">{{ t('metrics.spl') }}</span>

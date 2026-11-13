@@ -505,7 +505,7 @@ presets, the licence boundaries
 
   alarms: {
     type: {
-      spl: 'Sound pressure level',
+      spl: 'SPL',
       main_frequency: 'Main frequency',
       band_energy_ratio: 'Band energy ratio',
       smoothness: 'Smoothness',
@@ -530,6 +530,15 @@ presets, the licence boundaries
     currentSpl: 'Current level',
     azimuth: 'Pointing direction',
     playAudio: 'Play latest recording',
+    playLiveAudio: 'Play live audio',
+    stopLiveAudio: 'Stop live audio',
+    ptzPreviewTitle: 'PTZ camera',
+    ptzPreviewReserved: 'PTZ link enabled — live preview and alarm video will be shown here.',
+    ptzNotLinked: 'No PTZ camera linked',
+    deviceInfoTitle: 'Device information',
+    deviceInfoIp: 'IP address',
+    deviceInfoStatus: 'Status',
+    deviceInfoFirmware: 'Firmware',
     stopAudio: 'Stop playback',
     noAudio: 'No playable recording yet',
     realtimeOff: 'Live data is not connected: the device callback does not point to this machine, or the local listener is off.',
@@ -652,7 +661,7 @@ presets, the licence boundaries
   },
 
   metrics: {
-    spl: 'Sound pressure level',
+    spl: 'SPL',
     mainFrequency: 'Main frequency',
     smoothness: 'Steadiness',
     bandEnergyRatio: 'Band energy ratio',
@@ -757,7 +766,7 @@ presets, the licence boundaries
     viewMode: 'View switch',
     modeSingle: 'Single channel',
     modeDetect: 'Detection',
-    detectSpl: 'Sound pressure level',
+    detectSpl: 'SPL',
     detectSmoothness: 'Stability',
     detectEnergyRatio: 'Band energy ratio',
     detectDominantFreq: 'Dominant frequency',
@@ -1218,7 +1227,7 @@ presets, the licence boundaries
     editProfile: 'Edit alarm profile',
     createProfile: 'New alarm profile',
     groupBasics: 'Basics',
-    groupSpl: 'Sound pressure level',
+    groupSpl: 'SPL',
     groupMainFrequency: 'Main frequency',
     groupBandEnergy: 'Band energy ratio',
     labelEnable: 'Enable',
@@ -1680,6 +1689,7 @@ presets, the licence boundaries
     fitAll: 'Fit all devices',
     sonarDirection: 'Source direction {degrees}° · range {range} m',
     sonarNoPoint: 'No map point recorded, so direction and range cannot be shown',
+    autoFocus: 'Auto focus',
     canvasLabel: 'Device positions',
     /**
      * The translucent status bar in the map's top-right corner (owner batch 11, item 4):
@@ -2687,7 +2697,7 @@ presets, the licence boundaries
     fieldDischargeLogical: 'Discharge logic',
     fieldDischargeType: 'Discharge type',
     fieldNotes: 'Notes',
-    branchDecibel: 'Sound pressure level (dB)',
+    branchDecibel: 'SPL (dB)',
     branchDominantFreq: 'Main frequency',
     branchComparison: 'Spectrum comparison',
     branchDischarge: 'Discharge diagnosis',

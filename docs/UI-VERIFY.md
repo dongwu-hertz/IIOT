@@ -1,4 +1,4 @@
-﻿# 界面改动人工核对清单
+# 界面改动人工核对清单
 
 这份清单是给**人**看的。自动探针能证明的是 DOM 事实（某个类在不在、某个数字对不对），
 **证明不了"看起来对不对"** —— 间距是否舒服、文字是否被截断、颜色是否分得清，这些只有眼睛能判。
@@ -5728,3 +5728,67 @@ Trend query: totalRows 143 / 1 file / 10 s bucket
 - 目标测试 sonar-map-alarm：11/11 通过
 - npm run test:inproc：134 文件 / 2530 通过 / 72 失败；26 个失败文件为既有陈旧 UI 守卫，不是本轮功能回归。
 - verify:packaged：26/0；安装包签名 Valid。
+
+---
+
+## HHH. 第 68 轮的发布（v1.0.43，2026-11-13）
+
+业主 2026-11-13：
+> 1. Sound pressure level 修改成 SPL。
+> 2. 对于这个设备的告警给出方位角。
+> 3. 如何实现这个原始音频的回放和当前的实时录音播放。
+> 4. Live monitoring 支持实时播放音频；Device location 支持自动调整方位及地图放大。
+> 5. Alarm history 调为 50% 宽度；设备信息放右侧；下方地图版块删除；PTZ 视频预览区域预留。
+
+### HHH.1 交付
+
+- 版本：1.0.43（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.43-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,228,072 字节 / C7A43C5BDD12837F6BAF995BCA28003549E3B13FD890FBEB36F6F4DBDC444FC7
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（指纹 DB24261F59F98579A03CB6E9D965866FD109077F，DigiCert 时间戳；本次 Certum F88 私钥提供程序不可用，改用同主体备用代码签名证书）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.43
+- 上一版归档：release-1.0.42-2026-11-12/
+
+### HHH.2 SPL 与告警方位
+
+- 英文界面 Sound pressure level 改为 SPL（alarm type / metrics / detect / profile group / branch 五处）。
+- 告警中心列表的告警指标串追加 Alarm direction 297° 一类方位。
+- 告警详情摘要增加「告警方位」一项；地图最近告警列表和 Live monitoring 告警历史也显示方向角。
+
+
+### HHH.3 原始音频回放与实时音频
+
+原始告警音频（已实现并验证）：
+
+1. e2.syncAlarms(..., downloadAudio: true) 从设备 /saving_alarm_file 下载 alarm.wav。
+2. 写入 recordings，并把 alarms.recording_id 指向它。
+3. 告警详情的 RecordingPlayer 调 playback.load(recordingId)。
+4. Live monitoring 的 Play latest recording 同走这条 playback.load。
+
+实测 2 条真实告警下载成功：audioSaved=2，playback.load 返回 546192 字节 / 10240 ms。
+
+
+实时音频（本轮新增）：
+
+- 新增 E2AudioStreamService：主进程连接设备 ws://<设备>/audio_stream。
+- 设备每 100 ms 推 4096 字节单声道 16-bit 小端 PCM，采样率 20 kHz。
+- 主进程解码为归一化 Float32，通过 E2_AUDIO_FRAME 推送渲染层。
+- PcmStreamPlayer 用 WebAudio AudioBufferSourceNode 顺序排包播放。
+- Live monitoring 声呐页增加 Play live audio / Stop live audio，离开页面自动停流。
+- 实测收到 5 帧：len=2048、rate=20000、间隔约 100ms。
+
+
+### HHH.4 布局与地图
+
+- Live monitoring 声呐布局：顶部左 GIS 地图；顶部右 PTZ 视频预览预留卡；下方 Alarm history 50% 宽 + 右侧设备信息；删除 Live monitoring 下方重复地图。
+- DeviceLocationMap 增加 + / - 缩放、Auto focus（回设备中心并按最新告警校准方向/范围）、每 5 秒刷新最近告警方向。
+- 实测：board=1179px，history=581px，info=581px，同一 top；maps=1；PTZ 预留区与 live audio 按钮均存在。
+
+### HHH.5 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm / i18n：37/37 通过
+- npm run test:inproc：134 文件 / 2530 通过 / 72 失败；26 个失败文件为既有陈旧 UI 守卫。
+- verify:packaged：26/0；安装包签名 Valid。
+

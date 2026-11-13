@@ -528,6 +528,15 @@ export const tr: MessageSchema = {
     currentSpl: 'Güncel seviye',
     azimuth: 'Yön',
     playAudio: 'Son kaydı çal',
+    playLiveAudio: 'Canlı sesi çal',
+    stopLiveAudio: 'Canlı sesi durdur',
+    ptzPreviewTitle: 'PTZ kamera',
+    ptzPreviewReserved: 'PTZ bağlantısı açık — canlı önizleme ve alarm videosu burada gösterilecek.',
+    ptzNotLinked: 'PTZ kamera bağlı değil',
+    deviceInfoTitle: 'Cihaz bilgileri',
+    deviceInfoIp: 'IP adresi',
+    deviceInfoStatus: 'Durum',
+    deviceInfoFirmware: 'Ürün yazılımı',
     stopAudio: 'Durdur',
     noAudio: 'Çalınabilir kayıt yok',
     realtimeOff: 'Canlı veri bağlı değil: cihaz geri çağrısı bu bilgisayarı göstermiyor veya yerel alıcı kapalı.',
@@ -1647,6 +1656,7 @@ export const tr: MessageSchema = {
     fitAll: 'Tüm cihazları sığdır',
     sonarDirection: 'Kaynak yönü {degrees}° · menzil {range} m',
     sonarNoPoint: 'Harita noktası girilmemiş; yön ve menzil gösterilemez',
+    autoFocus: 'Otomatik odak',
     canvasLabel: 'Cihaz konumları',
     /**
      * Haritanın sağ üst köşesindeki yarı saydam durum çubuğu (11. parti, 4. madde):

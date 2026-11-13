@@ -1363,6 +1363,22 @@ export function registerIpcHandlers(): void {
         return getServices().e2.setRealtimeCallback(String(deviceId), enabled === true)
       })
   )
+  ipcMain.handle(IpcChannels.E2_AUDIO_START, (_event, deviceId: unknown) =>
+    toResult(async () => {
+      requirePermission('viewDevices')
+      await getServices().e2Audio.start(String(deviceId))
+      return undefined
+    })
+  )
+
+  ipcMain.handle(IpcChannels.E2_AUDIO_STOP, (_event, deviceId: unknown) =>
+    toResult(async () => {
+      requirePermission('viewDevices')
+      getServices().e2Audio.stop(String(deviceId))
+      return undefined
+    })
+  )
+
 
   // -------------------------------------------------------------------------
   // Protocol Lab (spec section 19)

@@ -34,6 +34,7 @@ import { SampleLibraryService } from './sample/sample-library-service'
 import { SampleLabelService } from './sample/sample-label-service'
 import { SampleLabelRepository } from './database/sample-label-repository'
 import { E2DeviceService } from './device/e2/e2-device-service'
+import { E2AudioStreamService } from './device/e2/e2-audio-stream-service'
 import { SampleDatasetExporter } from './sample/sample-dataset-export'
 import { SampleAiLabelService } from './sample/sample-ai-label-service'
 import { SampleAiStore } from './sample/sample-ai-store'
@@ -226,6 +227,8 @@ export interface AppServices {
   sampleLabels: SampleLabelService
   /** 听诊盒子族（E2 / FA100 / FA110）的「拉」通道：状态与告警同步。 */
   e2: E2DeviceService
+  /** SN-16 实时 PCM 音频（/audio_stream WebSocket）。 */
+  e2Audio: E2AudioStreamService
   /**
    * IoT 数据接入（业主 2026-09-19 第 1 条）：HTTP 推流 + 最小 MQTT broker。
    *
@@ -741,6 +744,8 @@ export async function initServices(): Promise<AppServices> {
     getRealtimeListener: () => iotIngest.status.http
   })
 
+  const e2Audio = new E2AudioStreamService({ devices: deviceService })
+
   const protocolLab = new ProtocolLab({
     transport,
     credentials: credentialResult.store,
@@ -1215,6 +1220,7 @@ export async function initServices(): Promise<AppServices> {
     sampleExport,
     sampleAi,
     e2,
+    e2Audio,
     iotIngest,
     alarms: alarmService,
     recordings: recordingService,
@@ -1233,6 +1239,7 @@ export async function initServices(): Promise<AppServices> {
       // The camera sockets are closed FIRST and synchronously: they belong to a
       // different device family, and leaving them open while the box streams
       // unwind would keep the process alive after the window closes.
+      e2Audio.dispose()
       fa371Streams.dispose()
       // 采集服务自己的子进程与未收尾的录像文件先处理：它登记录像行时需要
       // 数据库还活着（在 db.close() 之前），也需要在 ffmpeg 全量清扫之前收尾，

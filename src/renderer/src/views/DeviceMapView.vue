@@ -1648,6 +1648,7 @@ onBeforeUnmount(() => {
               <ul v-if="alarms.length > 0" class="map-latest-alarm__list" data-map-alarm-list>
                 <li v-for="alarm in alarms.slice(0, 3)" :key="alarm.id" data-map-alarm-row>
                   <span>{{ t('alarmsUi.columnChannel') }} CH{{ alarm.channelId + 1 }}</span>
+                  <span v-if="alarmHorizontalDeg(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmHorizontalDeg(alarm), 0) }}°</span>
                   <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
                   <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
                 </li>

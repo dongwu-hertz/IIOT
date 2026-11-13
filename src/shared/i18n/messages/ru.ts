@@ -501,6 +501,15 @@ export const ru: MessageSchema = {
     currentSpl: 'Текущий уровень',
     azimuth: 'Направление',
     playAudio: 'Слушать последнюю запись',
+    playLiveAudio: 'Слушать живой звук',
+    stopLiveAudio: 'Остановить живой звук',
+    ptzPreviewTitle: 'PTZ-камера',
+    ptzPreviewReserved: 'Связь с PTZ включена — здесь будут показаны живой просмотр и видео тревоги.',
+    ptzNotLinked: 'PTZ-камера не подключена',
+    deviceInfoTitle: 'Информация об устройстве',
+    deviceInfoIp: 'IP-адрес',
+    deviceInfoStatus: 'Состояние',
+    deviceInfoFirmware: 'Прошивка',
     stopAudio: 'Остановить',
     noAudio: 'Пока нет записи для прослушивания',
     realtimeOff: 'Живые данные не подключены: обратный вызов устройства не указывает на этот компьютер или локальный приёмник выключен.',
@@ -1603,6 +1612,7 @@ export const ru: MessageSchema = {
     fitAll: 'Показать все устройства',
     sonarDirection: 'Направление источника {degrees}° · дальность {range} м',
     sonarNoPoint: 'Точка на карте не задана; направление и дальность показать нельзя',
+    autoFocus: 'Автофокус',
     canvasLabel: 'Позиции устройств',
     /**
      * Полупрозрачная строка статуса в правом верхнем углу карты:

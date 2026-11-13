@@ -117,6 +117,7 @@ ealtime_value）的形状与解析都在 domain/e2-callback.ts。
  * 契约层只把它带出去：渲染层订阅推送、设备面板显示状态，用的都是同一份类型。
  */
 import type {
+  E2AudioFrameEvent,
   E2RealtimeCallbackOutcome,
   E2RealtimeCallbackStatus,
   E2RealtimeValueEvent
@@ -471,6 +472,9 @@ otify_url / is_send_realtime_value。
    */
   E2_REALTIME_CALLBACK: 'e2:realtime-callback',
   E2_REALTIME_CALLBACK_UPDATE: 'e2:realtime-callback-update',
+  /** SN-16 实时 PCM 音频（/audio_stream WebSocket）启停。 */
+  E2_AUDIO_START: 'e2:audio-start',
+  E2_AUDIO_STOP: 'e2:audio-stop',
 
   // Configuration reads used by earlier phases (kept: still referenced)
   CONFIG_GET_SAMPLE_RATE: 'config:get-sample-rate',
@@ -881,6 +885,8 @@ otify_url）。
    * 界面挂载或切换设备时先读一次状态里的最新值，之后靠这条推送同步。
    */
   E2_REALTIME_CALLBACK_VALUE: 'e2:realtime-value',
+  /** SN-16 实时 PCM 音频帧。 */
+  E2_AUDIO_FRAME: 'e2:audio-frame',
   /**
    * 瓦片缓存下载进度（业主 20260921 批）。每处理一块瓦片推一次
    * `MapTileCacheProgress`（done = 收尾那一次）；订阅方按自己发起的那一次认领
@@ -2305,6 +2311,9 @@ export interface RendererApi {
     updatePtz(deviceId: string, patch: E2PtzPatch): Promise<DeviceResult<E2PtzUpdateOutcome>>
     /** 与球机对时（`PUT /time_sync_with_nvt`；手册**只列了端点，没写请求体**）。 */
     syncNvtTime(deviceId: string): Promise<DeviceResult<E2NvtTimeSyncOutcome>>
+    /** 打开/关闭 SN-16 实时 PCM 音频流。 */
+    startAudio(deviceId: string): Promise<DeviceResult<void>>
+    stopAudio(deviceId: string): Promise<DeviceResult<void>>
     /**
      * 一条告警的**抓图**（本机文件，业主 2026-09-17 第 8 批第 2 条）。
      *
@@ -3129,6 +3138,8 @@ export interface RendererEvents {
 
   /** SN-16 realtime_value pushed from the main-process callback listener. */
   onE2RealtimeValue: EventSubscription<E2RealtimeValueEvent>
+  /** SN-16 实时 PCM 音频帧。 */
+  onE2AudioFrame: EventSubscription<E2AudioFrameEvent>
 
   /**
    * 检测结果文件的下载进度。

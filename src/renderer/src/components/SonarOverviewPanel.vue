@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -21,6 +21,7 @@ import { useI18n } from 'vue-i18n'
 import type { AlarmEvent } from '@shared/domain/models'
 import type { E2SyncOutcome } from '@shared/ipc/contract'
 import type { E2RealtimeCallbackStatus } from '@shared/domain/e2-callback'
+import type { E2PtzConfig } from '@shared/domain/e2-ptz'
 import { useDevicesStore } from '@renderer/stores/devices'
 import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
 import { useUiRefreshStore } from '@renderer/stores/uiRefresh'
@@ -29,6 +30,7 @@ import { alarmTypeLabel } from '@renderer/lib/labels'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 import { useSessionStore } from '@renderer/stores/session'
 import { resultMessage } from '@renderer/lib/result'
+import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
 
 const props = defineProps<{ deviceId: string }>()
@@ -98,8 +100,8 @@ const latestAlarmSpl = computed(() => latestAlarm.value?.spl)
 const displaySpl = computed(() => currentSpl.value ?? latestAlarmSpl.value)
 const splIsLive = computed(() => currentSpl.value !== undefined)
 /** 最近一条告警里的声源方位（设备原文 horizontal；取不到就不猜）。 */
-const latestAlarmDirection = computed(() => {
-  const raw = latestAlarm.value?.deviceRaw
+function alarmAzimuthOf(alarm: AlarmEvent | undefined): number | undefined {
+  const raw = alarm?.deviceRaw
   if (!raw) return undefined
   try {
     const value = Number((JSON.parse(raw) as Record<string, unknown>).horizontal)
@@ -107,11 +109,52 @@ const latestAlarmDirection = computed(() => {
   } catch {
     return undefined
   }
-})
+}
+
+const latestAlarmDirection = computed(() => alarmAzimuthOf(latestAlarm.value))
 
 /** 指向方向：优先最近告警，其次安装方位角。 */
 const direction = computed(() => latestAlarmDirection.value ?? azimuth.value)
 
+const liveAudio = new PcmStreamPlayer()
+const liveAudioEnabled = ref(false)
+const liveAudioBusy = ref(false)
+const liveAudioError = ref('')
+let unsubscribeLiveAudio: (() => void) | null = null
+
+async function toggleLiveAudio(): Promise<void> {
+  if (liveAudioBusy.value) return
+  liveAudioBusy.value = true
+  liveAudioError.value = ''
+  try {
+    if (liveAudioEnabled.value) {
+      liveAudioEnabled.value = false
+      await callApi(() => window.api.e2.stopAudio(props.deviceId))
+      await liveAudio.suspend()
+      return
+    }
+    await liveAudio.resume()
+    const result = await callApi(() => window.api.e2.startAudio(props.deviceId))
+    if (!result.success) {
+      liveAudioError.value = resultMessage(result)
+      await liveAudio.suspend()
+      return
+    }
+    liveAudioEnabled.value = true
+  } catch (error) {
+    liveAudioError.value = error instanceof Error ? error.message : String(error)
+    liveAudioEnabled.value = false
+    await liveAudio.suspend()
+  } finally {
+    liveAudioBusy.value = false
+  }
+}
+const ptz = ref<E2PtzConfig | null>(null)
+
+async function loadPtz(): Promise<void> {
+  const result = await callApi(() => window.api.e2.ptz(props.deviceId))
+  ptz.value = result.success ? unwrap(result) ?? null : null
+}
 const callback = ref<E2RealtimeCallbackStatus | null>(null)
 const callbackBusy = ref(false)
 const callbackError = ref('')
@@ -150,6 +193,7 @@ async function enableRealtime(): Promise<void> {
     // 等几轮读回，避免界面一直停在「未接入」。
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await loadCallback()
+  await loadPtz()
       if (callbackReady.value) break
       await new Promise((resolve) => setTimeout(resolve, 400))
     }
@@ -256,7 +300,13 @@ async function toggleAudio(): Promise<void> {
 
 onMounted(async () => {
   e2Realtime.acquire()
+  unsubscribeLiveAudio = window.events.onE2AudioFrame((event) => {
+    if (event.deviceId === props.deviceId && liveAudioEnabled.value) {
+      liveAudio.push(event.samples, event.sampleRate)
+    }
+  })
   await loadCallback()
+  await loadPtz()
   await loadAlarms()
   await loadLatestSnapshot(latestAlarm.value)
   alarmPollTimer = window.setInterval(() => void pollLatestAlarms(), 5_000)
@@ -264,6 +314,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   e2Realtime.release()
+  unsubscribeLiveAudio?.()
+  unsubscribeLiveAudio = null
+  void liveAudio.close()
+  if (liveAudioEnabled.value) void callApi(() => window.api.e2.stopAudio(props.deviceId))
   if (alarmPollTimer !== undefined) window.clearInterval(alarmPollTimer)
   if (audioEl.value) audioEl.value.pause()
   if (audioUrl.value !== '') URL.revokeObjectURL(audioUrl.value)
@@ -297,6 +351,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 
     <!-- 右列：第一行当前值，第二行最近一次告警 -->
     <div class="sonar-side">
+      <section class="card sonar-ptz" data-sonar-ptz-preview>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('sonarUi.ptzPreviewTitle') }}</h3>
+          <span v-if="ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
+        </div>
+        <div class="sonar-ptz__placeholder">
+          <p v-if="ptz?.enabled">{{ t('sonarUi.ptzPreviewReserved') }}</p>
+          <p v-else class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
+        </div>
+      </section>
       <section class="card sonar-now" data-sonar-now>
         <div class="sonar-now__spl">
           <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
@@ -343,6 +407,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         >
           {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
         </button>
+        <button
+          type="button"
+          class="btn btn--sm btn--ghost"
+          :disabled="liveAudioBusy"
+          data-sonar-live-audio
+          @click="toggleLiveAudio"
+        >
+          {{ liveAudioEnabled ? t('sonarUi.stopLiveAudio') : t('sonarUi.playLiveAudio') }}
+        </button>
+        <p v-if="liveAudioError" class="alert alert--danger" role="alert">{{ liveAudioError }}</p>
         <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>
           {{ t('sonarUi.noAudio') }}
         </p>
@@ -388,6 +462,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
     </div>
 
     <!-- 下方：全部历史告警 -->
+<div class="sonar-bottom">
     <section class="card sonar-history" data-sonar-history>
       <div class="section-header">
         <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
@@ -399,9 +474,21 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
           <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
           <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
+          <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
         </li>
       </ul>
     </section>
+      <section class="card sonar-device-info" data-sonar-device-info>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('sonarUi.deviceInfoTitle') }}</h3>
+        </div>
+        <dl class="sonar-device-info__facts">
+          <div><dt>{{ t('sonarUi.deviceInfoIp') }}</dt><dd class="mono">{{ device?.ip || '—' }}</dd></div>
+          <div><dt>{{ t('sonarUi.deviceInfoStatus') }}</dt><dd>{{ device?.status || '—' }}</dd></div>
+          <div><dt>{{ t('sonarUi.deviceInfoFirmware') }}</dt><dd>{{ device?.firmwareVersion || '—' }}</dd></div>
+        </dl>
+      </section>
+</div>
   </div>
 </template>
 
@@ -415,6 +502,58 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
   width: 100%;
 }
 
+.sonar-bottom {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.sonar-ptz__placeholder {
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  padding: var(--space-3);
+  text-align: center;
+}
+
+.sonar-ptz__placeholder p {
+  margin: 0;
+  max-width: 36ch;
+}
+
+.sonar-device-info__facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.sonar-device-info__facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-2);
+}
+
+.sonar-device-info__facts dt {
+  color: var(--color-text-secondary);
+}
+
+.sonar-device-info__facts dd {
+  margin: 0;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .sonar-bottom {
+    grid-template-columns: 1fr;
+  }
+}
 .sonar-map {
   min-width: 0;
 }
@@ -489,7 +628,8 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 }
 
 .sonar-history {
-  grid-column: 1 / -1;
+  grid-column: auto;
+  min-width: 0;
 }
 
 .sonar-history__list {

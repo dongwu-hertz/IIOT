@@ -521,6 +521,15 @@ export const es: MessageSchema = {
     currentSpl: 'Nivel actual',
     azimuth: 'Dirección de apuntado',
     playAudio: 'Reproducir la última grabación',
+    playLiveAudio: 'Reproducir audio en vivo',
+    stopLiveAudio: 'Detener audio en vivo',
+    ptzPreviewTitle: 'Cámara PTZ',
+    ptzPreviewReserved: 'Enlace PTZ activado: la vista en vivo y el vídeo de alarma se mostrarán aquí.',
+    ptzNotLinked: 'No hay cámara PTZ vinculada',
+    deviceInfoTitle: 'Información del dispositivo',
+    deviceInfoIp: 'Dirección IP',
+    deviceInfoStatus: 'Estado',
+    deviceInfoFirmware: 'Firmware',
     stopAudio: 'Detener reproducción',
     noAudio: 'Aún no hay grabación reproducible',
     realtimeOff: 'Los datos en vivo no están conectados: la devolución de llamada del dispositivo no apunta a este equipo o el receptor local está apagado.',
@@ -1643,6 +1652,7 @@ export const es: MessageSchema = {
     fitAll: 'Ajustar todos los dispositivos',
     sonarDirection: 'Dirección de la fuente {degrees}° · alcance {range} m',
     sonarNoPoint: 'No hay punto de mapa registrado; no se puede mostrar dirección ni alcance',
+    autoFocus: 'Enfoque automático',
     canvasLabel: 'Posiciones de los equipos',
     /**
      * La barra de estado translúcida de la esquina superior derecha del mapa (lote 11, punto 4):

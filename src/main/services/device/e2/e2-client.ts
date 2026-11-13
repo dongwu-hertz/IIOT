@@ -534,6 +534,26 @@ export class E2Client {
    * 判定放在这里而不是单独一次调用：`/system` 是两代**都有**的那个端点，而且它的内容就是
    * 判据（见 `detectE2Variant()`）。多打一次请求只为了判型号是浪费。
    */
+  /**
+   * SN-16 实时音频 WebSocket 的连接参数。
+   *
+   * 实测（192.168.110.234）：`/audio_stream` 在 **80 端口的 web 服务**上，
+   * 10 Hz 推 4096 字节、单声道 16-bit 小端 PCM；handshake 的 token 用 query
+   * 参数也能通过（与 `WebSocketStream` 的浏览器兼容写法一致）。
+   */
+  async audioStreamDescriptor(options: CallOptions = {}): Promise<{
+    wsBaseUrl: string
+    token: string
+    sampleRate: number
+  }> {
+    await this.login(options)
+    const source = this.webBaseUrl ?? this.baseUrl
+    return {
+      wsBaseUrl: source.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:'),
+      token: this.token ?? '',
+      sampleRate: 20_000
+    }
+  }
   async getSystem(options: CallOptions = {}): Promise<Record<string, unknown>> {
     const raw = await this.call<Record<string, unknown>>('/system', 'GET', undefined, options)
     const detected = detectE2Variant(raw)

@@ -627,6 +627,15 @@ export const zhCN = {
     currentSpl: '当前分贝',
     azimuth: '当前方位指向',
     playAudio: '播放最近录音',
+    playLiveAudio: '播放实时音频',
+    stopLiveAudio: '停止实时音频',
+    ptzPreviewTitle: 'PTZ 相机',
+    ptzPreviewReserved: 'PTZ 联动已启用，实时预览与告警视频将在此显示。',
+    ptzNotLinked: '未连接 PTZ 相机',
+    deviceInfoTitle: '设备信息',
+    deviceInfoIp: 'IP 地址',
+    deviceInfoStatus: '状态',
+    deviceInfoFirmware: '固件',
     stopAudio: '停止播放',
     noAudio: '还没有可播放的录音',
     realtimeOff: '实时值未接入：设备回调未指向本机，或本机接收端口未开启。',
@@ -1893,6 +1902,7 @@ export const zhCN = {
     fitAll: '适合全部设备',
     sonarDirection: '声源方向 {degrees}° · 范围 {range} m',
     sonarNoPoint: '未录入点位，无法显示声源方向与范围',
+    autoFocus: '自动聚焦',
     canvasLabel: '设备落点图',
     /**
      * 地图右上角那条半透明状态栏（业主 2026-09-19 第 11 批第 4 条：删除「图上 N 台 / 共 M 台」、

@@ -4248,7 +4248,6 @@ const sessionLabel = computed(() => {
           :installation="selectedDevice?.installation"
           :device-id="selectedDevice?.id"
           :device-name="selectedDevice?.name"
-          :show-map="true"
         />
 
         <AuscultationPanel :device-id="selectedDeviceId" />

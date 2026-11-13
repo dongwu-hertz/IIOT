@@ -560,6 +560,15 @@ export const zhTW: MessageSchema = {
     currentSpl: '當前分貝',
     azimuth: '當前方位指向',
     playAudio: '播放最近錄音',
+    playLiveAudio: '播放即時音訊',
+    stopLiveAudio: '停止即時音訊',
+    ptzPreviewTitle: 'PTZ 相機',
+    ptzPreviewReserved: 'PTZ 聯動已啟用，即時預覽與告警影片將在此顯示。',
+    ptzNotLinked: '未連接 PTZ 相機',
+    deviceInfoTitle: '裝置資訊',
+    deviceInfoIp: 'IP 位址',
+    deviceInfoStatus: '狀態',
+    deviceInfoFirmware: '韌體',
     stopAudio: '停止播放音訊',
     noAudio: '還沒有可播放的錄音',
     realtimeOff: '即時值未接入：裝置回呼未指向本機，或本機接收埠未開啟。',
@@ -1824,6 +1833,7 @@ export const zhTW: MessageSchema = {
     fitAll: '適合全部裝置',
     sonarDirection: '聲源方向 {degrees}° · 範圍 {range} m',
     sonarNoPoint: '未錄入點位，無法顯示聲源方向與範圍',
+    autoFocus: '自動聚焦',
     canvasLabel: '裝置落點圖',
     /**
      * 地圖右上角那條半透明狀態列（業主 2026-09-19 第 11 批第 4 條：刪除「圖上 N 臺 / 共 M 臺」、
