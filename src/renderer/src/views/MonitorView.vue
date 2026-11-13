@@ -134,7 +134,6 @@ import MonitorRecordingTimeline from '@renderer/components/MonitorRecordingTimel
 import AuscultationPanel from '@renderer/components/AuscultationPanel.vue'
 import SonarOverviewPanel from '@renderer/components/SonarOverviewPanel.vue'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
-import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 import GasLeakMonitorPanel from '@renderer/components/GasLeakMonitorPanel.vue'
 
 const { t, locale } = useI18n()
@@ -4244,11 +4243,6 @@ const sessionLabel = computed(() => {
         -->
         <SonarOverviewPanel :device-id="selectedDeviceId" />
 
-        <DeviceInstallationCard
-          :installation="selectedDevice?.installation"
-          :device-id="selectedDevice?.id"
-          :device-name="selectedDevice?.name"
-        />
 
         <AuscultationPanel :device-id="selectedDeviceId" />
 

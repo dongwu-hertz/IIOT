@@ -5792,3 +5792,61 @@ Trend query: totalRows 143 / 1 file / 10 s bucket
 - npm run test:inproc：134 文件 / 2530 通过 / 72 失败；26 个失败文件为既有陈旧 UI 守卫。
 - verify:packaged：26/0；安装包签名 Valid。
 
+
+---
+
+## III. 第 69 轮的发布（v1.0.44，2026-11-13）
+
+业主 2026-11-13：
+> 1. Device information 和 address info 都放在标题栏，用 SETTING 图标打开。
+> 2. Device 和 alarm history 放在一起，占右侧 50%，高度保持一致。
+> 3. 支持 device location 和 PTZ camera 视图切换。
+
+### III.1 交付
+
+- 版本：1.0.44（releaseDate 2026-11-12）
+- 安装包：release/HAIS-1.0.44-2026-11-12-x64-setup.exe
+- 大小 / sha256：128,229,232 字节 / 7C3D3B9848006118A84C725805E4F42BA27E72A635514DEFAF318C7BC05F5079
+- 签名：CN=Shanghai Hertzinno Technology Co., Ltd.（指纹 DB24261F59F98579A03CB6E9D965866FD109077F，DigiCert 时间戳）
+- 打包验证：严格签名模式 verify:packaged **26 通过 / 0 失败**，应用内版本 1.0.44
+- 上一版归档：release-1.0.43-2026-11-12/
+
+### III.2 标题栏 SETTINGS 入口
+
+- Live monitoring 声呐视图顶部工具栏右侧增加齿轮 SETTINGS 图标；
+- 默认不显示设备信息与地址信息；
+- 点击后弹出面板，同时包含：
+  - Device ID / IP / MAC / 状态 / 固件 / FPGA / Web 版本；
+  - 地址信息卡（点位、方位角、地图链接、复制坐标）。
+- 原页面下方的 DeviceInstallationCard 已从声呐实时页移除，避免重复展示。
+
+### III.3 右侧 Device + Alarm history
+
+- 主区域改为左右各 50%：
+  - 左：Device location / PTZ camera 视图；
+  - 右：Device 与 Alarm history 两张卡上下排列。
+- 右侧两卡使用 `1fr / 1fr` 等高网格，Device 卡与历史卡高度一致；
+- 历史列表在卡内滚动，不再把整页撑高。
+- 实测（1920 视口）：
+  - `.sonar-board` = 1179 × 587 px；
+  - 左视图 = 581 × 587 px；
+  - 右列 = 581 × 587 px；
+  - Device 卡 = 581 × 285.5 px；
+  - Alarm history 卡 = 581 × 285.5 px，同一 top 顺序、等高。
+
+### III.4 Device location / PTZ camera 视图切换
+
+- 顶部左侧增加两个视图 tab：
+  - `Device location`
+  - `PTZ camera`
+- 切换只改变左侧视图，不重建右侧设备/告警状态；
+- PTZ 视图保留 camera IP 与实时预览占位；未联动时显示未连接；
+- Device location 视图保留 GIS 瓦片、方向线、范围扇区、缩放与 Auto focus。
+
+### III.5 测试
+
+- npm run typecheck：通过
+- npm run build：通过
+- 目标测试 sonar-map-alarm / i18n：37/37 通过
+- npm run test:inproc：134 文件 / 2527 通过 / 75 失败；27 个失败文件为既有陈旧 UI 守卫（本轮新增布局后未同步的旧断言）
+- verify:packaged：26/0；安装包签名 Valid

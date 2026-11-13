@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -32,6 +32,7 @@ import { useSessionStore } from '@renderer/stores/session'
 import { resultMessage } from '@renderer/lib/result'
 import { PcmStreamPlayer } from '@renderer/lib/pcmStreamPlayer'
 import DeviceLocationMap from '@renderer/components/DeviceLocationMap.vue'
+import DeviceInstallationCard from '@renderer/components/DeviceInstallationCard.vue'
 
 const props = defineProps<{ deviceId: string }>()
 
@@ -41,7 +42,11 @@ const e2Realtime = useE2RealtimeStore()
 const uiRefresh = useUiRefreshStore()
 const session = useSessionStore()
 
-const device = computed(() => devices.byId(props.deviceId))
+const device = computed(() => devices.byId(props.deviceId))/** 左上视图：设备位置 GIS / 已联动的 PTZ 相机。 */
+const activeView = ref<'location' | 'ptz'>('location')
+/** 标题栏齿轮：设备信息 + 地址信息默认收起。 */
+const settingsOpen = ref(false)
+
 
 // ---------------------------------------------------------------------------
 // GIS 地图（本机 SVG：设备居中 + 方位箭头；离线优先，不出网）
@@ -336,162 +341,228 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 </script>
 
 <template>
-  <div class="sonar-board">
-    <!-- 左 66%：GIS 地图（16:9，设备居中） -->
-    <section class="card sonar-map" data-sonar-map>
-      <div class="section-header">
-        <h3 class="section-title">{{ t('sonarUi.mapTitle') }}</h3>
+  <div class="sonar-shell">
+    <div class="sonar-toolbar" data-sonar-toolbar>
+      <div class="sonar-view-switch" role="tablist" :aria-label="t('sonarUi.viewSwitch')">
+        <button
+          type="button"
+          role="tab"
+          class="sonar-view-switch__button"
+          :class="{ 'is-active': activeView === 'location' }"
+          :aria-selected="activeView === 'location'"
+          data-sonar-view-location
+          @click="activeView = 'location'"
+        >
+          {{ t('sonarUi.mapTitle') }}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="sonar-view-switch__button"
+          :class="{ 'is-active': activeView === 'ptz' }"
+          :aria-selected="activeView === 'ptz'"
+          data-sonar-view-ptz
+          @click="activeView = 'ptz'"
+        >
+          {{ t('sonarUi.ptzPreviewTitle') }}
+        </button>
       </div>
-      <DeviceLocationMap
-        :installation="device?.installation"
-        :device-id="props.deviceId"
-        :device-name="device?.name"
-      />
-    </section>
-
-    <!-- 右列：第一行当前值，第二行最近一次告警 -->
-    <div class="sonar-side">
-      <section class="card sonar-ptz" data-sonar-ptz-preview>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('sonarUi.ptzPreviewTitle') }}</h3>
-          <span v-if="ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
-        </div>
-        <div class="sonar-ptz__placeholder">
-          <p v-if="ptz?.enabled">{{ t('sonarUi.ptzPreviewReserved') }}</p>
-          <p v-else class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
-        </div>
-      </section>
-      <section class="card sonar-now" data-sonar-now>
-        <div class="sonar-now__spl">
-          <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
-          <span class="sonar-now__spl-unit">dB</span>
-        </div>
-        <dl class="sonar-now__facts">
-          <dt>{{ t('sonarUi.currentSpl') }}</dt>
-          <dd>
-            {{ displaySpl === undefined ? '—' : `${formatNumber(displaySpl, 1)} dB` }}
-            <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted"> · {{ t('sonarUi.latestAlarm') }}</span>
-          </dd>
-          <dt>{{ t('sonarUi.azimuth') }}</dt>
-          <dd>
-            {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
-            <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
-          </dd>
-        </dl>
-        <div v-if="!callbackReady" class="sonar-now__hint" data-sonar-realtime-off>
-          <p class="muted">{{ t('sonarUi.realtimeOff') }}</p>
-          <button
-            v-if="session.isAdmin"
-            type="button"
-            class="btn btn--sm"
-            :disabled="callbackBusy"
-            data-sonar-enable-callback
-            @click="enableRealtime"
-          >
-            {{ callbackBusy ? t('common.loading') : t('sonarUi.enableRealtime') }}
-          </button>
-        </div>
-        <p v-else-if="currentSpl === undefined" class="muted" data-sonar-realtime-waiting>
-          {{ t('sonarUi.waitingRealtime') }}
-        </p>
-        <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
-        <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
-        <button
-          type="button"
-          class="btn btn--sm"
-          :class="{ 'btn--danger': audioPlaying }"
-          :disabled="audioBusy || !latestPlayable"
-          :title="latestPlayable ? '' : t('sonarUi.noAudio')"
-          data-sonar-audio
-          @click="toggleAudio"
-        >
-          {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm btn--ghost"
-          :disabled="liveAudioBusy"
-          data-sonar-live-audio
-          @click="toggleLiveAudio"
-        >
-          {{ liveAudioEnabled ? t('sonarUi.stopLiveAudio') : t('sonarUi.playLiveAudio') }}
-        </button>
-        <p v-if="liveAudioError" class="alert alert--danger" role="alert">{{ liveAudioError }}</p>
-        <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>
-          {{ t('sonarUi.noAudio') }}
-        </p>
-        <p v-if="recordSyncError" class="alert alert--danger" role="alert">{{ recordSyncError }}</p>
-        <p v-if="recordSyncNotice" class="muted" role="status">{{ recordSyncNotice }}</p>
-        <button
-          type="button"
-          class="btn btn--sm btn--ghost"
-          :disabled="recordSyncBusy"
-          data-sonar-sync-recordings
-          @click="syncRecordings"
-        >
-          {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
-        </button>
-        <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
-        <!-- 播放器元素不进可视布局：按钮与状态就是它的界面。 -->
-        <audio ref="audioEl" :src="audioUrl" class="sonar-hidden-audio" @ended="audioPlaying = false"></audio>
-      </section>
-
-      <section class="card sonar-latest" data-sonar-latest>
-        <div class="section-header">
-          <h3 class="section-title">{{ t('sonarUi.latestAlarm') }}</h3>
-        </div>
-        <template v-if="latestAlarm">
-          <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" class="sonar-latest__image" alt="" />
-          <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
-          <dl class="sonar-latest__facts">
-            <dt>{{ t('sonarUi.alarmDirection') }}</dt>
-          <dd>
-            {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
-            <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
-          </dd>
-            <dt>{{ t('sonarUi.alarmSpl') }}</dt>
-            <dd>{{ latestAlarm.spl === undefined ? '—' : `${formatNumber(latestAlarm.spl, 1)} dB` }}</dd>
-            <dt>{{ t('sonarUi.alarmType') }}</dt>
-            <dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</dd>
-            <dt>{{ t('sonarUi.alarmTime') }}</dt>
-            <dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd>
-          </dl>
-        </template>
-        <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
-      </section>
+      <button
+        type="button"
+        class="btn btn--sm btn--icon sonar-settings-toggle"
+        :class="{ 'is-active': settingsOpen }"
+        :title="t('sonarUi.settingsTitle')"
+        :aria-label="t('sonarUi.settingsTitle')"
+        :aria-expanded="settingsOpen"
+        data-sonar-settings-toggle
+        @click="settingsOpen = !settingsOpen"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.7" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.27.68.4 1.1.4H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5.6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
     </div>
 
-    <!-- 下方：全部历史告警 -->
-<div class="sonar-bottom">
-    <section class="card sonar-history" data-sonar-history>
-      <div class="section-header">
-        <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
-        <span class="muted">{{ alarms.length }}</span>
-      </div>
-      <p v-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
-      <ul v-else class="sonar-history__list">
-        <li v-for="alarm in alarms" :key="alarm.id">
-          <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
-          <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
-          <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
-          <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
-        </li>
-      </ul>
-    </section>
-      <section class="card sonar-device-info" data-sonar-device-info>
+    <div class="sonar-board">
+      <section class="card sonar-view" data-sonar-map>
         <div class="section-header">
-          <h3 class="section-title">{{ t('sonarUi.deviceInfoTitle') }}</h3>
+          <h3 class="section-title">{{ activeView === 'location' ? t('sonarUi.mapTitle') : t('sonarUi.ptzPreviewTitle') }}</h3>
+          <span v-if="activeView === 'ptz' && ptz?.cameraIp" class="muted mono">{{ ptz.cameraIp }}</span>
         </div>
-        <dl class="sonar-device-info__facts">
-          <div><dt>{{ t('sonarUi.deviceInfoIp') }}</dt><dd class="mono">{{ device?.ip || '—' }}</dd></div>
-          <div><dt>{{ t('sonarUi.deviceInfoStatus') }}</dt><dd>{{ device?.status || '—' }}</dd></div>
-          <div><dt>{{ t('sonarUi.deviceInfoFirmware') }}</dt><dd>{{ device?.firmwareVersion || '—' }}</dd></div>
-        </dl>
+        <DeviceLocationMap
+          v-show="activeView === 'location'"
+          :installation="device?.installation"
+          :device-id="props.deviceId"
+          :device-name="device?.name"
+        />
+        <div v-show="activeView === 'ptz'" class="sonar-ptz-view" data-sonar-ptz-preview>
+          <div class="sonar-ptz__placeholder">
+            <p v-if="ptz?.enabled">{{ t('sonarUi.ptzPreviewReserved') }}</p>
+            <p v-else class="muted">{{ t('sonarUi.ptzNotLinked') }}</p>
+          </div>
+        </div>
       </section>
-</div>
+
+      <div class="sonar-side">
+        <section class="card sonar-device" data-sonar-now>
+          <div class="section-header">
+            <h3 class="section-title">{{ t('sonarUi.deviceTitle') }}</h3>
+            <span class="muted">{{ device?.status || '—' }}</span>
+          </div>
+          <div class="sonar-now__spl">
+            <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
+            <span class="sonar-now__spl-unit">dB</span>
+          </div>
+          <dl class="sonar-now__facts">
+            <dt>{{ t('sonarUi.currentSpl') }}</dt>
+            <dd>
+              {{ displaySpl === undefined ? '—' : `${formatNumber(displaySpl, 1)} dB` }}
+              <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted"> · {{ t('sonarUi.latestAlarm') }}</span>
+            </dd>
+            <dt>{{ t('sonarUi.azimuth') }}</dt>
+            <dd>
+              {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
+              <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
+            </dd>
+          </dl>
+
+          <div v-if="!callbackReady" class="sonar-now__hint" data-sonar-realtime-off>
+            <p class="muted">{{ t('sonarUi.realtimeOff') }}</p>
+            <button
+              v-if="session.isAdmin"
+              type="button"
+              class="btn btn--sm"
+              :disabled="callbackBusy"
+              data-sonar-enable-callback
+              @click="enableRealtime"
+            >
+              {{ callbackBusy ? t('common.loading') : t('sonarUi.enableRealtime') }}
+            </button>
+          </div>
+          <p v-else-if="currentSpl === undefined" class="muted" data-sonar-realtime-waiting>
+            {{ t('sonarUi.waitingRealtime') }}
+          </p>
+          <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
+          <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
+
+          <div class="sonar-device__actions">
+            <button
+              type="button"
+              class="btn btn--sm"
+              :class="{ 'btn--danger': audioPlaying }"
+              :disabled="audioBusy || !latestPlayable"
+              :title="latestPlayable ? '' : t('sonarUi.noAudio')"
+              data-sonar-audio
+              @click="toggleAudio"
+            >
+              {{ audioPlaying ? t('sonarUi.stopAudio') : t('sonarUi.playAudio') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm btn--ghost"
+              :disabled="liveAudioBusy"
+              data-sonar-live-audio
+              @click="toggleLiveAudio"
+            >
+              {{ liveAudioEnabled ? t('sonarUi.stopLiveAudio') : t('sonarUi.playLiveAudio') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn--sm btn--ghost"
+              :disabled="recordSyncBusy"
+              data-sonar-sync-recordings
+              @click="syncRecordings"
+            >
+              {{ recordSyncBusy ? t('sonarUi.syncingRecordings') : t('sonarUi.syncRecordings') }}
+            </button>
+          </div>
+          <p v-if="liveAudioError" class="alert alert--danger" role="alert">{{ liveAudioError }}</p>
+          <p v-if="!latestPlayable" class="muted" data-sonar-no-recording>{{ t('sonarUi.noAudio') }}</p>
+          <p v-if="recordSyncError" class="alert alert--danger" role="alert">{{ recordSyncError }}</p>
+          <p v-if="recordSyncNotice" class="muted" role="status">{{ recordSyncNotice }}</p>
+          <p v-if="audioError" class="alert alert--danger" role="alert">{{ audioError }}</p>
+
+          <div class="sonar-device__latest" data-sonar-latest>
+            <div class="section-header">
+              <h3 class="section-title">{{ t('sonarUi.latestAlarm') }}</h3>
+            </div>
+            <template v-if="latestAlarm">
+              <img v-if="latestSnapshotUrl" :src="latestSnapshotUrl" class="sonar-latest__image" alt="" />
+              <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
+              <dl class="sonar-latest__facts">
+                <dt>{{ t('sonarUi.alarmDirection') }}</dt>
+                <dd>
+                  {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
+                  <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
+                </dd>
+                <dt>{{ t('sonarUi.alarmSpl') }}</dt>
+                <dd>{{ latestAlarm.spl === undefined ? '—' : `${formatNumber(latestAlarm.spl, 1)} dB` }}</dd>
+                <dt>{{ t('sonarUi.alarmType') }}</dt>
+                <dd>{{ latestAlarm.alarmTypes.length > 0 ? latestAlarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</dd>
+                <dt>{{ t('sonarUi.alarmTime') }}</dt>
+                <dd>{{ formatDateTime(latestAlarm.timestamp) }}</dd>
+              </dl>
+            </template>
+            <p v-else class="muted">{{ t('sonarUi.noAlarms') }}</p>
+          </div>
+          <audio ref="audioEl" :src="audioUrl" class="sonar-hidden-audio" @ended="audioPlaying = false"></audio>
+        </section>
+
+        <section class="card sonar-history" data-sonar-history>
+          <div class="section-header">
+            <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
+            <span class="muted">{{ alarms.length }}</span>
+          </div>
+          <p v-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
+          <ul v-else class="sonar-history__list">
+            <li v-for="alarm in alarms" :key="alarm.id">
+              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+              <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
+              <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
+              <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </div>
+
+    <div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
+      <section class="card sonar-settings" role="dialog" aria-modal="true" data-sonar-settings-panel>
+        <div class="sonar-settings__head">
+          <h3 class="section-title">{{ t('sonarUi.settingsTitle') }}</h3>
+          <button
+            type="button"
+            class="btn btn--sm btn--icon"
+            :aria-label="t('common.close')"
+            :title="t('common.close')"
+            data-sonar-settings-close
+            @click="settingsOpen = false"
+          >×</button>
+        </div>
+        <div class="sonar-settings__grid">
+          <section class="sonar-settings__section" data-sonar-device-info>
+            <h4>{{ t('sonarUi.deviceInfoTitle') }}</h4>
+            <dl class="sonar-device-info__facts">
+              <div><dt>{{ t('devicesUi.deviceId') }}</dt><dd class="mono">{{ device?.deviceUid || '—' }}</dd></div>
+              <div><dt>{{ t('sonarUi.deviceInfoIp') }}</dt><dd class="mono">{{ device?.ip || '—' }}</dd></div>
+              <div><dt>{{ t('deviceDetailUi.mac') }}</dt><dd class="mono">{{ device?.mac || '—' }}</dd></div>
+              <div><dt>{{ t('sonarUi.deviceInfoStatus') }}</dt><dd>{{ device?.status || '—' }}</dd></div>
+              <div><dt>{{ t('deviceDetailUi.firmware') }}</dt><dd>{{ device?.firmwareVersion || '—' }}</dd></div>
+              <div><dt>{{ t('deviceDetailUi.fpga') }}</dt><dd>{{ device?.fpgaVersion || '—' }}</dd></div>
+              <div><dt>{{ t('deviceDetailUi.webVersion') }}</dt><dd>{{ device?.webVersion || '—' }}</dd></div>
+            </dl>
+          </section>
+          <DeviceInstallationCard
+            :installation="device?.installation"
+            :device-id="device?.id"
+            :device-name="device?.name"
+          />
+        </div>
+      </section>
+    </div>
   </div>
 </template>
-
 <style scoped>
 /* 业主 2026-09-24：地图 16:9、占 66% 宽；卡片间距统一。 */
 .sonar-board {
@@ -658,5 +729,196 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
   .sonar-board {
     grid-template-columns: 1fr;
   }
+}
+/* 业主 2026-11-13：标题栏设置入口 + 左视图切换 + 右 Device/历史等高。 */
+.sonar-shell {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  height: clamp(520px, 68vh, 760px);
+  min-width: 0;
+}
+
+.sonar-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 32px;
+}
+
+.sonar-view-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+}
+
+.sonar-view-switch__button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.sonar-view-switch__button.is-active {
+  background: var(--color-bg);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+
+.sonar-settings-toggle.is-active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.sonar-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+}
+
+.sonar-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sonar-ptz-view {
+  flex: 1;
+  min-height: 320px;
+  display: grid;
+  place-items: stretch;
+}
+
+.sonar-ptz-view .sonar-ptz__placeholder {
+  aspect-ratio: auto;
+  min-height: 320px;
+  height: 100%;
+}
+
+.sonar-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+  min-height: 0;
+}
+
+.sonar-device,
+.sonar-history {
+  min-width: 0;
+  min-height: 0;
+}
+
+.sonar-device {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.sonar-device__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.sonar-device__latest {
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+.sonar-history {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sonar-history__list {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.sonar-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(0 0 0 / 45%);
+}
+
+.sonar-settings {
+  width: min(960px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+}
+
+.sonar-settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.sonar-settings__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.sonar-settings__section {
+  min-width: 0;
+}
+
+.sonar-settings__section h4 {
+  margin: 0 0 var(--space-2);
+}
+
+@media (max-width: 1000px) {
+  .sonar-board,
+  .sonar-settings__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sonar-side {
+    grid-template-rows: minmax(320px, auto) minmax(320px, auto);
+  }
+}
+/* 最终高度约束：左视图与右侧两卡等高，历史列表在卡内滚动。 */
+.sonar-shell {
+  height: auto;
+}
+
+.sonar-board {
+  height: clamp(520px, 68vh, 760px);
+}
+
+.sonar-view,
+.sonar-side {
+  height: 100%;
+}
+
+.sonar-device,
+.sonar-history {
+  height: 100%;
 }
 </style>
