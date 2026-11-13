@@ -20,7 +20,7 @@ export class E2AudioStreamService extends EventEmitter {
     this.devices = options.devices
   }
 
-  async start(deviceId: string): Promise<void> {
+  async start(deviceId: string, channel = 1): Promise<void> {
     if (this.streams.has(deviceId)) return
     const device = this.devices.get(deviceId)
     if (device.kind !== 'auscultationBox') {
@@ -35,10 +35,11 @@ export class E2AudioStreamService extends EventEmitter {
         path: '/audio_stream',
         pingIntervalMs: 100,
         pingBody: '{"type": "ping", "channel": "0"}',
-        carriesChannel: false,
+        carriesChannel: true,
         purpose: 'SN-16 live PCM audio'
       },
       headers: { token: descriptor.token },
+      channel: Math.max(0, Math.floor(channel) - 1),
       onFrame: (frame) => {
         if (!frame.binary) return
         const byteCount = frame.bytes.byteLength - (frame.bytes.byteLength % 2)

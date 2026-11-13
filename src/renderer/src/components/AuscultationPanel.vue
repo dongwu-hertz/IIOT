@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 听诊盒子族（E2 / FA100 / FA110）的设备面板：工作模式 + 阈值参数 + 告警同步。
  *
@@ -29,7 +29,11 @@ import { useE2RealtimeStore } from '@renderer/stores/e2Realtime'
 import { callApi, resultMessage, unwrap } from '@renderer/lib/result'
 import { formatDateTime, formatNumber } from '@renderer/lib/format'
 
-const props = defineProps<{ deviceId: string }>()
+const props = defineProps<{
+  deviceId: string
+  showStatus?: boolean
+  showCallback?: boolean
+}>()
 
 const { t } = useI18n()
 
@@ -209,7 +213,7 @@ function paramLabel(key: string): string {
 </script>
 
 <template>
-  <section class="card">
+  <section v-if="showStatus !== false" class="card">
     <div class="section-header">
       <h3 class="section-title">{{ t('e2Ui.statusTitle') }}</h3>
       <button type="button" class="btn btn--sm" :disabled="loading" @click="load">
@@ -303,7 +307,7 @@ function paramLabel(key: string): string {
     设备把数值 POST 到 notify_url；本机复用「本机接入」的 HTTP 监听收下它。
     这一块只负责显示设备指向哪里、本机监听是否在跑、最近收到什么，以及把本机地址写进设备。
   -->
-  <section v-if="isAirSonar" class="card" data-e2-callback-card>
+  <section v-if="isAirSonar && showCallback !== false" class="card" data-e2-callback-card>
     <div class="section-header">
       <h3 class="section-title">{{ t('e2CallbackUi.title') }}</h3>
       <button
@@ -381,7 +385,7 @@ function paramLabel(key: string): string {
       <p v-else class="muted">{{ t('e2CallbackUi.noValue') }}</p>
     </div>
   </section>
-  <section class="card">
+  <section v-if="showStatus !== false" class="card">
     <div class="section-header">
       <h3 class="section-title">{{ t('e2Ui.syncTitle') }}</h3>
     </div>

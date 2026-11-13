@@ -2312,7 +2312,7 @@ export interface RendererApi {
     /** 与球机对时（`PUT /time_sync_with_nvt`；手册**只列了端点，没写请求体**）。 */
     syncNvtTime(deviceId: string): Promise<DeviceResult<E2NvtTimeSyncOutcome>>
     /** 打开/关闭 SN-16 实时 PCM 音频流。 */
-    startAudio(deviceId: string): Promise<DeviceResult<void>>
+    startAudio(deviceId: string, channel?: number): Promise<DeviceResult<void>>
     stopAudio(deviceId: string): Promise<DeviceResult<void>>
     /**
      * 一条告警的**抓图**（本机文件，业主 2026-09-17 第 8 批第 2 条）。

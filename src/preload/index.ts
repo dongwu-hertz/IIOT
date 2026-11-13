@@ -222,7 +222,7 @@ const api: RendererApi = {
       ipcRenderer.invoke(IpcChannels.E2_PTZ_UPDATE, deviceId, patch),
     syncNvtTime: (deviceId: string) =>
       ipcRenderer.invoke(IpcChannels.E2_NVT_TIME_SYNC, deviceId),
-    startAudio: (deviceId: string) => ipcRenderer.invoke(IpcChannels.E2_AUDIO_START, deviceId),
+    startAudio: (deviceId: string, channel?: number) => ipcRenderer.invoke(IpcChannels.E2_AUDIO_START, deviceId, channel),
     stopAudio: (deviceId: string) => ipcRenderer.invoke(IpcChannels.E2_AUDIO_STOP, deviceId),
     /** 某条告警的抓图（本机文件，回环地址）+ 关掉端点。 */
     alarmSnapshots: (deviceId: string, alarmId: string) =>

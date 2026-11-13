@@ -2704,12 +2704,6 @@ const enabledChannelSummary = computed(() => {
   return t('channelState.enabledSummary', { enabled, total: list.length })
 })
 
-const sessionLabel = computed(() => {
-  if (monitor.state === 'running') return t('monitorUi.sessionRunning')
-  if (monitor.state === 'starting') return t('monitorUi.sessionStarting')
-  if (monitor.state === 'error') return t('monitorUi.sessionError')
-  return t('monitorUi.sessionStopped')
-})
 </script>
 
 <template>
@@ -2790,7 +2784,7 @@ const sessionLabel = computed(() => {
           <div v-if="selectedDevice" class="monitor-head__status">
             <StatusBadge
               :status="selectedDevice.status"
-              :connection-type="selectedDevice.connectionType"
+              :connection-type="isVoiceprint ? undefined : selectedDevice.connectionType"
             />
             <!--
               角标：这一屏显示的数据**不是实时**的（业主第 18 条）。
@@ -2813,26 +2807,8 @@ const sessionLabel = computed(() => {
               describe the wrong device family.
             -->
             <template v-if="isVoiceprint">
-      <DeviceLocationMap
-        :installation="selectedDevice?.installation"
-        :device-id="selectedDevice?.id"
-        :device-name="selectedDevice?.name"
-      />
               <span class="muted">{{ channelHint }}</span>
               <span v-if="enabledChannelSummary" class="muted">{{ enabledChannelSummary }}</span>
-              <!--
-                会话状态徽标。`data-monitor-session-badge` 是**给探针用的**标记属性
-                （不带样式）：第 13 批第 3 条删掉了那个启停按钮之后，"进来到底有没有自动开始"
-                只剩这一枚徽标能回答，而设备头里另有一枚「局域网/广域网」徽标（`StatusBadge`），
-                靠"第几个 badge"去数是会数错的。
-              -->
-              <span
-                class="badge"
-                :class="monitor.isRunning ? 'badge--accent' : ''"
-                data-monitor-session-badge
-              >
-                {{ sessionLabel }}
-              </span>
             </template>
             <!--
               声呐（SN-16 空气声呐）：这一族**有**通道（16 路），但没有我们已经接入的实时流，
@@ -2901,10 +2877,7 @@ const sessionLabel = computed(() => {
             相关的两个词条（`monitorUi.start` / `monitorUi.stop`）四本目录同步删除，
             理由见 §15.80。
           -->
-        </div>
-
-        <!-- 通道页签也是声纹设备专有的：相机的"通道"不存在，声呐的通道没有实时数据可切。 -->
-        <nav v-if="isVoiceprint" class="channel-tabs" :aria-label="t('monitorUi.channelSelect')">
+        <nav v-if="isVoiceprint" class="channel-tabs channel-tabs--header" :aria-label="t('monitorUi.channelSelect')">
           <!-- 未启用的通道整块变灰且不可选；状态未知用另一种样式，两者不得混同。 -->
           <button
             v-for="tab in channelTabs"
@@ -2934,6 +2907,9 @@ const sessionLabel = computed(() => {
             </span>
           </button>
         </nav>
+        </div>
+
+        <!-- 通道页签也是声纹设备专有的：相机的"通道"不存在，声呐的通道没有实时数据可切。 -->
       </section>
 
       <!--
@@ -4263,7 +4239,7 @@ const sessionLabel = computed(() => {
         />
 
 
-        <AuscultationPanel :device-id="selectedDeviceId" />
+        <AuscultationPanel :device-id="selectedDeviceId" :show-status="false" :show-callback="false" />
 
         <MonitorRecordingTimeline :device-id="selectedDeviceId" />
       </template>
@@ -6202,4 +6178,14 @@ const sessionLabel = computed(() => {
   font-weight: 600;
 }
 
+.channel-tabs--header {
+  flex: 1 1 560px;
+  justify-content: flex-end;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.channel-tabs--header .channel-tab {
+  min-width: 64px;
+}
 </style>

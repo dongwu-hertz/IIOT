@@ -103,7 +103,12 @@ function alarmHorizontal(alarm: AlarmEvent | undefined): number | undefined {
 }
 
 /** 告警方向优先；没有告警时用安装方位角。没有方向就不画线，不猜 0°。 */
-const heading = computed(() => alarmHorizontal(latestAlarm.value) ?? props.installation?.azimuthDeg)
+const heading = computed(() => {
+  const relative = alarmHorizontal(latestAlarm.value)
+  const offset = props.installation?.azimuthDeg
+  if (relative === undefined) return offset
+  return ((relative + (offset ?? 0)) % 360 + 360) % 360
+})
 
 const marker = computed(() => ({ x: WIDTH / 2, y: HEIGHT / 2 }))
 

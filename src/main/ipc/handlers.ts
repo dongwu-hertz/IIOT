@@ -1363,10 +1363,10 @@ export function registerIpcHandlers(): void {
         return getServices().e2.setRealtimeCallback(String(deviceId), enabled === true)
       })
   )
-  ipcMain.handle(IpcChannels.E2_AUDIO_START, (_event, deviceId: unknown) =>
+  ipcMain.handle(IpcChannels.E2_AUDIO_START, (_event, deviceId: unknown, channel: unknown) =>
     toResult(async () => {
       requirePermission('viewDevices')
-      await getServices().e2Audio.start(String(deviceId))
+      await getServices().e2Audio.start(String(deviceId), typeof channel === 'number' ? channel : 1)
       return undefined
     })
   )

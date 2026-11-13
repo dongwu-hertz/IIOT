@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * Air Sonar（SN-16 空气声呐）实时监测总览（业主 2026-09-24 第 9 条改版）。
  *
@@ -19,7 +19,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AlarmEvent } from '@shared/domain/models'
-import type { E2SyncOutcome } from '@shared/ipc/contract'
+import type { E2DeviceStatus, E2SyncOutcome } from '@shared/ipc/contract'
 import type { E2RealtimeCallbackStatus } from '@shared/domain/e2-callback'
 import type { E2PtzConfig } from '@shared/domain/e2-ptz'
 import { useDevicesStore } from '@renderer/stores/devices'
@@ -124,9 +124,53 @@ function alarmAzimuthOf(alarm: AlarmEvent | undefined): number | undefined {
 }
 
 const latestAlarmDirection = computed(() => alarmAzimuthOf(latestAlarm.value))
+/** 设备安装方位：作为告警相对角度的校准偏移。 */
+const installationAzimuth = computed(() => device.value?.installation?.azimuthDeg ?? 0)
+
+/** 实时声压 / 告警方向：设备原文 relative + 安装方位 = 软件校准后的方向。 */
+const calibratedDirection = computed(() => {
+  const relative = latestAlarmDirection.value
+  if (relative === undefined) return azimuth.value
+  return ((relative + installationAzimuth.value) % 360 + 360) % 360
+})
+
+const direction = computed(() => calibratedDirection.value)
+
+const e2Status = ref<E2DeviceStatus | null>(null)
+const statusLoading = ref(false)
+
+const audioChannel = ref(1)
+const audioChannelCount = computed(() => {
+  const count = e2Status.value?.channelCount ?? devices.channelsOf(props.deviceId).length
+  return count && count > 0 ? count : 16
+})
+const liveAudioChannel = ref<number | undefined>(undefined)
+
+
+async function loadStatus(): Promise<void> {
+  statusLoading.value = true
+  try {
+    const result = await callApi(() => window.api.e2.status(props.deviceId))
+    e2Status.value = result.success ? unwrap(result) ?? null : null
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+async function onAudioChannelChange(): Promise<void> {
+  if (!liveAudioEnabled.value) return
+  await callApi(() => window.api.e2.stopAudio(props.deviceId))
+  liveAudioEnabled.value = false
+  liveAudioChannel.value = undefined
+  await liveAudio.resume()
+  const result = await callApi(() => window.api.e2.startAudio(props.deviceId, audioChannel.value))
+  if (result.success) {
+    liveAudioEnabled.value = true
+    liveAudioChannel.value = audioChannel.value
+  }
+}
 
 /** 指向方向：优先最近告警，其次安装方位角。 */
-const direction = computed(() => latestAlarmDirection.value ?? azimuth.value)
 
 const liveAudio = new PcmStreamPlayer()
 const liveAudioEnabled = ref(false)
@@ -141,18 +185,20 @@ async function toggleLiveAudio(): Promise<void> {
   try {
     if (liveAudioEnabled.value) {
       liveAudioEnabled.value = false
+      liveAudioChannel.value = undefined
       await callApi(() => window.api.e2.stopAudio(props.deviceId))
       await liveAudio.suspend()
       return
     }
     await liveAudio.resume()
-    const result = await callApi(() => window.api.e2.startAudio(props.deviceId))
+    const result = await callApi(() => window.api.e2.startAudio(props.deviceId, audioChannel.value))
     if (!result.success) {
       liveAudioError.value = resultMessage(result)
       await liveAudio.suspend()
       return
     }
     liveAudioEnabled.value = true
+    liveAudioChannel.value = audioChannel.value
   } catch (error) {
     liveAudioError.value = error instanceof Error ? error.message : String(error)
     liveAudioEnabled.value = false
@@ -325,6 +371,7 @@ onMounted(async () => {
   })
   await loadCallback()
   await loadPtz()
+  await loadStatus()
   await loadAlarms()
   await loadLatestSnapshot(latestAlarm.value)
   alarmPollTimer = window.setInterval(() => void pollLatestAlarms(), 5_000)
@@ -346,6 +393,7 @@ watch(
   () => uiRefresh.tick,
   async () => {
     await loadAlarms()
+    await loadStatus()
     await loadLatestSnapshot(latestAlarm.value)
   }
 )
@@ -366,6 +414,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           :device-name="device?.name"
         />
       </section>
+
       <div class="sonar-side">
         <section class="card sonar-ptz" data-sonar-ptz-preview>
           <div class="section-header">
@@ -398,48 +447,75 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
         <section class="card sonar-device" data-sonar-now>
           <div class="section-header">
             <h3 class="section-title">{{ t('sonarUi.deviceTitle') }}</h3>
-            <span class="muted">{{ device?.status || '—' }}</span>
           </div>
-          <div class="sonar-now__spl">
-            <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
-            <span class="sonar-now__spl-unit">dB</span>
-          </div>
-          <dl class="sonar-now__facts">
-            <dt>{{ t('sonarUi.currentSpl') }}</dt>
-            <dd>
-              {{ displaySpl === undefined ? '—' : `${formatNumber(displaySpl, 1)} dB` }}
-              <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted"> · {{ t('sonarUi.latestAlarm') }}</span>
-            </dd>
-            <dt>{{ t('sonarUi.azimuth') }}</dt>
-            <dd>
-              {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
-              <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
-            </dd>
-          </dl>
 
-          <div v-if="!callbackReady" class="sonar-now__hint" data-sonar-realtime-off>
-            <p class="muted">{{ t('sonarUi.realtimeOff') }}</p>
+          <div class="sonar-device__hero">
+            <div class="sonar-now__spl">
+              <span class="sonar-now__spl-value">{{ displaySpl === undefined ? '—' : formatNumber(displaySpl, 1) }}</span>
+              <span class="sonar-now__spl-unit">dB</span>
+              <span v-if="!splIsLive && latestAlarmSpl !== undefined" class="muted sonar-now__source">{{ t('sonarUi.latestAlarm') }}</span>
+            </div>
+            <div class="sonar-compass" data-sonar-compass>
+              <svg viewBox="0 0 80 80" width="80" height="80" aria-hidden="true">
+                <circle cx="40" cy="40" r="33" class="sonar-compass__ring" />
+                <text x="40" y="10" text-anchor="middle" class="sonar-compass__n">N</text>
+                <text x="73" y="44" text-anchor="middle" class="sonar-compass__tick">E</text>
+                <text x="40" y="77" text-anchor="middle" class="sonar-compass__tick">S</text>
+                <text x="7" y="44" text-anchor="middle" class="sonar-compass__tick">W</text>
+                <g :transform="`rotate(${direction ?? 0} 40 40)`">
+                  <polygon points="40,13 34,46 40,41 46,46" class="sonar-compass__needle" />
+                </g>
+                <circle cx="40" cy="40" r="3" class="sonar-compass__hub" />
+              </svg>
+              <strong>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</strong>
+              <span class="muted">{{ t('sonarUi.calibratedDirection') }}</span>
+            </div>
+          </div>
+          <p class="sonar-device__calibration">
+            {{ t('sonarUi.installationOffset', { degrees: formatNumber(installationAzimuth, 0) }) }}
+          </p>
+
+          <div class="sonar-device__callback" data-sonar-callback>
+            <div class="sonar-device__callback-head">
+              <strong>{{ t('e2CallbackUi.title') }}</strong>
+              <span class="badge" :class="callbackReady ? 'badge--success' : 'badge--warning'">
+                {{ callbackReady ? t('sonarUi.callbackConnected') : t('sonarUi.callbackDisconnected') }}
+              </span>
+            </div>
+            <p v-if="callbackReady" class="muted">
+              {{ t('e2CallbackUi.listening', { port: callback?.listener.port ?? '—' }) }}
+            </p>
+            <p v-else class="muted">{{ t('sonarUi.realtimeOff') }}</p>
             <button
-              v-if="session.isAdmin"
+              v-if="!callbackReady && session.isAdmin"
               type="button"
-              class="btn btn--sm"
+              class="btn btn--sm btn--primary"
               :disabled="callbackBusy"
               data-sonar-enable-callback
               @click="enableRealtime"
             >
               {{ callbackBusy ? t('common.loading') : t('sonarUi.enableRealtime') }}
             </button>
+            <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
+            <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
           </div>
-          <p v-else-if="currentSpl === undefined" class="muted" data-sonar-realtime-waiting>
-            {{ t('sonarUi.waitingRealtime') }}
-          </p>
-          <p v-if="callbackError" class="alert alert--danger" role="alert">{{ callbackError }}</p>
-          <p v-if="callbackNotice" class="muted" role="status">{{ callbackNotice }}</p>
+
+          <div class="sonar-device__audio-row">
+            <label class="field">
+              <span class="field-label">{{ t('sonarUi.audioChannel') }}</span>
+              <select v-model.number="audioChannel" class="select" :disabled="liveAudioBusy" data-sonar-audio-channel @change="onAudioChannelChange">
+                <option v-for="channel in audioChannelCount" :key="channel" :value="channel">CH{{ channel }}</option>
+              </select>
+            </label>
+            <span v-if="liveAudioEnabled" class="badge badge--accent">
+              {{ t('sonarUi.pullingAudio', { channel: liveAudioChannel ?? audioChannel }) }}
+            </span>
+          </div>
 
           <div class="sonar-device__actions">
             <button
               type="button"
-              class="btn btn--sm"
+              class="btn sonar-device__action-button"
               :class="{ 'btn--danger': audioPlaying }"
               :disabled="audioBusy || !latestPlayable"
               :title="latestPlayable ? '' : t('sonarUi.noAudio')"
@@ -450,16 +526,16 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
             </button>
             <button
               type="button"
-              class="btn btn--sm btn--ghost"
+              class="btn btn--primary sonar-device__action-button"
               :disabled="liveAudioBusy"
               data-sonar-live-audio
               @click="toggleLiveAudio"
             >
-              {{ liveAudioEnabled ? t('sonarUi.stopLiveAudio') : t('sonarUi.playLiveAudio') }}
+              {{ liveAudioEnabled ? t('sonarUi.stopPullAudio') : t('sonarUi.pullAudio') }}
             </button>
             <button
               type="button"
-              class="btn btn--sm btn--ghost"
+              class="btn sonar-device__action-button"
               :disabled="recordSyncBusy"
               data-sonar-sync-recordings
               @click="syncRecordings"
@@ -482,10 +558,7 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
               <p v-else-if="latestSnapshotState === 'missing'" class="muted">{{ t('sonarUi.noSnapshot') }}</p>
               <dl class="sonar-latest__facts">
                 <dt>{{ t('sonarUi.alarmDirection') }}</dt>
-                <dd>
-                  {{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}
-                  <span v-if="latestAlarmDirection !== undefined" class="muted"> · {{ t('sonarUi.fromLatestAlarm') }}</span>
-                </dd>
+                <dd>{{ direction === undefined ? '—' : `${formatNumber(direction, 0)}°` }}</dd>
                 <dt>{{ t('sonarUi.alarmSpl') }}</dt>
                 <dd>{{ latestAlarm.spl === undefined ? '—' : `${formatNumber(latestAlarm.spl, 1)} dB` }}</dd>
                 <dt>{{ t('sonarUi.alarmType') }}</dt>
@@ -498,25 +571,46 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
           </div>
           <audio ref="audioEl" :src="audioUrl" class="sonar-hidden-audio" @ended="audioPlaying = false"></audio>
         </section>
-
-        <section class="card sonar-history" data-sonar-history>
-          <div class="section-header">
-            <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
-            <span class="muted">{{ alarms.length }}</span>
-          </div>
-          <p v-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
-          <ul v-else class="sonar-history__list">
-            <li v-for="alarm in alarms" :key="alarm.id">
-              <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
-              <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
-              <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
-              <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
-            </li>
-          </ul>
-        </section>
       </div>
     </div>
 
+    <div class="sonar-bottom">
+      <section class="card sonar-history" data-sonar-history>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('sonarUi.history') }}</h3>
+          <span class="muted">{{ alarms.length }}</span>
+        </div>
+        <p v-if="alarms.length === 0" class="muted">{{ t('sonarUi.noAlarms') }}</p>
+        <ul v-else class="sonar-history__list">
+          <li v-for="alarm in alarms" :key="alarm.id">
+            <span class="muted">{{ formatDateTime(alarm.timestamp) }}</span>
+            <span>{{ alarm.alarmTypes.length > 0 ? alarm.alarmTypes.map(alarmTypeLabel).join(' + ') : '—' }}</span>
+            <span class="muted">{{ alarm.spl === undefined ? '—' : `${formatNumber(alarm.spl, 1)} dB` }}</span>
+            <span v-if="alarmAzimuthOf(alarm) !== undefined" class="muted">{{ t('sonarUi.alarmDirection') }} {{ formatNumber(alarmAzimuthOf(alarm), 0) }}°</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="card sonar-device-status" data-sonar-device-status>
+        <div class="section-header">
+          <h3 class="section-title">{{ t('e2Ui.statusTitle') }}</h3>
+          <button type="button" class="btn btn--sm" :disabled="statusLoading" @click="loadStatus">
+            {{ statusLoading ? t('common.loading') : t('common.refresh') }}
+          </button>
+        </div>
+        <template v-if="e2Status">
+          <dl class="sonar-device-info__facts">
+            <div><dt>{{ t('e2Ui.variant') }}</dt><dd>{{ e2Status.variant ?? '—' }}</dd></div>
+            <div><dt>{{ t('e2Ui.samplerate') }}</dt><dd>{{ e2Status.samplerate !== undefined ? `${e2Status.samplerate} Hz` : '—' }}</dd></div>
+            <div><dt>{{ t('e2Ui.channelCount') }}</dt><dd>{{ e2Status.channelCount ?? '—' }}</dd></div>
+            <div><dt>{{ t('e2Ui.deviceType') }}</dt><dd class="mono">{{ e2Status.basic.devType ?? '—' }}</dd></div>
+            <div><dt>{{ t('e2Ui.firmware') }}</dt><dd>{{ e2Status.basic.devVersion ?? '—' }}</dd></div>
+            <div><dt>{{ t('e2Ui.retention') }}</dt><dd>{{ t('e2Ui.retentionValue', { count: e2Status.alarmLogRetention }) }}</dd></div>
+          </dl>
+        </template>
+        <p v-else class="muted">{{ t('common.loading') }}</p>
+      </section>
+    </div>
     <div v-if="settingsOpen" class="sonar-settings-overlay" data-sonar-settings-overlay @click.self="settingsOpen = false">
       <section class="card sonar-settings" role="dialog" aria-modal="true" data-sonar-settings-panel>
         <div class="sonar-settings__head">
@@ -950,6 +1044,145 @@ watch(latestAlarm, (alarm) => void loadLatestSnapshot(alarm))
 @media (max-width: 1000px) {
   .sonar-side {
     grid-template-rows: minmax(220px, auto) minmax(320px, auto) minmax(320px, auto);
+  }
+}
+/* 2026-11-13：右侧 PTZ + Device 两块合计与左侧地图等高；告警历史 + 设备状态在下方各 50%。 */
+.sonar-side {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.sonar-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: stretch;
+  width: 100%;
+  height: 320px;
+  margin-top: var(--space-4);
+}
+
+.sonar-bottom > .card {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.sonar-device__hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.sonar-now__source {
+  margin-left: 4px;
+  font-size: 11.5px;
+}
+
+.sonar-compass {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 92px;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sonar-compass__ring {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-border);
+  stroke-width: 1.5;
+}
+
+.sonar-compass__n {
+  fill: var(--color-danger);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sonar-compass__tick {
+  fill: var(--color-text-secondary);
+  font-size: 9px;
+}
+
+.sonar-compass__needle {
+  fill: var(--color-accent);
+}
+
+.sonar-compass__hub {
+  fill: var(--color-text);
+}
+
+.sonar-compass strong {
+  font-size: 12.5px;
+}
+
+.sonar-compass .muted {
+  font-size: 10.5px;
+}
+
+.sonar-device__calibration {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+}
+
+.sonar-device__callback {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-2) 0;
+  margin-bottom: var(--space-2);
+}
+
+.sonar-device__callback-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sonar-device__callback p {
+  margin: var(--space-1) 0;
+  font-size: 11.5px;
+}
+
+.sonar-device__audio-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.sonar-device__audio-row .field {
+  margin: 0;
+}
+
+.sonar-device__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.sonar-device__action-button {
+  min-height: 38px;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.sonar-device__action-button.btn--primary {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+.sonar-device-status .sonar-device-info__facts {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 1000px) {
+  .sonar-bottom {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

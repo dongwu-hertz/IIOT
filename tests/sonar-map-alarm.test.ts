@@ -42,7 +42,9 @@ describe('SN-16 sonar map and alarm profile', () => {
     const monitor = read('src/renderer/src/views/MonitorView.vue')
     assert.match(monitor, /import DeviceLocationMap/)
     const uses = monitor.match(/<DeviceLocationMap/g) ?? []
-    assert.ok(uses.length >= 3, 'camera / voiceprint / gas-leak branches should embed the map')
+    assert.ok(uses.length >= 2, 'camera / gas-leak branches should embed the map')
+    const sonar = read('src/renderer/src/components/SonarOverviewPanel.vue')
+    assert.match(sonar, /<DeviceLocationMap/)
   })
 
   it('explains and can repair the Live monitoring gaps for SN-16', () => {
@@ -58,6 +60,13 @@ describe('SN-16 sonar map and alarm profile', () => {
     assert.match(panel, /data-sonar-settings-panel/)
     assert.doesNotMatch(monitor, /data-sonar-view-toggle/)
     assert.match(panel, /data-sonar-ptz-mode-toggle/)
+    assert.match(panel, /data-sonar-compass/)
+    assert.match(panel, /data-sonar-callback/)
+    assert.match(panel, /data-sonar-audio-channel/)
+    assert.match(panel, /data-sonar-device-status/)
+    assert.match(panel, /startAudio\(props\.deviceId, audioChannel\.value\)/)
+    assert.match(monitor, /channel-tabs--header/)
+    assert.doesNotMatch(monitor, /data-monitor-session-badge/)
     assert.doesNotMatch(panel, /activeView/)
     const locationMap = read('src/renderer/src/components/DeviceLocationMap.vue')
     assert.match(locationMap, /data-location-zoom-in/)
