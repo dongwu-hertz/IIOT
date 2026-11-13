@@ -384,6 +384,7 @@ export const IpcChannels = {
    */
   ALARM_SET_NOTE: 'alarm:set-note',
   ALARM_SET_SEVERITY: 'alarm:set-severity',
+  ALARM_DELETE: 'alarm:delete',
   ALARM_COUNT_BY_SEVERITY: 'alarm:count-by-severity',
 
   // Recordings
@@ -2350,6 +2351,8 @@ export interface RendererApi {
   alarms: {
     query(query: AlarmQuery): Promise<DeviceResult<AlarmPage>>
     acknowledge(ids: string[], acknowledged: boolean): Promise<DeviceResult<number>>
+    /** Permanently remove alarms selected by the operator. */
+    remove(ids: string[]): Promise<DeviceResult<number>>
     /**
      * 写/清除一条告警的操作员备注。`null` 清除。
      *

@@ -909,6 +909,14 @@ export function registerIpcHandlers(): void {
       toResult(async () => getServices().alarms.acknowledge(ids ?? [], acknowledged !== false))
   )
 
+  ipcMain.handle(IpcChannels.ALARM_DELETE, (_event, ids: string[]) =>
+    toResult(async () => {
+      requireAdministrator()
+      requirePermission('viewAlarms')
+      return getServices().alarms.remove(ids ?? [])
+    })
+  )
+
   /**
    * 备注与等级（v6）。三件事分三个通道，守卫统一走 `viewAlarms`——它们是值守动作，
    * 只改这条告警记录自己的注解（理由见 `auth.ts` 里 `viewAlarms` 的说明）。

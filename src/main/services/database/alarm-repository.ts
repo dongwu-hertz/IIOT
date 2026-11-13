@@ -370,6 +370,17 @@ export class AlarmRepository {
     return changes
   }
 
+  /** Permanently remove alarms selected by the operator (gas-leak history actions). */
+  deleteByIds(ids: readonly string[]): number {
+    if (ids.length === 0) return 0
+    const statement = this.db.prepare(`DELETE FROM alarms WHERE id = ?`)
+    let changes = 0
+    const apply = this.db.transaction(() => {
+      for (const id of ids) changes += statement.run(id).changes
+    })
+    apply()
+    return changes
+  }
   /** Link an alarm to the local recording captured from the Ring Buffer. */
   linkRecording(alarmId: string, recordingId: string): void {
     this.db.prepare(`UPDATE alarms SET recording_id = ? WHERE id = ?`).run(recordingId, alarmId)

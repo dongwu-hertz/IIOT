@@ -6286,4 +6286,21 @@ const enabledChannelSummary = computed(() => {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* 气井泄漏：右卡始终与左侧地图卡同高。 */
+.gas-leak-layout__top {
+  align-items: stretch;
+}
+
+.gas-leak-layout__top > .device-location-map {
+  height: 100%;
+  margin-top: 0;
+}
+
+.gas-leak-layout__info {
+  height: 100%;
+}
+
+.gas-leak-layout__info > .gas-leak {
+  height: 100%;
+}
 </style>

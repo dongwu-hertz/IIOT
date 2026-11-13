@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AlarmService and RecordingService.
  *
  * AlarmService owns alarm persistence and bit-mask decoding (spec 5.1,
@@ -67,6 +67,12 @@ export class AlarmService {
   acknowledge(ids: readonly string[], acknowledged: boolean): number {
     return this.alarms.acknowledge(ids, acknowledged)
   }
+
+  /** Permanently remove operator-selected alarms. */
+  remove(ids: readonly string[]): number {
+    return this.alarms.deleteByIds(ids)
+  }
+
 
   /**
    * 写备注。服务层不再包一层校验：长度上限只在仓库层判一次（`ALARM_NOTE_MAX_LENGTH`），

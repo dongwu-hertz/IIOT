@@ -203,6 +203,7 @@ const api: RendererApi = {
     query: (query: AlarmQuery) => ipcRenderer.invoke(IpcChannels.ALARM_QUERY, query),
     acknowledge: (ids: string[], acknowledged: boolean) =>
       ipcRenderer.invoke(IpcChannels.ALARM_ACKNOWLEDGE, ids, acknowledged),
+    remove: (ids: string[]) => ipcRenderer.invoke(IpcChannels.ALARM_DELETE, ids),
     setNote: (alarmId: string, note: string | null) =>
       ipcRenderer.invoke(IpcChannels.ALARM_SET_NOTE, alarmId, note),
     setSeverity: (alarmId: string, severity: EventSeverity) =>
