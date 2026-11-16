@@ -17,9 +17,12 @@ import type { AlarmEvent, DeviceInstallation } from '@shared/domain/models'
 import { isPointComplete } from '@shared/domain/device-installation'
 import { offsetMapPoint } from '@shared/domain/device-map'
 import {
+  clampTileZoom,
   defaultMapTilesConfig,
+  panMapCenter,
   projectToViewport,
   viewTiles,
+  type MapCenter,
   type MapTilesConfig
 } from '@shared/domain/map-tiles'
 import { deviceMapLink } from '@renderer/lib/deviceMapLink'
@@ -47,7 +50,13 @@ const DEFAULT_ZOOM = 16
 const RANGE_METRES = 100
 const DEFAULT_SECTOR_WIDTH_DEG = 36
 
-const zoom = ref(DEFAULT_ZOOM)
+const viewCenter = ref<MapCenter | null>(null)
+
+const centre = computed<MapCenter>(() => viewCenter.value ?? {
+  latitude: props.installation?.gisLatitude ?? 30,
+  longitude: props.installation?.gisLongitude ?? 110,
+  zoom: DEFAULT_ZOOM
+})
 
 const hasPoint = computed(
   () =>
@@ -66,12 +75,8 @@ const tilePlacements = computed(() => {
   if (!hasPoint.value) return []
   return viewTiles(
     tileConfig.value,
-    {
-      latitude: props.installation?.gisLatitude as number,
-      longitude: props.installation?.gisLongitude as number,
-      zoom: zoom.value
-    },
-    zoom.value,
+    centre.value,
+    centre.value.zoom,
     WIDTH,
     HEIGHT
   )
@@ -83,11 +88,6 @@ function hideFailedTile(key: string): void {
   failedTiles.value = new Set(failedTiles.value).add(key)
 }
 
-const centre = computed(() => ({
-  latitude: props.installation?.gisLatitude as number,
-  longitude: props.installation?.gisLongitude as number,
-  zoom: zoom.value
-}))
 
 /** 最近一条告警（只取一条；方向以设备原文的 horizontal 为准）。 */
 const latestAlarm = ref<AlarmEvent | undefined>()
@@ -117,7 +117,16 @@ const heading = computed(() => {
   return ((relative + (offset ?? 0)) % 360 + 360) % 360
 })
 
-const marker = computed(() => ({ x: WIDTH / 2, y: HEIGHT / 2 }))
+const marker = computed(() => {
+  if (!hasPoint.value) return { x: WIDTH / 2, y: HEIGHT / 2 }
+  return projectToViewport(
+    centre.value,
+    props.installation?.gisLatitude as number,
+    props.installation?.gisLongitude as number,
+    WIDTH,
+    HEIGHT
+  )
+})
 
 const directionEnd = computed(() => {
   if (!hasPoint.value || heading.value === undefined) return undefined
@@ -148,21 +157,92 @@ const sectorPoints = computed(() => {
   return points.join(' ')
 })
 
+const directionArrowPoints = computed(() => {
+  const end = directionEnd.value
+  if (!end) return ''
+  const dx = end.x - marker.value.x
+  const dy = end.y - marker.value.y
+  const length = Math.hypot(dx, dy)
+  if (length < 1) return ''
+  const ux = dx / length
+  const uy = dy / length
+  const baseX = end.x - ux * 11
+  const baseY = end.y - uy * 11
+  const halfWidth = 4
+  return `${end.x.toFixed(1)},${end.y.toFixed(1)} ${(baseX - uy * halfWidth).toFixed(1)},${(baseY + ux * halfWidth).toFixed(1)} ${(baseX + uy * halfWidth).toFixed(1)},${(baseY - ux * halfWidth).toFixed(1)}`
+})
 const mapLink = computed(() => deviceMapLink(props.deviceId ?? ''))
 
+function resetView(): void {
+  if (!hasPoint.value) {
+    viewCenter.value = null
+    return
+  }
+  viewCenter.value = {
+    latitude: props.installation?.gisLatitude as number,
+    longitude: props.installation?.gisLongitude as number,
+    zoom: DEFAULT_ZOOM
+  }
+}
+
 function zoomIn(): void {
-  zoom.value = Math.min(18, zoom.value + 1)
+  const current = centre.value
+  viewCenter.value = { ...current, zoom: clampTileZoom(current.zoom + 1) }
 }
 
 function zoomOut(): void {
-  zoom.value = Math.max(2, zoom.value - 1)
+  const current = centre.value
+  viewCenter.value = { ...current, zoom: clampTileZoom(current.zoom - 1) }
+}
+
+function onWheel(event: WheelEvent): void {
+  event.preventDefault()
+  const current = centre.value
+  const nextZoom = clampTileZoom(current.zoom + (event.deltaY < 0 ? 1 : -1))
+  if (nextZoom === current.zoom) return
+  viewCenter.value = { ...current, zoom: nextZoom }
+}
+
+const dragging = ref(false)
+const drag = {
+  active: false,
+  startX: 0,
+  startY: 0,
+  center: null as MapCenter | null
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return
+  dragging.value = true
+  drag.active = true
+  drag.startX = event.clientX
+  drag.startY = event.clientY
+  drag.center = { ...centre.value }
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!dragging.value || drag.center === null) return
+  const element = event.currentTarget as HTMLElement
+  const rect = element.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const dx = ((event.clientX - drag.startX) / rect.width) * WIDTH
+  const dy = ((event.clientY - drag.startY) / rect.height) * HEIGHT
+  viewCenter.value = panMapCenter(drag.center, dx, dy)
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (!dragging.value) return
+  dragging.value = false
+  drag.active = false
+  drag.center = null
+  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
 }
 
 async function autoAdjust(): Promise<void> {
-  zoom.value = 16
+  resetView()
   await loadLatestAlarm()
 }
-
 let alarmRefreshTimer: number | undefined
 
 onMounted(async () => {
@@ -172,8 +252,12 @@ onMounted(async () => {
 })
 
 watch(
-  () => props.deviceId,
-  () => void loadLatestAlarm()
+  () => [props.deviceId, props.installation?.gisLatitude, props.installation?.gisLongitude],
+  () => {
+    resetView()
+    void loadLatestAlarm()
+  },
+  { immediate: true }
 )
 onBeforeUnmount(() => {
   if (alarmRefreshTimer !== undefined) window.clearInterval(alarmRefreshTimer)
@@ -184,7 +268,15 @@ onBeforeUnmount(() => {
     <div v-if="!hasPoint" class="device-location-map__empty" data-device-location-empty></div>
 
     <template v-else>
-      <div class="device-location-map__canvas">
+      <div
+        class="device-location-map__canvas"
+        :class="{ 'device-location-map__canvas--dragging': dragging }"
+        @wheel.prevent="onWheel"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+      >
         <div class="device-location-map__tiles" data-device-location-tiles>
           <img
             v-for="tile in tilePlacements"
@@ -207,14 +299,28 @@ onBeforeUnmount(() => {
           </defs>
           <rect width="960" height="540" fill="url(#device-location-grid)" class="device-location-map__grid" />
           <g v-if="heading !== undefined">
-            <polygon :points="sectorPoints" class="device-location-map__sector" />
+            <polygon :points="sectorPoints" class="device-location-map__sector" vector-effect="non-scaling-stroke" />
             <line
               :x1="marker.x"
               :y1="marker.y"
               :x2="directionEnd?.x"
               :y2="directionEnd?.y"
               class="device-location-map__direction"
+              vector-effect="non-scaling-stroke"
             />
+            <polygon
+              :points="directionArrowPoints"
+              class="device-location-map__arrow"
+              vector-effect="non-scaling-stroke"
+            />
+            <text
+              v-if="directionEnd"
+              :x="directionEnd.x + 8"
+              :y="directionEnd.y - 8"
+              class="device-location-map__range-label"
+            >
+              {{ RANGE_METRES }} m
+            </text>
           </g>
           <circle :cx="marker.x" :cy="marker.y" r="10" class="device-location-map__dot" />
           <circle :cx="marker.x" :cy="marker.y" r="18" class="device-location-map__ring" />
@@ -398,5 +504,34 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 4px;
   pointer-events: none;
+}
+.device-location-map__canvas {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.device-location-map__canvas--dragging {
+  cursor: grabbing;
+}
+
+.device-location-map__sector {
+  stroke-width: 2.5;
+}
+
+.device-location-map__direction {
+  stroke-width: 4;
+}
+
+.device-location-map__arrow {
+  fill: var(--color-accent);
+  stroke: var(--color-accent);
+  stroke-width: 1;
+}
+
+.device-location-map__range-label {
+  fill: var(--color-accent);
+  font-size: 12px;
+  font-weight: 600;
 }
 </style>
