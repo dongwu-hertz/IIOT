@@ -498,6 +498,7 @@ watch(
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-4);
   border-bottom: 1px solid var(--color-border);
@@ -506,6 +507,7 @@ watch(
 .drawer__heading {
   display: flex;
   align-items: flex-start;
+  flex: 1 1 280px;
   gap: var(--space-3);
   min-width: 0;
 }
@@ -523,6 +525,7 @@ watch(
 }
 
 .drawer__titles {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -537,15 +540,18 @@ watch(
 .drawer__sub {
   margin: 2px 0 0;
   font-size: var(--font-size-meta);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .drawer__header-actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: none;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-left: auto;
 }
 
 /* 需要输入的处置动作：贴在头部下面的一条行内表单。 */
