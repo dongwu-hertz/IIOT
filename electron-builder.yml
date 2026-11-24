@@ -126,8 +126,8 @@ nsis:
   #
   # HONEST LIMIT: the installer's chosen language does NOT reach the application.
   # The app picks its own language from, in order: the user's saved choice
-  # (`localStorage`), the OS locale reported by the main process, then the product
-  # default (English) — see `src/renderer/src/composables/useLocale.ts`. Wiring the
+  # (`localStorage`), then the product default (English) — see
+  # `src/renderer/src/composables/useLocale.ts`. Wiring the
   # installer choice through would need the NSIS script to write something the app
   # reads; that is not implemented.
 

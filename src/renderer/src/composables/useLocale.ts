@@ -10,12 +10,12 @@
  *
  * RESOLUTION ORDER on first launch
  *   1. the user's previous explicit choice (localStorage)
- *   2. the operating system's UI languages, via the main process
- *   3. the product default (English)
+ *   2. the product default (English)
  *
- * Step 2 goes through the main process because Electron's `app.getLocale()`
- * reflects the OS setting, while `navigator.language` reflects the Chromium
- * bundle's setting and can disagree with what the user sees elsewhere.
+ * The product now defaults to English; the picker still offers Simplified and
+ * Traditional Chinese immediately after it. OS language detection is deliberately
+ * not used for the initial selection: a fresh installation must open in English
+ * unless the operator explicitly chooses another language.
  */
 
 import { ref, computed, readonly } from 'vue'
@@ -26,7 +26,6 @@ import {
   LOCALE_DESCRIPTORS,
   LOCALE_STORAGE_KEY,
   isAppLocale,
-  resolveLocale,
   type AppLocale
 } from '@shared/i18n/locales'
 
@@ -49,32 +48,6 @@ function writeStoredLocale(locale: AppLocale): void {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, locale)
   } catch {
     // Not being able to remember the choice must not break switching it.
-  }
-}
-
-/**
- * Ask the main process for the OS UI languages.
- *
- * `getPreferredLanguages` is optional in the bridge: during development the
- * renderer can be loaded outside Electron, and a probe build may not expose it.
- * Every failure path here is non-fatal by design — language detection is a
- * convenience, never a reason the app cannot start.
- */
-async function detectSystemLocale(): Promise<AppLocale | undefined> {
-  try {
-    const api = (window as { api?: { app?: { getPreferredLanguages?: () => Promise<unknown> } } }).api
-    const call = api?.app?.getPreferredLanguages
-    if (typeof call !== 'function') return undefined
-    const result = (await call()) as { success?: boolean; data?: unknown } | unknown[]
-    const list = Array.isArray(result)
-      ? result
-      : Array.isArray((result as { data?: unknown })?.data)
-        ? ((result as { data: unknown[] }).data as unknown[])
-        : []
-    const tags = list.filter((item): item is string => typeof item === 'string')
-    return resolveLocale(tags)
-  } catch {
-    return undefined
   }
 }
 
@@ -115,12 +88,7 @@ export function useLocale() {
     initialised = true
 
     const stored = readStoredLocale()
-    if (stored) {
-      apply(stored)
-      return
-    }
-    const detected = await detectSystemLocale()
-    apply(detected ?? DEFAULT_LOCALE)
+    apply(stored ?? DEFAULT_LOCALE)
   }
 
   return {
