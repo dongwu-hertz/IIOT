@@ -169,6 +169,21 @@ describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）
     assert.match(verifier, /安装包  \$\{path\.basename\(setupExe\)\}/, '报告里没有写出安装包文件名')
   })
 
+  it('安装器语言顺序：英文 → 简体中文 → 繁体中文', () => {
+    const yml = read('electron-builder.yml')
+    const lines = yml.split(/\r?\n/)
+    const start = lines.findIndex((line) => line.trim() === 'installerLanguages:')
+    assert.ok(start >= 0, 'installerLanguages 不见了')
+    const langs: string[] = []
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const matched = /^\s+-\s+(.+)$/.exec(lines[index] ?? '')
+      if (!matched) break
+      langs.push(matched[1]!.trim())
+    }
+    assert.deepEqual(langs.slice(0, 3), ['en_US', 'zh_CN', 'zh_TW'])
+    assert.ok(langs.includes('zh_TW'), '安装向导里没有繁体中文')
+  })
+
   it('底层的 yml 仍然有一个不带日期的兜底名字（`dist:win` 不吃独立配置）', () => {
     const yml = read('electron-builder.yml')
     assert.match(

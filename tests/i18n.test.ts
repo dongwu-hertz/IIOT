@@ -17,7 +17,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 
-import { LOCALES, LOCALE_DESCRIPTORS, resolveLocale, isAppLocale } from '../src/shared/i18n/locales'
+import { DEFAULT_LOCALE, LOCALES, LOCALE_DESCRIPTORS, resolveLocale, isAppLocale } from '../src/shared/i18n/locales'
 import { zhCN } from '../src/shared/i18n/messages/zh-CN'
 import { zhTW } from '../src/shared/i18n/messages/zh-TW'
 import { en } from '../src/shared/i18n/messages/en'
@@ -75,6 +75,15 @@ function placeholders(message: string): string[] {
 }
 
 describe('locale catalogue', () => {
+  it('orders English, Simplified Chinese, Traditional Chinese first and defaults to English', () => {
+    assert.deepEqual([...LOCALES.slice(0, 3)], ['en', 'zh-CN', 'zh-TW'])
+    assert.deepEqual(
+      LOCALE_DESCRIPTORS.slice(0, 3).map((descriptor) => descriptor.code),
+      ['en', 'zh-CN', 'zh-TW']
+    )
+    assert.equal(DEFAULT_LOCALE, 'en')
+  })
+
   it('exposes a descriptor for every declared locale', () => {
     assert.equal(LOCALE_DESCRIPTORS.length, LOCALES.length)
     for (const locale of LOCALES) {

@@ -13,7 +13,7 @@
  * interface they cannot read.
  */
 
-export const LOCALES = ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru'] as const
+export const LOCALES = ['en', 'zh-CN', 'zh-TW', 'es', 'tr', 'ru'] as const
 
 export type AppLocale = (typeof LOCALES)[number]
 
@@ -27,9 +27,9 @@ export interface LocaleDescriptor {
 }
 
 export const LOCALE_DESCRIPTORS: readonly LocaleDescriptor[] = [
+  { code: 'en', endonym: 'English', shortLabel: 'EN' },
   { code: 'zh-CN', endonym: '简体中文', shortLabel: '中文' },
   { code: 'zh-TW', endonym: '繁體中文', shortLabel: '繁中' },
-  { code: 'en', endonym: 'English', shortLabel: 'EN' },
   { code: 'es', endonym: 'Español', shortLabel: 'ES' },
   { code: 'tr', endonym: 'Türkçe', shortLabel: 'TR' },
   { code: 'ru', endonym: 'Русский', shortLabel: 'RU' }
@@ -38,11 +38,10 @@ export const LOCALE_DESCRIPTORS: readonly LocaleDescriptor[] = [
 /**
  * Default language.
  *
- * Chinese, because the product shipped that way and its existing users must not
- * be silently switched to another language by an upgrade. A first launch keeps
- * the previous behaviour; other languages are an explicit opt-in.
+ * English is the first/default language. The picker order is English, Simplified
+ * Chinese, Traditional Chinese, then the remaining supported languages.
  */
-export const DEFAULT_LOCALE: AppLocale = 'zh-CN'
+export const DEFAULT_LOCALE: AppLocale = 'en'
 
 /** Key used to remember the choice. Namespaced to avoid colliding with future keys. */
 export const LOCALE_STORAGE_KEY = 'hertzinno.locale'

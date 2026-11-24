@@ -93,21 +93,22 @@ nsis:
 
   # -- Multilingual installer (product request: "安装软件时应该支持选择语言") --------
   #
-  # These four codes are the same four the APPLICATION ships. That is the point:
+  # These five codes cover the primary APPLICATION languages. That is the point:
   # an operator who picks Türkçe in the installer gets a Türkçe installer wizard,
   # and the application then opens in Turkish too (see the note on
   # `displayLanguageSelector` below).
   #
   # Verified against the pinned electron-builder rather than guessed — the codes
   # are resolved through `app-builder-lib/out/util/langs`, which maps
-  #   en_US -> English · zh_CN -> SimpChinese · es_ES -> SpanishInternational · tr_TR -> Turkish
+  #   en_US -> English · zh_CN -> SimpChinese · zh_TW -> TradChinese · es_ES -> SpanishInternational · tr_TR -> Turkish
   # An unknown code throws "Language name is unknown for <x>" at build time, so a
   # typo fails the build instead of silently shipping an English-only installer.
   multiLanguageInstaller: true
   displayLanguageSelector: true
   installerLanguages:
-    - zh_CN
     - en_US
+    - zh_CN
+    - zh_TW
     - es_ES
     - tr_TR
   # NOTE: `nsis.language` is deliberately NOT set. Reading the pinned
@@ -118,14 +119,15 @@ nsis:
   # (1033) is also the right pairing for this file, whose productName, copyright and
   # description strings are all English.
   #
-  # The wizard's initial language therefore comes from NSIS itself (the OS language,
-  # falling back to the first entry above), and the operator can change it in the
+  # English is deliberately the first entry, followed by Simplified Chinese and
+  # Traditional Chinese. The wizard still prefers the OS language when NSIS can map
+  # it; otherwise it falls back to the first entry. The operator can change it in the
   # selector because `displayLanguageSelector` is on.
   #
   # HONEST LIMIT: the installer's chosen language does NOT reach the application.
   # The app picks its own language from, in order: the user's saved choice
   # (`localStorage`), the OS locale reported by the main process, then the product
-  # default (Chinese) — see `src/renderer/src/composables/useLocale.ts`. Wiring the
+  # default (English) — see `src/renderer/src/composables/useLocale.ts`. Wiring the
   # installer choice through would need the NSIS script to write something the app
   # reads; that is not implemented.
 

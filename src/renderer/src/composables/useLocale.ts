@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Language selection: read, persist, apply.
  *
  * WHY A MODULE-SCOPED SINGLETON RATHER THAN A PINIA STORE
@@ -11,7 +11,7 @@
  * RESOLUTION ORDER on first launch
  *   1. the user's previous explicit choice (localStorage)
  *   2. the operating system's UI languages, via the main process
- *   3. the product default (Chinese)
+ *   3. the product default (English)
  *
  * Step 2 goes through the main process because Electron's `app.getLocale()`
  * reflects the OS setting, while `navigator.language` reflects the Chromium

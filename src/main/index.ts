@@ -560,7 +560,7 @@ async function verifyLocales(window: BrowserWindow): Promise<void> {
 
   const states: Record<string, { nav: string | null; version: string | null; footer: string | null; copyright: string | null; htmlLang: string }> = {}
   try {
-    for (const code of ['zh-CN', 'zh-TW', 'en', 'es', 'tr', 'ru']) {
+    for (const code of ['en', 'zh-CN', 'zh-TW', 'es', 'tr', 'ru']) {
       await window.webContents.executeJavaScript(
         `window.localStorage.setItem('hertzinno.locale', ${JSON.stringify(code)}); true`
       )

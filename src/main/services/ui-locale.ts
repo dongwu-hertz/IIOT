@@ -9,7 +9,7 @@
  * 这里修掉两半：
  *   1. 文案真的来自共享消息目录（`shared/i18n/messages/*`，主进程可直接 import）；
  *   2. 语言跟随界面：渲染层应用/切换语言时通过 `app.setLocale` 上报（见
- *      `useLocale.ts`），没上报过就用出厂默认 `zh-CN`。
+ *      `useLocale.ts`），没上报过就用出厂默认 `en`。
  *
  * 这里只放**弹窗用得着的那几个键**的解析，不是把整套 vue-i18n 搬进主进程。
  */
@@ -19,12 +19,9 @@ import { en } from '@shared/i18n/messages/en'
 import { es } from '@shared/i18n/messages/es'
 import { tr } from '@shared/i18n/messages/tr'
 import { ru } from '@shared/i18n/messages/ru'
-import { LOCALES, type AppLocale } from '@shared/i18n/locales'
+import { DEFAULT_LOCALE, LOCALES, type AppLocale } from '@shared/i18n/locales'
 
 const CATALOGS: Record<AppLocale, typeof zhCN> = { 'zh-CN': zhCN, 'zh-TW': zhTW, en, es, tr, ru }
-
-/** 出厂默认语言（与渲染层 `useLocale` 的默认一致）。 */
-const DEFAULT_LOCALE: AppLocale = 'zh-CN'
 
 let currentLocale: AppLocale = DEFAULT_LOCALE
 
