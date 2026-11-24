@@ -1,6 +1,6 @@
 {
   "name": "hertzinno-acoustic-box-manager",
-  "version": "1.0.49",
+  "version": "1.1.0",
   "description": "HAIS - HERTZINNO 声学设备管理软件（Acoustic Box / AE08 系列）",
   "main": "./out/main/index.js",
   "author": {
@@ -72,6 +72,6 @@
     "vue-router": "4.6.4",
     "vue-tsc": "2.2.10"
   },
-  "releaseDate": "2026-11-12",
+  "releaseDate": "2026-11-24",
   "homepage": "https://www.hertzinno.com"
 }

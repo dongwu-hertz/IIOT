@@ -1,5 +1,5 @@
 /**
- * 安装包文件名：后缀发布日期 + 小版本号随发布递增（业主 2026-09-19 第 11 批第 1 条）。
+ * 安装包文件名：后缀发布日期 + 版本号随发布递增（业主 2026-09-19 第 11 批第 1 条）。
  *
  * WHY THIS FILE EXISTS
  * 业主的原话是「每个发布的软件 应该后缀发布日期，以及小版本号的变动」。这两件事都能
@@ -8,7 +8,7 @@
  * 所以这里钉住三件必须同时成立的事：
  *
  *   1. **文件名里真的有日期**，而且那一串日期就是 `package.json` 的 `releaseDate`；
- *   2. **版本号真的动了**（同一个小版本位比上一次发布大，且是三段 semver）；
+ *   2. **版本号真的动了**（比上一次发布大，且是三段 semver）；
  *   3. **两份发布配置（离线 / 签名）用的是同一个名字**，而且都与 stamp 一致 ——
  *      三处各写一遍的话，迟早出现"签名包叫 A、离线包叫 B"。
  *
@@ -60,7 +60,7 @@ const signedConfig = require_(path.join(projectRoot, 'scripts', 'electron-builde
 delete process.env.HERTZINNO_CERT_SHA1
 
 /** 上一次发布（第 19 轮）的那个版本号。它只在这里当"参照物"，不参与任何构建。 */
-const PREVIOUS_VERSION = '1.0.0'
+const PREVIOUS_VERSION = '1.0.49'
 
 describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）', () => {
   it('文件名里有版本号与发布日期，而且两串都来自 `package.json`', () => {
@@ -101,7 +101,7 @@ describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）
     )
   })
 
-  it('小版本号随发布递增（不是"又发了一次 1.0.0"）', () => {
+  it('版本号随发布递增（不是又发了一次旧版本）', () => {
     const parts = stamp.version.split('.').map((part) => Number(part))
     assert.equal(parts.length, 3, `版本号不是三段 semver：${stamp.version}`)
     assert.ok(parts.every((part) => Number.isInteger(part) && part >= 0), `版本号里有非数字：${stamp.version}`)
@@ -119,9 +119,8 @@ describe('安装包文件名：后缀发布日期（业主第 11 批第 1 条）
       `版本号没有往前走：上次发布 ${PREVIOUS_VERSION}，现在还是 ${stamp.version}` +
         '（同名的安装包会覆盖上一次的产物）'
     )
-    // 业主说的是「**小**版本号的变动」：大版本与小版本位不动，动的是第三位。
-    assert.deepEqual(parts.slice(0, 2), previous.slice(0, 2), '动的不是小版本号那一位（第三位）')
-    assert.ok(parts[2]! > previous[2]!, '第三位没有递增')
+    // 允许补丁、次版本或主版本递增：本次产品明确要求从 1.0.49 升到 1.1.0。
+    assert.notDeepEqual(parts, previous)
   })
 
   it('离线包与签名包用同一个名字（两处都取自 stamp）', () => {
