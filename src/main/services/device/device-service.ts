@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DeviceService — the single business entry point for device lifecycle
  * (spec 5.1, appendix C rule 4).
  *
@@ -1349,9 +1349,14 @@ export class DeviceService extends EventEmitter {
     if (device.kind !== 'acousticCamera') {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, '该设备不是声学相机，没有检测日志', deviceId)
     }
-    const raw = await this.withStatusTracking(device, () =>
-      this.cameraClientFor(device).getDetectLogs(1)
-    )
+    /*
+     * Detection-log parsing is a secondary feature. A malformed log row (or a
+     * device that answers with an unexpected status envelope) proves that the
+     * device IS reachable, so it must not increment the offline-failure counter.
+     * Connectivity/authentication is owned by the health check and the primary
+     * reads above; leave the failure to the caller/log instead.
+     */
+    const raw = await this.cameraClientFor(device).getDetectLogs(1)
     return mapDetectLogs(raw)
   }
 
@@ -1364,6 +1369,20 @@ export class DeviceService extends EventEmitter {
    */
   async configFor(deviceId: string): Promise<ConfigService> {
     const device = this.get(deviceId)
+    /*
+     * These are FA8 `/get_devinfo`, `/passageway`, `/alarm_profile`, …
+     * endpoints. A camera / Air Sonar / push device does not implement them.
+     * Calling them anyway used to look like an authentication failure and to
+     * increment the health-check failure counter for a healthy device, so
+     * refuse with a truthful capability error before touching the network.
+     */
+    if (device.kind !== 'acousticBox') {
+      throw new AppError(
+        ErrorCodes.NOT_IMPLEMENTED,
+        '该设备没有 FA8 通用配置接口，请在对应设备类型的专用页面中配置',
+        device.id
+      )
+    }
     const client = this.clientFor(device)
     await this.withStatusTracking(device, () => client.getDeviceInfo())
     return new ConfigService(client)

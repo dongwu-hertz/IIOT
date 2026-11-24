@@ -162,6 +162,18 @@ const device = computed(() => devices.byId(props.id))
 const isGasLeakDevice = computed(() => isGasLeakMonitor(device.value))
 
 /**
+ * The generic FA8 configuration blocks (channels / sample rate / alarm profiles /
+ * network / time / RS485 / Modbus / push) only exist on `acousticBox`.
+ *
+ * Camera, Air Sonar and push devices have their own tabs and protocols. Loading
+ * all of these anyway used to ask e.g. a camera for `/get_devinfo` and
+ * `/passageway`; those endpoints do not exist there, the resulting login/probe
+ * failures were surfaced as "AUTH_FAILED", and the failed health checks could
+ * even flip an ONLINE camera to OFFLINE just by opening its detail page.
+ */
+const loadsGenericDeviceConfig = computed(() => device.value?.kind === 'acousticBox')
+
+/**
  * 当前机型能看到的页签。
  *
  * ⚠️ **必须定义在 `device` 之后**：第一版把它（和下面那个 `watch`）写在了 `TABS` 旁边，
@@ -331,7 +343,14 @@ async function refresh(): Promise<void> {
 
   // Identity, configuration and status are independent reads; run them together
   // so one slow endpoint cannot serialise the whole page.
-  await Promise.all([config.loadAll(props.id), devices.refreshStatus(props.id)])
+  // Only FA8 (`acousticBox`) has the generic configuration endpoints. Other
+  // families own their tabs; probing FA8 endpoints on them is not a harmless
+  // read — it causes failed logins, a misleading AUTH_FAILED banner, and can
+  // push the device over its offline threshold.
+  const configTask = loadsGenericDeviceConfig.value
+    ? config.loadAll(props.id)
+    : Promise.resolve(config.clearError())
+  await Promise.all([configTask, devices.refreshStatus(props.id)])
   await resolveE2Variant()
 
   loading.value = false
